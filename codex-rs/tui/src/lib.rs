@@ -266,6 +266,15 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+pub async fn render_status_for_cli(
+    config: &Config,
+    auth_manager: std::sync::Arc<AuthManager>,
+    model_name: &str,
+    width: u16,
+) -> Vec<String> {
+    status::render_status_lines_for_cli(config, auth_manager, model_name, width).await
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,

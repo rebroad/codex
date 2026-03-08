@@ -49,6 +49,7 @@ use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::status::RateLimitWindowDisplay;
+use crate::status::fetch_rate_limits;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
@@ -59,7 +60,6 @@ use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -9644,22 +9644,6 @@ fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'st
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
-    }
-}
-
-async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
-    match BackendClient::from_auth(base_url, &auth) {
-        Ok(client) => match client.get_rate_limits_many().await {
-            Ok(snapshots) => snapshots,
-            Err(err) => {
-                debug!(error = ?err, "failed to fetch rate limits from /usage");
-                Vec::new()
-            }
-        },
-        Err(err) => {
-            debug!(error = ?err, "failed to construct backend client for rate limits");
-            Vec::new()
-        }
     }
 }
 
