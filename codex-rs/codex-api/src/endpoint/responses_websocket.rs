@@ -538,6 +538,7 @@ async fn run_websocket_response_stream(
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
+    let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
     let mut last_server_model: Option<String> = None;
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
@@ -548,6 +549,9 @@ async fn run_websocket_response_stream(
         }
     };
     trace!("websocket request: {request_text}");
+    if debug_http {
+        eprintln!("[codex prompt debug] websocket request: {request_text}");
+    }
 
     let request_start = Instant::now();
     let result = ws_stream
@@ -591,6 +595,9 @@ async fn run_websocket_response_stream(
         match message {
             Message::Text(text) => {
                 trace!("websocket event: {text}");
+                if debug_http {
+                    eprintln!("[codex prompt debug] websocket event: {text}");
+                }
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
