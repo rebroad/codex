@@ -63,7 +63,7 @@ impl EnvironmentContext {
             && self.subagents == *subagents
     }
 
-    pub fn diff_from_turn_context_item(
+    pub(crate) fn diff_from_turn_context_item(
         before: &TurnContextItem,
         after: &TurnContext,
         shell: &Shell,
