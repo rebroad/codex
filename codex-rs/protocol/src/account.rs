@@ -27,6 +27,13 @@ pub enum PlanType {
 }
 
 impl PlanType {
+    pub fn as_wire_name(self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
     pub fn is_team_like(self) -> bool {
         matches!(self, Self::Team | Self::SelfServeBusinessUsageBased)
     }
@@ -74,5 +81,17 @@ mod tests {
         assert_eq!(PlanType::Business.is_business_like(), true);
         assert_eq!(PlanType::EnterpriseCbpUsageBased.is_business_like(), true);
         assert_eq!(PlanType::Team.is_business_like(), false);
+    }
+
+    #[test]
+    fn as_wire_name_matches_known_values() {
+        assert_eq!(
+            PlanType::SelfServeBusinessUsageBased.as_wire_name(),
+            "self_serve_business_usage_based"
+        );
+        assert_eq!(
+            PlanType::EnterpriseCbpUsageBased.as_wire_name(),
+            "enterprise_cbp_usage_based"
+        );
     }
 }
