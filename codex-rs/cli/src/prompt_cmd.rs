@@ -29,6 +29,37 @@ use std::io::Read;
 use std::io::Write;
 use std::sync::Arc;
 
+const CODEX_PROMPT_DEBUG_HTTP_ENV_VAR: &str = "CODEX_PROMPT_DEBUG_HTTP";
+
+struct PromptDebugHttpGuard {
+    prior_value: Option<std::ffi::OsString>,
+}
+
+impl PromptDebugHttpGuard {
+    fn new() -> Self {
+        let prior_value = std::env::var_os(CODEX_PROMPT_DEBUG_HTTP_ENV_VAR);
+        // SAFETY: This is used by the single-process `codex prompt` command to
+        // coordinate debug logging with downstream async tasks.
+        unsafe { std::env::set_var(CODEX_PROMPT_DEBUG_HTTP_ENV_VAR, "1") };
+        Self { prior_value }
+    }
+}
+
+impl Drop for PromptDebugHttpGuard {
+    fn drop(&mut self) {
+        match self.prior_value.take() {
+            Some(value) => {
+                // SAFETY: Restores prior process environment on command exit.
+                unsafe { std::env::set_var(CODEX_PROMPT_DEBUG_HTTP_ENV_VAR, value) };
+            }
+            None => {
+                // SAFETY: Restores prior process environment on command exit.
+                unsafe { std::env::remove_var(CODEX_PROMPT_DEBUG_HTTP_ENV_VAR) };
+            }
+        }
+    }
+}
+
 /// Run a single prompt directly against the configured model.
 #[derive(Debug, Parser)]
 pub struct PromptCli {
@@ -211,9 +242,7 @@ async fn run_prompt(
     models_manager: ModelsManager,
     debug_http: bool,
 ) -> anyhow::Result<()> {
-    if debug_http {
-        eprintln!("--debug is not yet wired to raw HTTP/SSE tracing on this branch.");
-    }
+    let _debug_http_guard = debug_http.then(PromptDebugHttpGuard::new);
 
     let auth_snapshot = auth_manager.auth().await;
     let provider = config.model_provider.clone();
