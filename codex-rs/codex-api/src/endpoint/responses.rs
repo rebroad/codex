@@ -60,6 +60,15 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
+        if debug_http {
+            let request_url = self.session.provider().url_for_path(Self::path());
+            let body = serde_json::to_string_pretty(&request)
+                .unwrap_or_else(|_| "<unable to serialize payload>".to_string());
+            eprintln!("[codex prompt debug] POST {request_url}");
+            eprintln!("[codex prompt debug] Request JSON:\n{body}");
+        }
+
         let ResponsesOptions {
             conversation_id,
             session_source,
@@ -115,6 +124,13 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                 },
             )
             .await?;
+
+        if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
+            eprintln!(
+                "[codex prompt debug] Response status: {}",
+                stream_response.status
+            );
+        }
 
         Ok(spawn_response_stream(
             stream_response,
