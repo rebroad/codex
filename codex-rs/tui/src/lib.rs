@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_core::CodexAuth;
 use codex_core::auth::AuthConfig;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
@@ -582,6 +583,13 @@ fn latest_session_lookup_params(
         },
         search_term: None,
     }
+pub async fn render_status_for_cli(
+    config: &Config,
+    auth: Option<CodexAuth>,
+    model_name: &str,
+    width: u16,
+) -> Vec<String> {
+    status::render_status_lines_for_cli(config, auth, model_name, width).await
 }
 
 pub async fn run_main(

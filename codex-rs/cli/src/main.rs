@@ -45,6 +45,7 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
+use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -106,6 +107,9 @@ enum Subcommand {
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
+
+    /// Show local session configuration status and exit.
+    Status,
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
@@ -617,6 +621,15 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 
     match subcommand {
         None => {
+            if interactive
+                .prompt
+                .as_deref()
+                .is_some_and(is_status_shortcut_prompt)
+                && interactive.images.is_empty()
+            {
+                run_status_command(&root_config_overrides, &interactive).await?;
+                return Ok(());
+            }
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
@@ -722,6 +735,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_app_server_protocol::generate_internal_json_schema(&gen_cli.out_dir)?;
                 }
             }
+        }
+        Some(Subcommand::Status) => {
+            run_status_command(&root_config_overrides, &interactive).await?;
         }
         #[cfg(target_os = "macos")]
         Some(Subcommand::App(app_cli)) => {
@@ -1198,6 +1214,45 @@ fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<Str
     read_remote_auth_token_from_env_var_with(env_var_name, |name| std::env::var(name))
 }
 
+fn is_status_shortcut_prompt(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    trimmed == "/status" || trimmed == "status"
+}
+
+async fn run_status_command(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+) -> anyhow::Result<()> {
+    let mut cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    if interactive.web_search {
+        cli_kv_overrides.push((
+            "web_search".to_string(),
+            toml::Value::String("live".to_string()),
+        ));
+    }
+
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        ..Default::default()
+    };
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let auth_manager = std::sync::Arc::new(AuthManager::new(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+    ));
+    let auth = auth_manager.auth().await;
+    let model_name = config.model.as_deref().unwrap_or("<unknown>");
+    let lines = codex_tui::render_status_for_cli(&config, auth, model_name, /*width*/ 80).await;
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     remote: Option<String>,
@@ -1432,6 +1487,20 @@ mod tests {
         };
 
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+    }
+
+    #[test]
+    fn status_shortcut_prompt_matches_expected_values() {
+        assert_eq!(is_status_shortcut_prompt("/status"), true);
+        assert_eq!(is_status_shortcut_prompt("status"), true);
+        assert_eq!(is_status_shortcut_prompt(" /status "), true);
+    }
+
+    #[test]
+    fn status_shortcut_prompt_rejects_other_inputs() {
+        assert_eq!(is_status_shortcut_prompt("/status now"), false);
+        assert_eq!(is_status_shortcut_prompt("status please"), false);
+        assert_eq!(is_status_shortcut_prompt("/model"), false);
     }
 
     #[test]
