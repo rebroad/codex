@@ -355,6 +355,7 @@ pub async fn process_sse(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
+    let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
@@ -388,6 +389,9 @@ pub async fn process_sse(
         };
 
         trace!("SSE event: {}", &sse.data);
+        if debug_http {
+            eprintln!("[codex prompt debug] SSE event: {}", &sse.data);
+        }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
