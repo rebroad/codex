@@ -8,6 +8,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
+use codex_build_info::CODEX_BUILD_VERSION;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_protocol::num_format::format_with_separators;
@@ -215,8 +216,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
     ) {
-        const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("OpenAI Codex v{VERSION} (research preview)\n--------");
+        eprintln!("OpenAI Codex v{CODEX_BUILD_VERSION} (research preview)\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
