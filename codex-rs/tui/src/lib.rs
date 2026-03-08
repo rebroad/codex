@@ -37,6 +37,7 @@ use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_login::AuthConfig;
+use codex_login::CodexAuth;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
@@ -580,6 +581,15 @@ fn latest_session_lookup_params(
         cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
         search_term: None,
     }
+}
+
+pub async fn render_status_for_cli(
+    config: &Config,
+    auth: Option<CodexAuth>,
+    model_name: &str,
+    width: u16,
+) -> Vec<String> {
+    status::render_status_lines_for_cli(config, auth, model_name, width).await
 }
 
 fn config_cwd_for_app_server_target(
