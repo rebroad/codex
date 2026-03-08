@@ -1589,6 +1589,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-build-info"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "codex-chatgpt"
 version = "0.0.0"
 dependencies = [
@@ -1620,6 +1627,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-test-client",
  "codex-arg0",
+ "codex-build-info",
  "codex-chatgpt",
  "codex-cloud-tasks",
  "codex-config",
@@ -1977,6 +1985,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
+ "codex-build-info",
  "codex-cloud-requirements",
  "codex-core",
  "codex-feedback",
@@ -2637,6 +2646,7 @@ dependencies = [
  "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-build-info",
  "codex-chatgpt",
  "codex-cli",
  "codex-cloud-requirements",
