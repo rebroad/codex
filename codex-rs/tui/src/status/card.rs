@@ -435,11 +435,10 @@ impl HistoryCell for StatusHistoryCell {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
         });
-
-        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut labels: Vec<String> = vec!["Model".to_string()];
+        labels.push("Directory".to_string());
+        labels.push("Permissions".to_string());
+        labels.push("Agents.md".to_string());
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
 
@@ -495,12 +494,12 @@ impl HistoryCell for StatusHistoryCell {
             model_spans.push(Span::from(")").dim());
         }
 
-        let directory_value = format_directory_display(&self.directory, Some(value_width));
-
         lines.push(formatter.line("Model", model_spans));
         if let Some(model_provider) = self.model_provider.as_ref() {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
+        let directory_value = format_directory_display(&self.directory, Some(value_width));
+
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
