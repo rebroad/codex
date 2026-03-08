@@ -66,3 +66,6 @@ codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 sqlx = { workspace = true }
+
+[build-dependencies]
+time = { workspace = true, features = ["formatting", "macros"] }
