@@ -17,6 +17,7 @@ use codex_core::config::Config;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
@@ -329,7 +330,23 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT");
+                let mut details = Vec::new();
+
+                if let Some(email) = auth.get_account_email() {
+                    details.push(format!("email={email}"));
+                }
+                if let Some(account_id) = auth.get_account_id() {
+                    details.push(format!("account_id={account_id}"));
+                }
+                if let Some(plan_type) = auth.account_plan_type() {
+                    details.push(format!("plan={}", format_plan_type(plan_type)));
+                }
+
+                if details.is_empty() {
+                    eprintln!("Logged in using ChatGPT");
+                } else {
+                    eprintln!("Logged in using ChatGPT ({})", details.join(", "));
+                }
                 std::process::exit(0);
             }
         },
@@ -341,6 +358,20 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             eprintln!("Error checking login status: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+fn format_plan_type(plan_type: PlanType) -> &'static str {
+    match plan_type {
+        PlanType::Free => "free",
+        PlanType::Go => "go",
+        PlanType::Plus => "plus",
+        PlanType::Pro => "pro",
+        PlanType::Team => "team",
+        PlanType::Business => "business",
+        PlanType::Enterprise => "enterprise",
+        PlanType::Edu => "edu",
+        PlanType::Unknown => "unknown",
     }
 }
 
