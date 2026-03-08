@@ -329,7 +329,23 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT");
+                let mut details = Vec::new();
+
+                if let Some(email) = auth.get_account_email() {
+                    details.push(format!("email={email}"));
+                }
+                if let Some(account_id) = auth.get_account_id() {
+                    details.push(format!("account_id={account_id}"));
+                }
+                if let Some(plan_type) = auth.account_plan_type() {
+                    details.push(format!("plan={}", plan_type.as_wire_name()));
+                }
+
+                if details.is_empty() {
+                    eprintln!("Logged in using ChatGPT");
+                } else {
+                    eprintln!("Logged in using ChatGPT ({})", details.join(", "));
+                }
                 std::process::exit(0);
             }
         },
