@@ -1068,6 +1068,12 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
+                    if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
+                        eprintln!(
+                            "[codex prompt debug] Response error: {}",
+                            unauthorized_transport
+                        );
+                    }
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
@@ -1078,7 +1084,12 @@ impl ModelClientSession {
                     );
                     continue;
                 }
-                Err(err) => return Err(map_api_error(err)),
+                Err(err) => {
+                    if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
+                        eprintln!("[codex prompt debug] Response error: {err}");
+                    }
+                    return Err(map_api_error(err));
+                }
             }
         }
     }
@@ -1168,6 +1179,12 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
+                    if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
+                        eprintln!(
+                            "[codex prompt debug] Response error: {}",
+                            unauthorized_transport
+                        );
+                    }
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
