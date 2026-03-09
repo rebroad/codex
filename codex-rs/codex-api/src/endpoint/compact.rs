@@ -2,6 +2,8 @@ use crate::auth::AuthProvider;
 use crate::common::CompactionInput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::prompt_debug_http::prompt_capture_write_output_json;
+use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
@@ -38,12 +40,18 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         body: serde_json::Value,
         extra_headers: HeaderMap,
     ) -> Result<Vec<ResponseItem>, ApiError> {
+        let request_json = serde_json::to_string_pretty(&body)
+            .unwrap_or_else(|_| "<unable to serialize compact payload>".to_string());
+        let capture = start_prompt_capture("responses_compact", Some(request_json.as_str()));
         let resp = self
             .session
             .execute(Method::POST, Self::path(), extra_headers, Some(body))
             .await?;
-        let parsed: CompactHistoryResponse =
+        let response_json: serde_json::Value =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
+        prompt_capture_write_output_json(capture.as_ref(), "Compaction response", &response_json);
+        let parsed: CompactHistoryResponse =
+            serde_json::from_value(response_json).map_err(|e| ApiError::Stream(e.to_string()))?;
         Ok(parsed.output)
     }
 
