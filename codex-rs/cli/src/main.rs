@@ -1401,6 +1401,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if subcommand_cli.web_search {
         interactive.web_search = true;
     }
+    if subcommand_cli.bare_prompt {
+        interactive.bare_prompt = true;
+    }
     if !subcommand_cli.images.is_empty() {
         interactive.images = subcommand_cli.images;
     }
@@ -1695,6 +1698,7 @@ mod tests {
                 "--oss",
                 "--full-auto",
                 "--search",
+                "--bare-prompt",
                 "--sandbox",
                 "workspace-write",
                 "--ask-for-approval",
@@ -1728,6 +1732,7 @@ mod tests {
             Some(std::path::Path::new("/tmp"))
         );
         assert!(interactive.web_search);
+        assert!(interactive.bare_prompt);
         let has_a = interactive
             .images
             .iter()

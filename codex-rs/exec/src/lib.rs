@@ -51,6 +51,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
+use code_core::Prompt;
 use codex_core::auth::AuthConfig;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
@@ -70,6 +71,7 @@ use codex_git_utils::get_git_repo_root;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -85,6 +87,7 @@ use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -149,6 +152,8 @@ impl RequestIdSequencer {
 }
 
 struct ExecRunArgs {
+    bare_prompt: bool,
+    developer_instructions_cli_override: bool,
     in_process_start_args: InProcessClientStartArgs,
     command: Option<ExecCommand>,
     config: Config,
@@ -162,6 +167,7 @@ struct ExecRunArgs {
     output_schema_path: Option<PathBuf>,
     prompt: Option<String>,
     skip_git_repo_check: bool,
+    system_prompt: Option<String>,
     stderr_with_ansi: bool,
 }
 
@@ -195,11 +201,24 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         color,
         last_message_file,
         json: json_mode,
+        list_models,
+        direct,
+        bare_prompt,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        system_prompt,
+        debug,
     } = cli;
+
+    let _backend_capture_guard = debug.then(BackendCaptureGuard::new);
+
+    if command.is_some() && (direct || list_models) {
+        anyhow::bail!(
+            "`--direct` and `--models` are only valid for top-level `codex exec` runs, not subcommands"
+        );
+    }
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -239,6 +258,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
+    let developer_instructions_cli_override = cli_kv_overrides
+        .iter()
+        .any(|(key, _)| key == "developer_instructions");
 
     let resolved_cwd = cwd.clone();
     let config_cwd = match resolved_cwd.as_deref() {
@@ -346,9 +368,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         js_repl_node_module_dirs: None,
         zsh_path: None,
         base_instructions: None,
-        developer_instructions: None,
+        developer_instructions: system_prompt.clone(),
         personality: None,
         compact_prompt: None,
+        bare_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
@@ -362,6 +385,48 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
+
+    if list_models {
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            /*enable_codex_api_key_env*/ true,
+            config.cli_auth_credentials_store_mode,
+        );
+        let models_manager = ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager,
+            config.model_catalog.clone(),
+            CollaborationModesConfig::default(),
+        );
+        let presets = models_manager
+            .list_models(RefreshStrategy::OnlineIfUncached)
+            .await;
+        if presets.is_empty() {
+            println!("No models are currently available.");
+            return Ok(());
+        }
+
+        println!("Available models:");
+        for preset in presets {
+            let default_marker = if preset.is_default { " (default)" } else { "" };
+            println!(
+                "  {}{} - {}",
+                preset.model, default_marker, preset.description
+            );
+            println!(
+                "    Default reasoning effort: {}",
+                preset.default_reasoning_effort
+            );
+            if !preset.supported_reasoning_efforts.is_empty() {
+                println!("    Supported reasoning efforts:");
+                for option in preset.supported_reasoning_efforts {
+                    println!("      - {}: {}", option.effort, option.description);
+                }
+            }
+        }
+
+        return Ok(());
+    }
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -385,6 +450,18 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     }) {
         eprintln!("{err}");
         std::process::exit(1);
+    }
+
+    if direct {
+        let prompt_text = resolve_prompt(prompt.clone());
+        return run_direct_request(
+            prompt_text,
+            &config,
+            bare_prompt,
+            system_prompt,
+            developer_instructions_cli_override,
+        )
+        .await;
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -447,6 +524,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     };
     run_exec_session(ExecRunArgs {
+        bare_prompt,
+        developer_instructions_cli_override,
         in_process_start_args,
         command,
         config,
@@ -460,6 +539,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema_path,
         prompt,
         skip_git_repo_check,
+        system_prompt,
         stderr_with_ansi,
     })
     .instrument(exec_span)
@@ -468,6 +548,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let ExecRunArgs {
+        bare_prompt,
+        developer_instructions_cli_override,
         in_process_start_args,
         command,
         config,
@@ -481,6 +563,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         output_schema_path,
         prompt,
         skip_git_repo_check,
+        system_prompt,
         stderr_with_ansi,
     } = args;
 
@@ -513,10 +596,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
+    let bare_prompt_developer_instructions =
+        if bare_prompt && (system_prompt.is_some() || developer_instructions_cli_override) {
+            config.developer_instructions.clone()
+        } else {
+            None
+        };
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
     if !skip_git_repo_check
+        && !bare_prompt
         && !dangerously_bypass_approvals_and_sandbox
         && get_git_repo_root(&default_cwd).is_none()
     {
@@ -540,7 +630,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadResume {
                         request_id: request_ids.next(),
-                        params: thread_resume_params_from_config(&config, thread_id),
+                        params: thread_resume_params_from_config(
+                            &config,
+                            thread_id,
+                            bare_prompt,
+                            bare_prompt_developer_instructions.clone(),
+                        ),
                     },
                     "thread/resume",
                 )
@@ -554,7 +649,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadStart {
                         request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config),
+                        params: thread_start_params_from_config(
+                            &config,
+                            bare_prompt,
+                            bare_prompt_developer_instructions.clone(),
+                        ),
                     },
                     "thread/start",
                 )
@@ -569,7 +668,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadStart {
                     request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config),
+                    params: thread_start_params_from_config(
+                        &config,
+                        bare_prompt,
+                        bare_prompt_developer_instructions,
+                    ),
                 },
                 "thread/start",
             )
@@ -848,7 +951,11 @@ fn sandbox_mode_from_policy(
     }
 }
 
-fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+fn thread_start_params_from_config(
+    config: &Config,
+    bare_prompt: bool,
+    bare_prompt_developer_instructions: Option<String>,
+) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
@@ -856,13 +963,24 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
-        config: config_request_overrides_from_config(config),
+        config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
+        base_instructions: bare_prompt.then(String::new),
+        developer_instructions: if bare_prompt {
+            Some(bare_prompt_developer_instructions.unwrap_or_default())
+        } else {
+            None
+        },
         ..ThreadStartParams::default()
     }
 }
 
-fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
+fn thread_resume_params_from_config(
+    config: &Config,
+    thread_id: String,
+    bare_prompt: bool,
+    bare_prompt_developer_instructions: Option<String>,
+) -> ThreadResumeParams {
     ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
@@ -871,16 +989,36 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
-        config: config_request_overrides_from_config(config),
+        config: config_request_overrides_from_config(config, bare_prompt),
+        base_instructions: bare_prompt.then(String::new),
+        developer_instructions: if bare_prompt {
+            Some(bare_prompt_developer_instructions.unwrap_or_default())
+        } else {
+            None
+        },
         ..ThreadResumeParams::default()
     }
 }
 
-fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .active_profile
-        .as_ref()
-        .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
+fn config_request_overrides_from_config(
+    config: &Config,
+    bare_prompt: bool,
+) -> Option<HashMap<String, Value>> {
+    let mut overrides = HashMap::new();
+
+    if let Some(profile) = config.active_profile.as_ref() {
+        overrides.insert("profile".to_string(), Value::String(profile.clone()));
+    }
+
+    if bare_prompt {
+        overrides.insert("bare_prompt".to_string(), json!(true));
+    }
+
+    if overrides.is_empty() {
+        None
+    } else {
+        Some(overrides)
+    }
 }
 
 fn approvals_reviewer_override_from_config(
@@ -1626,6 +1764,306 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
     }
 }
 
+async fn run_direct_request(
+    prompt_text: String,
+    config: &Config,
+    bare_prompt: bool,
+    system_prompt: Option<String>,
+    developer_instructions_cli_override: bool,
+) -> anyhow::Result<()> {
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ true,
+        config.cli_auth_credentials_store_mode,
+    );
+    let models_manager = ModelsManager::new(
+        config.codex_home.clone(),
+        auth_manager.clone(),
+        config.model_catalog.clone(),
+        CollaborationModesConfig::default(),
+    );
+    let auth_snapshot = auth_manager.auth().await;
+    let provider = config.model_provider.clone();
+    let conversation_id = ThreadId::new();
+    let model = models_manager
+        .get_default_model(&config.model, RefreshStrategy::OnlineIfUncached)
+        .await;
+    let model_info: ModelInfo = models_manager.get_model_info(&model, config).await;
+    let telemetry_auth_mode = auth_snapshot
+        .as_ref()
+        .map(|auth| TelemetryAuthMode::from(auth.auth_mode()));
+    let session_telemetry = SessionTelemetry::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        auth_snapshot
+            .as_ref()
+            .and_then(codex_core::CodexAuth::get_account_id),
+        auth_snapshot
+            .as_ref()
+            .and_then(codex_core::CodexAuth::get_account_email),
+        telemetry_auth_mode,
+        "codex exec --direct".to_string(),
+        config.otel.log_user_prompt,
+        user_agent(),
+        SessionSource::Exec,
+    );
+    let effective_reasoning_effort = config
+        .model_reasoning_effort
+        .or(model_info.default_reasoning_level)
+        .map(|effort| effort.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    eprintln!("model: {}", model_info.slug);
+    eprintln!("provider: {}", config.model_provider_id);
+    eprintln!("reasoning effort: {effective_reasoning_effort}");
+
+    let effective_system_prompt = if bare_prompt {
+        system_prompt.or_else(|| {
+            if developer_instructions_cli_override {
+                config.developer_instructions.clone()
+            } else {
+                None
+            }
+        })
+    } else {
+        system_prompt
+            .or_else(|| config.developer_instructions.clone())
+            .or_else(|| Some(DEFAULT_DIRECT_SYSTEM_PROMPT.to_string()))
+    };
+
+    let mut prompt = Prompt::default();
+    prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
+    if bare_prompt {
+        prompt.base_instructions.text = String::new();
+    } else if let Some(base_instructions) = &config.base_instructions {
+        prompt.base_instructions.text = base_instructions.clone();
+    }
+    let mut client_session = ModelClient::new(
+        Some(auth_manager),
+        conversation_id,
+        provider,
+        SessionSource::Exec,
+        config.model_verbosity,
+        config.features.enabled(Feature::EnableRequestCompression),
+        config.features.enabled(Feature::RuntimeMetrics),
+        /*beta_features_header*/ None,
+    )
+    .new_session();
+    let reasoning_summary = config
+        .model_reasoning_summary
+        .unwrap_or(model_info.default_reasoning_summary);
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            config.model_reasoning_effort,
+            reasoning_summary,
+            config.service_tier,
+            /*turn_metadata_header*/ None,
+        )
+        .await?;
+
+    let usage_store =
+        AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+            .await
+            .ok();
+    let account_key = auth_snapshot.as_ref().and_then(|auth| {
+        account_usage_key(
+            auth.get_account_id().as_deref(),
+            auth.get_account_email().as_deref(),
+        )
+    });
+    let account_display = auth_snapshot
+        .as_ref()
+        .and_then(|auth| account_usage_display(auth.get_account_email().as_deref()));
+
+    consume_direct_stream(&mut stream, usage_store, account_key, account_display).await
+}
+
+fn build_direct_prompt_inputs(system_prompt: Option<&str>, prompt_text: &str) -> Vec<ResponseItem> {
+    let mut items = Vec::with_capacity(2);
+    if let Some(system_prompt) = system_prompt {
+        items.push(ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: system_prompt.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+    }
+    items.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: prompt_text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    });
+    items
+}
+
+async fn consume_direct_stream(
+    stream: &mut ResponseStream,
+    usage_store: Option<std::sync::Arc<AccountUsageStore>>,
+    account_key: Option<String>,
+    account_display: Option<String>,
+) -> anyhow::Result<()> {
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
+    let mut printed_response = false;
+    let mut reasoning_summary_line = String::new();
+    let mut summary_active = false;
+
+    let flush_summary = |summary_active: &mut bool, reasoning_summary_line: &mut String| -> bool {
+        if *summary_active {
+            if !reasoning_summary_line.is_empty() {
+                eprintln!();
+                reasoning_summary_line.clear();
+            } else {
+                eprintln!();
+            }
+            *summary_active = false;
+            true
+        } else {
+            false
+        }
+    };
+
+    while let Some(event) = stream.next().await {
+        match event? {
+            ResponseEvent::Created => {}
+            ResponseEvent::OutputTextDelta(delta) => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+                stdout.write_all(delta.as_bytes())?;
+                stdout.flush()?;
+                printed_response = true;
+            }
+            ResponseEvent::OutputItemAdded(item) | ResponseEvent::OutputItemDone(item) => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+                if let Some(text) = assistant_text(&item)
+                    && !printed_response
+                {
+                    stdout.write_all(text.as_bytes())?;
+                    stdout.flush()?;
+                    printed_response = true;
+                }
+            }
+            ResponseEvent::ReasoningSummaryDelta { delta, .. } => {
+                reasoning_summary_line.push_str(&delta);
+                summary_active = true;
+                let colored = format!("(reasoning summary) {reasoning_summary_line}");
+                eprint!("\r{}", colored.yellow());
+                stderr.flush()?;
+            }
+            ResponseEvent::ReasoningContentDelta { delta, .. } => {
+                eprintln!("(reasoning detail) {delta}");
+            }
+            ResponseEvent::ReasoningSummaryPartAdded { .. } => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+            }
+            ResponseEvent::RateLimits(snapshot) => {
+                eprintln!("Rate limits: {snapshot:?}");
+            }
+            ResponseEvent::ServerModel(_)
+            | ResponseEvent::ServerReasoningIncluded(_)
+            | ResponseEvent::ModelsEtag(_) => {}
+            ResponseEvent::Completed {
+                token_usage,
+                capture_id,
+                transport_bytes,
+                ..
+            } => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+                if printed_response {
+                    stdout.write_all(b"\n")?;
+                    stdout.flush()?;
+                    printed_response = false;
+                }
+                if let Some(usage) = token_usage {
+                    print_token_usage(&usage);
+                    if let (Some(usage_store), Some(account_key)) =
+                        (usage_store.as_ref(), account_key.as_ref())
+                    {
+                        if let Some(account_display) = account_display.as_ref() {
+                            usage_store
+                                .cache_account_display(
+                                    account_key.as_str(),
+                                    account_display.clone(),
+                                )
+                                .await;
+                        }
+                        if let Err(err) = usage_store
+                            .record_account_token_usage(
+                                account_key.as_str(),
+                                &usage,
+                                AccountUsageEventMeta {
+                                    query_id: capture_id.as_deref(),
+                                    sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
+                                    recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                },
+                            )
+                            .await
+                        {
+                            eprintln!("failed to record account token usage: {err}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if printed_response {
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+    }
+    if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+        stderr.flush()?;
+    }
+    Ok(())
+}
+
+fn assistant_text(item: &ResponseItem) -> Option<String> {
+    if let ResponseItem::Message { role, content, .. } = item
+        && role == "assistant"
+    {
+        let mut text = String::new();
+        for chunk in content {
+            match chunk {
+                ContentItem::InputText { text: value }
+                | ContentItem::OutputText { text: value } => text.push_str(value),
+                ContentItem::InputImage { .. } => {}
+            }
+        }
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn print_token_usage(usage: &codex_protocol::protocol::TokenUsage) {
+    eprintln!(
+        "Token usage: total={} input={} cached_input={} output={} reasoning_output={}",
+        usage.total_tokens,
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        usage.reasoning_output_tokens
+    );
+}
+
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
     let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
@@ -1984,7 +2422,9 @@ mod tests {
             .await
             .expect("build config with manual-only review policy");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(
+            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
+        );
 
         assert_eq!(
             params.approvals_reviewer,
@@ -2007,7 +2447,9 @@ mod tests {
             .await
             .expect("build config with guardian review policy");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(
+            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
+        );
 
         assert_eq!(
             params.approvals_reviewer,
