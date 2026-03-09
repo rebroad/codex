@@ -2131,8 +2131,13 @@ impl Session {
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
+        let text = if state.session_configuration.original_config_do_not_use.bare_prompt {
+            String::new()
+        } else {
+            state.session_configuration.base_instructions.clone()
+        };
         BaseInstructions {
-            text: state.session_configuration.base_instructions.clone(),
+            text,
         }
     }
 
@@ -3454,6 +3459,9 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        if turn_context.config.bare_prompt {
+            return Vec::new();
+        }
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
@@ -6324,28 +6332,37 @@ pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
     turn_context: &TurnContext,
-    base_instructions: BaseInstructions,
+    mut base_instructions: BaseInstructions,
 ) -> Prompt {
-    let deferred_dynamic_tools = turn_context
-        .dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading)
-        .map(|tool| tool.name.as_str())
-        .collect::<HashSet<_>>();
-    let tools = if deferred_dynamic_tools.is_empty() {
-        router.model_visible_specs()
+    let tools = if turn_context.config.bare_prompt {
+        Vec::new()
     } else {
-        router
-            .model_visible_specs()
-            .into_iter()
-            .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
-            .collect()
+        let deferred_dynamic_tools = turn_context
+            .dynamic_tools
+            .iter()
+            .filter(|tool| tool.defer_loading)
+            .map(|tool| tool.name.as_str())
+            .collect::<HashSet<_>>();
+        if deferred_dynamic_tools.is_empty() {
+            router.model_visible_specs()
+        } else {
+            router
+                .model_visible_specs()
+                .into_iter()
+                .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
+                .collect()
+        }
     };
+    let parallel_tool_calls =
+        !turn_context.config.bare_prompt && turn_context.model_info.supports_parallel_tool_calls;
+    if turn_context.config.bare_prompt {
+        base_instructions.text.clear();
+    }
 
     Prompt {
         input,
         tools,
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
