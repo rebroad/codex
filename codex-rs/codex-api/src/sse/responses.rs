@@ -1,6 +1,9 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
+use crate::prompt_debug_http::PromptCaptureSession;
+use crate::prompt_debug_http::prompt_capture_append_output;
+use crate::prompt_debug_http::prompt_capture_append_reasoning;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
@@ -50,6 +53,7 @@ pub fn stream_from_fixture(
         tx_event,
         idle_timeout,
         /*telemetry*/ None,
+        /*capture*/ None,
     ));
     Ok(ResponseStream { rx_event })
 }
@@ -59,6 +63,7 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+    capture: Option<PromptCaptureSession>,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -99,7 +104,14 @@ pub fn spawn_response_stream(
                 .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                 .await;
         }
-        process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        process_sse(
+            stream_response.bytes,
+            tx_event,
+            idle_timeout,
+            telemetry,
+            capture,
+        )
+        .await;
     });
 
     ResponseStream { rx_event }
@@ -321,6 +333,7 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
+                            capture_id: None,
                         }));
                     }
                     Err(err) => {
@@ -359,8 +372,9 @@ pub async fn process_sse(
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    capture: Option<PromptCaptureSession>,
 ) {
-    let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
+    let capture_id = capture.as_ref().map(|session| session.id().to_string());
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
@@ -394,9 +408,6 @@ pub async fn process_sse(
         };
 
         trace!("SSE event: {}", &sse.data);
-        if debug_http {
-            eprintln!("[codex prompt debug] SSE event: {}", &sse.data);
-        }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -420,7 +431,33 @@ pub async fn process_sse(
         }
 
         match process_responses_event(event) {
-            Ok(Some(event)) => {
+            Ok(Some(mut event)) => {
+                match &event {
+                    ResponseEvent::OutputTextDelta(delta) => {
+                        if let Some(capture) = capture.as_ref() {
+                            prompt_capture_append_output(capture, delta);
+                        }
+                    }
+                    ResponseEvent::ReasoningSummaryDelta { delta, .. }
+                    | ResponseEvent::ReasoningContentDelta { delta, .. } => {
+                        if let Some(capture) = capture.as_ref() {
+                            prompt_capture_append_reasoning(capture, delta);
+                        }
+                    }
+                    ResponseEvent::Completed { .. } => {
+                        if let ResponseEvent::Completed { capture_id: id, .. } = &mut event {
+                            *id = capture_id.clone();
+                        }
+                    }
+                    ResponseEvent::Created
+                    | ResponseEvent::OutputItemDone(_)
+                    | ResponseEvent::OutputItemAdded(_)
+                    | ResponseEvent::ServerModel(_)
+                    | ResponseEvent::ServerReasoningIncluded(_)
+                    | ResponseEvent::ReasoningSummaryPartAdded { .. }
+                    | ResponseEvent::RateLimits(_)
+                    | ResponseEvent::ModelsEtag(_) => {}
+                }
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
                 if tx_event.send(Ok(event)).await.is_err() {
                     return;
@@ -519,7 +556,13 @@ mod tests {
         let stream =
             ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(16);
-        tokio::spawn(process_sse(Box::pin(stream), tx, idle_timeout(), None));
+        tokio::spawn(process_sse(
+            Box::pin(stream),
+            tx,
+            idle_timeout(),
+            None,
+            None,
+        ));
 
         let mut events = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -545,7 +588,13 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
         let stream = ReaderStream::new(std::io::Cursor::new(body))
             .map_err(|err| TransportError::Network(err.to_string()));
-        tokio::spawn(process_sse(Box::pin(stream), tx, idle_timeout(), None));
+        tokio::spawn(process_sse(
+            Box::pin(stream),
+            tx,
+            idle_timeout(),
+            None,
+            None,
+        ));
 
         let mut out = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -614,6 +663,7 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                ..
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
@@ -699,7 +749,7 @@ mod tests {
         let stream: ByteStream = Box::pin(stream);
 
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
-        tokio::spawn(process_sse(stream, tx, idle_timeout(), None));
+        tokio::spawn(process_sse(stream, tx, idle_timeout(), None, None));
 
         let events = tokio::time::timeout(Duration::from_millis(1000), async {
             let mut events = Vec::new();
@@ -716,6 +766,7 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                ..
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
@@ -898,7 +949,7 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(stream_response, idle_timeout(), None, None);
+        let mut stream = spawn_response_stream(stream_response, idle_timeout(), None, None, None);
         let event = stream
             .rx_event
             .recv()
@@ -940,7 +991,8 @@ mod tests {
             &events[1],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                ..
             } if response_id == "resp-1"
         );
     }
@@ -976,7 +1028,8 @@ mod tests {
             &events[2],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                ..
             } if response_id == "resp-1"
         );
     }

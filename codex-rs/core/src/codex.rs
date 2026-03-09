@@ -3696,6 +3696,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
+        query_id: Option<&str>,
     ) {
         if let Some(token_usage) = token_usage {
             let mut state = self.state.lock().await;
@@ -7380,6 +7381,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
+                capture_id,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -7388,8 +7390,12 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.update_token_usage_info(&turn_context, token_usage.as_ref())
-                    .await;
+                sess.update_token_usage_info(
+                    &turn_context,
+                    token_usage.as_ref(),
+                    capture_id.as_deref(),
+                )
+                .await;
                 should_emit_turn_diff = true;
 
                 needs_follow_up |= sess.has_pending_input().await;

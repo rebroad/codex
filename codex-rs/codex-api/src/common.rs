@@ -77,6 +77,7 @@ pub enum ResponseEvent {
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
+        capture_id: Option<String>,
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta {
