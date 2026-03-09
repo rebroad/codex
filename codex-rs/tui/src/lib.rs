@@ -752,6 +752,7 @@ pub async fn run_main(
         approval_policy,
         sandbox_mode,
         cwd,
+        bare_prompt: cli.bare_prompt.then_some(true),
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
