@@ -58,6 +58,20 @@ same bundle. If the file is empty, unreadable, or malformed, the affected Codex
 HTTP or secure websocket connection reports a user-facing error that points
 back to these environment variables.
 
+## Prompt HTTP Debug Logging
+
+Set `[prompt_debug_http]` in `config.toml` to control low-level Responses API debug traces:
+
+```toml
+[prompt_debug_http]
+enabled = true
+log_file = "/absolute/path/to/prompt-debug.log"
+```
+
+If `enabled = true` and `log_file` is omitted, debug output goes to `stderr`.
+`CODEX_PROMPT_DEBUG_HTTP=1` still force-enables this debug mode; if set,
+`CODEX_PROMPT_DEBUG_HTTP_LOGFILE` overrides the log file path.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

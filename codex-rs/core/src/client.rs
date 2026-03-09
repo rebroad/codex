@@ -56,6 +56,8 @@ use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
+use codex_api::prompt_debug_http_enabled;
+use codex_api::prompt_debug_http_log;
 use codex_api::requests::responses::Compression;
 use codex_otel::SessionTelemetry;
 
@@ -872,18 +874,15 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
-                        eprintln!(
-                            "[codex prompt debug] Response error: {}",
-                            unauthorized_transport
-                        );
+                    if prompt_debug_http_enabled() {
+                        prompt_debug_http_log(format!("Response error: {unauthorized_transport}"));
                     }
                     handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => {
-                    if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
-                        eprintln!("[codex prompt debug] Response error: {err}");
+                    if prompt_debug_http_enabled() {
+                        prompt_debug_http_log(format!("Response error: {err}"));
                     }
                     return Err(map_api_error(err));
                 }
@@ -962,11 +961,8 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
-                        eprintln!(
-                            "[codex prompt debug] Response error: {}",
-                            unauthorized_transport
-                        );
+                    if prompt_debug_http_enabled() {
+                        prompt_debug_http_log(format!("Response error: {unauthorized_transport}"));
                     }
                     handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;

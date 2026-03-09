@@ -372,6 +372,32 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+/// HTTP/SSE request debug tracing settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PromptDebugHttpToml {
+    /// When `true`, emits low-level Responses API HTTP/SSE/websocket payload logs.
+    pub enabled: Option<bool>,
+    /// Optional absolute log file path for debug output. When unset, logs go to stderr.
+    pub log_file: Option<AbsolutePathBuf>,
+}
+
+/// Effective HTTP/SSE request debug tracing settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PromptDebugHttpConfig {
+    pub enabled: bool,
+    pub log_file: Option<PathBuf>,
+}
+
+impl From<PromptDebugHttpToml> for PromptDebugHttpConfig {
+    fn from(toml: PromptDebugHttpToml) -> Self {
+        Self {
+            enabled: toml.enabled.unwrap_or(false),
+            log_file: toml.log_file.map(Into::into),
+        }
+    }
+}
+
 /// Memories settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

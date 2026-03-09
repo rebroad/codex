@@ -1,6 +1,8 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
+use crate::prompt_debug_http::prompt_debug_http_enabled;
+use crate::prompt_debug_http::prompt_debug_http_log;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
@@ -355,7 +357,7 @@ pub async fn process_sse(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
-    let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
+    let debug_http = prompt_debug_http_enabled();
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
@@ -390,7 +392,7 @@ pub async fn process_sse(
 
         trace!("SSE event: {}", &sse.data);
         if debug_http {
-            eprintln!("[codex prompt debug] SSE event: {}", &sse.data);
+            prompt_debug_http_log(format!("SSE event: {}", &sse.data));
         }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
