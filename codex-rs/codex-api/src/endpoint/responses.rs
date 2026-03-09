@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
@@ -71,14 +72,9 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
-        let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
-        if debug_http {
-            let request_url = self.session.provider().url_for_path(Self::path());
-            let body = serde_json::to_string_pretty(&request)
-                .unwrap_or_else(|_| "<unable to serialize payload>".to_string());
-            eprintln!("[codex prompt debug] POST {request_url}");
-            eprintln!("[codex prompt debug] Request JSON:\n{body}");
-        }
+        let request_json = serde_json::to_string_pretty(&request)
+            .unwrap_or_else(|_| "<unable to serialize payload>".to_string());
+        let capture = start_prompt_capture("responses_http", Some(request_json.as_str()));
 
         let ResponsesOptions {
             conversation_id,
@@ -103,7 +99,8 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream(body, headers, compression, turn_state).await
+        self.stream(body, headers, compression, turn_state, capture)
+            .await
     }
 
     fn path() -> &'static str {
@@ -127,6 +124,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
+        capture: Option<crate::prompt_debug_http::PromptCaptureSession>,
     ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
@@ -150,18 +148,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             )
             .await?;
 
-        if std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some() {
-            eprintln!(
-                "[codex prompt debug] Response status: {}",
-                stream_response.status
-            );
-        }
-
         Ok(spawn_response_stream(
             stream_response,
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            capture,
         ))
     }
 }
