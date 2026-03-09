@@ -85,6 +85,7 @@ use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -137,6 +138,7 @@ impl RequestIdSequencer {
 }
 
 struct ExecRunArgs {
+    bare_prompt: bool,
     in_process_start_args: InProcessClientStartArgs,
     command: Option<ExecCommand>,
     config: Config,
@@ -183,6 +185,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         color,
         last_message_file,
         json: json_mode,
+        bare_prompt,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
@@ -337,6 +340,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         developer_instructions: None,
         personality: None,
         compact_prompt: None,
+        bare_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
@@ -435,6 +439,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     };
     run_exec_session(ExecRunArgs {
+        bare_prompt,
         in_process_start_args,
         command,
         config,
@@ -456,6 +461,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let ExecRunArgs {
+        bare_prompt,
         in_process_start_args,
         command,
         config,
@@ -505,6 +511,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
     if !skip_git_repo_check
+        && !bare_prompt
         && !dangerously_bypass_approvals_and_sandbox
         && get_git_repo_root(&default_cwd).is_none()
     {
@@ -528,7 +535,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadResume {
                         request_id: request_ids.next(),
-                        params: thread_resume_params_from_config(&config, thread_id),
+                        params: thread_resume_params_from_config(&config, thread_id, bare_prompt),
                     },
                     "thread/resume",
                 )
@@ -542,7 +549,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadStart {
                         request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config),
+                        params: thread_start_params_from_config(&config, bare_prompt),
                     },
                     "thread/start",
                 )
@@ -557,7 +564,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadStart {
                     request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config),
+                    params: thread_start_params_from_config(&config, bare_prompt),
                 },
                 "thread/start",
             )
@@ -836,7 +843,7 @@ fn sandbox_mode_from_policy(
     }
 }
 
-fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+fn thread_start_params_from_config(config: &Config, bare_prompt: bool) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
@@ -844,13 +851,19 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
-        config: config_request_overrides_from_config(config),
+        config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
+        base_instructions: bare_prompt.then(String::new),
+        developer_instructions: bare_prompt.then(String::new),
         ..ThreadStartParams::default()
     }
 }
 
-fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
+fn thread_resume_params_from_config(
+    config: &Config,
+    thread_id: String,
+    bare_prompt: bool,
+) -> ThreadResumeParams {
     ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
@@ -859,16 +872,32 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
-        config: config_request_overrides_from_config(config),
+        config: config_request_overrides_from_config(config, bare_prompt),
+        base_instructions: bare_prompt.then(String::new),
+        developer_instructions: bare_prompt.then(String::new),
         ..ThreadResumeParams::default()
     }
 }
 
-fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .active_profile
-        .as_ref()
-        .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
+fn config_request_overrides_from_config(
+    config: &Config,
+    bare_prompt: bool,
+) -> Option<HashMap<String, Value>> {
+    let mut overrides = HashMap::new();
+
+    if let Some(profile) = config.active_profile.as_ref() {
+        overrides.insert("profile".to_string(), Value::String(profile.clone()));
+    }
+
+    if bare_prompt {
+        overrides.insert("bare_prompt".to_string(), json!(true));
+    }
+
+    if overrides.is_empty() {
+        None
+    } else {
+        Some(overrides)
+    }
 }
 
 fn approvals_reviewer_override_from_config(
