@@ -36,6 +36,20 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## Prompt HTTP Debug Logging
+
+Set `[prompt_debug_http]` in `config.toml` to control low-level Responses API debug traces:
+
+```toml
+[prompt_debug_http]
+enabled = true
+log_file = "/absolute/path/to/prompt-debug.log"
+```
+
+If `enabled = true` and `log_file` is omitted, debug output goes to `stderr`.
+`CODEX_PROMPT_DEBUG_HTTP=1` still force-enables this debug mode; if set,
+`CODEX_PROMPT_DEBUG_HTTP_LOGFILE` overrides the log file path.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
