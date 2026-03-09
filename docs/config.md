@@ -88,6 +88,18 @@ The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`
 If the `log_file` path contains `$$`, Codex replaces it with the current
 process PID (for example, `"/tmp/prompt-debug-$$.log"` -> `"/tmp/prompt-debug-12345.log"`).
 
+## Bare prompt mode
+
+Set `bare_prompt = true` in `config.toml` to disable built-in/system and
+contextual prompt scaffolding so only user text is sent.
+
+```toml
+bare_prompt = true
+```
+
+You can also enable this for a single `codex exec` invocation with
+`--bare-prompt`.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
