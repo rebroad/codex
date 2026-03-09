@@ -68,6 +68,24 @@ same bundle. If the file is empty, unreadable, or malformed, the affected Codex
 HTTP or secure websocket connection reports a user-facing error that points
 back to these environment variables.
 
+## Backend Query Capture
+
+Set `[prompt_debug_http]` in `config.toml` to capture backend query payloads as files:
+
+```toml
+[prompt_debug_http]
+enabled = true
+capture_input = true
+capture_output = true
+capture_reasoning = true
+capture_dir = "/tmp"
+```
+
+If `enabled = true`, capture files are written under `capture_dir` (defaults to `/tmp`).
+The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`,
+`CODEX_BACKEND_CAPTURE_OUTPUT`, `CODEX_BACKEND_CAPTURE_REASONING`, and
+`CODEX_BACKEND_CAPTURE_DIR` can force-enable or override runtime capture settings.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

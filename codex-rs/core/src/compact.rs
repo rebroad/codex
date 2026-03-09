@@ -31,6 +31,13 @@ use tracing::error;
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+pub(crate) fn maybe_capture_compaction_payload(
+    _sess: &Session,
+    _source: &str,
+    _body: &str,
+) -> Option<String> {
+    None
+}
 
 /// Controls whether compaction replacement history must include initial context.
 ///
@@ -192,6 +199,8 @@ async fn run_compact_task_inner(
     let history_items = history_snapshot.raw_items();
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
+    let _ =
+        maybe_capture_compaction_payload(sess.as_ref(), "local_compaction_summary", &summary_text);
     let user_messages = collect_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
@@ -427,8 +436,11 @@ async fn drain_to_completed(
                 sess.update_rate_limits(turn_context, snapshot).await;
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
-                sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
+                sess.update_token_usage_info(
+                    turn_context,
+                    token_usage.as_ref(),
+                    /*query_id*/ None,
+                ).await;
                 return Ok(());
             }
             Ok(_) => continue,
