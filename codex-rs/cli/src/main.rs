@@ -5,6 +5,7 @@ use clap_complete::Shell;
 use clap_complete::generate;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
+use codex_build_info::CODEX_BUILD_VERSION;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
@@ -54,8 +55,6 @@ use codex_core::config::find_codex_home;
 use codex_core::features::Stage;
 use codex_core::features::is_known_feature_key;
 use codex_core::terminal::TerminalName;
-
-const CODEX_BUILD_VERSION: &str = env!("CODEX_BUILD_VERSION");
 
 /// Codex CLI
 ///
