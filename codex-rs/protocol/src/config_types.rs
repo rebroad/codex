@@ -99,6 +99,7 @@ pub enum Personality {
     None,
     Friendly,
     Pragmatic,
+    Comedic,
 }
 
 #[derive(
