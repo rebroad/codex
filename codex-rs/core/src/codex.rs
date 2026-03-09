@@ -529,7 +529,11 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config).await;
+        let user_instructions = if config.bare_prompt {
+            None
+        } else {
+            get_user_instructions(&config).await
+        };
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -2149,9 +2153,16 @@ impl Session {
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
-        BaseInstructions {
-            text: state.session_configuration.base_instructions.clone(),
-        }
+        let text = if state
+            .session_configuration
+            .original_config_do_not_use
+            .bare_prompt
+        {
+            String::new()
+        } else {
+            state.session_configuration.base_instructions.clone()
+        };
+        BaseInstructions { text }
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
@@ -3553,6 +3564,9 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        if turn_context.config.bare_prompt {
+            return Vec::new();
+        }
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
@@ -6508,7 +6522,7 @@ pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
     turn_context: &TurnContext,
-    base_instructions: BaseInstructions,
+    mut base_instructions: BaseInstructions,
     tool_calls_blocked_pending_steer: bool,
 ) -> Prompt {
     let deferred_dynamic_tools = turn_context
@@ -6517,7 +6531,7 @@ pub(crate) fn build_prompt(
         .filter(|tool| tool.defer_loading)
         .map(|tool| tool.name.as_str())
         .collect::<HashSet<_>>();
-    let tools = if tool_calls_blocked_pending_steer {
+    let tools = if turn_context.config.bare_prompt || tool_calls_blocked_pending_steer {
         Vec::new()
     } else if deferred_dynamic_tools.is_empty() {
         router.model_visible_specs()
@@ -6528,8 +6542,12 @@ pub(crate) fn build_prompt(
             .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
             .collect()
     };
-    let parallel_tool_calls =
-        !tool_calls_blocked_pending_steer && turn_context.model_info.supports_parallel_tool_calls;
+    let parallel_tool_calls = !turn_context.config.bare_prompt
+        && !tool_calls_blocked_pending_steer
+        && turn_context.model_info.supports_parallel_tool_calls;
+    if turn_context.config.bare_prompt {
+        base_instructions.text.clear();
+    }
 
     Prompt {
         input,
