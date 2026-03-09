@@ -4,6 +4,9 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
+use crate::prompt_debug_http::prompt_capture_append_output;
+use crate::prompt_debug_http::prompt_capture_append_reasoning;
+use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::responses::ResponsesStreamEvent;
@@ -227,6 +230,9 @@ impl ResponsesWebsocketConnection {
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+        let request_json = serde_json::to_string_pretty(&request_body)
+            .unwrap_or_else(|_| "<unable to serialize websocket payload>".to_string());
+        let capture = start_prompt_capture("responses_websocket", Some(request_json.as_str()));
 
         let current_span = Span::current();
         tokio::spawn(
@@ -260,6 +266,7 @@ impl ResponsesWebsocketConnection {
                         idle_timeout,
                         telemetry,
                         connection_reused,
+                        capture,
                     )
                     .await
                 };
@@ -537,8 +544,9 @@ async fn run_websocket_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
+    capture: Option<crate::prompt_debug_http::PromptCaptureSession>,
 ) -> Result<(), ApiError> {
-    let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
+    let capture_id = capture.as_ref().map(|session| session.id().to_string());
     let mut last_server_model: Option<String> = None;
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
@@ -549,9 +557,6 @@ async fn run_websocket_response_stream(
         }
     };
     trace!("websocket request: {request_text}");
-    if debug_http {
-        eprintln!("[codex prompt debug] websocket request: {request_text}");
-    }
 
     let request_start = Instant::now();
     let result = ws_stream
@@ -595,9 +600,6 @@ async fn run_websocket_response_stream(
         match message {
             Message::Text(text) => {
                 trace!("websocket event: {text}");
-                if debug_http {
-                    eprintln!("[codex prompt debug] websocket event: {text}");
-                }
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
@@ -627,7 +629,34 @@ async fn run_websocket_response_stream(
                     last_server_model = Some(model);
                 }
                 match process_responses_event(event) {
-                    Ok(Some(event)) => {
+                    Ok(Some(mut event)) => {
+                        match &event {
+                            ResponseEvent::OutputTextDelta(delta) => {
+                                if let Some(capture) = capture.as_ref() {
+                                    prompt_capture_append_output(capture, delta);
+                                }
+                            }
+                            ResponseEvent::ReasoningSummaryDelta { delta, .. }
+                            | ResponseEvent::ReasoningContentDelta { delta, .. } => {
+                                if let Some(capture) = capture.as_ref() {
+                                    prompt_capture_append_reasoning(capture, delta);
+                                }
+                            }
+                            ResponseEvent::Completed { .. } => {
+                                if let ResponseEvent::Completed { capture_id: id, .. } = &mut event
+                                {
+                                    *id = capture_id.clone();
+                                }
+                            }
+                            ResponseEvent::Created
+                            | ResponseEvent::OutputItemDone(_)
+                            | ResponseEvent::OutputItemAdded(_)
+                            | ResponseEvent::ServerModel(_)
+                            | ResponseEvent::ServerReasoningIncluded(_)
+                            | ResponseEvent::ReasoningSummaryPartAdded { .. }
+                            | ResponseEvent::RateLimits(_)
+                            | ResponseEvent::ModelsEtag(_) => {}
+                        }
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;
                         if is_completed {

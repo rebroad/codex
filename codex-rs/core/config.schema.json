@@ -134,6 +134,36 @@
       },
       "type": "object"
     },
+    "AppServerLogMode": {
+      "enum": [
+        "stderr",
+        "log",
+        "log_and_stderr"
+      ],
+      "type": "string"
+    },
+    "AppServerLogToml": {
+      "additionalProperties": false,
+      "properties": {
+        "log_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute log file path for app-server tracing output."
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppServerLogMode"
+            }
+          ],
+          "description": "Log output mode: stderr, log, or log_and_stderr."
+        }
+      },
+      "type": "object"
+    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -1270,17 +1300,29 @@
       "additionalProperties": false,
       "description": "HTTP/SSE request debug tracing settings.",
       "properties": {
-        "enabled": {
-          "description": "When `true`, emits low-level Responses API HTTP/SSE/websocket payload logs.",
-          "type": "boolean"
-        },
-        "log_file": {
+        "capture_dir": {
           "allOf": [
             {
               "$ref": "#/definitions/AbsolutePathBuf"
             }
           ],
-          "description": "Optional absolute log file path for debug output. When unset, logs go to stderr."
+          "description": "Directory used for captured backend files."
+        },
+        "capture_input": {
+          "description": "Capture query input payloads.",
+          "type": "boolean"
+        },
+        "capture_output": {
+          "description": "Capture model output text payloads.",
+          "type": "boolean"
+        },
+        "capture_reasoning": {
+          "description": "Capture model reasoning payloads.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "When `true`, captures backend query payloads.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1885,6 +1927,14 @@
       ],
       "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
     },
+    "app_server_log": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AppServerLogToml"
+        }
+      ],
+      "description": "App-server tracing output configuration."
+    },
     "approval_policy": {
       "allOf": [
         {
@@ -1924,6 +1974,10 @@
       "format": "uint64",
       "minimum": 0.0,
       "type": "integer"
+    },
+    "bare_prompt": {
+      "description": "When set to `true`, disable built-in/system and contextual prompt scaffolding so only user text is sent.",
+      "type": "boolean"
     },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
@@ -2456,14 +2510,6 @@
       },
       "type": "object"
     },
-    "realtime": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/RealtimeToml"
-        }
-      ],
-      "default": null,
-      "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
     "prompt_debug_http": {
       "allOf": [
         {
@@ -2473,9 +2519,22 @@
       "default": null,
       "description": "HTTP/SSE request debug tracing settings."
     },
+    "realtime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeToml"
+        }
+      ],
+      "default": null,
+      "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
+    },
+    "sandbox_debug": {
+      "description": "When false, disable Linux sandbox debug logging written to /tmp. Defaults to true when unset.",
+      "type": "boolean"
     },
     "sandbox_mode": {
       "allOf": [
