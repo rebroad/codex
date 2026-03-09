@@ -7,6 +7,7 @@ use crate::codex::TurnContext;
 use crate::codex::built_tools;
 use crate::compact::InitialContextInjection;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::compact::maybe_capture_compaction_payload;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -137,6 +138,13 @@ async fn run_remote_compact_task_inner_impl(
             Err(err)
         })
         .await?;
+    let remote_summary_payload = serde_json::to_string_pretty(&new_history)
+        .unwrap_or_else(|_| "<unable to serialize remote compaction output>".to_string());
+    let _ = maybe_capture_compaction_payload(
+        sess.as_ref(),
+        "remote_compaction_replacement_history",
+        &remote_summary_payload,
+    );
     new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),

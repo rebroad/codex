@@ -13,6 +13,8 @@ use crate::config::types::MemoriesToml;
 use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
+use crate::config::types::PromptDebugHttpConfig;
+use crate::config::types::PromptDebugHttpToml;
 use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::RequirementSource;
 use assert_matches::assert_matches;
@@ -182,6 +184,42 @@ consolidation_model = "gpt-5"
             min_rollout_idle_hours: 24,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5".to_string()),
+        }
+    );
+
+    let prompt_debug_http = r#"
+[prompt_debug_http]
+enabled = true
+capture_input = false
+capture_output = true
+capture_reasoning = true
+capture_dir = "/tmp/prompt-debug-http"
+"#;
+    let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        Some(PromptDebugHttpToml {
+            enabled: Some(true),
+            capture_input: Some(false),
+            capture_output: Some(true),
+            capture_reasoning: Some(true),
+            capture_dir: Some(test_absolute_path("/tmp/prompt-debug-http")),
+        }),
+        prompt_debug_http_cfg.prompt_debug_http
+    );
+
+    let prompt_debug_http_effective: PromptDebugHttpConfig = prompt_debug_http_cfg
+        .prompt_debug_http
+        .expect("prompt_debug_http should be set")
+        .into();
+    assert_eq!(
+        prompt_debug_http_effective,
+        PromptDebugHttpConfig {
+            enabled: true,
+            capture_input: false,
+            capture_output: true,
+            capture_reasoning: true,
+            capture_dir: Some("/tmp/prompt-debug-http".into()),
         }
     );
 }

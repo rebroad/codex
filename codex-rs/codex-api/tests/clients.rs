@@ -208,6 +208,7 @@ async fn responses_client_uses_responses_path() -> Result<()> {
             HeaderMap::new(),
             Compression::None,
             /*turn_state*/ None,
+            /*capture*/ None,
         )
         .await?;
 
@@ -230,6 +231,7 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
             HeaderMap::new(),
             Compression::None,
             /*turn_state*/ None,
+            /*capture*/ None,
         )
         .await?;
 
