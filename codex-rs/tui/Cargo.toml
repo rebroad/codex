@@ -141,3 +141,6 @@ rand = { workspace = true }
 serial_test = { workspace = true }
 vt100 = { workspace = true }
 uuid = { workspace = true }
+
+[build-dependencies]
+chrono = { workspace = true }
