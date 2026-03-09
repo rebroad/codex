@@ -167,6 +167,7 @@ async fn load_config(
         developer_instructions: None,
         personality: None,
         compact_prompt: None,
+        bare_prompt: None,
         include_apply_patch_tool: Some(false),
         show_raw_agent_reasoning: None,
         tools_web_search_request: Some(false),

@@ -196,6 +196,7 @@ Start a fresh thread when you need a new Codex conversation.
     // current config settings.
     "model": "gpt-5.1-codex",
     "cwd": "/Users/me/project",
+    "config": { "bare_prompt": true }, // optional: send only user prompt text
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
@@ -233,7 +234,8 @@ To continue a stored session, call `thread/resume` with the `thread.id` you prev
 ```json
 { "method": "thread/resume", "id": 11, "params": {
     "threadId": "thr_123",
-    "personality": "friendly"
+    "personality": "friendly",
+    "config": { "bare_prompt": true }
 } }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```

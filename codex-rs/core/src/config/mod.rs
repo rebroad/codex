@@ -278,6 +278,10 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
+    /// When true, send only user prompt text without base/developer/contextual
+    /// prompt scaffolding.
+    pub bare_prompt: bool,
+
     /// Optional commit attribution text for commit message co-author trailers.
     ///
     /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
@@ -1228,6 +1232,10 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
+    /// When set to `true`, disable built-in/system and contextual prompt
+    /// scaffolding so only user text is sent.
+    pub bare_prompt: Option<bool>,
+
     /// Optional commit attribution text for commit message co-author trailers.
     ///
     /// Set to an empty string to disable automatic commit attribution.
@@ -1897,6 +1905,7 @@ pub struct ConfigOverrides {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
+    pub bare_prompt: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
@@ -2095,6 +2104,7 @@ impl Config {
             developer_instructions,
             personality,
             compact_prompt,
+            bare_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
@@ -2486,6 +2496,7 @@ impl Config {
             "experimental compact prompt file",
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
+        let bare_prompt = bare_prompt.or(cfg.bare_prompt).unwrap_or(false);
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
             .or(cfg.js_repl_node_path.map(Into::into));
@@ -2625,6 +2636,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            bare_prompt,
             commit_attribution,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
