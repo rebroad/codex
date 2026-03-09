@@ -182,6 +182,7 @@ Start a fresh thread when you need a new Codex conversation.
     // current config settings.
     "model": "gpt-5.1-codex",
     "cwd": "/Users/me/project",
+    "config": { "bare_prompt": true }, // optional: send only user prompt text
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
@@ -214,12 +215,13 @@ Start a fresh thread when you need a new Codex conversation.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, `"comedic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality` and `config.bare_prompt`:
 
 ```json
 { "method": "thread/resume", "id": 11, "params": {
     "threadId": "thr_123",
-    "personality": "friendly"
+    "personality": "friendly",
+    "config": { "bare_prompt": true }
 } }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
