@@ -17,6 +17,8 @@ use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::PluginConfig;
+use crate::config::types::PromptDebugHttpConfig as PromptDebugHttpSettings;
+use crate::config::types::PromptDebugHttpToml;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -58,6 +60,8 @@ use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
+use codex_api::PromptDebugHttpConfig as ApiPromptDebugHttpConfig;
+use codex_api::configure_prompt_debug_http;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
@@ -1188,6 +1192,10 @@ pub struct ConfigToml {
     /// Directory where Codex writes log files, for example `codex-tui.log`.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
+
+    /// HTTP/SSE request debug tracing settings.
+    #[serde(default)]
+    pub prompt_debug_http: Option<PromptDebugHttpToml>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -2534,6 +2542,12 @@ impl Config {
                 }
             },
         };
+        let prompt_debug_http: PromptDebugHttpSettings =
+            cfg.prompt_debug_http.unwrap_or_default().into();
+        configure_prompt_debug_http(ApiPromptDebugHttpConfig {
+            enabled: prompt_debug_http.enabled,
+            log_file: prompt_debug_http.log_file,
+        });
         Ok(config)
     }
 

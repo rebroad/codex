@@ -4,6 +4,8 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
+use crate::prompt_debug_http::prompt_debug_http_enabled;
+use crate::prompt_debug_http::prompt_debug_http_log;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::responses::ResponsesStreamEvent;
@@ -506,7 +508,7 @@ async fn run_websocket_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 ) -> Result<(), ApiError> {
-    let debug_http = std::env::var_os("CODEX_PROMPT_DEBUG_HTTP").is_some();
+    let debug_http = prompt_debug_http_enabled();
     let mut last_server_model: Option<String> = None;
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
@@ -518,7 +520,7 @@ async fn run_websocket_response_stream(
     };
     trace!("websocket request: {request_text}");
     if debug_http {
-        eprintln!("[codex prompt debug] websocket request: {request_text}");
+        prompt_debug_http_log(format!("websocket request: {request_text}"));
     }
 
     let request_start = Instant::now();
@@ -560,7 +562,7 @@ async fn run_websocket_response_stream(
             Message::Text(text) => {
                 trace!("websocket event: {text}");
                 if debug_http {
-                    eprintln!("[codex prompt debug] websocket event: {text}");
+                    prompt_debug_http_log(format!("websocket event: {text}"));
                 }
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
