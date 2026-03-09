@@ -5911,7 +5911,11 @@ impl ChatWidget {
 
     fn open_personality_popup_for_current_model(&mut self) {
         let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
-        let personalities = [Personality::Friendly, Personality::Pragmatic];
+        let personalities = [
+            Personality::Friendly,
+            Personality::Pragmatic,
+            Personality::Comedic,
+        ];
         let supports_personality = self.current_model_supports_personality();
 
         let items: Vec<SelectionItem> = personalities
@@ -7736,6 +7740,7 @@ impl ChatWidget {
             Personality::None => "None",
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
+            Personality::Comedic => "Comedic",
         }
     }
 
@@ -7744,6 +7749,7 @@ impl ChatWidget {
             Personality::None => "No personality instructions.",
             Personality::Friendly => "Warm, collaborative, and helpful.",
             Personality::Pragmatic => "Concise, task-focused, and direct.",
+            Personality::Comedic => "Playful, exaggerated, and sarcastic.",
         }
     }
 

@@ -3633,6 +3633,7 @@ impl App {
             Personality::None => "None",
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
+            Personality::Comedic => "Comedic",
         }
     }
 
