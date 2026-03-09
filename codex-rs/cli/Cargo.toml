@@ -71,3 +71,4 @@ sqlx = { workspace = true }
 
 [build-dependencies]
 time = { workspace = true, features = ["formatting", "macros"] }
+chrono = { workspace = true }

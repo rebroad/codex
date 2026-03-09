@@ -366,7 +366,11 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_plugins = plugins_manager.plugins_for_config(&config);
-        let loaded_skills = skills_manager.skills_for_config(&config);
+        let loaded_skills = if config.bare_prompt {
+            SkillLoadOutcome::default()
+        } else {
+            skills_manager.skills_for_config(&config)
+        };
 
         for err in &loaded_skills.errors {
             error!(
@@ -400,14 +404,18 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let allowed_skills_for_implicit_invocation =
-            loaded_skills.allowed_skills_for_implicit_invocation();
-        let user_instructions = get_user_instructions(
-            &config,
-            Some(&allowed_skills_for_implicit_invocation),
-            Some(loaded_plugins.capability_summaries()),
-        )
-        .await;
+        let user_instructions = if config.bare_prompt {
+            None
+        } else {
+            let allowed_skills_for_implicit_invocation =
+                loaded_skills.allowed_skills_for_implicit_invocation();
+            get_user_instructions(
+                &config,
+                Some(&allowed_skills_for_implicit_invocation),
+                Some(loaded_plugins.capability_summaries()),
+            )
+            .await
+        };
 
         let exec_policy = if crate::guardian::is_guardian_subagent_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -442,11 +450,15 @@ impl Codex {
         // 2. conversation history => session_meta.base_instructions
         // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = if config.bare_prompt {
+            String::new()
+        } else {
+            config
+                .base_instructions
+                .clone()
+                .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality))
+        };
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -2219,12 +2231,16 @@ impl Session {
                 &per_turn_config,
             )
             .await;
-        let skills_outcome = Arc::new(
-            self.services
-                .skills_manager
-                .skills_for_cwd(&session_configuration.cwd, false)
-                .await,
-        );
+        let skills_outcome = if per_turn_config.bare_prompt {
+            Arc::new(SkillLoadOutcome::default())
+        } else {
+            Arc::new(
+                self.services
+                    .skills_manager
+                    .skills_for_cwd(&session_configuration.cwd, false)
+                    .await,
+            )
+        };
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
@@ -3168,6 +3184,9 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        if turn_context.config.bare_prompt {
+            return Vec::new();
+        }
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
