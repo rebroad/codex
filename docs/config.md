@@ -50,6 +50,18 @@ If `enabled = true` and `log_file` is omitted, debug output goes to `stderr`.
 `CODEX_PROMPT_DEBUG_HTTP=1` still force-enables this debug mode; if set,
 `CODEX_PROMPT_DEBUG_HTTP_LOGFILE` overrides the log file path.
 
+## Bare prompt mode
+
+Set `bare_prompt = true` in `config.toml` to disable built-in/system and
+contextual prompt scaffolding so only user text is sent.
+
+```toml
+bare_prompt = true
+```
+
+You can also enable this for a single `codex exec` invocation with
+`--bare-prompt`.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

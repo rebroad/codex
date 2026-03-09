@@ -383,6 +383,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         approval_policy,
         sandbox_mode,
         cwd,
+        bare_prompt: cli.bare_prompt.then_some(true),
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),

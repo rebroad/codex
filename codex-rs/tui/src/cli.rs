@@ -98,6 +98,11 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Send only the user prompt text by disabling built-in and contextual
+    /// prompt scaffolding for this session.
+    #[arg(long = "bare-prompt", default_value_t = false)]
+    pub bare_prompt: bool,
+
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,

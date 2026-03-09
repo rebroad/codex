@@ -1777,6 +1777,10 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "bare_prompt": {
+      "description": "When set to `true`, disable built-in/system and contextual prompt scaffolding so only user text is sent.",
+      "type": "boolean"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"

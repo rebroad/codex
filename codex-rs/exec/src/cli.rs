@@ -99,6 +99,11 @@ pub struct Cli {
     )]
     pub json: bool,
 
+    /// Send only the user prompt text to the model by disabling built-in and
+    /// contextual prompt scaffolding for this session.
+    #[arg(long = "bare-prompt", default_value_t = false, global = true)]
+    pub bare_prompt: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(
         long = "output-last-message",
