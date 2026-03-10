@@ -1,7 +1,6 @@
 use codex_core::config::Config;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::items::TurnItem;
-use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
@@ -906,7 +905,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             eprintln!(
                 "{}\n{}",
                 "tokens used".style(self.magenta).style(self.italic),
-                format_with_separators(usage_info.total_token_usage.blended_total())
+                format!(
+                    "Token usage: total={} input={} cached_input={} output={} reasoning_output={}",
+                    usage_info.total_token_usage.total_tokens,
+                    usage_info.total_token_usage.input_tokens,
+                    usage_info.total_token_usage.cached_input_tokens,
+                    usage_info.total_token_usage.output_tokens,
+                    usage_info.total_token_usage.reasoning_output_tokens,
+                )
             );
         }
 
