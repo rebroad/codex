@@ -153,6 +153,14 @@ async fn shutdown_signal() -> IoResult<()> {
     }
 }
 
+#[cfg(unix)]
+fn reload_signal_stream() -> IoResult<tokio::signal::unix::Signal> {
+    use tokio::signal::unix::SignalKind;
+    use tokio::signal::unix::signal;
+
+    signal(SignalKind::hangup())
+}
+
 impl ShutdownState {
     fn requested(&self) -> bool {
         self.requested
@@ -628,6 +636,22 @@ pub async fn run_main_with_transport(
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
         let transport_shutdown_token = transport_shutdown_token.clone();
+        let mut reload_signal = {
+            #[cfg(unix)]
+            {
+                match reload_signal_stream() {
+                    Ok(signal) => Some(signal),
+                    Err(err) => {
+                        warn!("failed to listen for reload signal: {err}");
+                        None
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        };
         async move {
             let mut listen_for_threads = true;
             let mut shutdown_state = ShutdownState::default();
@@ -654,6 +678,16 @@ pub async fn run_main_with_transport(
                         }
                         let running_turn_count = *running_turn_count_rx.borrow();
                         shutdown_state.on_signal(connections.len(), running_turn_count);
+                    }
+                    _ = async {
+                        if let Some(signal) = reload_signal.as_mut() {
+                            signal.recv().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        let auth_changed = processor.reload_runtime_state().await;
+                        info!("reload signal applied (authChanged={auth_changed})");
                     }
                     changed = running_turn_count_rx.changed(), if graceful_signal_restart_enabled && shutdown_state.requested() => {
                         if changed.is_err() {
