@@ -29,6 +29,7 @@ use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigReloadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
@@ -725,6 +726,16 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::ConfigReload {
+                request_id,
+                params: _,
+            } => {
+                self.handle_config_reload(ConnectionRequestId {
+                    connection_id,
+                    request_id,
+                })
+                .await;
+            }
             ClientRequest::ConfigRequirementsRead {
                 request_id,
                 params: _,
@@ -849,6 +860,10 @@ impl MessageProcessor {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
+    }
+
+    pub(crate) async fn reload_runtime_state(&self) -> bool {
+        self.codex_message_processor.reload_runtime_state().await
     }
 
     async fn handle_config_value_write(
@@ -980,6 +995,12 @@ impl MessageProcessor {
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
+    }
+
+    async fn handle_config_reload(&self, request_id: ConnectionRequestId) {
+        let auth_changed = self.reload_runtime_state().await;
+        let response = ConfigReloadResponse { auth_changed };
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn handle_config_requirements_read(&self, request_id: ConnectionRequestId) {
