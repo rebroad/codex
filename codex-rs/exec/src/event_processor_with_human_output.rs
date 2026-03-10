@@ -11,7 +11,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_build_info::CODEX_BUILD_VERSION;
 use codex_core::WireApi;
 use codex_core::config::Config;
-use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use owo_colors::OwoColorize;
@@ -383,7 +382,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             eprintln!(
                 "{}\n{}",
                 "tokens used".style(self.dimmed),
-                format_with_separators(blended_total(usage))
+                format!(
+                    "Token usage: blended_total={} total={} input={} cached_input={} output={} reasoning_output={}",
+                    blended_total(usage),
+                    usage.total.total_tokens,
+                    usage.total.input_tokens,
+                    usage.total.cached_input_tokens,
+                    usage.total.output_tokens,
+                    usage.total.reasoning_output_tokens,
+                )
             );
         }
 
