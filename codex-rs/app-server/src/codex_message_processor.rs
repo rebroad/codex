@@ -448,6 +448,52 @@ impl CodexMessageProcessor {
         }
     }
 
+    pub(crate) async fn reload_user_config(&self) {
+        let thread_ids = self.thread_manager.list_thread_ids().await;
+        for thread_id in thread_ids {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                continue;
+            };
+            if let Err(err) = thread.submit(Op::ReloadUserConfig).await {
+                warn!("failed to request user config reload: {err}");
+            }
+        }
+    }
+
+    pub(crate) async fn reload_auth_and_notify(&self) -> bool {
+        let changed = self.auth_manager.reload();
+        if !changed {
+            return false;
+        }
+
+        replace_cloud_requirements_loader(
+            self.cloud_requirements.as_ref(),
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            self.config.codex_home.clone(),
+        );
+        sync_default_client_residency_requirement(
+            &self.cli_overrides,
+            self.cloud_requirements.as_ref(),
+        )
+        .await;
+
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
+        true
+    }
+
+    pub(crate) async fn reload_runtime_state(&self) -> bool {
+        let auth_changed = self.reload_auth_and_notify().await;
+        self.reload_user_config().await;
+        self.clear_plugin_related_caches();
+        self.maybe_start_curated_repo_sync_for_latest_config().await;
+        auth_changed
+    }
+
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
@@ -885,7 +931,8 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
-            | ClientRequest::ConfigBatchWrite { .. } => {
+            | ClientRequest::ConfigBatchWrite { .. }
+            | ClientRequest::ConfigReload { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
             ClientRequest::ConfigRequirementsRead { .. } => {
@@ -5821,6 +5868,19 @@ impl CodexMessageProcessor {
         app_server_client_name: Option<String>,
     ) {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+        if params.input.len() == 1
+            && let Some(V2UserInput::Text { text, .. }) = params.input.first()
+            && text.trim().eq_ignore_ascii_case("/reload")
+        {
+            let auth_changed = self.reload_runtime_state().await;
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("Reloaded config and auth (authChanged={auth_changed})."),
+                data: None,
+            };
             self.outgoing.send_error(request_id, error).await;
             return;
         }

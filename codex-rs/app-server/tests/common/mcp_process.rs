@@ -699,6 +699,10 @@ impl McpProcess {
         self.send_request("config/batchWrite", params).await
     }
 
+    pub async fn send_config_reload_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("config/reload", None).await
+    }
+
     /// Send an `account/logout` JSON-RPC request.
     pub async fn send_logout_account_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("account/logout", None).await
