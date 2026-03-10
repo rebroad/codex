@@ -4774,6 +4774,29 @@
         },
         "method": {
           "enum": [
+            "config/reload"
+          ],
+          "title": "Config/reloadRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Config/reloadRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "configRequirements/read"
           ],
           "title": "ConfigRequirements/readRequestMethod",

@@ -496,6 +496,10 @@ client_request_definitions! {
         params: v2::ConfigBatchWriteParams,
         response: v2::ConfigWriteResponse,
     },
+    ConfigReload => "config/reload" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::ConfigReloadResponse,
+    },
 
     ConfigRequirementsRead => "configRequirements/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
