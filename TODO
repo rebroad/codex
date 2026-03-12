@@ -1,0 +1,16 @@
+=Explore "encrypted_content" in "codex prompt debug".
+=Explore "obfuscation" in "codex prompt debug".
+=Try to reduce repetition being send to the backend-api, e.g. "You are Codex".
+=See if we have a unique id per input/output/reasoning - if so display it can capture to files. Maybe use the id sent from the app-server client?
+
+=Ask how do we toggle the captures while the app-server is already running. Do we need to send a SIGHUP to it to get it to re-read the config.toml file?
+=Does tokens_per_pct need to be per model?
+=Create tool to convert codex-super logs to human readable
+=Remove human-readable output from codex itself - use tools instead to convert
+=What does Ctrl+L do in codex and why is it disabled during task in progress?
+=Make Ctrl+C exit codex when in "codex resume --all" menu selection
+=Add context window wise to "codex resume --all" menu selection.
+=Suppress resets_at wobble by storing the previous value. If new value close to previous value, don't report.
+="codex status" is STILL showing a higher estimated percentage than the codex_usage.txt file - why? Is the math different? Or if not, are additional tokens being used since the last log entry to codex_usage.txt?
+=tokens_per_pct: try the lowest out of total vs cached_input+output+reasoning
+=Remove SIGUSR2 exit 77 thingy (regular kill is handled fined by supervisor)
