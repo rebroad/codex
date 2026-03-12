@@ -2384,6 +2384,26 @@
       "default": null,
       "description": "HTTP/SSE request debug tracing settings."
     },
+    "rate_limit_short_reset_at_offset_seconds": {
+      "description": "Offset applied to backend-provided short-window rate limit reset timestamps, in seconds.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "rate_limit_short_used_percent_offset": {
+      "description": "Offset applied to backend-provided short-window rate limit used percentages.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "rate_limit_weekly_reset_at_offset_seconds": {
+      "description": "Offset applied to backend-provided weekly rate limit reset timestamps, in seconds.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "rate_limit_weekly_used_percent_offset": {
+      "description": "Offset applied to backend-provided weekly rate limit used percentages.",
+      "format": "int64",
+      "type": "integer"
+    },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"

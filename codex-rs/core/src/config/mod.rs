@@ -477,6 +477,18 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Offset applied to backend-provided short-window rate limit reset timestamps, in seconds.
+    pub rate_limit_short_reset_at_offset_seconds: i64,
+
+    /// Maximum value applied to backend-provided short-window rate limit used percentages.
+    pub rate_limit_short_used_percent_max: Option<i64>,
+
+    /// Offset applied to backend-provided weekly rate limit reset timestamps, in seconds.
+    pub rate_limit_weekly_reset_at_offset_seconds: i64,
+
+    /// Maximum value applied to backend-provided weekly rate limit used percentages.
+    pub rate_limit_weekly_used_percent_max: Option<i64>,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
 
@@ -1369,6 +1381,18 @@ pub struct ConfigToml {
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
+
+    /// Offset applied to backend-provided short-window rate limit reset timestamps, in seconds.
+    pub rate_limit_short_reset_at_offset_seconds: Option<i64>,
+
+    /// Maximum value applied to backend-provided short-window rate limit used percentages.
+    pub rate_limit_short_used_percent_max: Option<i64>,
+
+    /// Offset applied to backend-provided weekly rate limit reset timestamps, in seconds.
+    pub rate_limit_weekly_reset_at_offset_seconds: Option<i64>,
+
+    /// Maximum value applied to backend-provided weekly rate limit used percentages.
+    pub rate_limit_weekly_used_percent_max: Option<i64>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
@@ -2524,6 +2548,12 @@ impl Config {
                 .clone()
                 .or(cfg.model_catalog_json.clone()),
         )?;
+        let rate_limit_short_reset_at_offset_seconds =
+            cfg.rate_limit_short_reset_at_offset_seconds.unwrap_or(0);
+        let rate_limit_short_used_percent_max = cfg.rate_limit_short_used_percent_max;
+        let rate_limit_weekly_reset_at_offset_seconds =
+            cfg.rate_limit_weekly_reset_at_offset_seconds.unwrap_or(0);
+        let rate_limit_weekly_used_percent_max = cfg.rate_limit_weekly_used_percent_max;
 
         let log_dir = cfg
             .log_dir
@@ -2702,6 +2732,10 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            rate_limit_short_reset_at_offset_seconds,
+            rate_limit_short_used_percent_max,
+            rate_limit_weekly_reset_at_offset_seconds,
+            rate_limit_weekly_used_percent_max,
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {

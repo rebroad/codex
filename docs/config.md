@@ -90,6 +90,24 @@ You can also enable this for a single `codex exec` invocation with
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
 
+## Rate limit testing offsets
+
+Use these optional keys to shift backend rate-limit snapshots for testing:
+
+```toml
+rate_limit_short_reset_at_offset_seconds = 0
+rate_limit_short_used_percent_max = 100
+rate_limit_weekly_reset_at_offset_seconds = 0
+rate_limit_weekly_used_percent_max = 100
+```
+
+`rate_limit_short_reset_at_offset_seconds` shifts the backend-provided short-window reset timestamp (seconds since epoch).
+`rate_limit_short_used_percent_max` clamps the backend-provided short-window used percentage to a maximum before the UI computes
+the remaining percentage.
+`rate_limit_weekly_reset_at_offset_seconds` shifts the backend-provided weekly reset timestamp (seconds since epoch).
+`rate_limit_weekly_used_percent_max` clamps the backend-provided weekly used percentage to a maximum before the UI computes
+the remaining percentage.
+
 ## Plan mode defaults
 
 `plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning

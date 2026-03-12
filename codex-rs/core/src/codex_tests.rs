@@ -1709,6 +1709,85 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     );
 }
 
+#[tokio::test]
+async fn update_rate_limits_applies_offsets_before_store() {
+    let (session, mut turn_context, _rx) = make_session_and_context_with_rx().await;
+    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    turn_context.config.rate_limit_short_used_percent_max = Some(90);
+    turn_context.config.rate_limit_short_reset_at_offset_seconds = 120;
+    turn_context.config.rate_limit_weekly_used_percent_max = Some(65);
+    turn_context
+        .config
+        .rate_limit_weekly_reset_at_offset_seconds = 240;
+
+    let snapshot = RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 95.0,
+            window_minutes: Some(300),
+            resets_at: Some(1_700_000_000),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 70.0,
+            window_minutes: Some(10080),
+            resets_at: Some(1_700_000_600),
+        }),
+        credits: None,
+        plan_type: None,
+    };
+
+    session.update_rate_limits(turn_context, snapshot).await;
+
+    let stored = {
+        let state = session.state.lock().await;
+        state
+            .latest_rate_limits
+            .clone()
+            .expect("rate limits stored")
+    };
+    let primary = stored.primary.expect("primary rate limit");
+    let secondary = stored.secondary.expect("secondary rate limit");
+    assert_eq!(primary.used_percent, 90.0);
+    assert_eq!(primary.resets_at, Some(1_700_000_120));
+    assert_eq!(secondary.used_percent, 65.0);
+    assert_eq!(secondary.resets_at, Some(1_700_000_840));
+}
+
+#[tokio::test]
+async fn update_rate_limits_clamps_used_percent_lower_bound() {
+    let (session, mut turn_context, _rx) = make_session_and_context_with_rx().await;
+    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    turn_context.config.rate_limit_short_used_percent_max = Some(0);
+    turn_context.config.rate_limit_short_reset_at_offset_seconds = -120;
+
+    let snapshot = RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 5.0,
+            window_minutes: Some(15),
+            resets_at: Some(1_700_000_000),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: None,
+    };
+
+    session.update_rate_limits(turn_context, snapshot).await;
+
+    let stored = {
+        let state = session.state.lock().await;
+        state
+            .latest_rate_limits
+            .clone()
+            .expect("rate limits stored")
+    };
+    let primary = stored.primary.expect("primary rate limit");
+    assert_eq!(primary.used_percent, 0.0);
+    assert_eq!(primary.resets_at, Some(1_699_999_880));
+}
+
 #[test]
 fn prefers_structured_content_when_present() {
     let ctr = McpCallToolResult {

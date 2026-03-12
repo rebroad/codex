@@ -18,6 +18,7 @@ use crate::history_cell::HistoryCell;
 use crate::insert_history::write_spans;
 use chrono::Local;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::RateLimitAdjustments;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::WireApi;
@@ -51,8 +52,21 @@ pub(crate) async fn render_status_lines_for_cli(
 ) -> Vec<String> {
     let auth = auth_manager.auth().await;
     let mut plan_type = auth.as_ref().and_then(CodexAuth::account_plan_type);
+    let rate_limit_adjustments = RateLimitAdjustments {
+        short_reset_at_seconds: config.rate_limit_short_reset_at_offset_seconds,
+        short_used_percent_max: config.rate_limit_short_used_percent_max,
+        weekly_reset_at_seconds: config.rate_limit_weekly_reset_at_offset_seconds,
+        weekly_used_percent_max: config.rate_limit_weekly_used_percent_max,
+    };
     let rate_limits = match auth {
-        Some(auth) => fetch_rate_limits(config.chatgpt_base_url.clone(), auth).await,
+        Some(auth) => {
+            fetch_rate_limits(
+                config.chatgpt_base_url.clone(),
+                auth,
+                rate_limit_adjustments,
+            )
+            .await
+        }
         None => Vec::new(),
     };
     if let Some(rate_limit_plan) = rate_limits.iter().find_map(|snapshot| snapshot.plan_type) {
@@ -128,9 +142,17 @@ pub(crate) async fn render_status_lines_for_cli(
         .collect()
 }
 
-pub(crate) async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
+pub(crate) async fn fetch_rate_limits(
+    base_url: String,
+    auth: CodexAuth,
+    rate_limit_adjustments: RateLimitAdjustments,
+) -> Vec<RateLimitSnapshot> {
     match BackendClient::from_auth(base_url, &auth) {
-        Ok(client) => client.get_rate_limits_many().await.unwrap_or_default(),
+        Ok(client) => client
+            .with_rate_limit_adjustments(rate_limit_adjustments)
+            .get_rate_limits_many()
+            .await
+            .unwrap_or_default(),
         Err(_) => Vec::new(),
     }
 }

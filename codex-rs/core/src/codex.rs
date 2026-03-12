@@ -242,6 +242,7 @@ use crate::protocol::NetworkApprovalContext;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
+use crate::protocol::RateLimitWindow;
 use crate::protocol::ReasoningContentDeltaEvent;
 use crate::protocol::ReasoningRawContentDeltaEvent;
 use crate::protocol::RequestUserInputEvent;
@@ -3694,6 +3695,61 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
+        const WEEKLY_WINDOW_MINUTES: i64 = 60 * 24 * 7;
+        let short_used_percent_max = turn_context.config.rate_limit_short_used_percent_max;
+        let short_reset_at_offset_seconds =
+            turn_context.config.rate_limit_short_reset_at_offset_seconds;
+        let weekly_used_percent_max = turn_context.config.rate_limit_weekly_used_percent_max;
+        let weekly_reset_at_offset_seconds = turn_context
+            .config
+            .rate_limit_weekly_reset_at_offset_seconds;
+        let resolve_limits =
+            |window_minutes: Option<i64>, fallback_is_weekly: bool| -> (Option<i64>, i64) {
+                let is_weekly = match window_minutes {
+                    Some(minutes) => minutes >= WEEKLY_WINDOW_MINUTES,
+                    None => fallback_is_weekly,
+                };
+                if is_weekly {
+                    (weekly_used_percent_max, weekly_reset_at_offset_seconds)
+                } else {
+                    (short_used_percent_max, short_reset_at_offset_seconds)
+                }
+            };
+        let primary = new_rate_limits.primary.map(|window| {
+            let (used_percent_max, reset_at_offset_seconds) =
+                resolve_limits(window.window_minutes, false);
+            let used_percent_max = used_percent_max.map(|value| value.clamp(0, 100) as f64);
+            let used_percent = used_percent_max
+                .map_or(window.used_percent, |value| window.used_percent.min(value));
+            let resets_at = window
+                .resets_at
+                .map(|value| value.saturating_add(reset_at_offset_seconds));
+            RateLimitWindow {
+                used_percent,
+                resets_at,
+                ..window
+            }
+        });
+        let secondary = new_rate_limits.secondary.map(|window| {
+            let (used_percent_max, reset_at_offset_seconds) =
+                resolve_limits(window.window_minutes, true);
+            let used_percent_max = used_percent_max.map(|value| value.clamp(0, 100) as f64);
+            let used_percent = used_percent_max
+                .map_or(window.used_percent, |value| window.used_percent.min(value));
+            let resets_at = window
+                .resets_at
+                .map(|value| value.saturating_add(reset_at_offset_seconds));
+            RateLimitWindow {
+                used_percent,
+                resets_at,
+                ..window
+            }
+        });
+        let new_rate_limits = RateLimitSnapshot {
+            primary,
+            secondary,
+            ..new_rate_limits
+        };
         {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);

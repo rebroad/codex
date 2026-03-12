@@ -105,9 +105,20 @@ pub struct Client {
     user_agent: Option<HeaderValue>,
     chatgpt_account_id: Option<String>,
     path_style: PathStyle,
+    rate_limit_adjustments: RateLimitAdjustments,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RateLimitAdjustments {
+    pub short_reset_at_seconds: i64,
+    pub short_used_percent_max: Option<i64>,
+    pub weekly_reset_at_seconds: i64,
+    pub weekly_used_percent_max: Option<i64>,
 }
 
 impl Client {
+    const WEEKLY_WINDOW_MINUTES: i64 = 60 * 24 * 7;
+
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let mut base_url = base_url.into();
         // Normalize common ChatGPT hostnames to include /backend-api so we hit the WHAM paths.
@@ -130,6 +141,7 @@ impl Client {
             user_agent: None,
             chatgpt_account_id: None,
             path_style,
+            rate_limit_adjustments: RateLimitAdjustments::default(),
         })
     }
 
@@ -146,6 +158,11 @@ impl Client {
 
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
         self.bearer_token = Some(token.into());
+        self
+    }
+
+    pub fn with_rate_limit_adjustments(mut self, adjustments: RateLimitAdjustments) -> Self {
+        self.rate_limit_adjustments = adjustments;
         self
     }
 
@@ -262,7 +279,10 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
-        Ok(Self::rate_limit_snapshots_from_payload(payload))
+        Ok(Self::rate_limit_snapshots_from_payload(
+            payload,
+            self.rate_limit_adjustments,
+        ))
     }
 
     pub async fn list_tasks(
@@ -395,6 +415,7 @@ impl Client {
     // rate limit helpers
     fn rate_limit_snapshots_from_payload(
         payload: RateLimitStatusPayload,
+        rate_limit_adjustments: RateLimitAdjustments,
     ) -> Vec<RateLimitSnapshot> {
         let plan_type = Some(Self::map_plan_type(payload.plan_type));
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
@@ -403,6 +424,7 @@ impl Client {
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
             plan_type,
+            rate_limit_adjustments,
         )];
         if let Some(additional) = payload.additional_rate_limits.flatten() {
             snapshots.extend(additional.into_iter().map(|details| {
@@ -412,6 +434,7 @@ impl Client {
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
                     None,
                     plan_type,
+                    rate_limit_adjustments,
                 )
             }));
         }
@@ -424,11 +447,20 @@ impl Client {
         rate_limit: Option<crate::types::RateLimitStatusDetails>,
         credits: Option<crate::types::CreditStatusDetails>,
         plan_type: Option<AccountPlanType>,
+        rate_limit_adjustments: RateLimitAdjustments,
     ) -> RateLimitSnapshot {
         let (primary, secondary) = match rate_limit {
             Some(details) => (
-                Self::map_rate_limit_window(details.primary_window),
-                Self::map_rate_limit_window(details.secondary_window),
+                Self::map_rate_limit_window(
+                    details.primary_window,
+                    rate_limit_adjustments,
+                    RateLimitWindowKind::Short,
+                ),
+                Self::map_rate_limit_window(
+                    details.secondary_window,
+                    rate_limit_adjustments,
+                    RateLimitWindowKind::Weekly,
+                ),
             ),
             None => (None, None),
         };
@@ -444,12 +476,35 @@ impl Client {
 
     fn map_rate_limit_window(
         window: Option<Option<Box<crate::types::RateLimitWindowSnapshot>>>,
+        rate_limit_adjustments: RateLimitAdjustments,
+        fallback_kind: RateLimitWindowKind,
     ) -> Option<RateLimitWindow> {
         let snapshot = window.flatten().map(|details| *details)?;
-
-        let used_percent = f64::from(snapshot.used_percent);
         let window_minutes = Self::window_minutes_from_seconds(snapshot.limit_window_seconds);
-        let resets_at = Some(i64::from(snapshot.reset_at));
+        let use_weekly_offsets = match window_minutes {
+            Some(minutes) => minutes >= Self::WEEKLY_WINDOW_MINUTES,
+            None => matches!(fallback_kind, RateLimitWindowKind::Weekly),
+        };
+        let (used_percent_max, reset_at_offset) = if use_weekly_offsets {
+            (
+                rate_limit_adjustments.weekly_used_percent_max,
+                rate_limit_adjustments.weekly_reset_at_seconds,
+            )
+        } else {
+            (
+                rate_limit_adjustments.short_used_percent_max,
+                rate_limit_adjustments.short_reset_at_seconds,
+            )
+        };
+        let used_percent_raw = i64::from(snapshot.used_percent);
+        let used_percent = used_percent_max
+            .map(|value| value.clamp(0, 100) as i64)
+            .map_or(used_percent_raw, |value| used_percent_raw.min(value));
+        let used_percent = used_percent.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        let used_percent = f64::from(used_percent);
+        let resets_at_raw = i64::from(snapshot.reset_at) + reset_at_offset;
+        let resets_at = resets_at_raw.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        let resets_at = Some(i64::from(resets_at));
         Some(RateLimitWindow {
             used_percent,
             window_minutes,
@@ -492,6 +547,12 @@ impl Client {
         let seconds_i64 = i64::from(seconds);
         Some((seconds_i64 + 59) / 60)
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RateLimitWindowKind {
+    Short,
+    Weekly,
 }
 
 #[cfg(test)]
@@ -540,7 +601,8 @@ mod tests {
             }))),
         };
 
-        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        let snapshots =
+            Client::rate_limit_snapshots_from_payload(payload, RateLimitAdjustments::default());
         assert_eq!(snapshots.len(), 2);
 
         assert_eq!(snapshots[0].limit_id.as_deref(), Some("codex"));
@@ -586,13 +648,48 @@ mod tests {
             credits: None,
         };
 
-        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        let snapshots =
+            Client::rate_limit_snapshots_from_payload(payload, RateLimitAdjustments::default());
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].limit_id.as_deref(), Some("codex"));
         assert_eq!(snapshots[0].limit_name, None);
         assert_eq!(snapshots[0].primary, None);
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
         assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
+    }
+
+    #[test]
+    fn usage_payload_applies_rate_limit_limits() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Pro,
+            rate_limit: Some(Some(Box::new(crate::types::RateLimitStatusDetails {
+                primary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                    used_percent: 12,
+                    limit_window_seconds: 300,
+                    reset_after_seconds: 0,
+                    reset_at: 100,
+                }))),
+                secondary_window: None,
+                ..Default::default()
+            }))),
+            additional_rate_limits: None,
+            credits: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(
+            payload,
+            RateLimitAdjustments {
+                short_reset_at_seconds: -20,
+                short_used_percent_max: Some(14),
+                weekly_reset_at_seconds: 0,
+                weekly_used_percent_max: None,
+            },
+        );
+
+        assert_eq!(snapshots.len(), 1);
+        let primary = snapshots[0].primary.as_ref().expect("primary window");
+        assert_eq!(primary.used_percent, 14.0);
+        assert_eq!(primary.resets_at, Some(80));
     }
 
     #[test]
