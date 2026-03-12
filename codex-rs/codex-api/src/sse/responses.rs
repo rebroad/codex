@@ -392,7 +392,8 @@ pub async fn process_sse(
 
         trace!("SSE event: {}", &sse.data);
         if debug_http {
-            prompt_debug_http_log(format!("SSE event: {}", &sse.data));
+            let data = &sse.data;
+            prompt_debug_http_log(format!("Recv SSE event: {data}"));
         }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {

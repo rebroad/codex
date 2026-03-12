@@ -67,8 +67,8 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             let request_url = self.session.provider().url_for_path(Self::path());
             let body = serde_json::to_string_pretty(&request)
                 .unwrap_or_else(|_| "<unable to serialize payload>".to_string());
-            prompt_debug_http_log(format!("POST {request_url}"));
-            prompt_debug_http_log(format!("Request JSON:\n{body}"));
+            prompt_debug_http_log(format!("Send POST {request_url}"));
+            prompt_debug_http_log(format!("Send Request JSON:\n{body}"));
         }
 
         let ResponsesOptions {
@@ -131,7 +131,10 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .await?;
 
         if prompt_debug_http_enabled() {
-            prompt_debug_http_log(format!("Response status: {}", stream_response.status));
+            prompt_debug_http_log(format!(
+                "Recv Response status: {status}",
+                status = stream_response.status
+            ));
         }
 
         Ok(spawn_response_stream(

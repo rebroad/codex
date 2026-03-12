@@ -1,3 +1,4 @@
+use chrono::Utc;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -62,7 +63,10 @@ pub fn prompt_debug_http_log(message: impl AsRef<str>) {
         return;
     }
 
-    let line = format!("{CODEX_PROMPT_DEBUG_HTTP_PREFIX} {}", message.as_ref());
+    let now = Utc::now();
+    let timestamp = now.format("%Y-%m-%dT%H:%M:%S%.2f");
+    let message = message.as_ref();
+    let line = format!("{CODEX_PROMPT_DEBUG_HTTP_PREFIX} [{timestamp}] {message}");
     if let Some(path) = config.log_file {
         let write_lock = PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
         let Ok(_guard) = write_lock.lock() else {

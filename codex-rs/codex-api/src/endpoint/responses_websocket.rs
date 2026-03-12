@@ -520,7 +520,7 @@ async fn run_websocket_response_stream(
     };
     trace!("websocket request: {request_text}");
     if debug_http {
-        prompt_debug_http_log(format!("websocket request: {request_text}"));
+        prompt_debug_http_log(format!("Send websocket request: {request_text}"));
     }
 
     let request_start = Instant::now();
@@ -562,7 +562,7 @@ async fn run_websocket_response_stream(
             Message::Text(text) => {
                 trace!("websocket event: {text}");
                 if debug_http {
-                    prompt_debug_http_log(format!("websocket event: {text}"));
+                    prompt_debug_http_log(format!("Recv websocket event: {text}"));
                 }
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =

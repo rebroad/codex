@@ -809,14 +809,16 @@ impl ModelClientSession {
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
                     if prompt_debug_http_enabled() {
-                        prompt_debug_http_log(format!("Response error: {unauthorized_transport}"));
+                        prompt_debug_http_log(format!(
+                            "Recv Response error: {unauthorized_transport}"
+                        ));
                     }
                     handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => {
                     if prompt_debug_http_enabled() {
-                        prompt_debug_http_log(format!("Response error: {err}"));
+                        prompt_debug_http_log(format!("Recv Response error: {err}"));
                     }
                     return Err(map_api_error(err));
                 }
@@ -883,7 +885,9 @@ impl ModelClientSession {
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
                     if prompt_debug_http_enabled() {
-                        prompt_debug_http_log(format!("Response error: {unauthorized_transport}"));
+                        prompt_debug_http_log(format!(
+                            "Recv Response error: {unauthorized_transport}"
+                        ));
                     }
                     handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;
