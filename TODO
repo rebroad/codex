@@ -1,0 +1,5 @@
+Explore "encrypted_content" in "codex prompt debug".
+Explore "obfuscation" in "codex prompt debug".
+Add timestamps to "codex prompt debug".
+Try to reduce repetition being send to the backend-api, e.g. "You are Codex".
+When "reasoning_tokens" are >0, find out if we're receiving the reasoning in text, and save this to a dedicated file.
