@@ -853,6 +853,34 @@ WHERE account_id = ? AND provider = ?
         let previous_backend_percent = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+        let previous_backend_resets_at = prior_usage
+            .as_ref()
+            .and_then(|row| row.try_get::<Option<i64>, _>("last_backend_resets_at").ok())
+            .flatten();
+        let previous_backend_window_minutes = prior_usage
+            .as_ref()
+            .and_then(|row| row.try_get::<Option<i64>, _>("last_backend_window_minutes").ok())
+            .flatten();
+        let same_backend_window = (window_minutes.is_some() || resets_at.is_some())
+            && previous_backend_window_minutes == window_minutes
+            && previous_backend_resets_at == resets_at;
+        let stale_regression_snapshot = same_backend_window
+            && previous_backend_percent.is_some_and(|previous| {
+                previous - used_percent > USED_PERCENT_REFUND_EPSILON
+            });
+        if stale_regression_snapshot {
+            self.log_usage_event(
+                account_id,
+                Some(used_percent),
+                previous_backend_percent,
+                format!(
+                    "stale_backend_regression_ignored=1 delta_percent={}",
+                    previous_backend_percent.map_or(0.0, |previous| used_percent - previous)
+                ),
+            )
+            .await;
+            return Ok(());
+        }
         let backend_percent_changed = previous_backend_percent
             .is_none_or(|previous| (previous - used_percent).abs() > USED_PERCENT_REFUND_EPSILON);
         if backend_percent_changed {
@@ -3735,7 +3763,7 @@ WHERE account_id = ? AND provider = ?
     }
 
     #[tokio::test]
-    async fn account_usage_gates_used_percent_drop_without_rewinding_totals() {
+    async fn account_usage_ignores_used_percent_regression_without_rewinding_totals() {
         let home = tempfile::tempdir().expect("tempdir");
         let runtime =
             AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
@@ -3855,7 +3883,7 @@ WHERE account_id = ? AND provider = ?
         runtime
             .record_account_backend_rate_limit("account-1", &refund_snapshot)
             .await
-            .expect("confirm refund snapshot");
+            .expect("repeat refund snapshot");
 
         let row_after_confirmation = sqlx::query(
             r#"
@@ -3879,7 +3907,7 @@ WHERE account_id = ? AND provider = ?
             .expect("last_backend_used_percent");
 
         assert_eq!(total_tokens_after_confirmation, total_tokens_before);
-        assert_eq!(last_backend_used_percent_after_confirmation, 1.0);
+        assert_eq!(last_backend_used_percent_after_confirmation, 2.0);
     }
 
     #[tokio::test]
