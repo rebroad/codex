@@ -129,6 +129,13 @@ enum ShutdownAction {
     Finish,
 }
 
+enum ExitDecision {
+    Normal,
+    Restart,
+}
+
+const RESTART_EXIT_CODE: i32 = 77;
+
 async fn shutdown_signal() -> IoResult<()> {
     #[cfg(unix)]
     {
@@ -156,6 +163,14 @@ fn reload_signal_stream() -> IoResult<tokio::signal::unix::Signal> {
     signal(SignalKind::hangup())
 }
 
+#[cfg(unix)]
+fn restart_signal_stream() -> IoResult<tokio::signal::unix::Signal> {
+    use tokio::signal::unix::SignalKind;
+    use tokio::signal::unix::signal;
+
+    signal(SignalKind::user_defined2())
+}
+
 impl ShutdownState {
     fn requested(&self) -> bool {
         self.requested
@@ -174,7 +189,7 @@ impl ShutdownState {
         self.requested = true;
         self.last_logged_running_turn_count = None;
         info!(
-            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
+            "received shutdown/restart signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
             connection_count, running_turn_count,
         );
     }
@@ -643,6 +658,22 @@ pub async fn run_main_with_transport(
                 None
             }
         };
+        let mut restart_signal = {
+            #[cfg(unix)]
+            {
+                match restart_signal_stream() {
+                    Ok(signal) => Some(signal),
+                    Err(err) => {
+                        warn!("failed to listen for restart signal: {err}");
+                        None
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        };
         let websocket_accept_shutdown = match &transport_runtime {
             TransportRuntime::WebSocket { shutdown_token, .. } => Some(shutdown_token.clone()),
             TransportRuntime::Stdio => None,
@@ -650,6 +681,7 @@ pub async fn run_main_with_transport(
         async move {
             let mut listen_for_threads = true;
             let mut shutdown_state = ShutdownState::default();
+            let mut exit_decision = ExitDecision::Normal;
             loop {
                 let running_turn_count = {
                     let running_turn_count = running_turn_count_rx.borrow();
@@ -686,7 +718,18 @@ pub async fn run_main_with_transport(
                         let auth_changed = processor.reload_runtime_state().await;
                         info!("reload signal applied (authChanged={auth_changed})");
                     }
-                    changed = running_turn_count_rx.changed(), if graceful_signal_restart_enabled && shutdown_state.requested() => {
+                    _ = async {
+                        if let Some(signal) = restart_signal.as_mut() {
+                            signal.recv().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        let running_turn_count = *running_turn_count_rx.borrow();
+                        shutdown_state.on_signal(connections.len(), running_turn_count);
+                        exit_decision = ExitDecision::Restart;
+                    }
+                    changed = running_turn_count_rx.changed(), if shutdown_state.requested() && (graceful_signal_restart_enabled || matches!(exit_decision, ExitDecision::Restart)) => {
                         if changed.is_err() {
                             warn!("running-turn watcher closed during graceful restart drain");
                         }
@@ -859,12 +902,13 @@ pub async fn run_main_with_transport(
                 processor.shutdown_threads().await;
             }
             info!("processor task exited (channel closed)");
+            exit_decision
         }
     });
 
     drop(transport_event_tx);
 
-    let _ = processor_handle.await;
+    let exit_decision = processor_handle.await.unwrap_or(ExitDecision::Normal);
     let _ = outbound_handle.await;
 
     if let TransportRuntime::WebSocket {
@@ -882,6 +926,10 @@ pub async fn run_main_with_transport(
 
     if let Some(otel) = otel {
         otel.shutdown();
+    }
+
+    if matches!(exit_decision, ExitDecision::Restart) {
+        std::process::exit(RESTART_EXIT_CODE);
     }
 
     Ok(())
