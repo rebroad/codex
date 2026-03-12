@@ -49,6 +49,8 @@ log_file = "/absolute/path/to/prompt-debug.log"
 If `enabled = true` and `log_file` is omitted, debug output goes to `stderr`.
 `CODEX_PROMPT_DEBUG_HTTP=1` still force-enables this debug mode; if set,
 `CODEX_PROMPT_DEBUG_HTTP_LOGFILE` overrides the log file path.
+If the `log_file` path contains `$$`, Codex replaces it with the current
+process PID (for example, `"/tmp/prompt-debug-$$.log"` -> `"/tmp/prompt-debug-12345.log"`).
 
 ## Bare prompt mode
 
@@ -65,6 +67,19 @@ You can also enable this for a single `codex exec` invocation with
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
+
+## Rate limit testing offsets
+
+Use these optional keys to shift backend rate-limit snapshots for testing:
+
+```toml
+rate_limit_reset_at_offset_seconds = 0
+rate_limit_used_percent_offset = 0
+```
+
+`rate_limit_reset_at_offset_seconds` shifts the backend-provided reset timestamp (seconds since epoch).
+`rate_limit_used_percent_offset` shifts the backend-provided used percentage before the UI computes
+the remaining percentage.
 
 ## Plan mode defaults
 

@@ -18,6 +18,7 @@ use crate::history_cell::HistoryCell;
 use crate::insert_history::write_spans;
 use chrono::Local;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::RateLimitOffsets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::WireApi;
@@ -51,8 +52,14 @@ pub(crate) async fn render_status_lines_for_cli(
 ) -> Vec<String> {
     let auth = auth_manager.auth().await;
     let mut plan_type = auth.as_ref().and_then(CodexAuth::account_plan_type);
+    let rate_limit_offsets = RateLimitOffsets {
+        reset_at_seconds: config.rate_limit_reset_at_offset_seconds,
+        used_percent: config.rate_limit_used_percent_offset,
+    };
     let rate_limits = match auth {
-        Some(auth) => fetch_rate_limits(config.chatgpt_base_url.clone(), auth).await,
+        Some(auth) => {
+            fetch_rate_limits(config.chatgpt_base_url.clone(), auth, rate_limit_offsets).await
+        }
         None => Vec::new(),
     };
     if let Some(rate_limit_plan) = rate_limits.iter().find_map(|snapshot| snapshot.plan_type) {
@@ -128,9 +135,20 @@ pub(crate) async fn render_status_lines_for_cli(
         .collect()
 }
 
-pub(crate) async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
+pub(crate) async fn fetch_rate_limits(
+    base_url: String,
+    auth: CodexAuth,
+    rate_limit_offsets: RateLimitOffsets,
+) -> Vec<RateLimitSnapshot> {
     match BackendClient::from_auth(base_url, &auth) {
-        Ok(client) => client.get_rate_limits_many().await.unwrap_or_default(),
+        Ok(client) => client
+            .with_rate_limit_offsets(
+                rate_limit_offsets.reset_at_seconds,
+                rate_limit_offsets.used_percent,
+            )
+            .get_rate_limits_many()
+            .await
+            .unwrap_or_default(),
         Err(_) => Vec::new(),
     }
 }

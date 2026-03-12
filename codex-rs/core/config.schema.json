@@ -2311,6 +2311,16 @@
       "default": null,
       "description": "HTTP/SSE request debug tracing settings."
     },
+    "rate_limit_reset_at_offset_seconds": {
+      "description": "Offset applied to backend-provided rate limit reset timestamps, in seconds.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "rate_limit_used_percent_offset": {
+      "description": "Offset applied to backend-provided rate limit used percentages.",
+      "format": "int64",
+      "type": "integer"
+    },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"

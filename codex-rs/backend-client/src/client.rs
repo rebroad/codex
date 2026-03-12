@@ -104,6 +104,13 @@ pub struct Client {
     user_agent: Option<HeaderValue>,
     chatgpt_account_id: Option<String>,
     path_style: PathStyle,
+    rate_limit_offsets: RateLimitOffsets,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RateLimitOffsets {
+    pub reset_at_seconds: i64,
+    pub used_percent: i64,
 }
 
 impl Client {
@@ -129,6 +136,7 @@ impl Client {
             user_agent: None,
             chatgpt_account_id: None,
             path_style,
+            rate_limit_offsets: RateLimitOffsets::default(),
         })
     }
 
@@ -145,6 +153,14 @@ impl Client {
 
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
         self.bearer_token = Some(token.into());
+        self
+    }
+
+    pub fn with_rate_limit_offsets(mut self, reset_at_seconds: i64, used_percent: i64) -> Self {
+        self.rate_limit_offsets = RateLimitOffsets {
+            reset_at_seconds,
+            used_percent,
+        };
         self
     }
 
@@ -261,7 +277,10 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
-        Ok(Self::rate_limit_snapshots_from_payload(payload))
+        Ok(Self::rate_limit_snapshots_from_payload(
+            payload,
+            self.rate_limit_offsets,
+        ))
     }
 
     pub async fn list_tasks(
@@ -394,6 +413,7 @@ impl Client {
     // rate limit helpers
     fn rate_limit_snapshots_from_payload(
         payload: RateLimitStatusPayload,
+        rate_limit_offsets: RateLimitOffsets,
     ) -> Vec<RateLimitSnapshot> {
         let plan_type = Some(Self::map_plan_type(payload.plan_type));
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
@@ -402,6 +422,7 @@ impl Client {
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
             plan_type,
+            rate_limit_offsets,
         )];
         if let Some(additional) = payload.additional_rate_limits.flatten() {
             snapshots.extend(additional.into_iter().map(|details| {
@@ -411,6 +432,7 @@ impl Client {
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
                     None,
                     plan_type,
+                    rate_limit_offsets,
                 )
             }));
         }
@@ -423,11 +445,12 @@ impl Client {
         rate_limit: Option<crate::types::RateLimitStatusDetails>,
         credits: Option<crate::types::CreditStatusDetails>,
         plan_type: Option<AccountPlanType>,
+        rate_limit_offsets: RateLimitOffsets,
     ) -> RateLimitSnapshot {
         let (primary, secondary) = match rate_limit {
             Some(details) => (
-                Self::map_rate_limit_window(details.primary_window),
-                Self::map_rate_limit_window(details.secondary_window),
+                Self::map_rate_limit_window(details.primary_window, rate_limit_offsets),
+                Self::map_rate_limit_window(details.secondary_window, rate_limit_offsets),
             ),
             None => (None, None),
         };
@@ -443,12 +466,16 @@ impl Client {
 
     fn map_rate_limit_window(
         window: Option<Option<Box<crate::types::RateLimitWindowSnapshot>>>,
+        rate_limit_offsets: RateLimitOffsets,
     ) -> Option<RateLimitWindow> {
         let snapshot = window.flatten().map(|details| *details)?;
-
-        let used_percent = f64::from(snapshot.used_percent);
+        let used_percent_raw = i64::from(snapshot.used_percent) + rate_limit_offsets.used_percent;
+        let used_percent = used_percent_raw.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        let used_percent = f64::from(used_percent);
         let window_minutes = Self::window_minutes_from_seconds(snapshot.limit_window_seconds);
-        let resets_at = Some(i64::from(snapshot.reset_at));
+        let resets_at_raw = i64::from(snapshot.reset_at) + rate_limit_offsets.reset_at_seconds;
+        let resets_at = resets_at_raw.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        let resets_at = Some(i64::from(resets_at));
         Some(RateLimitWindow {
             used_percent,
             window_minutes,
@@ -539,7 +566,8 @@ mod tests {
             }))),
         };
 
-        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        let snapshots =
+            Client::rate_limit_snapshots_from_payload(payload, RateLimitOffsets::default());
         assert_eq!(snapshots.len(), 2);
 
         assert_eq!(snapshots[0].limit_id.as_deref(), Some("codex"));
@@ -585,13 +613,46 @@ mod tests {
             credits: None,
         };
 
-        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        let snapshots =
+            Client::rate_limit_snapshots_from_payload(payload, RateLimitOffsets::default());
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].limit_id.as_deref(), Some("codex"));
         assert_eq!(snapshots[0].limit_name, None);
         assert_eq!(snapshots[0].primary, None);
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
         assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
+    }
+
+    #[test]
+    fn usage_payload_applies_rate_limit_offsets() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Pro,
+            rate_limit: Some(Some(Box::new(crate::types::RateLimitStatusDetails {
+                primary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                    used_percent: 12,
+                    limit_window_seconds: 300,
+                    reset_after_seconds: 0,
+                    reset_at: 100,
+                }))),
+                secondary_window: None,
+                ..Default::default()
+            }))),
+            additional_rate_limits: None,
+            credits: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(
+            payload,
+            RateLimitOffsets {
+                reset_at_seconds: -20,
+                used_percent: 5,
+            },
+        );
+
+        assert_eq!(snapshots.len(), 1);
+        let primary = snapshots[0].primary.as_ref().expect("primary window");
+        assert_eq!(primary.used_percent, 17.0);
+        assert_eq!(primary.resets_at, Some(80));
     }
 
     #[test]

@@ -52,6 +52,7 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_backend_client::RateLimitOffsets;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -5727,6 +5728,10 @@ impl ChatWidget {
         }
 
         let base_url = self.config.chatgpt_base_url.clone();
+        let rate_limit_offsets = RateLimitOffsets {
+            reset_at_seconds: self.config.rate_limit_reset_at_offset_seconds,
+            used_percent: self.config.rate_limit_used_percent_offset,
+        };
         let app_event_tx = self.app_event_tx.clone();
         let auth_manager = Arc::clone(&self.auth_manager);
 
@@ -5737,7 +5742,9 @@ impl ChatWidget {
                 if let Some(auth) = auth_manager.auth().await
                     && auth.is_chatgpt_auth()
                 {
-                    for snapshot in fetch_rate_limits(base_url.clone(), auth).await {
+                    for snapshot in
+                        fetch_rate_limits(base_url.clone(), auth, rate_limit_offsets).await
+                    {
                         app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
                     }
                 }

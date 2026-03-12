@@ -2,6 +2,7 @@ mod client;
 pub mod types;
 
 pub use client::Client;
+pub use client::RateLimitOffsets;
 pub use client::RequestError;
 pub use types::CodeTaskDetailsResponse;
 pub use types::CodeTaskDetailsResponseExt;

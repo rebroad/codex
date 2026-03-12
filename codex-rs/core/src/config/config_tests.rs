@@ -185,6 +185,26 @@ log_file = "/tmp/prompt-debug-http.log"
             log_file: Some("/tmp/prompt-debug-http.log".into()),
         }
     );
+
+    let pid = std::process::id();
+    let prompt_debug_http_with_pid = r#"
+[prompt_debug_http]
+enabled = true
+log_file = "/tmp/prompt-debug-$$.log"
+"#;
+    let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_pid)
+        .expect("TOML deserialization should succeed");
+    let prompt_debug_http_effective: PromptDebugHttpConfig = prompt_debug_http_cfg
+        .prompt_debug_http
+        .expect("prompt_debug_http should be set")
+        .into();
+    assert_eq!(
+        prompt_debug_http_effective,
+        PromptDebugHttpConfig {
+            enabled: true,
+            log_file: Some(format!("/tmp/prompt-debug-{pid}.log").into()),
+        }
+    );
 }
 
 #[test]
@@ -4103,6 +4123,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            rate_limit_reset_at_offset_seconds: 0,
+            rate_limit_used_percent_offset: 0,
             realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
@@ -4240,6 +4262,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_verbosity: None,
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        rate_limit_reset_at_offset_seconds: 0,
+        rate_limit_used_percent_offset: 0,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -4375,6 +4399,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_verbosity: None,
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        rate_limit_reset_at_offset_seconds: 0,
+        rate_limit_used_percent_offset: 0,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -4496,6 +4522,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_verbosity: Some(Verbosity::High),
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        rate_limit_reset_at_offset_seconds: 0,
+        rate_limit_used_percent_offset: 0,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,

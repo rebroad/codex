@@ -1544,7 +1544,11 @@ impl CodexMessageProcessor {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to construct backend client: {err}"),
                 data: None,
-            })?;
+            })?
+            .with_rate_limit_offsets(
+                self.config.rate_limit_reset_at_offset_seconds,
+                self.config.rate_limit_used_percent_offset,
+            );
 
         let snapshots = client
             .get_rate_limits_many()
