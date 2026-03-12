@@ -32,6 +32,7 @@ pub enum SlashCommand {
     Plan,
     Collab,
     Agent,
+    Btw,
     // Undo,
     Diff,
     Copy,
@@ -98,6 +99,7 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
+            SlashCommand::Btw => "ask a side question in a forked subagent",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -127,6 +129,7 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Fast
+                | SlashCommand::Btw
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -167,7 +170,8 @@ impl SlashCommand {
             | SlashCommand::Apps
             | SlashCommand::Feedback
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
+            | SlashCommand::Exit
+            | SlashCommand::Btw => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
