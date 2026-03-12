@@ -1539,15 +1539,16 @@ impl CodexMessageProcessor {
             });
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+        let config = self.load_latest_config(None).await?;
+        let client = BackendClient::from_auth(config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to construct backend client: {err}"),
                 data: None,
             })?
             .with_rate_limit_offsets(
-                self.config.rate_limit_reset_at_offset_seconds,
-                self.config.rate_limit_used_percent_offset,
+                config.rate_limit_reset_at_offset_seconds,
+                config.rate_limit_used_percent_offset,
             );
 
         let snapshots = client
