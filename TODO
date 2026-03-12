@@ -1,0 +1,33 @@
+=Explore "encrypted_content" in "codex prompt debug".
+=Explore "obfuscation" in "codex prompt debug".
+=Try to reduce repetition being send to the backend-api, e.g. "You are Codex".
+=See if we have a unique id per input/output/reasoning - if so display it can capture to files. Maybe use the id sent from the app-server client?
+=Ask how do we toggle the captures while the app-server is already running. Do we need to send a SIGHUP to it to get it to re-read the config.toml file?
+=Does tokens_per_pct need to be per model?
+=Create tool to convert codex-super logs to human readable
+=Remove human-readable output from codex itself - use tools instead to convert
+=What does Ctrl+L do in codex and why is it disabled during task in progress?
+=Make Ctrl+C exit codex when in "codex resume --all" menu selection
+=Review rebroad/sandbox
+=Review rebroad/opencode
+=Add privilege levels to telegram users - also allow toolset to be customized.
+=Check weights on bytes in/out
+=Check how token usage is displayed in "codex status".
+=Avoid "final messages" when backend usage has reached 100 - stay in a productive loop, and perhaps allow user queries (like in plan mode, with option to provide an "other").
+=Check why tool use counts are only showing exec_command and stdin (e.g. no apply_patch)
+=Enable/test image generation feature
+=Enable/test undo feature
+=Enable/test realtime feature - what is "v1"/"v2"?
+
+=Upstream PRs to review:-
+-16709 Sanitize forked child history (de-dup?)
+-17176 voice-related
+-16467 remove old tui code
+-17183 "realtime" sessions - what are these?
+-17186 simple fix
+-17222 can this be used within the app-server to switch conversations?
+-16422 sandbox align with upstream
+-16481,16499,16503 codex-tools migration
+-16588 fix TUI steer crash
+-16684 MCP fix
+-16700 "remote --cd forwarding" what is this?
