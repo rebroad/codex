@@ -4418,6 +4418,7 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
+    use serial_test::serial;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -5647,6 +5648,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn start_btw_forks_switches_and_esc_returns_to_parent() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut tui = make_test_tui();
@@ -5793,6 +5795,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn start_btw_ctrl_c_returns_to_parent() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut tui = make_test_tui();
@@ -5870,6 +5873,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn open_agent_picker_discards_active_btw_thread() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut tui = make_test_tui();
