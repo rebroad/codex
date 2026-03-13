@@ -238,6 +238,7 @@ use crate::protocol::NetworkApprovalContext;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
+use crate::protocol::RateLimitWindow;
 use crate::protocol::ReasoningContentDeltaEvent;
 use crate::protocol::ReasoningRawContentDeltaEvent;
 use crate::protocol::RequestUserInputEvent;
@@ -3604,6 +3605,35 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
+        let used_percent_offset = turn_context.config.rate_limit_used_percent_offset as f64;
+        let reset_at_offset_seconds = turn_context.config.rate_limit_reset_at_offset_seconds;
+        let primary = new_rate_limits.primary.map(|window| {
+            let used_percent = (window.used_percent + used_percent_offset).clamp(0.0, 100.0);
+            let resets_at = window
+                .resets_at
+                .map(|value| value.saturating_add(reset_at_offset_seconds));
+            RateLimitWindow {
+                used_percent,
+                resets_at,
+                ..window
+            }
+        });
+        let secondary = new_rate_limits.secondary.map(|window| {
+            let used_percent = (window.used_percent + used_percent_offset).clamp(0.0, 100.0);
+            let resets_at = window
+                .resets_at
+                .map(|value| value.saturating_add(reset_at_offset_seconds));
+            RateLimitWindow {
+                used_percent,
+                resets_at,
+                ..window
+            }
+        });
+        let new_rate_limits = RateLimitSnapshot {
+            primary,
+            secondary,
+            ..new_rate_limits
+        };
         {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
