@@ -1548,20 +1548,22 @@ async fn set_rate_limits_updates_plan_type_when_present() {
 async fn update_rate_limits_applies_offsets_before_store() {
     let (session, mut turn_context, _rx) = make_session_and_context_with_rx().await;
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.config.rate_limit_used_percent_offset = 10;
-    turn_context.config.rate_limit_reset_at_offset_seconds = 120;
+    turn_context.config.rate_limit_short_used_percent_offset = 10;
+    turn_context.config.rate_limit_short_reset_at_offset_seconds = 120;
+    turn_context.config.rate_limit_weekly_used_percent_offset = 20;
+    turn_context.config.rate_limit_weekly_reset_at_offset_seconds = 240;
 
     let snapshot = RateLimitSnapshot {
         limit_id: Some("codex".to_string()),
         limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 95.0,
-            window_minutes: Some(10080),
+            window_minutes: Some(300),
             resets_at: Some(1_700_000_000),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 5.0,
-            window_minutes: Some(60),
+            used_percent: 70.0,
+            window_minutes: Some(10080),
             resets_at: Some(1_700_000_600),
         }),
         credits: None,
@@ -1581,16 +1583,16 @@ async fn update_rate_limits_applies_offsets_before_store() {
     let secondary = stored.secondary.expect("secondary rate limit");
     assert_eq!(primary.used_percent, 100.0);
     assert_eq!(primary.resets_at, Some(1_700_000_120));
-    assert_eq!(secondary.used_percent, 15.0);
-    assert_eq!(secondary.resets_at, Some(1_700_000_720));
+    assert_eq!(secondary.used_percent, 90.0);
+    assert_eq!(secondary.resets_at, Some(1_700_000_840));
 }
 
 #[tokio::test]
 async fn update_rate_limits_clamps_used_percent_lower_bound() {
     let (session, mut turn_context, _rx) = make_session_and_context_with_rx().await;
     let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.config.rate_limit_used_percent_offset = -20;
-    turn_context.config.rate_limit_reset_at_offset_seconds = -120;
+    turn_context.config.rate_limit_short_used_percent_offset = -20;
+    turn_context.config.rate_limit_short_reset_at_offset_seconds = -120;
 
     let snapshot = RateLimitSnapshot {
         limit_id: Some("codex".to_string()),

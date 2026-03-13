@@ -53,8 +53,10 @@ pub(crate) async fn render_status_lines_for_cli(
     let auth = auth_manager.auth().await;
     let mut plan_type = auth.as_ref().and_then(CodexAuth::account_plan_type);
     let rate_limit_offsets = RateLimitOffsets {
-        reset_at_seconds: config.rate_limit_reset_at_offset_seconds,
-        used_percent: config.rate_limit_used_percent_offset,
+        short_reset_at_seconds: config.rate_limit_short_reset_at_offset_seconds,
+        short_used_percent: config.rate_limit_short_used_percent_offset,
+        weekly_reset_at_seconds: config.rate_limit_weekly_reset_at_offset_seconds,
+        weekly_used_percent: config.rate_limit_weekly_used_percent_offset,
     };
     let rate_limits = match auth {
         Some(auth) => {
@@ -142,10 +144,7 @@ pub(crate) async fn fetch_rate_limits(
 ) -> Vec<RateLimitSnapshot> {
     match BackendClient::from_auth(base_url, &auth) {
         Ok(client) => client
-            .with_rate_limit_offsets(
-                rate_limit_offsets.reset_at_seconds,
-                rate_limit_offsets.used_percent,
-            )
+            .with_rate_limit_offsets(rate_limit_offsets)
             .get_rate_limits_many()
             .await
             .unwrap_or_default(),

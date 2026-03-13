@@ -109,11 +109,15 @@ pub struct Client {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RateLimitOffsets {
-    pub reset_at_seconds: i64,
-    pub used_percent: i64,
+    pub short_reset_at_seconds: i64,
+    pub short_used_percent: i64,
+    pub weekly_reset_at_seconds: i64,
+    pub weekly_used_percent: i64,
 }
 
 impl Client {
+    const WEEKLY_WINDOW_MINUTES: i64 = 60 * 24 * 7;
+
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let mut base_url = base_url.into();
         // Normalize common ChatGPT hostnames to include /backend-api so we hit the WHAM paths.
@@ -156,11 +160,8 @@ impl Client {
         self
     }
 
-    pub fn with_rate_limit_offsets(mut self, reset_at_seconds: i64, used_percent: i64) -> Self {
-        self.rate_limit_offsets = RateLimitOffsets {
-            reset_at_seconds,
-            used_percent,
-        };
+    pub fn with_rate_limit_offsets(mut self, offsets: RateLimitOffsets) -> Self {
+        self.rate_limit_offsets = offsets;
         self
     }
 
@@ -449,8 +450,16 @@ impl Client {
     ) -> RateLimitSnapshot {
         let (primary, secondary) = match rate_limit {
             Some(details) => (
-                Self::map_rate_limit_window(details.primary_window, rate_limit_offsets),
-                Self::map_rate_limit_window(details.secondary_window, rate_limit_offsets),
+                Self::map_rate_limit_window(
+                    details.primary_window,
+                    rate_limit_offsets,
+                    RateLimitWindowKind::Short,
+                ),
+                Self::map_rate_limit_window(
+                    details.secondary_window,
+                    rate_limit_offsets,
+                    RateLimitWindowKind::Weekly,
+                ),
             ),
             None => (None, None),
         };
@@ -467,13 +476,29 @@ impl Client {
     fn map_rate_limit_window(
         window: Option<Option<Box<crate::types::RateLimitWindowSnapshot>>>,
         rate_limit_offsets: RateLimitOffsets,
+        fallback_kind: RateLimitWindowKind,
     ) -> Option<RateLimitWindow> {
         let snapshot = window.flatten().map(|details| *details)?;
-        let used_percent_raw = i64::from(snapshot.used_percent) + rate_limit_offsets.used_percent;
+        let window_minutes = Self::window_minutes_from_seconds(snapshot.limit_window_seconds);
+        let use_weekly_offsets = match window_minutes {
+            Some(minutes) => minutes >= Self::WEEKLY_WINDOW_MINUTES,
+            None => matches!(fallback_kind, RateLimitWindowKind::Weekly),
+        };
+        let (used_percent_offset, reset_at_offset) = if use_weekly_offsets {
+            (
+                rate_limit_offsets.weekly_used_percent,
+                rate_limit_offsets.weekly_reset_at_seconds,
+            )
+        } else {
+            (
+                rate_limit_offsets.short_used_percent,
+                rate_limit_offsets.short_reset_at_seconds,
+            )
+        };
+        let used_percent_raw = i64::from(snapshot.used_percent) + used_percent_offset;
         let used_percent = used_percent_raw.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
         let used_percent = f64::from(used_percent);
-        let window_minutes = Self::window_minutes_from_seconds(snapshot.limit_window_seconds);
-        let resets_at_raw = i64::from(snapshot.reset_at) + rate_limit_offsets.reset_at_seconds;
+        let resets_at_raw = i64::from(snapshot.reset_at) + reset_at_offset;
         let resets_at = resets_at_raw.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
         let resets_at = Some(i64::from(resets_at));
         Some(RateLimitWindow {
@@ -518,6 +543,12 @@ impl Client {
         let seconds_i64 = i64::from(seconds);
         Some((seconds_i64 + 59) / 60)
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RateLimitWindowKind {
+    Short,
+    Weekly,
 }
 
 #[cfg(test)]
@@ -644,8 +675,10 @@ mod tests {
         let snapshots = Client::rate_limit_snapshots_from_payload(
             payload,
             RateLimitOffsets {
-                reset_at_seconds: -20,
-                used_percent: 5,
+                short_reset_at_seconds: -20,
+                short_used_percent: 5,
+                weekly_reset_at_seconds: 0,
+                weekly_used_percent: 0,
             },
         );
 
