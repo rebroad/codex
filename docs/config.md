@@ -71,6 +71,8 @@ log_file = "/absolute/path/to/prompt-debug.log"
 If `enabled = true` and `log_file` is omitted, debug output goes to `stderr`.
 `CODEX_PROMPT_DEBUG_HTTP=1` still force-enables this debug mode; if set,
 `CODEX_PROMPT_DEBUG_HTTP_LOGFILE` overrides the log file path.
+If the `log_file` path contains `$$`, Codex replaces it with the current
+process PID (for example, `"/tmp/prompt-debug-$$.log"` -> `"/tmp/prompt-debug-12345.log"`).
 
 ## Notices
 

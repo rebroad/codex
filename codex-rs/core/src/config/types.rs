@@ -391,9 +391,19 @@ pub struct PromptDebugHttpConfig {
 
 impl From<PromptDebugHttpToml> for PromptDebugHttpConfig {
     fn from(toml: PromptDebugHttpToml) -> Self {
+        let log_file = toml.log_file.map(|path| {
+            let path_buf: PathBuf = path.into();
+            let path_str = path_buf.to_string_lossy();
+            if !path_str.contains("$$") {
+                return path_buf;
+            }
+            let pid = std::process::id();
+            let pid_str = pid.to_string();
+            PathBuf::from(path_str.replace("$$", &pid_str))
+        });
         Self {
             enabled: toml.enabled.unwrap_or(false),
-            log_file: toml.log_file.map(Into::into),
+            log_file,
         }
     }
 }
