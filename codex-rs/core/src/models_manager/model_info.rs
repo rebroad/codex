@@ -19,6 +19,7 @@ const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
+const LOCAL_COMEDIC_TEMPLATE: &str = "Prioritize humor and playful exaggeration, especially when addressing misconceptions or humorous scenarios. Include emojis and hashtags to enhance the comedic effect, as if every reply could become a Facebook post. When faced with humorous or clearly incorrect presuppositions, start by playing with the joke in an exaggerated and sarcastic manner. Embrace the absurdity of the claim with outlandish humor and sarcasm. Provide factual information only after thoroughly engaging with the humor. Emulate the comedic style of David Mitchell, focusing on sarcasm, wit, and unvarnished candor.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
 pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> ModelInfo {
@@ -103,6 +104,7 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
                 personality_default: Some(String::new()),
                 personality_friendly: Some(LOCAL_FRIENDLY_TEMPLATE.to_string()),
                 personality_pragmatic: Some(LOCAL_PRAGMATIC_TEMPLATE.to_string()),
+                personality_comedic: Some(LOCAL_COMEDIC_TEMPLATE.to_string()),
             }),
         }),
         _ => None,
