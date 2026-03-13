@@ -6757,8 +6757,6 @@ impl CodexMessageProcessor {
                             api_version,
                             fallback_model_provider.clone(),
                             codex_home.as_path(),
-                            rate_limit_reset_at_offset_seconds,
-                            rate_limit_used_percent_offset,
                         )
                         .await;
                     }
