@@ -7173,9 +7173,7 @@ smart_approvals = true
                 tui,
                 AppEvent::StartBtw {
                     parent_thread_id,
-                    user_message: crate::chatwidget::UserMessage::plain(
-                        "explore the codebase".to_string(),
-                    ),
+                    user_message: "explore the codebase".into(),
                 },
             )
             .await?;
