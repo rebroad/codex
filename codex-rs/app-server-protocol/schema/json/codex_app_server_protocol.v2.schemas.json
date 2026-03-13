@@ -6280,7 +6280,8 @@
       "enum": [
         "none",
         "friendly",
-        "pragmatic"
+        "pragmatic",
+        "comedic"
       ],
       "type": "string"
     },
