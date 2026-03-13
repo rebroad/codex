@@ -371,6 +371,7 @@ pub struct ModelInstructionsVariables {
     pub personality_default: Option<String>,
     pub personality_friendly: Option<String>,
     pub personality_pragmatic: Option<String>,
+    pub personality_comedic: Option<String>,
 }
 
 impl ModelInstructionsVariables {
@@ -386,6 +387,10 @@ impl ModelInstructionsVariables {
                 Personality::None => Some(String::new()),
                 Personality::Friendly => self.personality_friendly.clone(),
                 Personality::Pragmatic => self.personality_pragmatic.clone(),
+                Personality::Comedic => self
+                    .personality_comedic
+                    .clone()
+                    .or_else(|| self.personality_pragmatic.clone()),
             }
         } else {
             self.personality_default.clone()
@@ -555,6 +560,7 @@ mod tests {
             personality_default: Some("default".to_string()),
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
+            personality_comedic: Some("comedic".to_string()),
         }
     }
 
@@ -592,6 +598,7 @@ mod tests {
                 personality_default: None,
                 personality_friendly: Some("friendly".to_string()),
                 personality_pragmatic: None,
+                personality_comedic: None,
             }),
         }));
         assert_eq!(
@@ -617,6 +624,7 @@ mod tests {
                 personality_default: None,
                 personality_friendly: None,
                 personality_pragmatic: None,
+                personality_comedic: None,
             }),
         }));
         assert_eq!(
@@ -645,6 +653,7 @@ mod tests {
                 personality_default: None,
                 personality_friendly: None,
                 personality_pragmatic: None,
+                personality_comedic: None,
             }),
         }));
 
@@ -674,6 +683,10 @@ mod tests {
             Some("pragmatic".to_string())
         );
         assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::Comedic)),
+            Some("comedic".to_string())
+        );
+        assert_eq!(
             personality_variables.get_personality_message(Some(Personality::None)),
             Some(String::new())
         );
@@ -686,6 +699,7 @@ mod tests {
             personality_default: Some("default".to_string()),
             personality_friendly: None,
             personality_pragmatic: None,
+            personality_comedic: None,
         };
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Friendly)),
@@ -693,6 +707,10 @@ mod tests {
         );
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Pragmatic)),
+            None
+        );
+        assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::Comedic)),
             None
         );
         assert_eq!(
@@ -708,6 +726,7 @@ mod tests {
             personality_default: None,
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
+            personality_comedic: None,
         };
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Friendly)),
@@ -715,6 +734,10 @@ mod tests {
         );
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Pragmatic)),
+            Some("pragmatic".to_string())
+        );
+        assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::Comedic)),
             Some("pragmatic".to_string())
         );
         assert_eq!(
