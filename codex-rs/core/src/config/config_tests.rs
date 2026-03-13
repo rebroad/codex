@@ -222,6 +222,26 @@ capture_dir = "/tmp/prompt-debug-http"
             capture_dir: Some("/tmp/prompt-debug-http".into()),
         }
     );
+
+    let pid = std::process::id();
+    let prompt_debug_http_with_pid = r#"
+[prompt_debug_http]
+enabled = true
+log_file = "/tmp/prompt-debug-$$.log"
+"#;
+    let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_pid)
+        .expect("TOML deserialization should succeed");
+    let prompt_debug_http_effective: PromptDebugHttpConfig = prompt_debug_http_cfg
+        .prompt_debug_http
+        .expect("prompt_debug_http should be set")
+        .into();
+    assert_eq!(
+        prompt_debug_http_effective,
+        PromptDebugHttpConfig {
+            enabled: true,
+            log_file: Some(format!("/tmp/prompt-debug-{pid}.log").into()),
+        }
+    );
 }
 
 #[test]
