@@ -1234,7 +1234,8 @@
       "enum": [
         "none",
         "friendly",
-        "pragmatic"
+        "pragmatic",
+        "comedic"
       ],
       "type": "string"
     },
@@ -1253,6 +1254,25 @@
       "properties": {
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
+        }
+      },
+      "type": "object"
+    },
+    "PromptDebugHttpToml": {
+      "additionalProperties": false,
+      "description": "HTTP/SSE request debug tracing settings.",
+      "properties": {
+        "enabled": {
+          "description": "When `true`, emits low-level Responses API HTTP/SSE/websocket payload logs.",
+          "type": "boolean"
+        },
+        "log_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute log file path for debug output. When unset, logs go to stderr."
         }
       },
       "type": "object"
@@ -2436,6 +2456,14 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    "prompt_debug_http": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PromptDebugHttpToml"
+        }
+      ],
+      "default": null,
+      "description": "HTTP/SSE request debug tracing settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
