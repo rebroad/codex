@@ -176,6 +176,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::RateLimitOffsets;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
@@ -1546,10 +1547,12 @@ impl CodexMessageProcessor {
                 message: format!("failed to construct backend client: {err}"),
                 data: None,
             })?
-            .with_rate_limit_offsets(
-                config.rate_limit_reset_at_offset_seconds,
-                config.rate_limit_used_percent_offset,
-            );
+            .with_rate_limit_offsets(RateLimitOffsets {
+                short_reset_at_seconds: config.rate_limit_short_reset_at_offset_seconds,
+                short_used_percent: config.rate_limit_short_used_percent_offset,
+                weekly_reset_at_seconds: config.rate_limit_weekly_reset_at_offset_seconds,
+                weekly_used_percent: config.rate_limit_weekly_used_percent_offset,
+            });
 
         let snapshots = client
             .get_rate_limits_many()

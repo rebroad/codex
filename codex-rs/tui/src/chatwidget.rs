@@ -5729,8 +5729,10 @@ impl ChatWidget {
 
         let base_url = self.config.chatgpt_base_url.clone();
         let rate_limit_offsets = RateLimitOffsets {
-            reset_at_seconds: self.config.rate_limit_reset_at_offset_seconds,
-            used_percent: self.config.rate_limit_used_percent_offset,
+            short_reset_at_seconds: self.config.rate_limit_short_reset_at_offset_seconds,
+            short_used_percent: self.config.rate_limit_short_used_percent_offset,
+            weekly_reset_at_seconds: self.config.rate_limit_weekly_reset_at_offset_seconds,
+            weekly_used_percent: self.config.rate_limit_weekly_used_percent_offset,
         };
         let app_event_tx = self.app_event_tx.clone();
         let auth_manager = Arc::clone(&self.auth_manager);

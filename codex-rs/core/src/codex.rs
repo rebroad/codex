@@ -3605,9 +3605,30 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
-        let used_percent_offset = turn_context.config.rate_limit_used_percent_offset as f64;
-        let reset_at_offset_seconds = turn_context.config.rate_limit_reset_at_offset_seconds;
+        const WEEKLY_WINDOW_MINUTES: i64 = 60 * 24 * 7;
+        let short_used_percent_offset =
+            turn_context.config.rate_limit_short_used_percent_offset as f64;
+        let short_reset_at_offset_seconds =
+            turn_context.config.rate_limit_short_reset_at_offset_seconds;
+        let weekly_used_percent_offset =
+            turn_context.config.rate_limit_weekly_used_percent_offset as f64;
+        let weekly_reset_at_offset_seconds =
+            turn_context.config.rate_limit_weekly_reset_at_offset_seconds;
+        let resolve_offsets =
+            |window_minutes: Option<i64>, fallback_is_weekly: bool| -> (f64, i64) {
+                let is_weekly = match window_minutes {
+                    Some(minutes) => minutes >= WEEKLY_WINDOW_MINUTES,
+                    None => fallback_is_weekly,
+                };
+                if is_weekly {
+                    (weekly_used_percent_offset, weekly_reset_at_offset_seconds)
+                } else {
+                    (short_used_percent_offset, short_reset_at_offset_seconds)
+                }
+            };
         let primary = new_rate_limits.primary.map(|window| {
+            let (used_percent_offset, reset_at_offset_seconds) =
+                resolve_offsets(window.window_minutes, false);
             let used_percent = (window.used_percent + used_percent_offset).clamp(0.0, 100.0);
             let resets_at = window
                 .resets_at
@@ -3619,6 +3640,8 @@ impl Session {
             }
         });
         let secondary = new_rate_limits.secondary.map(|window| {
+            let (used_percent_offset, reset_at_offset_seconds) =
+                resolve_offsets(window.window_minutes, true);
             let used_percent = (window.used_percent + used_percent_offset).clamp(0.0, 100.0);
             let resets_at = window
                 .resets_at
