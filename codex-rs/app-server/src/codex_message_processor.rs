@@ -6739,6 +6739,13 @@ impl CodexMessageProcessor {
                             subscribed_connection_ids,
                             conversation_id,
                         );
+                        let (rate_limit_reset_at_offset_seconds, rate_limit_used_percent_offset) = {
+                            let config = self.config.as_ref();
+                            (
+                                config.rate_limit_reset_at_offset_seconds,
+                                config.rate_limit_used_percent_offset,
+                            )
+                        };
                         apply_bespoke_event_handling(
                             event.clone(),
                             conversation_id,
@@ -6750,6 +6757,8 @@ impl CodexMessageProcessor {
                             api_version,
                             fallback_model_provider.clone(),
                             codex_home.as_path(),
+                            rate_limit_reset_at_offset_seconds,
+                            rate_limit_used_percent_offset,
                         )
                         .await;
                     }

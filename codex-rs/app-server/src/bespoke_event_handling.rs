@@ -117,6 +117,8 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -194,6 +196,8 @@ pub(crate) async fn apply_bespoke_event_handling(
     api_version: ApiVersion,
     fallback_model_provider: String,
     codex_home: &Path,
+    rate_limit_reset_at_offset_seconds: i64,
+    rate_limit_used_percent_offset: i64,
 ) {
     let Event {
         id: event_turn_id,
@@ -1195,8 +1199,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TokenCount(token_count_event) => {
-            handle_token_count_event(conversation_id, event_turn_id, token_count_event, &outgoing)
-                .await;
+            handle_token_count_event(
+                conversation_id,
+                event_turn_id,
+                token_count_event,
+                &outgoing,
+                rate_limit_reset_at_offset_seconds,
+                rate_limit_used_percent_offset,
+            )
+            .await;
         }
         EventMsg::Error(ev) => {
             thread_watch_manager
@@ -1946,6 +1957,8 @@ async fn handle_token_count_event(
     turn_id: String,
     token_count_event: TokenCountEvent,
     outgoing: &ThreadScopedOutgoingMessageSender,
+    rate_limit_reset_at_offset_seconds: i64,
+    rate_limit_used_percent_offset: i64,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
     if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
@@ -1959,6 +1972,27 @@ async fn handle_token_count_event(
             .await;
     }
     if let Some(rate_limits) = rate_limits {
+        let primary = rate_limits.primary.map(|window| RateLimitWindow {
+            used_percent: (window.used_percent + rate_limit_used_percent_offset as f64)
+                .clamp(0.0, 100.0),
+            resets_at: window
+                .resets_at
+                .map(|value| value.saturating_add(rate_limit_reset_at_offset_seconds)),
+            ..window
+        });
+        let secondary = rate_limits.secondary.map(|window| RateLimitWindow {
+            used_percent: (window.used_percent + rate_limit_used_percent_offset as f64)
+                .clamp(0.0, 100.0),
+            resets_at: window
+                .resets_at
+                .map(|value| value.saturating_add(rate_limit_reset_at_offset_seconds)),
+            ..window
+        });
+        let rate_limits = RateLimitSnapshot {
+            primary,
+            secondary,
+            ..rate_limits
+        };
         outgoing
             .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
                 AccountRateLimitsUpdatedNotification {
@@ -3233,6 +3267,8 @@ mod tests {
                 rate_limits: Some(rate_limits),
             },
             &outgoing,
+            120,
+            10,
         )
         .await;
 
@@ -3259,7 +3295,9 @@ mod tests {
             ) => {
                 assert_eq!(payload.rate_limits.limit_id.as_deref(), Some("codex"));
                 assert_eq!(payload.rate_limits.limit_name, None);
-                assert!(payload.rate_limits.primary.is_some());
+                let primary = payload.rate_limits.primary.expect("primary rate limit");
+                assert_eq!(primary.used_percent, 53);
+                assert_eq!(primary.resets_at, Some(1_700_000_120));
                 assert!(payload.rate_limits.credits.is_some());
             }
             other => bail!("unexpected notification: {other:?}"),
@@ -3287,6 +3325,8 @@ mod tests {
                 rate_limits: None,
             },
             &outgoing,
+            0,
+            0,
         )
         .await;
 
