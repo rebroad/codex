@@ -474,6 +474,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_user_message: Option<UserMessage>,
+    pub(crate) forked_from_label_override: Option<String>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
@@ -718,6 +719,7 @@ pub(crate) struct ChatWidget {
     thread_name: Option<String>,
     thread_rename_enabled: bool,
     forked_from: Option<ThreadId>,
+    forked_from_label_override: Option<String>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1442,13 +1444,25 @@ impl ChatWidget {
         }
     }
 
-    fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
-        let line: Line<'static> = vec![
-            "• ".dim(),
-            "Thread forked from ".into(),
-            forked_from_id.to_string().cyan(),
-        ]
-        .into();
+    fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
+        let line: Line<'static> = if let Some(label) = self.forked_from_label_override.take() {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                label.cyan(),
+                " (".into(),
+                forked_from_id.to_string().cyan(),
+                ")".into(),
+            ]
+            .into()
+        } else {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                forked_from_id.to_string().cyan(),
+            ]
+            .into()
+        };
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             PlainHistoryCell::new(vec![line]),
         )));
@@ -3486,6 +3500,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            forked_from_label_override,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3593,6 +3608,7 @@ impl ChatWidget {
             thread_name: None,
             thread_rename_enabled: true,
             forked_from: None,
+            forked_from_label_override,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -3674,6 +3690,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            forked_from_label_override,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3780,6 +3797,7 @@ impl ChatWidget {
             thread_name: None,
             thread_rename_enabled: true,
             forked_from: None,
+            forked_from_label_override,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
@@ -3853,6 +3871,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            forked_from_label_override,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3959,6 +3978,7 @@ impl ChatWidget {
             thread_name: None,
             thread_rename_enabled: true,
             forked_from: None,
+            forked_from_label_override,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
