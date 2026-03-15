@@ -175,30 +175,30 @@ fn install_network_seccomp_filter_on_current_thread(
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
-    deny_syscall(&mut rules, libc::SYS_ptrace);
-    deny_syscall(&mut rules, libc::SYS_io_uring_setup);
-    deny_syscall(&mut rules, libc::SYS_io_uring_enter);
-    deny_syscall(&mut rules, libc::SYS_io_uring_register);
+    deny_syscall(&mut rules, i64::from(libc::SYS_ptrace));
+    deny_syscall(&mut rules, i64::from(libc::SYS_io_uring_setup));
+    deny_syscall(&mut rules, i64::from(libc::SYS_io_uring_enter));
+    deny_syscall(&mut rules, i64::from(libc::SYS_io_uring_register));
 
     match mode {
         NetworkSeccompMode::Restricted => {
-            deny_syscall(&mut rules, libc::SYS_connect);
-            deny_syscall(&mut rules, libc::SYS_accept);
-            deny_syscall(&mut rules, libc::SYS_accept4);
-            deny_syscall(&mut rules, libc::SYS_bind);
-            deny_syscall(&mut rules, libc::SYS_listen);
-            deny_syscall(&mut rules, libc::SYS_getpeername);
-            deny_syscall(&mut rules, libc::SYS_getsockname);
-            deny_syscall(&mut rules, libc::SYS_shutdown);
-            deny_syscall(&mut rules, libc::SYS_sendto);
-            deny_syscall(&mut rules, libc::SYS_sendmmsg);
+            deny_syscall(&mut rules, i64::from(libc::SYS_connect));
+            deny_syscall(&mut rules, i64::from(libc::SYS_accept));
+            deny_syscall(&mut rules, i64::from(libc::SYS_accept4));
+            deny_syscall(&mut rules, i64::from(libc::SYS_bind));
+            deny_syscall(&mut rules, i64::from(libc::SYS_listen));
+            deny_syscall(&mut rules, i64::from(libc::SYS_getpeername));
+            deny_syscall(&mut rules, i64::from(libc::SYS_getsockname));
+            deny_syscall(&mut rules, i64::from(libc::SYS_shutdown));
+            deny_syscall(&mut rules, i64::from(libc::SYS_sendto));
+            deny_syscall(&mut rules, i64::from(libc::SYS_sendmmsg));
             // NOTE: allowing recvfrom allows some tools like: `cargo clippy`
             // to run with their socketpair + child processes for sub-proc
             // management.
             // deny_syscall(&mut rules, libc::SYS_recvfrom);
-            deny_syscall(&mut rules, libc::SYS_recvmmsg);
-            deny_syscall(&mut rules, libc::SYS_getsockopt);
-            deny_syscall(&mut rules, libc::SYS_setsockopt);
+            deny_syscall(&mut rules, i64::from(libc::SYS_recvmmsg));
+            deny_syscall(&mut rules, i64::from(libc::SYS_getsockopt));
+            deny_syscall(&mut rules, i64::from(libc::SYS_setsockopt));
 
             // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny
             // everything else.
@@ -209,8 +209,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 libc::AF_UNIX as u64,
             )?])?;
 
-            rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
-            rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
+            rules.insert(i64::from(libc::SYS_socket), vec![unix_only_rule.clone()]);
+            rules.insert(i64::from(libc::SYS_socketpair), vec![unix_only_rule]);
         }
         NetworkSeccompMode::ProxyRouted => {
             // In proxy-routed mode we allow IP sockets in the isolated
@@ -238,8 +238,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 SeccompCmpOp::Eq,
                 libc::AF_UNIX as u64,
             )?])?;
-            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
-            rules.insert(libc::SYS_socketpair, vec![deny_unix_socketpair]);
+            rules.insert(i64::from(libc::SYS_socket), vec![deny_non_ip_socket]);
+            rules.insert(i64::from(libc::SYS_socketpair), vec![deny_unix_socketpair]);
         }
     }
 
