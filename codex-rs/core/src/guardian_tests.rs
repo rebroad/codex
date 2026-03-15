@@ -32,6 +32,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+use toml::Value as TomlValue;
 
 #[test]
 fn build_guardian_transcript_keeps_original_numbering() {
@@ -645,10 +646,18 @@ fn guardian_subagent_config_uses_parent_active_model_instead_of_hardcoded_slug()
 #[tokio::test]
 async fn guardian_subagent_config_uses_managed_guardian_config_override() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
+    let workspace = tempfile::tempdir().expect("create temp dir");
     let managed_path = codex_home.path().join("managed_config.toml");
+    let dot_codex = workspace.path().join(".codex");
+    std::fs::create_dir_all(&dot_codex).expect("create .codex");
     std::fs::write(
         codex_home.path().join("config.toml"),
         "guardian_developer_instructions = \"\"\"\nUser override that should lose.\n\"\"\"\n",
+    )
+    .expect("write config");
+    std::fs::write(
+        dot_codex.join("config.toml"),
+        "guardian_developer_instructions = \"\"\"\nProject override that should lose.\n\"\"\"\n",
     )
     .expect("write config");
     std::fs::write(
@@ -658,13 +667,17 @@ async fn guardian_subagent_config_uses_managed_guardian_config_override() {
     .expect("write config");
     let parent_config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "guardian_developer_instructions".to_string(),
+            TomlValue::String("cli override that should lose".to_string()),
+        )])
         .loader_overrides(LoaderOverrides {
             managed_config_path: Some(managed_path),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
             macos_managed_config_requirements_base64: None,
         })
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .fallback_cwd(Some(workspace.path().to_path_buf()))
         .build()
         .await
         .expect("load config");
@@ -676,5 +689,45 @@ async fn guardian_subagent_config_uses_managed_guardian_config_override() {
     assert_eq!(
         guardian_config.developer_instructions,
         Some("Use the company-managed guardian policy.".to_string())
+    );
+}
+
+#[tokio::test]
+async fn guardian_subagent_config_ignores_unmanaged_guardian_config_overrides() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let workspace = tempfile::tempdir().expect("create temp dir");
+    let dot_codex = workspace.path().join(".codex");
+    std::fs::create_dir_all(&dot_codex).expect("create .codex");
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "guardian_developer_instructions = \"\"\"\nUser override that should lose.\n\"\"\"\n",
+    )
+    .expect("write config");
+    std::fs::write(
+        dot_codex.join("config.toml"),
+        "guardian_developer_instructions = \"\"\"\nProject override that should lose.\n\"\"\"\n",
+    )
+    .expect("write config");
+
+    let parent_config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "guardian_developer_instructions".to_string(),
+            TomlValue::String("cli override that should lose".to_string()),
+        )])
+        .fallback_cwd(Some(workspace.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load config");
+
+    assert_eq!(parent_config.guardian_developer_instructions, None);
+
+    let guardian_config =
+        build_guardian_subagent_config(&parent_config, None, "active-model", None)
+            .expect("guardian config");
+
+    assert_eq!(
+        guardian_config.developer_instructions,
+        Some(guardian_policy_prompt())
     );
 }

@@ -2993,7 +2993,7 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[test]
-fn load_config_trims_guardian_developer_instructions() -> std::io::Result<()> {
+fn load_config_ignores_unmanaged_guardian_developer_instructions() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
     let config = Config::load_from_base_config_with_overrides(
@@ -3007,10 +3007,7 @@ fn load_config_trims_guardian_developer_instructions() -> std::io::Result<()> {
         codex_home.path().to_path_buf(),
     )?;
 
-    assert_eq!(
-        config.guardian_developer_instructions.as_deref(),
-        Some("Use the managed guardian prompt override.")
-    );
+    assert_eq!(config.guardian_developer_instructions, None);
 
     Ok(())
 }
@@ -3057,10 +3054,11 @@ async fn managed_config_overrides_guardian_developer_instructions() -> anyhow::R
         Some("  managed override  \n")
     );
 
-    let final_config = Config::load_from_base_config_with_overrides(
+    let final_config = Config::load_config_with_layer_stack(
         cfg,
         ConfigOverrides::default(),
         codex_home.path().to_path_buf(),
+        config_layer_stack,
     )?;
     assert_eq!(
         final_config.guardian_developer_instructions.as_deref(),

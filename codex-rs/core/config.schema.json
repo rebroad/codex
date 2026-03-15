@@ -2111,7 +2111,7 @@
     },
     "guardian_developer_instructions": {
       "default": null,
-      "description": "Guardian-specific developer instructions used for approval review.\n\nThis is intended for managed policy overrides, such as company-wide security guidance delivered via managed config or MDM.",
+      "description": "Guardian-specific developer instructions used for approval review.\n\nThis is intended for managed policy overrides, such as company-wide security guidance delivered via managed config or MDM. Values from user, project, and session-layer config are ignored.",
       "type": "string"
     },
     "hide_agent_reasoning": {
