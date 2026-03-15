@@ -277,6 +277,31 @@ fn create_filesystem_args(
             }
         }
     }
+    let mut tmpfs_roots = BTreeSet::new();
+    for writable_root in &writable_roots {
+        let root = writable_root.root.as_path();
+        if let Some(symlink_path) = find_symlink_in_path(root, &allowed_write_paths) {
+            if let Some(parent) = symlink_path.parent() {
+                if parent != Path::new("/") {
+                    tmpfs_roots.insert(parent.to_path_buf());
+                }
+            }
+        }
+    }
+    for tmpfs_root in &tmpfs_roots {
+        args.push("--tmpfs".to_string());
+        args.push(path_to_string(tmpfs_root));
+    }
+    for writable_root in &writable_roots {
+        let root = writable_root.root.as_path();
+        if let Some(symlink_path) = find_symlink_in_path(root, &allowed_write_paths) {
+            if let Some(parent) = symlink_path.parent() {
+                if parent != Path::new("/") {
+                    append_mount_target_parent_dir_args(&mut args, root, parent);
+                }
+            }
+        }
+    }
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots
         .iter()
         .map(|path| path.as_path().to_path_buf())
