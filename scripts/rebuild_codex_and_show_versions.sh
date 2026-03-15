@@ -9,6 +9,8 @@ INSTALL_BIN="${HOME}/.cargo/bin/codex"
 
 MODE="debug"
 PUBLISH="auto"
+REGEN_SCHEMA="auto"
+SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
 for arg in "$@"; do
   case "${arg}" in
     --debug)
@@ -22,6 +24,12 @@ for arg in "$@"; do
       ;;
     --no-publish)
       PUBLISH="false"
+      ;;
+    --regen-schema)
+      REGEN_SCHEMA="true"
+      ;;
+    --no-regen-schema)
+      REGEN_SCHEMA="false"
       ;;
     -h|--help)
       cat <<'EOF'
@@ -37,6 +45,10 @@ Options:
   --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
   --no-publish
              Skip tag/push even in release mode
+  --regen-schema
+             Force schema regeneration
+  --no-regen-schema
+             Skip schema regeneration
 EOF
       exit 0
       ;;
@@ -49,8 +61,37 @@ EOF
 done
 
 cd "${REPO_DIR}"
-echo "[1/4] Regenerating app-server schema..."
-just write-app-server-schema
+schema_should_run="false"
+if [[ "${REGEN_SCHEMA}" == "true" ]]; then
+  schema_should_run="true"
+elif [[ "${REGEN_SCHEMA}" != "false" ]]; then
+  schema_should_run="true"
+fi
+
+if [[ "${schema_should_run}" == "true" ]]; then
+  schema_hash="$(
+    find "${REPO_DIR}/codex-rs/app-server" "${REPO_DIR}/codex-rs/app-server-protocol" \
+      -type f -print0 \
+      | LC_ALL=C sort -z \
+      | xargs -0 sha256sum \
+      | sha256sum \
+      | awk '{print $1}'
+  )"
+  previous_hash=""
+  if [[ -f "${SCHEMA_HASH_FILE}" ]]; then
+    previous_hash="$(cat "${SCHEMA_HASH_FILE}")"
+  fi
+  if [[ -n "${schema_hash}" && "${schema_hash}" == "${previous_hash}" ]]; then
+    echo "[1/4] Skipping schema regeneration (no source changes detected)..."
+  else
+    echo "[1/4] Regenerating app-server schema..."
+    just write-app-server-schema
+    mkdir -p "$(dirname "${SCHEMA_HASH_FILE}")"
+    echo "${schema_hash}" > "${SCHEMA_HASH_FILE}"
+  fi
+else
+  echo "[1/4] Skipping schema regeneration (forced off)..."
+fi
 
 cd "${RUST_WORKSPACE_DIR}"
 if [[ -f "${HOME}/.cargo/env" ]]; then
@@ -72,7 +113,7 @@ fi
 
 if [[ "${MODE}" == "release" ]]; then
   echo "[2/4] Building release codex..."
-  RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked
+  RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked
   echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
   install -D -m 755 "${RUST_WORKSPACE_DIR}/target/release/codex" "${INSTALL_BIN}"
 else
@@ -99,11 +140,12 @@ fi
 
 if [[ "${should_publish}" == "true" ]]; then
   VERSION="$(
-    python3 - <<'PY'
+    RUST_WORKSPACE_DIR="${RUST_WORKSPACE_DIR}" python3 - <<'PY'
+import os
 import tomllib
 from pathlib import Path
 
-toml_path = Path(r"'"${RUST_WORKSPACE_DIR}"'") / "Cargo.toml"
+toml_path = Path(os.environ["RUST_WORKSPACE_DIR"]) / "Cargo.toml"
 data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
 version = data.get("workspace", {}).get("package", {}).get("version")
 if version:
