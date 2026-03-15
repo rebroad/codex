@@ -218,7 +218,18 @@ PY
       repo="${BASH_REMATCH[2]%\.git}"
       if gh auth status -h github.com >/dev/null 2>&1; then
         echo "gh authenticated; querying workflow runs..."
-        runs_json="$(gh run list --repo "${owner}/${repo}" --workflow custom-codex-release.yml --json databaseId,status,headBranch,headRef,displayTitle,startedAt -L 100 2>/dev/null || true)"
+        gh_error=""
+        runs_json="$(
+          { gh run list \
+              --repo "${owner}/${repo}" \
+              --workflow custom-codex-release.yml \
+              --json databaseId,status,headBranch,headRef,displayTitle,startedAt \
+              -L 100; } 2> >(tee /tmp/gh-run-list.err >&2)
+        )"
+        if [[ -s /tmp/gh-run-list.err ]]; then
+          gh_error="$(cat /tmp/gh-run-list.err)"
+          rm -f /tmp/gh-run-list.err
+        fi
         if [[ -n "${runs_json}" ]]; then
           run_ids="$(printf '%s\n' "${runs_json}" | TAG="${TAG}" python3 - <<'PY'
 import json
@@ -291,6 +302,47 @@ PY
           fi
         else
           echo "Unable to list workflow runs; gh returned no data."
+          if [[ -n "${gh_error}" ]]; then
+            echo "gh error output: ${gh_error}"
+          fi
+          api_runs="$(gh api -H "Accept: application/vnd.github+json" "/repos/${owner}/${repo}/actions/workflows/custom-codex-release.yml/runs?per_page=20" 2>/dev/null || true)"
+          if [[ -n "${api_runs}" ]]; then
+            api_run_ids="$(printf '%s\n' "${api_runs}" | TAG="${TAG}" python3 - <<'PY'
+import json
+import os
+import sys
+
+tag = os.environ.get("TAG")
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(0)
+
+runs = data.get("workflow_runs", [])
+for run in runs:
+    status = run.get("status")
+    if status not in {"in_progress", "queued"}:
+        continue
+    head_branch = run.get("head_branch") or ""
+    display_title = run.get("display_title") or ""
+    if head_branch == tag or tag in display_title:
+        print(run.get("id"))
+PY
+            )"
+            if [[ -n "${api_run_ids}" ]]; then
+              echo "Canceling in-progress workflow runs from GitHub API..."
+              while IFS= read -r run_id; do
+                [[ -z "${run_id}" ]] && continue
+                gh api -X POST "/repos/${owner}/${repo}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+              done <<< "${api_run_ids}"
+            else
+              echo "GitHub API returned no matching in-progress runs for ${TAG}."
+            fi
+          fi
         fi
       else
         echo "Note: gh is installed but not authenticated; skipping workflow cancellation."
