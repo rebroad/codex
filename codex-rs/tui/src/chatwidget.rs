@@ -9196,7 +9196,7 @@ impl ChatWidget {
                 .into_iter()
                 .find(|preset| preset.id == "auto")
         {
-            self.open_windows_sandbox_enable_prompt(preset);
+            self.open_windows_sandbox_enable_prompt(preset, self.config.approvals_reviewer);
         }
     }
 
