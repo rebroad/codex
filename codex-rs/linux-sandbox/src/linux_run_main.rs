@@ -402,6 +402,11 @@ fn write_sandbox_debug(
         "mount_proc={} network_mode={:?}",
         mount_proc, network_mode
     );
+    let _ = writeln!(
+        file,
+        "self_exe_env={:?}",
+        env::var("CODEX_LINUX_SANDBOX_SELF_EXE")
+    );
     let _ = writeln!(file, "argv={:?}", bwrap_args.args);
     let _ = writeln!(file, "writable_roots={:?}", writable_roots);
     let _ = writeln!(file, "unreadable_roots={:?}", unreadable_roots);
