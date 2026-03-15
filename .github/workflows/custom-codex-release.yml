@@ -140,6 +140,9 @@ jobs:
           EOF
           chmod +x "${wrapper}"
           echo "UBSAN_PATH=${ubsan}" >> "$GITHUB_ENV"
+          if [[ -n "${ubsan}" ]]; then
+            echo "LD_PRELOAD=${ubsan}" >> "$GITHUB_ENV"
+          fi
           echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
           echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
 
