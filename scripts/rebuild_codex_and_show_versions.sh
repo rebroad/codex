@@ -211,12 +211,14 @@ PY
   echo "Pushed ${TAG} to origin."
 
   if command -v gh >/dev/null 2>&1; then
+    echo "Attempting to cancel any in-progress workflow runs for ${TAG}..."
     origin_url="$(git config --get remote.origin.url || true)"
     if [[ "${origin_url}" =~ github\.com[:/]+([^/]+)/([^/]+)(\.git)?$ ]]; then
       owner="${BASH_REMATCH[1]}"
       repo="${BASH_REMATCH[2]%\.git}"
       if gh auth status -h github.com >/dev/null 2>&1; then
-        runs_json="$(gh run list --repo "${owner}/${repo}" --workflow custom-codex-release.yml --json databaseId,status,headBranch,headRef,displayTitle -L 100 2>/dev/null || true)"
+        echo "gh authenticated; querying workflow runs..."
+        runs_json="$(gh run list --repo "${owner}/${repo}" --workflow custom-codex-release.yml --json databaseId,status,headBranch,headRef,displayTitle,startedAt -L 100 2>/dev/null || true)"
         if [[ -n "${runs_json}" ]]; then
           run_ids="$(printf '%s\n' "${runs_json}" | TAG="${TAG}" python3 - <<'PY'
 import json
@@ -242,9 +244,13 @@ def matches(run: dict, tag: str) -> bool:
             return True
     return False
 
+matched = []
 for run in data:
     if run.get("status") in {"in_progress", "queued"} and matches(run, tag):
-        print(run.get("databaseId"))
+        matched.append(run.get("databaseId"))
+
+for run_id in matched:
+    print(run_id)
 PY
           )"
           if [[ -n "${run_ids}" ]]; then
@@ -255,12 +261,43 @@ PY
             done <<< "${run_ids}"
           else
             echo "No in-progress workflow runs matched tag ${TAG}."
+            if [[ "${FORCE_TAG}" == "true" ]]; then
+              all_run_ids="$(printf '%s\n' "${runs_json}" | python3 - <<'PY'
+import json
+import sys
+
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(0)
+
+for run in data:
+    if run.get("status") in {"in_progress", "queued"}:
+        print(run.get("databaseId"))
+PY
+              )"
+              if [[ -n "${all_run_ids}" ]]; then
+                echo "Canceling all in-progress workflow runs for custom-codex-release.yml..."
+                while IFS= read -r run_id; do
+                  [[ -z "${run_id}" ]] && continue
+                  gh run cancel "${run_id}" --repo "${owner}/${repo}" >/dev/null 2>&1 || true
+                done <<< "${all_run_ids}"
+              fi
+            fi
           fi
+        else
+          echo "Unable to list workflow runs; gh returned no data."
         fi
       else
         echo "Note: gh is installed but not authenticated; skipping workflow cancellation."
       fi
     fi
+  else
+    echo "Note: gh is not installed; skipping workflow cancellation."
   fi
 
   origin_url="$(git config --get remote.origin.url || true)"
