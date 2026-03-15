@@ -114,15 +114,16 @@ jobs:
           fi
           wrapper_root="${RUNNER_TEMP:-/tmp}"
           wrapper="${wrapper_root}/rustc-ubsan-wrapper"
-          cat > "${wrapper}" <<EOF
+          cat > "${wrapper}" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          if [[ -n "${ubsan}" ]]; then
-            export LD_PRELOAD="${ubsan}${LD_PRELOAD:+:${LD_PRELOAD}}"
+          if [[ -n "${UBSAN_PATH-}" ]]; then
+            export LD_PRELOAD="${UBSAN_PATH}${LD_PRELOAD:+:${LD_PRELOAD}}"
           fi
-          exec "$1" "${@:2}"
+          exec "$@"
           EOF
           chmod +x "${wrapper}"
+          echo "UBSAN_PATH=${ubsan}" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
           echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
 
