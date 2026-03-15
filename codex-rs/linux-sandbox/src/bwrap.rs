@@ -377,7 +377,13 @@ fn create_filesystem_args(
         }
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
-            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
+            append_read_only_subpath_args(
+                &mut args,
+                &mut preserved_files,
+                &subpath,
+                &allowed_write_paths,
+                symlink_target.is_some(),
+            );
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -480,14 +486,31 @@ fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Pa
 
 fn append_read_only_subpath_args(
     args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
+    prefer_bind_fd: bool,
 ) {
     if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
         args.push("--ro-bind".to_string());
         args.push("/dev/null".to_string());
         args.push(path_to_string(&symlink_path));
         return;
+    }
+
+    if prefer_bind_fd
+        && subpath.exists()
+        && is_within_allowed_write_paths(subpath, allowed_write_paths)
+    {
+        if let Ok(file) = File::open(subpath) {
+            preserved_files.push(file);
+            if let Some(file) = preserved_files.last() {
+                args.push("--ro-bind-fd".to_string());
+                args.push(file.as_raw_fd().to_string());
+                args.push(path_to_string(subpath));
+                return;
+            }
+        }
     }
 
     if !subpath.exists() {
