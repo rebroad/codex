@@ -1,13 +1,20 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("@v8_poc_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load(
+    "@v8_poc_crates//:defs.bzl",
+    "aliases",
+    "all_crate_deps",
+)
 
 package(default_visibility = ["//visibility:public"])
 
 PACKAGE_NAME = "codex-rs/v8-poc/Cargo.toml"
 
-COMMON_CONSTRAINTS = [
+LINUX_X86_64_CONSTRAINTS = [
     "@platforms//os:linux",
     "@platforms//cpu:x86_64",
+]
+
+GNU_CONSTRAINTS = LINUX_X86_64_CONSTRAINTS + [
     "@llvm//constraints/libc:gnu.2.28",
 ]
 
@@ -21,7 +28,7 @@ rust_library(
     ),
     edition = "2024",
     srcs = ["src/lib.rs"],
-    target_compatible_with = COMMON_CONSTRAINTS,
+    target_compatible_with = LINUX_X86_64_CONSTRAINTS,
 )
 
 rust_test(
@@ -33,5 +40,15 @@ rust_test(
         normal_dev = True,
         package_name = PACKAGE_NAME,
     ),
-    target_compatible_with = COMMON_CONSTRAINTS,
+    target_compatible_with = GNU_CONSTRAINTS,
+)
+
+rust_binary(
+    name = "smoke_test",
+    crate_name = "codex_v8_poc_smoke_test",
+    crate_root = "src/smoke_test.rs",
+    deps = [":v8-poc"],
+    edition = "2024",
+    srcs = ["src/smoke_test.rs"],
+    target_compatible_with = LINUX_X86_64_CONSTRAINTS,
 )

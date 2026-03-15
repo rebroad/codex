@@ -71,6 +71,7 @@ crate.from_cargo(
     cargo_toml = "//codex-rs/v8-poc:Cargo.toml",
     platform_triples = [
         "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
     ],
     use_experimental_platforms = True,
 )
@@ -83,16 +84,17 @@ crate.annotation(
     deps = ["@zstd"],
 )
 crate.annotation(
-    # The Bazel canary builds codex-rs/v8-poc on x86_64 GNU Linux only for
-    # now, so wire the upstream v8 crate to the corresponding Bazel-produced
-    # archive + binding pair.
     build_script_data = [
         "@@//third_party/v8:v8_146_4_0_x86_64_unknown_linux_gnu",
         "@@//third_party/v8:src_binding_release_x86_64_unknown_linux_gnu",
+        "@@//third_party/v8:v8_146_4_0_x86_64_unknown_linux_musl",
+        "@@//third_party/v8:src_binding_release_x86_64_unknown_linux_musl",
     ],
     build_script_env = {
-        "RUSTY_V8_ARCHIVE": "$(execpath @@//third_party/v8:v8_146_4_0_x86_64_unknown_linux_gnu)",
-        "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @@//third_party/v8:src_binding_release_x86_64_unknown_linux_gnu)",
+        "RUSTY_V8_ARCHIVE_X86_64_UNKNOWN_LINUX_GNU": "$(execpath @@//third_party/v8:v8_146_4_0_x86_64_unknown_linux_gnu)",
+        "RUSTY_V8_ARCHIVE_X86_64_UNKNOWN_LINUX_MUSL": "$(execpath @@//third_party/v8:v8_146_4_0_x86_64_unknown_linux_musl)",
+        "RUSTY_V8_SRC_BINDING_PATH_X86_64_UNKNOWN_LINUX_GNU": "$(execpath @@//third_party/v8:src_binding_release_x86_64_unknown_linux_gnu)",
+        "RUSTY_V8_SRC_BINDING_PATH_X86_64_UNKNOWN_LINUX_MUSL": "$(execpath @@//third_party/v8:src_binding_release_x86_64_unknown_linux_musl)",
     },
     crate = "v8",
     patch_args = ["-p1"],

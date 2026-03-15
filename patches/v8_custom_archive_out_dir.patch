@@ -1,10 +1,58 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -578,6 +578,16 @@
+@@ -54,6 +54,13 @@
+     println!("cargo:rerun-if-env-changed={env}");
+   }
+
++  let target_specific_env_suffix =
++    env::var("TARGET").unwrap().replace('-', "_").to_ascii_uppercase();
++  println!("cargo:rerun-if-env-changed=RUSTY_V8_ARCHIVE_{target_specific_env_suffix}");
++  println!(
++    "cargo:rerun-if-env-changed=RUSTY_V8_SRC_BINDING_PATH_{target_specific_env_suffix}"
++  );
++
+   // Detect if trybuild tests are being compiled.
+   let is_trybuild = env::var_os("DENO_TRYBUILD").is_some();
+
+@@ -550,8 +557,32 @@
+   }
  }
- 
+
+-fn static_lib_url() -> String {
++fn target_specific_env_var_suffix() -> String {
++  env::var("TARGET").unwrap().replace('-', "_").to_ascii_uppercase()
++}
++
++fn custom_archive() -> Option<String> {
+   if let Ok(custom_archive) = env::var("RUSTY_V8_ARCHIVE") {
++    return Some(custom_archive);
++  }
++
++  let target_specific_archive =
++    format!("RUSTY_V8_ARCHIVE_{}", target_specific_env_var_suffix());
++  env::var(target_specific_archive).ok()
++}
++
++fn custom_src_binding_path() -> Option<String> {
++  if let Ok(binding) = env::var("RUSTY_V8_SRC_BINDING_PATH") {
++    return Some(binding);
++  }
++
++  let target_specific_binding =
++    format!("RUSTY_V8_SRC_BINDING_PATH_{}", target_specific_env_var_suffix());
++  env::var(target_specific_binding).ok()
++}
++
++fn static_lib_url() -> String {
++  if let Some(custom_archive) = custom_archive() {
+     return custom_archive;
+   }
+   let default_base = "https://github.com/denoland/rusty_v8/releases/download";
+@@ -578,6 +609,16 @@
+ }
+
  fn static_lib_dir() -> PathBuf {
-+  if env::var_os("RUSTY_V8_ARCHIVE").is_some() {
++  if custom_archive().is_some() {
 +    return PathBuf::from(
 +      env::var_os("OUT_DIR").expect(
 +        "The 'OUT_DIR' environment is not set (it should be something like \
@@ -16,4 +64,13 @@
 +  }
    build_dir().join("gn_out").join("obj")
  }
- 
+
+@@ -843,7 +884,7 @@
+ }
+
+ fn print_prebuilt_src_binding_path() {
+-  if let Ok(binding) = env::var("RUSTY_V8_SRC_BINDING_PATH") {
++  if let Some(binding) = custom_src_binding_path() {
+     println!("cargo:rustc-env=RUSTY_V8_SRC_BINDING_PATH={binding}");
+     return;
+   }

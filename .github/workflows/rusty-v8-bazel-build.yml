@@ -41,11 +41,25 @@ concurrency:
 
 jobs:
   bazel-canary:
-    name: Bazel canary
-    runs-on: ubuntu-24.04
+    name: Bazel canary - ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-gnu-test
+            runner: ubuntu-24.04
+            command: test
+            platform: "@llvm//platforms:linux_amd64"
+            target: "//codex-rs/v8-poc:v8-poc-test"
+          - name: linux-musl-smoke
+            runner: ubuntu-24.04
+            command: build
+            platform: "//:linux_amd64_musl_pie_off"
+            target: "//codex-rs/v8-poc:smoke_test"
 
     steps:
       - uses: actions/checkout@v6
@@ -53,18 +67,19 @@ jobs:
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
-      - name: bazel test codex-rs/v8-poc
+      - name: bazel canary codex-rs/v8-poc
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
 
-          bazel_args=(
-            test
-            --platforms=@llvm//platforms:linux_amd64
-            //codex-rs/v8-poc:v8-poc-test
-            --test_verbose_timeout_warnings
+          bazel_cmd=(
+            bazel
+            --noexperimental_remote_repo_contents_cache
+          )
+
+          common_args=(
             --build_metadata=REPO_URL=https://github.com/${GITHUB_REPOSITORY}.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI
@@ -72,15 +87,38 @@ jobs:
           )
 
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-            bazel \
-              --noexperimental_remote_repo_contents_cache \
-              --bazelrc=.github/workflows/ci.bazelrc \
-              "${bazel_args[@]}" \
+            bazel_cmd+=(
+              --bazelrc=.github/workflows/ci.bazelrc
               "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+            )
           else
-            bazel \
-              --noexperimental_remote_repo_contents_cache \
-              "${bazel_args[@]}" \
-              --remote_cache= \
+            bazel_cmd+=(
+              --remote_cache=
               --remote_executor=
+            )
+          fi
+
+          if [[ "${{ matrix.command }}" == "test" ]]; then
+            "${bazel_cmd[@]}" test \
+              --platforms="${{ matrix.platform }}" \
+              "${{ matrix.target }}" \
+              --test_verbose_timeout_warnings \
+              "${common_args[@]}"
+          else
+            "${bazel_cmd[@]}" build \
+              --platforms="${{ matrix.platform }}" \
+              "${{ matrix.target }}" \
+              "${common_args[@]}"
+
+            smoke_binary="$("${bazel_cmd[@]}" cquery \
+              --platforms="${{ matrix.platform }}" \
+              --output=files \
+              "${{ matrix.target }}" | tail -n 1)"
+
+            if [[ -z "${smoke_binary}" ]]; then
+              echo "failed to resolve smoke binary path" >&2
+              exit 1
+            fi
+
+            "./${smoke_binary}"
           fi
