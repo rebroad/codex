@@ -683,10 +683,11 @@ impl SandboxManager {
                 full_command.push(exe.to_string_lossy().to_string());
                 full_command.append(&mut args);
                 let mut sandbox_env = HashMap::new();
-                sandbox_env.insert(
-                    "CODEX_LINUX_SANDBOX_SELF_EXE".to_string(),
-                    exe.to_string_lossy().to_string(),
-                );
+                if let Some(arg0) = std::env::args().next() {
+                    if !arg0.is_empty() {
+                        sandbox_env.insert("CODEX_LINUX_SANDBOX_SELF_EXE".to_string(), arg0);
+                    }
+                }
                 (
                     full_command,
                     sandbox_env,
