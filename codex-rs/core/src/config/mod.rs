@@ -253,6 +253,9 @@ pub struct Config {
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
+    /// Whether Linux sandbox debug logging is enabled (default true).
+    pub sandbox_debug: bool,
+
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
@@ -1122,6 +1125,10 @@ pub struct ConfigToml {
 
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
+
+    /// When false, disable Linux sandbox debug logging written to /tmp.
+    /// Defaults to true when unset.
+    pub sandbox_debug: Option<bool>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
@@ -2297,6 +2304,13 @@ impl Config {
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
+        let sandbox_debug = cfg.sandbox_debug.unwrap_or(true);
+
+        if !sandbox_debug {
+            unsafe {
+                std::env::set_var("CODEX_SANDBOX_DEBUG", "0");
+            }
+        }
 
         let history = cfg.history.unwrap_or_default();
 
@@ -2577,6 +2591,7 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            sandbox_debug,
             approvals_reviewer,
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
