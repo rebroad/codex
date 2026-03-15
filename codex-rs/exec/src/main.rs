@@ -29,13 +29,34 @@ struct TopCli {
 }
 
 fn set_linux_sandbox_self_exe_from_argv0() {
-    if env::var("CODEX_LINUX_SANDBOX_SELF_EXE").is_ok() {
-        return;
+    let mut debug_lines: Vec<String> = Vec::new();
+    let debug_paths = env::var("CODEX_SANDBOX_DEBUG")
+        .map(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"))
+        .unwrap_or(true);
+
+    let existing = env::var("CODEX_LINUX_SANDBOX_SELF_EXE").ok();
+    let arg0 = env::args().next().unwrap_or_default();
+
+    if debug_paths {
+        debug_lines.push(format!("self_exe_arg0={}", arg0));
+        debug_lines.push(format!("self_exe_path_env={:?}", env::var("PATH")));
+        debug_lines.push(format!("self_exe_env_before={:?}", existing));
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/codex-sandbox-debug.log")
+            .and_then(|mut f| {
+                use std::io::Write;
+                for line in &debug_lines {
+                    let _ = writeln!(f, "{}", line);
+                }
+                Ok(())
+            });
     }
 
-    let Some(arg0) = env::args().next() else {
+    if existing.is_some() {
         return;
-    };
+    }
     if arg0.is_empty() {
         return;
     }
@@ -43,35 +64,23 @@ fn set_linux_sandbox_self_exe_from_argv0() {
     let argv0_path = PathBuf::from(&arg0);
     let argv0_name = argv0_path.file_name().map(|s| s.to_os_string());
 
-    // Debug: log PATH search and chosen self exe path when sandbox debug is enabled.
-    let debug_paths = env::var("CODEX_SANDBOX_DEBUG")
-        .map(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"))
-        .unwrap_or(true);
-    let mut debug_lines: Vec<String> = Vec::new();
-    if debug_paths {
-        debug_lines.push(format!("self_exe_arg0={}", arg0));
-        debug_lines.push(format!("self_exe_path_env={:?}", env::var("PATH")));
-    }
-
     if let Some(argv0_name) = argv0_name {
         if let Some(path_var) = env::var_os("PATH") {
             for dir in env::split_paths(&path_var) {
                 let candidate = dir.join(&argv0_name);
                 if candidate.is_file() {
                     if debug_paths {
-                        debug_lines.push(format!(
-                            "self_exe_path_pick={}",
-                            candidate.to_string_lossy()
-                        ));
                         let _ = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
                             .open("/tmp/codex-sandbox-debug.log")
                             .and_then(|mut f| {
                                 use std::io::Write;
-                                for line in &debug_lines {
-                                    let _ = writeln!(f, "{}", line);
-                                }
+                                let _ = writeln!(
+                                    f,
+                                    "self_exe_path_pick={}",
+                                    candidate.to_string_lossy()
+                                );
                                 Ok(())
                             });
                     }
@@ -89,19 +98,13 @@ fn set_linux_sandbox_self_exe_from_argv0() {
 
     if argv0_path.is_absolute() {
         if debug_paths {
-            debug_lines.push(format!(
-                "self_exe_path_pick={}",
-                argv0_path.to_string_lossy()
-            ));
             let _ = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open("/tmp/codex-sandbox-debug.log")
                 .and_then(|mut f| {
                     use std::io::Write;
-                    for line in &debug_lines {
-                        let _ = writeln!(f, "{}", line);
-                    }
+                    let _ = writeln!(f, "self_exe_path_pick={}", argv0_path.to_string_lossy());
                     Ok(())
                 });
         }
@@ -119,16 +122,13 @@ fn set_linux_sandbox_self_exe_from_argv0() {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|_| PathBuf::from(arg0));
     if debug_paths {
-        debug_lines.push(format!("self_exe_path_pick={}", abs.to_string_lossy()));
         let _ = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open("/tmp/codex-sandbox-debug.log")
             .and_then(|mut f| {
                 use std::io::Write;
-                for line in &debug_lines {
-                    let _ = writeln!(f, "{}", line);
-                }
+                let _ = writeln!(f, "self_exe_path_pick={}", abs.to_string_lossy());
                 Ok(())
             });
     }
