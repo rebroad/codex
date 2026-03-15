@@ -363,18 +363,6 @@ fn create_filesystem_args(
             .map(|path| path.as_path().to_path_buf())
             .filter(|path| !unreadable_paths.contains(path))
             .collect();
-        if let Some(target) = &symlink_target {
-            read_only_subpaths = read_only_subpaths
-                .into_iter()
-                .map(|path| {
-                    if let Ok(rel) = path.strip_prefix(root) {
-                        target.join(rel)
-                    } else {
-                        path
-                    }
-                })
-                .collect();
-        }
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
             append_read_only_subpath_args(
@@ -382,6 +370,8 @@ fn create_filesystem_args(
                 &mut preserved_files,
                 &subpath,
                 &allowed_write_paths,
+                symlink_target.as_deref(),
+                root,
                 symlink_target.is_some(),
             );
         }
@@ -489,20 +479,33 @@ fn append_read_only_subpath_args(
     preserved_files: &mut Vec<File>,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
+    symlink_target: Option<&Path>,
+    symlink_root: &Path,
     prefer_bind_fd: bool,
 ) {
     if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
-        return;
+        if symlink_path != symlink_root {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&symlink_path));
+            return;
+        }
     }
 
     if prefer_bind_fd
         && subpath.exists()
         && is_within_allowed_write_paths(subpath, allowed_write_paths)
     {
-        if let Ok(file) = File::open(subpath) {
+        let source_path = if let Some(target) = symlink_target {
+            if let Ok(rel) = subpath.strip_prefix(symlink_root) {
+                target.join(rel)
+            } else {
+                subpath.to_path_buf()
+            }
+        } else {
+            subpath.to_path_buf()
+        };
+        if let Ok(file) = File::open(&source_path) {
             preserved_files.push(file);
             if let Some(file) = preserved_files.last() {
                 args.push("--ro-bind-fd".to_string());
