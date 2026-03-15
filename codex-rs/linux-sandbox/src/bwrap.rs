@@ -333,13 +333,29 @@ fn create_filesystem_args(
             append_mount_target_parent_dir_args(&mut args, root, masking_root);
         }
 
-        args.push("--bind".to_string());
+        let mut bind_fd = None;
         if let Some(target) = &symlink_target {
-            args.push(path_to_string(target));
+            if let Ok(file) = File::open(target) {
+                preserved_files.push(file);
+                if let Some(file) = preserved_files.last() {
+                    bind_fd = Some(file.as_raw_fd());
+                }
+            }
+        }
+
+        if let Some(fd) = bind_fd {
+            args.push("--bind-fd".to_string());
+            args.push(fd.to_string());
+            args.push(path_to_string(root));
         } else {
+            args.push("--bind".to_string());
+            if let Some(target) = &symlink_target {
+                args.push(path_to_string(target));
+            } else {
+                args.push(path_to_string(root));
+            }
             args.push(path_to_string(root));
         }
-        args.push(path_to_string(root));
 
         let mut read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
