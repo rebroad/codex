@@ -1,0 +1,443 @@
+name: custom-codex-release
+
+on:
+  push:
+    tags:
+      - "codex-v*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            platform_key: linux-x86_64
+          - runner: ubuntu-22.04
+            target: armv7-unknown-linux-gnueabihf
+            platform_key: linux-armv7
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+
+      - name: Install ARMv7 cross toolchain
+        if: ${{ matrix.target == 'armv7-unknown-linux-gnueabihf' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo tee /etc/apt/sources.list.d/armhf-ports.list > /dev/null <<'EOF'
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          EOF
+          sudo rm -f /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list
+          sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          EOF
+          sudo apt-get update -y
+          sudo dpkg --add-architecture armhf
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf pkg-config \
+            libssl-dev:armhf
+
+      - name: Install UBSan runtime (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+          fi
+
+      - name: Install Zig (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Install musl build tools (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure rustc UBSan wrapper (musl host)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ubsan=""
+          if command -v ldconfig >/dev/null 2>&1; then
+            ubsan="$(ldconfig -p 2>/dev/null | grep -m1 'libubsan\\.so\\.1' | sed -E 's/.*=> (.*)$/\\1/' || true)"
+          fi
+          wrapper_root="${RUNNER_TEMP:-/tmp}"
+          wrapper="${wrapper_root}/rustc-ubsan-wrapper"
+          cat > "${wrapper}" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${UBSAN_PATH-}" ]]; then
+            export LD_PRELOAD="${UBSAN_PATH}${LD_PRELOAD:+:${LD_PRELOAD}}"
+          fi
+          exec "$@"
+          EOF
+          chmod +x "${wrapper}"
+          echo "UBSAN_PATH=${ubsan}" >> "$GITHUB_ENV"
+          if [[ -n "${ubsan}" ]]; then
+            echo "LD_PRELOAD=${ubsan}" >> "$GITHUB_ENV"
+          fi
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Clear sanitizer flags (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Avoid problematic aws-lc jitter entropy code path on musl builders.
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+
+          # Clear global Rust flags so host/proc-macro builds don't pull in UBSan.
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          # Override any runner-level Cargo config rustflags as well.
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+          sanitize_flags() {
+            local input="$1"
+            input="${input//-fsanitize=undefined/}"
+            input="${input//-fno-sanitize-recover=undefined/}"
+            input="${input//-fno-sanitize-trap=undefined/}"
+            echo "$input"
+          }
+
+          cflags="$(sanitize_flags "${CFLAGS-}")"
+          cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
+          echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
+
+      - name: Build codex (release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
+            export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/lib/arm-linux-gnueabihf/pkgconfig"
+          fi
+          RUSTUP_DISABLE_SELF_UPDATE=1 cargo build -p codex-cli --release --target "${{ matrix.target }}"
+
+      - name: Package release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist_dir="${GITHUB_WORKSPACE}/dist/${{ matrix.target }}"
+          mkdir -p "$dist_dir"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/codex.exe" "$dist_dir/codex.exe"
+          else
+            cp "target/${{ matrix.target }}/release/codex" "$dist_dir/codex"
+          fi
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd "$dist_dir" && tar -czf "codex-${{ matrix.target }}.tar.gz" codex.exe)
+          else
+            (cd "$dist_dir" && tar -czf "codex-${{ matrix.target }}.tar.gz" codex)
+          fi
+
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          dist = Path("${GITHUB_WORKSPACE}") / "dist" / "${{ matrix.target }}"
+          archive = dist / f"codex-${{ matrix.target }}.tar.gz"
+          h = hashlib.sha256()
+          with archive.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+              h.update(chunk)
+          (dist / f"codex-${{ matrix.target }}.tar.gz.sha256").write_text(f"{h.hexdigest()}  {archive.name}\n")
+          PY
+
+      - name: Prepare npm vendor payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor_root="${RUNNER_TEMP}/npm-vendor"
+          target="${{ matrix.target }}"
+          platform_key="${{ matrix.platform_key }}"
+
+          mkdir -p "${vendor_root}/${target}/codex"
+          mkdir -p "${vendor_root}/${target}/path"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${target}/release/codex.exe" "${vendor_root}/${target}/codex/codex.exe"
+          else
+            cp "target/${target}/release/codex" "${vendor_root}/${target}/codex/codex"
+            chmod 0755 "${vendor_root}/${target}/codex/codex"
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import shutil
+          import sys
+          import tarfile
+          import zipfile
+          from pathlib import Path
+          import urllib.request
+
+          platform_key = os.environ["RG_PLATFORM_KEY"]
+          vendor_root = Path(os.environ["RG_VENDOR_ROOT"])
+          target = os.environ["RG_TARGET"]
+          skip_rg = os.environ.get("RG_SKIP", "") == "1"
+
+          if skip_rg:
+            raise SystemExit(0)
+
+          manifest_text = Path("codex-cli/bin/rg").read_text(encoding="utf-8")
+          manifest = json.loads(manifest_text[manifest_text.index("{"):])
+          platform = manifest["platforms"].get(platform_key)
+          if platform is None:
+            raise RuntimeError(f"rg manifest missing platform key: {platform_key}")
+          url = platform["providers"][0]["url"]
+          member_path = platform["path"]
+          archive_format = platform.get("format", "tar.gz")
+
+          archive_path = vendor_root / "rg-archive"
+          with urllib.request.urlopen(url) as response, open(archive_path, "wb") as out:
+            shutil.copyfileobj(response, out)
+
+          dest_dir = vendor_root / target / "path"
+          dest_dir.mkdir(parents=True, exist_ok=True)
+          dest = dest_dir / ("rg.exe" if platform_key.startswith("windows") else "rg")
+
+          if archive_format == "tar.gz":
+            with tarfile.open(archive_path, "r:gz") as tar:
+              member = tar.getmember(member_path)
+              with tar.extractfile(member) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+          elif archive_format == "zip":
+            with zipfile.ZipFile(archive_path) as zf:
+              with zf.open(member_path) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+          else:
+            raise RuntimeError(f"Unsupported rg archive format: {archive_format}")
+
+          if not platform_key.startswith("windows"):
+            dest.chmod(0o755)
+          PY
+        env:
+          RG_PLATFORM_KEY: ${{ matrix.platform_key }}
+          RG_VENDOR_ROOT: ${{ runner.temp }}/npm-vendor
+          RG_TARGET: ${{ matrix.target }}
+          RG_SKIP: ${{ matrix.platform_key == 'linux-armv7' && '1' || '0' }}
+
+      - name: Upload npm vendor payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: vendor-${{ matrix.target }}
+          path: ${{ runner.temp }}/npm-vendor
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.target }}/codex-${{ matrix.target }}.tar.gz
+            dist/${{ matrix.target }}/codex-${{ matrix.target }}.tar.gz.sha256
+
+  package-npm:
+    name: Package and publish npm
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download vendor payloads
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vendor-*
+          path: vendor-artifacts
+
+      - name: Assemble vendor tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor_root="${RUNNER_TEMP}/npm-vendor"
+          mkdir -p "$vendor_root"
+          for dir in vendor-artifacts/*; do
+            rsync -a "${dir}/" "$vendor_root/"
+          done
+          find "$vendor_root" -maxdepth 2 -type d
+          echo "vendor_root=${vendor_root}" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.14.0
+          registry-url: "https://registry.npmjs.org"
+          scope: "@reb.ai"
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Build npm tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#codex-v}"
+          dist_dir="${GITHUB_WORKSPACE}/dist/npm"
+          mkdir -p "$dist_dir"
+
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex \
+            --release-version "$version" \
+            --vendor-src "$vendor_root" \
+            --pack-output "$dist_dir/codex-npm-${version}.tgz"
+
+          for platform in linux-x64 linux-armv7; do
+            python3 codex-cli/scripts/build_npm_package.py \
+              --package "codex-${platform}" \
+              --release-version "$version" \
+              --vendor-src "$vendor_root" \
+              --pack-output "$dist_dir/codex-npm-${platform}-${version}.tgz"
+          done
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#codex-v}"
+          npm_tag=""
+          if [[ "$version" == *-* ]]; then
+            npm_tag="alpha"
+          fi
+
+          prefix=""
+          if [[ -n "$npm_tag" ]]; then
+            prefix="${npm_tag}-"
+          fi
+
+          tarballs=(dist/npm/*-"${version}".tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found for version ${version}" >&2
+            exit 1
+          fi
+
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-npm-linux-*-${version}.tgz)
+                platform="${filename#codex-npm-}"
+                platform="${platform%-${version}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-${version}.tgz)
+                tag="${npm_tag}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}" >&2
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}" --access public)
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            "${publish_cmd[@]}"
+          done
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-tarballs
+          path: dist/npm/*.tgz
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - build
+      - package-npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-tarballs
+          path: dist/npm
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/**/codex-*.tar.gz
+            dist/**/codex-*.tar.gz.sha256
+            dist/npm/*.tgz
