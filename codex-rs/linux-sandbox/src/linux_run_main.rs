@@ -409,6 +409,17 @@ fn write_sandbox_debug(
     );
     let _ = writeln!(file, "argv={:?}", bwrap_args.args);
     let _ = writeln!(file, "writable_roots={:?}", writable_roots);
+    for root in &writable_roots {
+        let root_path = root.root.as_path();
+        let canonical = std::fs::canonicalize(root_path).ok();
+        let _ = writeln!(
+            file,
+            "writable_root_check path={} exists={} canonical={:?}",
+            root_path.display(),
+            root_path.exists(),
+            canonical
+        );
+    }
     let _ = writeln!(file, "unreadable_roots={:?}", unreadable_roots);
 }
 

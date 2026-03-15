@@ -228,9 +228,6 @@ pub fn set_linux_sandbox_self_exe_from_argv0() {
             });
     }
 
-    if existing.is_some() {
-        return;
-    }
     if arg0.is_empty() {
         return;
     }

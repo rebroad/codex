@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -458,7 +459,7 @@ impl FileSystemSandboxPolicy {
         })
         .collect::<Vec<_>>();
 
-        expand_symlink_writable_roots(writable_roots)
+        Self::expand_symlink_writable_roots(writable_roots)
     }
 
     /// Returns explicit unreadable roots resolved against the provided cwd.
