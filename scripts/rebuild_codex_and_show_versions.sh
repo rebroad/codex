@@ -223,7 +223,7 @@ PY
           { gh run list \
               --repo "${owner}/${repo}" \
               --workflow custom-codex-release.yml \
-              --json databaseId,status,headBranch,headRef,displayTitle,startedAt \
+              --json databaseId,status,headBranch,displayTitle,startedAt \
               -L 100; } 2> >(tee /tmp/gh-run-list.err >&2)
         )"
         if [[ -s /tmp/gh-run-list.err ]]; then
@@ -247,7 +247,7 @@ except json.JSONDecodeError:
     sys.exit(0)
 
 def matches(run: dict, tag: str) -> bool:
-    for key in ("headBranch", "headRef", "displayTitle"):
+    for key in ("headBranch", "displayTitle"):
         value = run.get(key)
         if not value:
             continue
