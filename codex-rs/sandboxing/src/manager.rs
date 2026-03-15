@@ -210,6 +210,7 @@ impl SandboxManager {
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.append(&mut command.args);
+        let mut env = command.env;
 
         let (argv, arg0_override) = match sandbox {
             SandboxType::None => (argv, None),
@@ -248,6 +249,9 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
                 full_command.append(&mut args);
+                if let Ok(value) = std::env::var("CODEX_SANDBOX_DEBUG") {
+                    env.insert("CODEX_SANDBOX_DEBUG".to_string(), value);
+                }
                 (
                     full_command,
                     Some(linux_sandbox_arg0_override(exe.as_path())),
@@ -262,7 +266,7 @@ impl SandboxManager {
         Ok(SandboxExecRequest {
             command: argv,
             cwd: command.cwd,
-            env: command.env,
+            env,
             network: network.cloned(),
             sandbox,
             windows_sandbox_level,
