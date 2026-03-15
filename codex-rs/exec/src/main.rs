@@ -14,7 +14,10 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_exec::Cli;
 use codex_exec::run_main;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
+use std::env;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 struct TopCli {
@@ -25,7 +28,62 @@ struct TopCli {
     inner: Cli,
 }
 
+fn set_linux_sandbox_self_exe_from_argv0() {
+    if env::var("CODEX_LINUX_SANDBOX_SELF_EXE").is_ok() {
+        return;
+    }
+
+    let Some(arg0) = env::args().next() else {
+        return;
+    };
+    if arg0.is_empty() {
+        return;
+    }
+
+    let argv0_path = PathBuf::from(&arg0);
+    let argv0_name = argv0_path.file_name().map(|s| s.to_os_string());
+
+    if let Some(argv0_name) = argv0_name {
+        if let Some(path_var) = env::var_os("PATH") {
+            for dir in env::split_paths(&path_var) {
+                let candidate = dir.join(&argv0_name);
+                if candidate.is_file() {
+                    unsafe {
+                        env::set_var(
+                            "CODEX_LINUX_SANDBOX_SELF_EXE",
+                            candidate.to_string_lossy().to_string(),
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    if argv0_path.is_absolute() {
+        unsafe {
+            env::set_var(
+                "CODEX_LINUX_SANDBOX_SELF_EXE",
+                argv0_path.to_string_lossy().to_string(),
+            );
+        }
+        return;
+    }
+
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let abs = AbsolutePathBuf::resolve_path_against_base(&arg0, &cwd)
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|_| PathBuf::from(arg0));
+    unsafe {
+        env::set_var(
+            "CODEX_LINUX_SANDBOX_SELF_EXE",
+            abs.to_string_lossy().to_string(),
+        );
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    set_linux_sandbox_self_exe_from_argv0();
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         // Merge root-level overrides into inner CLI struct so downstream logic remains unchanged.
