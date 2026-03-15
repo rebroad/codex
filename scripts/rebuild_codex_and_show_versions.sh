@@ -71,8 +71,10 @@ if ! rustup toolchain list | grep -q "^${TOOLCHAIN}-"; then
 fi
 
 if [[ "${MODE}" == "release" ]]; then
-  echo "[2/4] Installing release codex into ${INSTALL_BIN}..."
-  RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" install --path cli --force
+  echo "[2/4] Building release codex..."
+  RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked
+  echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
+  install -D -m 755 "${RUST_WORKSPACE_DIR}/target/release/codex" "${INSTALL_BIN}"
 else
   echo "[2/4] Building debug codex..."
   # Force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
@@ -97,11 +99,16 @@ fi
 
 if [[ "${should_publish}" == "true" ]]; then
   VERSION="$(
-    awk '
-      $0 ~ /^\[workspace\.package\]/ { in=1; next }
-      in && $0 ~ /^\[/ { exit }
-      in && match($0, /^version[[:space:]]*=[[:space:]]*"([^"]+)"/, m) { print m[1]; exit }
-    ' "${RUST_WORKSPACE_DIR}/Cargo.toml"
+    python3 - <<'PY'
+import tomllib
+from pathlib import Path
+
+toml_path = Path(r"'"${RUST_WORKSPACE_DIR}"'") / "Cargo.toml"
+data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+version = data.get("workspace", {}).get("package", {}).get("version")
+if version:
+    print(version)
+PY
   )"
   if [[ -z "${VERSION}" ]]; then
     version_from_codex="$("${INSTALL_BIN}" --version | awk '{print $2}')"
