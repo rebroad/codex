@@ -8174,7 +8174,7 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
         .into_iter()
         .find(|preset| preset.id == "auto")
         .expect("auto preset");
-    chat.open_windows_sandbox_enable_prompt(preset);
+    chat.open_windows_sandbox_enable_prompt(preset, ApprovalsReviewer::User);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
@@ -9756,7 +9756,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
 async fn world_writable_warning_without_preset_persists_dont_warn_again() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.open_world_writable_warning_confirmation(None, Vec::new(), 0, true);
+    chat.open_world_writable_warning_confirmation(None, None, Vec::new(), 0, true);
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
