@@ -1,8 +1,11 @@
 use clap::Parser;
+use std::env;
 use std::ffi::CString;
 use std::fmt;
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Read;
+use std::io::Write;
 use std::os::fd::FromRawFd;
 use std::path::Path;
 use std::path::PathBuf;
@@ -376,6 +379,58 @@ fn file_system_sandbox_policies_match_semantics(
             == derived.get_unreadable_roots_with_cwd(sandbox_policy_cwd)
 }
 
+fn sandbox_debug_enabled() -> bool {
+    match env::var("CODEX_SANDBOX_DEBUG") {
+        Ok(value) => !matches!(value.as_str(), "0" | "false" | "no" | "off"),
+        Err(_) => true,
+    }
+}
+
+fn write_sandbox_debug(
+    label: &str,
+    bwrap_args: &crate::bwrap::BwrapArgs,
+    sandbox_policy_cwd: &Path,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_mode: BwrapNetworkMode,
+    mount_proc: bool,
+) {
+    if !sandbox_debug_enabled() {
+        return;
+    }
+
+    let log_path = Path::new("/tmp/codex-sandbox-debug.log");
+    let mut file = match OpenOptions::new().create(true).append(true).open(log_path) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+
+    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let unreadable_roots =
+        file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
+
+    let _ = writeln!(file, "=== {} ===", label);
+    let _ = writeln!(file, "cwd={}", sandbox_policy_cwd.display());
+    let _ = writeln!(
+        file,
+        "mount_proc={} network_mode={:?}",
+        mount_proc, network_mode
+    );
+    let _ = writeln!(file, "argv={:?}", bwrap_args.args);
+    let _ = writeln!(file, "writable_roots={:?}", writable_roots);
+    for root in &writable_roots {
+        let root_path = root.root.as_path();
+        let canonical = std::fs::canonicalize(root_path).ok();
+        let _ = writeln!(
+            file,
+            "writable_root_check path={} exists={} canonical={:?}",
+            root_path.display(),
+            root_path.exists(),
+            canonical
+        );
+    }
+    let _ = writeln!(file, "unreadable_roots={:?}", unreadable_roots);
+}
+
 fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_legacy_landlock: bool) {
     if apply_seccomp_then_exec && use_legacy_landlock {
         panic!("--apply-seccomp-then-exec is incompatible with --use-legacy-landlock");
@@ -436,6 +491,14 @@ fn run_bwrap_with_proc_fallback(
         options,
     );
     apply_inner_command_argv0(&mut bwrap_args.args);
+    write_sandbox_debug(
+        "bwrap-run",
+        &bwrap_args,
+        sandbox_policy_cwd,
+        file_system_sandbox_policy,
+        network_mode,
+        mount_proc,
+    );
     exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
 }
 
@@ -527,6 +590,14 @@ fn preflight_proc_mount_support(
         command_cwd,
         file_system_sandbox_policy,
         network_mode,
+    );
+    write_sandbox_debug(
+        "bwrap-preflight",
+        &preflight_argv,
+        sandbox_policy_cwd,
+        file_system_sandbox_policy,
+        network_mode,
+        /*mount_proc*/ true,
     );
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     !is_proc_mount_failure(stderr.as_str())
