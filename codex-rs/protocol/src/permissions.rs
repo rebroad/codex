@@ -381,6 +381,38 @@ impl FileSystemSandboxPolicy {
         )
     }
 
+    fn expand_symlink_writable_roots(roots: Vec<WritableRoot>) -> Vec<WritableRoot> {
+        let mut expanded = Vec::with_capacity(roots.len());
+        for root in roots {
+            let root_path = root.root.as_path();
+            let mut emitted = vec![root.clone()];
+            if let Ok(meta) = fs::symlink_metadata(root_path) {
+                if meta.file_type().is_symlink() {
+                    if let Ok(target) = fs::canonicalize(root_path) {
+                        if let Ok(target_abs) = AbsolutePathBuf::from_absolute_path(&target) {
+                            if target_abs.as_path() != root_path {
+                                let mut read_only_subpaths = Vec::new();
+                                for sub in &root.read_only_subpaths {
+                                    if let Ok(rel) = sub.as_path().strip_prefix(root_path) {
+                                        read_only_subpaths.push(
+                                            target_abs.join(rel).unwrap_or_else(|_| sub.clone()),
+                                        );
+                                    }
+                                }
+                                emitted.push(WritableRoot {
+                                    root: target_abs,
+                                    read_only_subpaths: read_only_subpaths,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            expanded.extend(emitted);
+        }
+        expanded
+    }
+
     /// Returns the writable roots together with read-only carveouts resolved
     /// against the provided cwd.
     pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
@@ -398,7 +430,7 @@ impl FileSystemSandboxPolicy {
                 .collect(),
         );
 
-        dedup_absolute_paths(
+        let writable_roots = dedup_absolute_paths(
             resolved_entries
                 .into_iter()
                 .filter(|entry| entry.access.can_write())
@@ -424,7 +456,9 @@ impl FileSystemSandboxPolicy {
                 read_only_subpaths: dedup_absolute_paths(read_only_subpaths),
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+        expand_symlink_writable_roots(writable_roots)
     }
 
     /// Returns explicit unreadable roots resolved against the provided cwd.
