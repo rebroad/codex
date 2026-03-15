@@ -474,7 +474,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_user_message: Option<UserMessage>,
-    pub(crate) forked_from_label_override: Option<String>,
+    /// One-shot pretty label for the next synthetic fork banner; consumed on first use.
+    pub(crate) pending_fork_banner_label: Option<String>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
@@ -719,7 +720,8 @@ pub(crate) struct ChatWidget {
     thread_name: Option<String>,
     thread_rename_enabled: bool,
     forked_from: Option<ThreadId>,
-    forked_from_label_override: Option<String>,
+    /// Pretty parent label used only for the next fork banner inserted on session configure.
+    pending_fork_banner_label: Option<String>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1445,7 +1447,7 @@ impl ChatWidget {
     }
 
     fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
-        let line: Line<'static> = if let Some(label) = self.forked_from_label_override.take() {
+        let line: Line<'static> = if let Some(label) = self.pending_fork_banner_label.take() {
             vec![
                 "• ".dim(),
                 "Thread forked from ".into(),
@@ -3500,7 +3502,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
-            forked_from_label_override,
+            pending_fork_banner_label,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3608,7 +3610,7 @@ impl ChatWidget {
             thread_name: None,
             thread_rename_enabled: true,
             forked_from: None,
-            forked_from_label_override,
+            pending_fork_banner_label,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -3690,7 +3692,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
-            forked_from_label_override,
+            pending_fork_banner_label,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3797,7 +3799,7 @@ impl ChatWidget {
             thread_name: None,
             thread_rename_enabled: true,
             forked_from: None,
-            forked_from_label_override,
+            pending_fork_banner_label,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
@@ -3871,7 +3873,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
-            forked_from_label_override,
+            pending_fork_banner_label,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3978,7 +3980,7 @@ impl ChatWidget {
             thread_name: None,
             thread_rename_enabled: true,
             forked_from: None,
-            forked_from_label_override,
+            pending_fork_banner_label,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -4347,10 +4349,6 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Rename => {
-                if !self.thread_rename_enabled {
-                    self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
-                    return;
-                }
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
@@ -4671,8 +4669,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
-                if !self.thread_rename_enabled {
-                    self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+                if !self.ensure_thread_rename_enabled() {
                     return;
                 }
                 self.session_telemetry
@@ -4698,21 +4695,8 @@ impl ChatWidget {
                 if self.active_mode_kind() != ModeKind::Plan {
                     return;
                 }
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(true)
-                else {
+                let Some(user_message) = self.prepare_inline_submission_user_message() else {
                     return;
-                };
-                let local_images = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_remote_image_urls();
-                let user_message = UserMessage {
-                    text: prepared_args,
-                    local_images,
-                    remote_image_urls,
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -4730,21 +4714,8 @@ impl ChatWidget {
                     );
                     return;
                 };
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(true)
-                else {
+                let Some(user_message) = self.prepare_inline_submission_user_message() else {
                     return;
-                };
-                let local_images = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_remote_image_urls();
-                let user_message = UserMessage {
-                    text: prepared_args,
-                    local_images,
-                    remote_image_urls,
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
                 self.app_event_tx.send(AppEvent::StartBtw {
                     parent_thread_id,
@@ -4784,8 +4755,7 @@ impl ChatWidget {
     }
 
     fn show_rename_prompt(&mut self) {
-        if !self.thread_rename_enabled {
-            self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+        if !self.ensure_thread_rename_enabled() {
             return;
         }
         let tx = self.app_event_tx.clone();
@@ -4817,6 +4787,31 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn ensure_thread_rename_enabled(&mut self) -> bool {
+        if self.thread_rename_enabled {
+            true
+        } else {
+            self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+            false
+        }
+    }
+
+    fn prepare_inline_submission_user_message(&mut self) -> Option<UserMessage> {
+        let (text, text_elements) = self.bottom_pane.prepare_inline_args_submission(true)?;
+        let local_images = self
+            .bottom_pane
+            .take_recent_submission_images_with_placeholders();
+        let remote_image_urls = self.take_remote_image_urls();
+        let mention_bindings = self.bottom_pane.take_recent_submission_mention_bindings();
+        Some(UserMessage {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        })
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -4886,7 +4881,7 @@ impl ChatWidget {
             self.submit_user_message_for_current_thread_with_collaboration_mode(user_message, None);
     }
 
-    pub(crate) fn submit_user_message_for_current_thread_with_developer_instructions(
+    pub(crate) fn submit_user_message_with_developer_instructions(
         &mut self,
         user_message: UserMessage,
         developer_instructions: String,
