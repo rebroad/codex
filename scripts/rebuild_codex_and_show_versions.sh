@@ -216,7 +216,7 @@ PY
       owner="${BASH_REMATCH[1]}"
       repo="${BASH_REMATCH[2]%\.git}"
       if gh auth status -h github.com >/dev/null 2>&1; then
-        runs_json="$(gh run list --repo "${owner}/${repo}" --workflow custom-codex-release.yml --json databaseId,status,headBranch -L 50 2>/dev/null || true)"
+        runs_json="$(gh run list --repo "${owner}/${repo}" --workflow custom-codex-release.yml --json databaseId,status,headBranch,headRef,displayTitle -L 100 2>/dev/null || true)"
         if [[ -n "${runs_json}" ]]; then
           run_ids="$(printf '%s\n' "${runs_json}" | TAG="${TAG}" python3 - <<'PY'
 import json
@@ -233,8 +233,17 @@ try:
 except json.JSONDecodeError:
     sys.exit(0)
 
+def matches(run: dict, tag: str) -> bool:
+    for key in ("headBranch", "headRef", "displayTitle"):
+        value = run.get(key)
+        if not value:
+            continue
+        if value == tag or (isinstance(value, str) and tag in value):
+            return True
+    return False
+
 for run in data:
-    if run.get("headBranch") == tag and run.get("status") in {"in_progress", "queued"}:
+    if run.get("status") in {"in_progress", "queued"} and matches(run, tag):
         print(run.get("databaseId"))
 PY
           )"
@@ -244,6 +253,8 @@ PY
               [[ -z "${run_id}" ]] && continue
               gh run cancel "${run_id}" --repo "${owner}/${repo}" >/dev/null 2>&1 || true
             done <<< "${run_ids}"
+          else
+            echo "No in-progress workflow runs matched tag ${TAG}."
           fi
         fi
       else
