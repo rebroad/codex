@@ -29,7 +29,10 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             platform_key: linux-aarch64
-          - runner: macos-13
+          - runner: ubuntu-22.04
+            target: armv7-unknown-linux-gnueabihf
+            platform_key: linux-armv7
+          - runner: macos-14
             target: x86_64-apple-darwin
             platform_key: macos-x86_64
           - runner: macos-14
@@ -53,6 +56,25 @@ jobs:
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
 
+      - name: Install ARMv7 cross toolchain
+        if: ${{ matrix.target == 'armv7-unknown-linux-gnueabihf' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+
+      - name: Install UBSan runtime (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+          fi
+
       - name: Install Zig (musl)
         if: ${{ runner.os == 'Linux' }}
         uses: mlugg/setup-zig@v2
@@ -70,10 +92,83 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure rustc UBSan wrapper (musl host)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ubsan=""
+          if command -v ldconfig >/dev/null 2>&1; then
+            ubsan="$(ldconfig -p | grep -m1 'libubsan\\.so\\.1' | sed -E 's/.*=> (.*)$/\\1/')"
+          fi
+          wrapper_root="${RUNNER_TEMP:-/tmp}"
+          wrapper="${wrapper_root}/rustc-ubsan-wrapper"
+          cat > "${wrapper}" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${ubsan}" ]]; then
+            export LD_PRELOAD="${ubsan}${LD_PRELOAD:+:${LD_PRELOAD}}"
+          fi
+          exec "$1" "${@:2}"
+          EOF
+          chmod +x "${wrapper}"
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Clear sanitizer flags (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Avoid problematic aws-lc jitter entropy code path on musl builders.
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+
+          # Clear global Rust flags so host/proc-macro builds don't pull in UBSan.
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          # Override any runner-level Cargo config rustflags as well.
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+          sanitize_flags() {
+            local input="$1"
+            input="${input//-fsanitize=undefined/}"
+            input="${input//-fno-sanitize-recover=undefined/}"
+            input="${input//-fno-sanitize-trap=undefined/}"
+            echo "$input"
+          }
+
+          cflags="$(sanitize_flags "${CFLAGS-}")"
+          cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
+          echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
+
       - name: Build codex (release)
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
+            export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+            export PKG_CONFIG_ALLOW_CROSS=1
+          fi
           RUSTUP_DISABLE_SELF_UPDATE=1 cargo build -p codex-cli --release --target "${{ matrix.target }}"
 
       - name: Package release binary
@@ -138,10 +233,16 @@ jobs:
           platform_key = os.environ["RG_PLATFORM_KEY"]
           vendor_root = Path(os.environ["RG_VENDOR_ROOT"])
           target = os.environ["RG_TARGET"]
+          skip_rg = os.environ.get("RG_SKIP", "") == "1"
+
+          if skip_rg:
+            raise SystemExit(0)
 
           manifest_text = Path("codex-cli/bin/rg").read_text(encoding="utf-8")
           manifest = json.loads(manifest_text[manifest_text.index("{"):])
-          platform = manifest["platforms"][platform_key]
+          platform = manifest["platforms"].get(platform_key)
+          if platform is None:
+            raise RuntimeError(f"rg manifest missing platform key: {platform_key}")
           url = platform["providers"][0]["url"]
           member_path = platform["path"]
           archive_format = platform.get("format", "tar.gz")
@@ -173,6 +274,7 @@ jobs:
           RG_PLATFORM_KEY: ${{ matrix.platform_key }}
           RG_VENDOR_ROOT: ${{ runner.temp }}/npm-vendor
           RG_TARGET: ${{ matrix.target }}
+          RG_SKIP: ${{ matrix.platform_key == 'linux-armv7' && '1' || '0' }}
 
       - name: Upload npm vendor payload
         uses: actions/upload-artifact@v7
@@ -240,7 +342,7 @@ jobs:
             --vendor-src "$vendor_root" \
             --pack-output "$dist_dir/codex-npm-${version}.tgz"
 
-          for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64; do
+          for platform in linux-x64 linux-arm64 linux-armv7 darwin-x64 darwin-arm64 win32-x64 win32-arm64; do
             python3 codex-cli/scripts/build_npm_package.py \
               --package "codex-${platform}" \
               --release-version "$version" \

@@ -190,7 +190,7 @@ PY
   origin_url="$(git config --get remote.origin.url || true)"
   if [[ "${origin_url}" =~ github\.com[:/]+([^/]+)/([^/]+)(\.git)?$ ]]; then
     owner="${BASH_REMATCH[1]}"
-    repo="${BASH_REMATCH[2]}"
+    repo="${BASH_REMATCH[2]%\.git}"
     workflow_url="https://github.com/${owner}/${repo}/actions/workflows/custom-codex-release.yml"
     echo "GitHub Actions workflow: ${workflow_url}"
     echo "Look for the run triggered by tag ${TAG}."

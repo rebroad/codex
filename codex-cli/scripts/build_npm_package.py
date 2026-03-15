@@ -33,6 +33,13 @@ CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
         "os": "linux",
         "cpu": "arm64",
     },
+    "codex-linux-armv7": {
+        "npm_name": "@reb.ai/codex-linux-armv7",
+        "npm_tag": "linux-armv7",
+        "target_triple": "armv7-unknown-linux-gnueabihf",
+        "os": "linux",
+        "cpu": "arm",
+    },
     "codex-darwin-x64": {
         "npm_name": "@reb.ai/codex-darwin-x64",
         "npm_tag": "darwin-x64",
@@ -71,6 +78,7 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex": [],
     "codex-linux-x64": ["codex", "rg"],
     "codex-linux-arm64": ["codex", "rg"],
+    "codex-linux-armv7": ["codex"],
     "codex-darwin-x64": ["codex", "rg"],
     "codex-darwin-arm64": ["codex", "rg"],
     "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],

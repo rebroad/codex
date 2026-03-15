@@ -156,6 +156,9 @@ case "$(uname -m)" in
   arm64 | aarch64)
     arch="aarch64"
     ;;
+  armv7l | armv7)
+    arch="armv7"
+    ;;
   *)
     echo "Unsupported architecture: $(uname -m)" >&2
     exit 1
@@ -165,6 +168,9 @@ esac
 if [ "$arch" = "aarch64" ]; then
   target="aarch64-unknown-linux-gnu"
   platform_label="Linux (ARM64)"
+elif [ "$arch" = "armv7" ]; then
+  target="armv7-unknown-linux-gnueabihf"
+  platform_label="Linux (ARMv7)"
 else
   target="x86_64-unknown-linux-gnu"
   platform_label="Linux (x64)"
