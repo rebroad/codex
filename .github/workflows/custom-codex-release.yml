@@ -67,6 +67,13 @@ jobs:
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
           EOF
+          sudo rm -f /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list
+          sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
+          deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          deb http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          EOF
           sudo apt-get update -y
           sudo dpkg --add-architecture armhf
           sudo apt-get update -y

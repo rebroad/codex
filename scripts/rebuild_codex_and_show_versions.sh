@@ -270,6 +270,8 @@ PY
               [[ -z "${run_id}" ]] && continue
               gh run cancel "${run_id}" --repo "${owner}/${repo}" >/dev/null 2>&1 || true
             done <<< "${run_ids}"
+            echo "Canceled runs:"
+            echo "${run_ids}"
           else
             echo "No in-progress workflow runs matched tag ${TAG}."
             if [[ "${FORCE_TAG}" == "true" ]]; then
@@ -297,6 +299,8 @@ PY
                   [[ -z "${run_id}" ]] && continue
                   gh run cancel "${run_id}" --repo "${owner}/${repo}" >/dev/null 2>&1 || true
                 done <<< "${all_run_ids}"
+                echo "Canceled runs:"
+                echo "${all_run_ids}"
               fi
             fi
           fi
