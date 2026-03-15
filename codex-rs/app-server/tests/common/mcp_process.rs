@@ -718,6 +718,7 @@ impl McpProcess {
 
     pub async fn send_config_reload_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("config/reload", None).await
+    }
 
     pub async fn send_fs_read_file_request(
         &mut self,

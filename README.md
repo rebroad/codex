@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><code>npm i -g @reb.ai/codex</code><br />or <code>brew install --cask codex</code></p>
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
@@ -18,7 +18,7 @@ Install globally with your preferred package manager:
 
 ```shell
 # Install using npm
-npm install -g @openai/codex
+npm install -g @reb.ai/codex
 ```
 
 ```shell
@@ -27,6 +27,7 @@ brew install --cask codex
 ```
 
 Then simply run `codex` to get started.
+Note: The `@reb.ai/codex` npm package currently supports Linux x86_64 only.
 
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
@@ -43,6 +44,38 @@ Each GitHub Release contains many executables, but in practice, you likely want 
 Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
 
 </details>
+
+### Installing the customized build from this repo
+
+This fork publishes Linux x86_64 release artifacts on tag pushes that look like `codex-vX.Y.Z`.
+To install on the machine you want Codex installed on (for example your Ubuntu 22.04 server), run:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/rebroad/codex/main/scripts/install_codex.sh | sh
+```
+
+You can also pin a specific version on the machine you are installing to:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/rebroad/codex/main/scripts/install_codex.sh | sh -s 1.2.3
+```
+
+By default, the installer writes to `~/.local/bin` and updates your `PATH` if needed. If you
+fork this repo, set `CODEX_INSTALL_REPO=owner/repo` to point the installer at your fork.
+
+Currently this fork publishes a single Linux x86_64 artifact. To support additional
+architectures or operating systems, add build jobs that produce
+`codex-<target>.tar.gz` assets and update the installer if needed.
+
+To publish a new release artifact from this repo, create and push a tag like:
+
+```shell
+git tag -a codex-v1.2.3 -m "Release 1.2.3"
+git push origin codex-v1.2.3
+```
+
+The install script will work once the GitHub Actions release workflow finishes and the
+`codex-<target>.tar.gz` asset appears in the GitHub Release for that tag.
 
 ### Using Codex with your ChatGPT plan
 

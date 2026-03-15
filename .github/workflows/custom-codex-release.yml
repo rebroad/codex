@@ -1,0 +1,335 @@
+name: custom-codex-release
+
+on:
+  push:
+    tags:
+      - "codex-v*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            platform_key: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            platform_key: linux-aarch64
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            platform_key: macos-x86_64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            platform_key: macos-aarch64
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            platform_key: windows-x86_64
+          - runner: windows-2022
+            target: aarch64-pc-windows-msvc
+            platform_key: windows-aarch64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+
+      - name: Install Zig (musl)
+        if: ${{ runner.os == 'Linux' }}
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Install musl build tools (musl)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build codex (release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUSTUP_DISABLE_SELF_UPDATE=1 cargo build -p codex-cli --release --target "${{ matrix.target }}"
+
+      - name: Package release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist_dir="${GITHUB_WORKSPACE}/dist/${{ matrix.target }}"
+          mkdir -p "$dist_dir"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/codex.exe" "$dist_dir/codex.exe"
+          else
+            cp "target/${{ matrix.target }}/release/codex" "$dist_dir/codex"
+          fi
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd "$dist_dir" && tar -czf "codex-${{ matrix.target }}.tar.gz" codex.exe)
+          else
+            (cd "$dist_dir" && tar -czf "codex-${{ matrix.target }}.tar.gz" codex)
+          fi
+
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          dist = Path("${GITHUB_WORKSPACE}") / "dist" / "${{ matrix.target }}"
+          archive = dist / f"codex-${{ matrix.target }}.tar.gz"
+          h = hashlib.sha256()
+          with archive.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+              h.update(chunk)
+          (dist / f"codex-${{ matrix.target }}.tar.gz.sha256").write_text(f"{h.hexdigest()}  {archive.name}\n")
+          PY
+
+      - name: Prepare npm vendor payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor_root="${RUNNER_TEMP}/npm-vendor"
+          target="${{ matrix.target }}"
+          platform_key="${{ matrix.platform_key }}"
+
+          mkdir -p "${vendor_root}/${target}/codex"
+          mkdir -p "${vendor_root}/${target}/path"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${target}/release/codex.exe" "${vendor_root}/${target}/codex/codex.exe"
+          else
+            cp "target/${target}/release/codex" "${vendor_root}/${target}/codex/codex"
+            chmod 0755 "${vendor_root}/${target}/codex/codex"
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import shutil
+          import sys
+          import tarfile
+          import zipfile
+          from pathlib import Path
+          import urllib.request
+
+          platform_key = os.environ["RG_PLATFORM_KEY"]
+          vendor_root = Path(os.environ["RG_VENDOR_ROOT"])
+          target = os.environ["RG_TARGET"]
+
+          manifest_text = Path("codex-cli/bin/rg").read_text(encoding="utf-8")
+          manifest = json.loads(manifest_text[manifest_text.index("{"):])
+          platform = manifest["platforms"][platform_key]
+          url = platform["providers"][0]["url"]
+          member_path = platform["path"]
+          archive_format = platform.get("format", "tar.gz")
+
+          archive_path = vendor_root / "rg-archive"
+          with urllib.request.urlopen(url) as response, open(archive_path, "wb") as out:
+            shutil.copyfileobj(response, out)
+
+          dest_dir = vendor_root / target / "path"
+          dest_dir.mkdir(parents=True, exist_ok=True)
+          dest = dest_dir / ("rg.exe" if platform_key.startswith("windows") else "rg")
+
+          if archive_format == "tar.gz":
+            with tarfile.open(archive_path, "r:gz") as tar:
+              member = tar.getmember(member_path)
+              with tar.extractfile(member) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+          elif archive_format == "zip":
+            with zipfile.ZipFile(archive_path) as zf:
+              with zf.open(member_path) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+          else:
+            raise RuntimeError(f"Unsupported rg archive format: {archive_format}")
+
+          if not platform_key.startswith("windows"):
+            dest.chmod(0o755)
+          PY
+        env:
+          RG_PLATFORM_KEY: ${{ matrix.platform_key }}
+          RG_VENDOR_ROOT: ${{ runner.temp }}/npm-vendor
+          RG_TARGET: ${{ matrix.target }}
+
+      - name: Upload npm vendor payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: vendor-${{ matrix.target }}
+          path: ${{ runner.temp }}/npm-vendor
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.target }}/codex-${{ matrix.target }}.tar.gz
+            dist/${{ matrix.target }}/codex-${{ matrix.target }}.tar.gz.sha256
+
+  package-npm:
+    name: Package and publish npm
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download vendor payloads
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vendor-*
+          path: vendor-artifacts
+
+      - name: Assemble vendor tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor_root="${RUNNER_TEMP}/npm-vendor"
+          mkdir -p "$vendor_root"
+          for dir in vendor-artifacts/*; do
+            rsync -a "${dir}/" "$vendor_root/"
+          done
+          find "$vendor_root" -maxdepth 2 -type d
+          echo "vendor_root=${vendor_root}" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.14.0
+          registry-url: "https://registry.npmjs.org"
+          scope: "@reb.ai"
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Build npm tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#codex-v}"
+          dist_dir="${GITHUB_WORKSPACE}/dist/npm"
+          mkdir -p "$dist_dir"
+
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex \
+            --release-version "$version" \
+            --vendor-src "$vendor_root" \
+            --pack-output "$dist_dir/codex-npm-${version}.tgz"
+
+          for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64; do
+            python3 codex-cli/scripts/build_npm_package.py \
+              --package "codex-${platform}" \
+              --release-version "$version" \
+              --vendor-src "$vendor_root" \
+              --pack-output "$dist_dir/codex-npm-${platform}-${version}.tgz"
+          done
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#codex-v}"
+          npm_tag=""
+          if [[ "$version" == *-* ]]; then
+            npm_tag="alpha"
+          fi
+
+          prefix=""
+          if [[ -n "$npm_tag" ]]; then
+            prefix="${npm_tag}-"
+          fi
+
+          tarballs=(dist/npm/*-"${version}".tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found for version ${version}" >&2
+            exit 1
+          fi
+
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-npm-linux-*-${version}.tgz|codex-npm-darwin-*-${version}.tgz|codex-npm-win32-*-${version}.tgz)
+                platform="${filename#codex-npm-}"
+                platform="${platform%-${version}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-${version}.tgz)
+                tag="${npm_tag}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}" >&2
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}" --access public)
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            "${publish_cmd[@]}"
+          done
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-tarballs
+          path: dist/npm/*.tgz
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - build
+      - package-npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-tarballs
+          path: dist/npm
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/**/codex-*.tar.gz
+            dist/**/codex-*.tar.gz.sha256
+            dist/npm/*.tgz

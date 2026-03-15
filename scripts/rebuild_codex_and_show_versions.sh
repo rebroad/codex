@@ -8,6 +8,7 @@ TOOLCHAIN_FILE="${RUST_WORKSPACE_DIR}/rust-toolchain.toml"
 INSTALL_BIN="${HOME}/.cargo/bin/codex"
 
 MODE="debug"
+PUBLISH="auto"
 for arg in "$@"; do
   case "${arg}" in
     --debug)
@@ -16,9 +17,15 @@ for arg in "$@"; do
     --release)
       MODE="release"
       ;;
+    --publish)
+      PUBLISH="true"
+      ;;
+    --no-publish)
+      PUBLISH="false"
+      ;;
     -h|--help)
       cat <<'EOF'
-Usage: rebuild_codex_and_show_versions.sh [--release]
+Usage: rebuild_codex_and_show_versions.sh [--release] [--publish|--no-publish]
 
 Default behavior:
 - Regenerate app-server schema (just write-app-server-schema)
@@ -27,6 +34,9 @@ Default behavior:
 
 Options:
   --release   Build/install release codex into ~/.cargo/bin/codex, then clean target binaries
+  --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
+  --no-publish
+             Skip tag/push even in release mode
 EOF
       exit 0
       ;;
@@ -77,3 +87,48 @@ rm -f "${RUST_WORKSPACE_DIR}/target/debug/codex" "${RUST_WORKSPACE_DIR}/target/r
 
 echo "Final version:"
 echo "- Installed: $("${INSTALL_BIN}" --version)"
+
+should_publish="false"
+if [[ "${MODE}" == "release" && "${PUBLISH}" != "false" ]]; then
+  should_publish="true"
+elif [[ "${PUBLISH}" == "true" ]]; then
+  should_publish="true"
+fi
+
+if [[ "${should_publish}" == "true" ]]; then
+  VERSION="$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' "${RUST_WORKSPACE_DIR}/Cargo.toml" | head -n 1)"
+  if [[ -z "${VERSION}" ]]; then
+    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml"
+    exit 1
+  fi
+
+  TAG="codex-v${VERSION}"
+
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Working tree is not clean; refusing to tag ${TAG}."
+    exit 1
+  fi
+
+  if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+    echo "Tag ${TAG} already exists locally."
+    exit 1
+  fi
+
+  if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+    echo "Tag ${TAG} already exists on origin."
+    exit 1
+  fi
+
+  echo "Tagging and pushing ${TAG}..."
+  git tag -a "${TAG}" -m "Release ${VERSION}"
+  git push origin "${TAG}"
+
+  origin_url="$(git config --get remote.origin.url || true)"
+  if [[ "${origin_url}" =~ github\.com[:/]+([^/]+)/([^/]+)(\.git)?$ ]]; then
+    owner="${BASH_REMATCH[1]}"
+    repo="${BASH_REMATCH[2]}"
+    workflow_url="https://github.com/${owner}/${repo}/actions/workflows/custom-codex-release.yml"
+    echo "GitHub Actions workflow: ${workflow_url}"
+    echo "Look for the run triggered by tag ${TAG}."
+  fi
+fi
