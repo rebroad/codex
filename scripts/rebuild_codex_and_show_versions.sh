@@ -10,6 +10,7 @@ INSTALL_BIN="${HOME}/.cargo/bin/codex"
 MODE="debug"
 PUBLISH="auto"
 REGEN_SCHEMA="auto"
+FORCE_TAG="true"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
 for arg in "$@"; do
   case "${arg}" in
@@ -24,6 +25,9 @@ for arg in "$@"; do
       ;;
     --no-publish)
       PUBLISH="false"
+      ;;
+    --no-force-tag)
+      FORCE_TAG="false"
       ;;
     --regen-schema)
       REGEN_SCHEMA="true"
@@ -45,6 +49,8 @@ Options:
   --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
   --no-publish
              Skip tag/push even in release mode
+  --no-force-tag
+             Do not replace existing tags (default is to replace)
   --regen-schema
              Force schema regeneration
   --no-regen-schema
@@ -174,18 +180,35 @@ PY
   fi
 
   if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-    echo "Tag ${TAG} already exists locally."
-    exit 1
+    if [[ "${FORCE_TAG}" == "true" ]]; then
+      echo "Tag ${TAG} already exists locally; replacing it."
+      git tag -d "${TAG}"
+    else
+      echo "Tag ${TAG} already exists locally. Re-run without --no-force-tag to replace it."
+      exit 1
+    fi
   fi
 
   if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
-    echo "Tag ${TAG} already exists on origin."
-    exit 1
+    if [[ "${FORCE_TAG}" == "true" ]]; then
+      echo "Tag ${TAG} already exists on origin; deleting it."
+      if ! git push origin ":refs/tags/${TAG}"; then
+        echo "Failed to delete tag ${TAG} on origin. Fix the issue above, then re-run this script." >&2
+        exit 1
+      fi
+    else
+      echo "Tag ${TAG} already exists on origin. Re-run without --no-force-tag to replace it."
+      exit 1
+    fi
   fi
 
   echo "Tagging and pushing ${TAG}..."
   git tag -a "${TAG}" -m "Release ${VERSION}"
-  git push origin "${TAG}"
+  if ! git push origin "${TAG}"; then
+    echo "Failed to push ${TAG}. Fix the issue above, then re-run this script." >&2
+    exit 1
+  fi
+  echo "Pushed ${TAG} to origin."
 
   origin_url="$(git config --get remote.origin.url || true)"
   if [[ "${origin_url}" =~ github\.com[:/]+([^/]+)/([^/]+)(\.git)?$ ]]; then
