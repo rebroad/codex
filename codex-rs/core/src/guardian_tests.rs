@@ -1,8 +1,10 @@
 use super::*;
+use crate::config::ConfigBuilder;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
 use crate::config_loader::FeatureRequirementsToml;
+use crate::config_loader::LoaderOverrides;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
@@ -539,7 +541,6 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
         None,
         "parent-active-model",
         Some(codex_protocol::openai_models::ReasoningEffort::Low),
-        None,
     )
     .expect("guardian config");
 
@@ -590,7 +591,6 @@ fn guardian_subagent_config_uses_live_network_proxy_state() {
         Some(live_network.clone()),
         "active-model",
         None,
-        None,
     )
     .expect("guardian config");
 
@@ -608,26 +608,6 @@ fn guardian_subagent_config_uses_live_network_proxy_state() {
 }
 
 #[test]
-fn guardian_subagent_config_uses_model_guardian_prompt_override_when_present() {
-    let parent_config = test_config();
-    let guardian_override = "Use the workspace guardian override.".to_string();
-
-    let guardian_config = build_guardian_subagent_config(
-        &parent_config,
-        None,
-        "active-model",
-        None,
-        Some(guardian_override.as_str()),
-    )
-    .expect("guardian config");
-
-    assert_eq!(
-        guardian_config.developer_instructions,
-        Some(guardian_override)
-    );
-}
-
-#[test]
 fn guardian_subagent_config_rejects_pinned_collab_feature() {
     let mut parent_config = test_config();
     parent_config.features = ManagedFeatures::from_configured(
@@ -641,7 +621,7 @@ fn guardian_subagent_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_subagent_config(&parent_config, None, "active-model", None, None)
+    let err = build_guardian_subagent_config(&parent_config, None, "active-model", None)
         .expect_err("guardian config should fail when collab is pinned on");
 
     assert!(
@@ -656,8 +636,45 @@ fn guardian_subagent_config_uses_parent_active_model_instead_of_hardcoded_slug()
     parent_config.model = Some("configured-model".to_string());
 
     let guardian_config =
-        build_guardian_subagent_config(&parent_config, None, "active-model", None, None)
+        build_guardian_subagent_config(&parent_config, None, "active-model", None)
             .expect("guardian config");
 
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
+}
+
+#[tokio::test]
+async fn guardian_subagent_config_uses_managed_guardian_config_override() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let managed_path = codex_home.path().join("managed_config.toml");
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "guardian_developer_instructions = \"\"\"\nUser override that should lose.\n\"\"\"\n",
+    )
+    .expect("write config");
+    std::fs::write(
+        &managed_path,
+        "guardian_developer_instructions = \"\"\"\n  Use the company-managed guardian policy.  \n\"\"\"\n",
+    )
+    .expect("write config");
+    let parent_config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            managed_config_path: Some(managed_path),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+            macos_managed_config_requirements_base64: None,
+        })
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load config");
+
+    let guardian_config =
+        build_guardian_subagent_config(&parent_config, None, "active-model", None)
+            .expect("guardian config");
+
+    assert_eq!(
+        guardian_config.developer_instructions,
+        Some("Use the company-managed guardian policy.".to_string())
+    );
 }

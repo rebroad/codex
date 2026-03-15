@@ -2993,6 +2993,95 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[test]
+fn load_config_preserves_guardian_developer_instructions_in_effective_config() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            guardian_developer_instructions: Some(
+                "  Use the managed guardian prompt override.  ".to_string(),
+            ),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.guardian_developer_instructions.as_deref(),
+        Some("Use the managed guardian prompt override.")
+    );
+
+    let effective = deserialize_config_toml_with_base(
+        config.config_layer_stack.effective_config(),
+        codex_home.path(),
+    )?;
+
+    assert_eq!(
+        effective.guardian_developer_instructions.as_deref(),
+        Some("  Use the managed guardian prompt override.  ")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_config_overrides_guardian_developer_instructions() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let managed_path = codex_home.path().join("managed_config.toml");
+    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+    std::fs::write(
+        &config_path,
+        "guardian_developer_instructions = \"\"\"\nuser override\n\"\"\"\n",
+    )?;
+    std::fs::write(
+        &managed_path,
+        "guardian_developer_instructions = \"\"\"\n  managed override  \n\"\"\"\n",
+    )?;
+
+    let overrides = LoaderOverrides {
+        managed_config_path: Some(managed_path.clone()),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: None,
+        macos_managed_config_requirements_base64: None,
+    };
+
+    let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home.path(),
+        Some(cwd),
+        &Vec::new(),
+        overrides,
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+    let cfg =
+        deserialize_config_toml_with_base(config_layer_stack.effective_config(), codex_home.path())
+            .map_err(|e| {
+                tracing::error!("Failed to deserialize overridden config: {e}");
+                e
+            })?;
+    assert_eq!(
+        cfg.guardian_developer_instructions.as_deref(),
+        Some("  managed override  \n")
+    );
+
+    let final_config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+    assert_eq!(
+        final_config.guardian_developer_instructions.as_deref(),
+        Some("managed override")
+    );
+
+    Ok(())
+}
+
+#[test]
 fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let missing_path = codex_home.path().join("agents").join("researcher.toml");
@@ -4254,6 +4343,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_startup_context: None,
             base_instructions: None,
             developer_instructions: None,
+            guardian_developer_instructions: None,
             compact_prompt: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
@@ -4393,6 +4483,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -4530,6 +4621,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -4653,6 +4745,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
