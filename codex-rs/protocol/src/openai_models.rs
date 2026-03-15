@@ -245,6 +245,10 @@ pub struct ModelInfo {
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
+    /// Optional guardian-specific developer instructions supplied by the model catalog.
+    /// When omitted, core falls back to the bundled guardian policy prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardian_developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_messages: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
@@ -523,6 +527,7 @@ mod tests {
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
+            guardian_developer_instructions: None,
             model_messages: spec,
             supports_reasoning_summaries: false,
             default_reasoning_summary: ReasoningSummary::Auto,
@@ -711,6 +716,7 @@ mod tests {
             "priority": 1,
             "upgrade": null,
             "base_instructions": "base",
+            "guardian_developer_instructions": null,
             "model_messages": null,
             "supports_reasoning_summaries": false,
             "default_reasoning_summary": "auto",
@@ -736,6 +742,62 @@ mod tests {
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
+    }
+
+    #[test]
+    fn model_info_round_trips_guardian_developer_instructions() {
+        let model: ModelInfo = serde_json::from_value(serde_json::json!({
+            "slug": "test-model",
+            "display_name": "Test Model",
+            "description": null,
+            "supported_reasoning_levels": [],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 1,
+            "upgrade": null,
+            "base_instructions": "base",
+            "guardian_developer_instructions": "Use the tenant guardian override.",
+            "model_messages": null,
+            "supports_reasoning_summaries": false,
+            "default_reasoning_summary": "auto",
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {
+                "mode": "bytes",
+                "limit": 10000
+            },
+            "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
+            "context_window": null,
+            "auto_compact_token_limit": null,
+            "effective_context_window_percent": 95,
+            "experimental_supported_tools": [],
+            "input_modalities": ["text", "image"],
+            "prefer_websockets": false
+        }))
+        .expect("deserialize model info");
+
+        assert_eq!(
+            model.guardian_developer_instructions.as_deref(),
+            Some("Use the tenant guardian override.")
+        );
+
+        let serialized = serde_json::to_value(&model).expect("serialize model info");
+        assert_eq!(
+            serialized.get("guardian_developer_instructions"),
+            Some(&serde_json::Value::String(
+                "Use the tenant guardian override.".to_string()
+            ))
+        );
+
+        let round_tripped: ModelInfo =
+            serde_json::from_value(serialized).expect("round-trip model info");
+        assert_eq!(
+            round_tripped.guardian_developer_instructions.as_deref(),
+            Some("Use the tenant guardian override.")
+        );
     }
 
     #[test]

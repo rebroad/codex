@@ -77,6 +77,7 @@ async fn models_client_hits_models_endpoint() {
             priority: 1,
             upgrade: None,
             base_instructions: "base instructions".to_string(),
+            guardian_developer_instructions: Some("Use the remote guardian override.".to_string()),
             model_messages: None,
             supports_reasoning_summaries: false,
             default_reasoning_summary: ReasoningSummary::Auto,
@@ -119,6 +120,10 @@ async fn models_client_hits_models_endpoint() {
 
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].slug, "gpt-test");
+    assert_eq!(
+        models[0].guardian_developer_instructions.as_deref(),
+        Some("Use the remote guardian override.")
+    );
 
     let received = server
         .received_requests()

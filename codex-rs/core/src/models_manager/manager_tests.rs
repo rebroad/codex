@@ -120,6 +120,7 @@ async fn get_model_info_uses_custom_catalog() {
         .expect("load default test config");
     let mut overlay = remote_model("gpt-overlay", "Overlay", 0);
     overlay.supports_image_detail_original = true;
+    overlay.guardian_developer_instructions = Some("Use the catalog override.".to_string());
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
@@ -139,6 +140,10 @@ async fn get_model_info_uses_custom_catalog() {
     assert_eq!(model_info.display_name, "Overlay");
     assert_eq!(model_info.context_window, Some(272_000));
     assert!(model_info.supports_image_detail_original);
+    assert_eq!(
+        model_info.guardian_developer_instructions.as_deref(),
+        Some("Use the catalog override.")
+    );
     assert!(!model_info.supports_parallel_tool_calls);
     assert!(!model_info.used_fallback_model_metadata);
 }
@@ -291,6 +296,69 @@ async fn refresh_available_models_uses_cache_when_fresh() {
         models_mock.requests().len(),
         1,
         "cache hit should avoid a second /models request"
+    );
+}
+
+#[tokio::test]
+async fn refresh_available_models_preserves_guardian_developer_instructions_in_cache() {
+    let server = MockServer::start().await;
+    let mut guarded = remote_model("guarded", "Guarded", 5);
+    guarded.guardian_developer_instructions = Some("Use the cached guardian override.".to_string());
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![guarded.clone()],
+        },
+    )
+    .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("load default test config");
+
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        provider_for(server.uri()),
+    );
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("initial refresh succeeds");
+    assert_eq!(
+        manager
+            .get_model_info("guarded", &config)
+            .await
+            .guardian_developer_instructions
+            .as_deref(),
+        Some("Use the cached guardian override.")
+    );
+
+    let cached_manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        provider_for(server.uri()),
+    );
+    cached_manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("cached refresh succeeds");
+
+    assert_eq!(
+        cached_manager
+            .get_model_info("guarded", &config)
+            .await
+            .guardian_developer_instructions
+            .as_deref(),
+        Some("Use the cached guardian override.")
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "fresh cache should preserve guardian instructions without a second /models request"
     );
 }
 

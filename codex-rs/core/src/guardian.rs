@@ -700,6 +700,7 @@ async fn run_guardian_subagent(
         live_network_config,
         guardian_model.as_str(),
         guardian_reasoning_effort,
+        turn.model_info.guardian_developer_instructions.as_deref(),
     )?;
 
     // Reuse the standard interactive subagent runner so we can seed inherited
@@ -765,11 +766,16 @@ fn build_guardian_subagent_config(
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
     active_model: &str,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    guardian_developer_instructions: Option<&str>,
 ) -> anyhow::Result<Config> {
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
-    guardian_config.developer_instructions = Some(guardian_policy_prompt());
+    guardian_config.developer_instructions = Some(
+        guardian_developer_instructions
+            .map(str::to_owned)
+            .unwrap_or_else(guardian_policy_prompt),
+    );
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());

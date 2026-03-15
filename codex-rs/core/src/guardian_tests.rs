@@ -539,6 +539,7 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
         None,
         "parent-active-model",
         Some(codex_protocol::openai_models::ReasoningEffort::Low),
+        None,
     )
     .expect("guardian config");
 
@@ -558,6 +559,10 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
     assert_eq!(
         guardian_config.permissions.sandbox_policy,
         Constrained::allow_only(SandboxPolicy::new_read_only_policy())
+    );
+    assert_eq!(
+        guardian_config.developer_instructions,
+        Some(guardian_policy_prompt())
     );
 }
 
@@ -585,6 +590,7 @@ fn guardian_subagent_config_uses_live_network_proxy_state() {
         Some(live_network.clone()),
         "active-model",
         None,
+        None,
     )
     .expect("guardian config");
 
@@ -602,6 +608,26 @@ fn guardian_subagent_config_uses_live_network_proxy_state() {
 }
 
 #[test]
+fn guardian_subagent_config_uses_model_guardian_prompt_override_when_present() {
+    let parent_config = test_config();
+    let guardian_override = "Use the workspace guardian override.".to_string();
+
+    let guardian_config = build_guardian_subagent_config(
+        &parent_config,
+        None,
+        "active-model",
+        None,
+        Some(guardian_override.as_str()),
+    )
+    .expect("guardian config");
+
+    assert_eq!(
+        guardian_config.developer_instructions,
+        Some(guardian_override)
+    );
+}
+
+#[test]
 fn guardian_subagent_config_rejects_pinned_collab_feature() {
     let mut parent_config = test_config();
     parent_config.features = ManagedFeatures::from_configured(
@@ -615,7 +641,7 @@ fn guardian_subagent_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_subagent_config(&parent_config, None, "active-model", None)
+    let err = build_guardian_subagent_config(&parent_config, None, "active-model", None, None)
         .expect_err("guardian config should fail when collab is pinned on");
 
     assert!(
@@ -630,7 +656,7 @@ fn guardian_subagent_config_uses_parent_active_model_instead_of_hardcoded_slug()
     parent_config.model = Some("configured-model".to_string());
 
     let guardian_config =
-        build_guardian_subagent_config(&parent_config, None, "active-model", None)
+        build_guardian_subagent_config(&parent_config, None, "active-model", None, None)
             .expect("guardian config");
 
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
