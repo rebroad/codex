@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > /etc/apt/sources.list.d/armhf-ports.list <<'EOF'
+          sudo tee /etc/apt/sources.list.d/armhf-ports.list > /dev/null <<'EOF'
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
