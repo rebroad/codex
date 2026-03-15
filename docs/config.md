@@ -46,6 +46,12 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## Sandbox Debug Logging
+
+Set `sandbox_debug = false` in `config.toml` to disable Linux sandbox debug
+logging written to `/tmp`. This sets `CODEX_SANDBOX_DEBUG=0` for the sandbox
+runtime.
+
 ## Custom CA Certificates
 
 Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket
