@@ -40,7 +40,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dunce::canonicalize;
+use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use macos_permissions::intersect_macos_seatbelt_profile_extensions;
 use macos_permissions::merge_macos_seatbelt_profile_extensions;
 use std::collections::HashMap;
@@ -289,7 +289,7 @@ fn normalize_permission_paths(
     let mut seen = HashSet::new();
 
     for path in paths {
-        let canonicalized = canonicalize(path.as_path())
+        let canonicalized = canonicalize_preserving_symlinks(path.as_path())
             .ok()
             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
             .unwrap_or(path);
