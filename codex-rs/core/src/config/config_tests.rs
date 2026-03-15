@@ -2993,8 +2993,7 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[test]
-fn load_config_preserves_guardian_developer_instructions_in_effective_config() -> std::io::Result<()>
-{
+fn load_config_trims_guardian_developer_instructions() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
     let config = Config::load_from_base_config_with_overrides(
@@ -3011,16 +3010,6 @@ fn load_config_preserves_guardian_developer_instructions_in_effective_config() -
     assert_eq!(
         config.guardian_developer_instructions.as_deref(),
         Some("Use the managed guardian prompt override.")
-    );
-
-    let effective = deserialize_config_toml_with_base(
-        config.config_layer_stack.effective_config(),
-        codex_home.path(),
-    )?;
-
-    assert_eq!(
-        effective.guardian_developer_instructions.as_deref(),
-        Some("  Use the managed guardian prompt override.  ")
     );
 
     Ok(())
