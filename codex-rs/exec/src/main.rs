@@ -12,9 +12,11 @@
 use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
+use codex_core::path_utils::set_linux_sandbox_self_exe_from_argv0;
 use codex_exec::Cli;
 use codex_exec::run_main;
 use codex_utils_cli::CliConfigOverrides;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 struct TopCli {
@@ -26,6 +28,7 @@ struct TopCli {
 }
 
 fn main() -> anyhow::Result<()> {
+    set_linux_sandbox_self_exe_from_argv0();
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         // Merge root-level overrides into inner CLI struct so downstream logic remains unchanged.

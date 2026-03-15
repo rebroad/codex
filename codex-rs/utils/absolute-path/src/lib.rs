@@ -98,6 +98,25 @@ impl AbsolutePathBuf {
     }
 }
 
+/// Canonicalize a path when possible, but preserve the logical (non-symlink-
+/// resolved) absolute path if canonicalization would traverse symlinks.
+///
+/// This keeps sandbox-visible paths stable even when symlink targets live in
+/// mounts that are not visible inside a nested sandbox.
+pub fn canonicalize_preserving_symlinks(path: &Path) -> std::io::Result<PathBuf> {
+    let logical = AbsolutePathBuf::from_absolute_path(path)?.into_path_buf();
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => {
+            if canonical != logical {
+                Ok(logical)
+            } else {
+                Ok(canonical)
+            }
+        }
+        Err(_) => Ok(logical),
+    }
+}
+
 impl AsRef<Path> for AbsolutePathBuf {
     fn as_ref(&self) -> &Path {
         &self.0

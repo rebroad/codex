@@ -79,9 +79,13 @@ impl ApplyPatchRuntime {
             }
             #[cfg(not(target_os = "windows"))]
             {
-                std::env::current_exe().map_err(|e| {
-                    ToolError::Rejected(format!("failed to determine codex exe: {e}"))
-                })?
+                let arg0 = std::env::args().next().unwrap_or_default();
+                if arg0.is_empty() {
+                    return Err(ToolError::Rejected(
+                        "failed to determine codex exe from argv[0]".to_string(),
+                    ));
+                }
+                PathBuf::from(arg0)
             }
         };
         let program = exe.to_string_lossy().to_string();

@@ -156,10 +156,16 @@ where
     // async entry-point.
     let runtime = build_runtime()?;
     runtime.block_on(async move {
-        let current_exe = std::env::current_exe().ok();
+        let argv0 = std::env::args_os().next().unwrap_or_default();
+        let argv0_path = PathBuf::from(argv0);
+        let argv0_path = if argv0_path.components().count() > 1 {
+            Some(argv0_path)
+        } else {
+            None
+        };
         let paths = Arg0DispatchPaths {
             codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
-                current_exe.or_else(|| {
+                argv0_path.or_else(|| {
                     path_entry
                         .as_ref()
                         .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())

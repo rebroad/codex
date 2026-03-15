@@ -201,3 +201,19 @@ fn lower_ascii_path(path: PathBuf) -> PathBuf {
 #[cfg(test)]
 #[path = "path_utils_tests.rs"]
 mod tests;
+
+pub fn set_linux_sandbox_self_exe_from_argv0() {
+    let arg0 = std::env::args().next().unwrap_or_default();
+
+    if arg0.is_empty() {
+        return;
+    }
+
+    if arg0.ends_with("codex-linux-sandbox") {
+        return;
+    }
+
+    unsafe {
+        std::env::set_var("CODEX_LINUX_SANDBOX_SELF_EXE", arg0);
+    }
+}

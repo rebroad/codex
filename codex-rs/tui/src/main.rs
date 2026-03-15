@@ -1,6 +1,7 @@
 use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
+use codex_core::path_utils::set_linux_sandbox_self_exe_from_argv0;
 use codex_tui::Cli;
 use codex_tui::run_main;
 use codex_utils_cli::CliConfigOverrides;
@@ -15,6 +16,7 @@ struct TopCli {
 }
 
 fn main() -> anyhow::Result<()> {
+    set_linux_sandbox_self_exe_from_argv0();
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         let mut inner = top_cli.inner;

@@ -2338,7 +2338,6 @@ impl Config {
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
-
         let history = cfg.history.unwrap_or_default();
 
         let agent_max_threads = cfg

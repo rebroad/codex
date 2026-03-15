@@ -11,6 +11,7 @@
 //! - bubblewrap used to construct the filesystem view before exec.
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::fs;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -262,10 +263,14 @@ fn create_filesystem_args(
         args
     };
     let mut preserved_files = Vec::new();
-    let allowed_write_paths: Vec<PathBuf> = writable_roots
-        .iter()
-        .map(|writable_root| writable_root.root.as_path().to_path_buf())
-        .collect();
+    let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
+    for writable_root in &writable_roots {
+        let root = writable_root.root.as_path();
+        allowed_write_paths.push(root.to_path_buf());
+        if let Some(target) = symlink_target(root) {
+            allowed_write_paths.push(target);
+        }
+    }
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots
         .iter()
         .map(|path| path.as_path().to_path_buf())
@@ -301,6 +306,7 @@ fn create_filesystem_args(
 
     for writable_root in &sorted_writable_roots {
         let root = writable_root.root.as_path();
+        let symlink_target = symlink_target(root);
         // If a denied ancestor was already masked, recreate any missing mount
         // target parents before binding the narrower writable descendant.
         if let Some(masking_root) = unreadable_roots
@@ -312,9 +318,15 @@ fn create_filesystem_args(
             append_mount_target_parent_dir_args(&mut args, root, masking_root);
         }
 
-        args.push("--bind".to_string());
-        args.push(path_to_string(root));
-        args.push(path_to_string(root));
+        if let Some(target) = &symlink_target {
+            args.push("--bind".to_string());
+            args.push(path_to_string(target));
+            args.push(path_to_string(target));
+        } else {
+            args.push("--bind".to_string());
+            args.push(path_to_string(root));
+            args.push(path_to_string(root));
+        }
 
         let mut read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
@@ -322,6 +334,9 @@ fn create_filesystem_args(
             .map(|path| path.as_path().to_path_buf())
             .filter(|path| !unreadable_paths.contains(path))
             .collect();
+        if let Some(target) = &symlink_target {
+            read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, target);
+        }
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
             append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
@@ -331,6 +346,10 @@ fn create_filesystem_args(
             .filter(|path| path.as_path().starts_with(root))
             .map(|path| path.as_path().to_path_buf())
             .collect();
+        if let Some(target) = &symlink_target {
+            nested_unreadable_roots =
+                remap_paths_for_symlink_target(nested_unreadable_roots, root, target);
+        }
         nested_unreadable_roots.sort_by_key(|path| path_depth(path));
         for unreadable_root in nested_unreadable_roots {
             append_unreadable_root_args(
@@ -383,6 +402,31 @@ fn ensure_mount_targets_exist(writable_roots: &[WritableRoot]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn symlink_target(root: &Path) -> Option<PathBuf> {
+    let meta = fs::symlink_metadata(root).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    let target = fs::canonicalize(root).ok()?;
+    if target.as_path() == root {
+        return None;
+    }
+    Some(target)
+}
+
+fn remap_paths_for_symlink_target(paths: Vec<PathBuf>, root: &Path, target: &Path) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .map(|path| {
+            if let Ok(rel) = path.strip_prefix(root) {
+                target.join(rel)
+            } else {
+                path
+            }
+        })
+        .collect()
 }
 
 fn path_to_string(path: &Path) -> String {
