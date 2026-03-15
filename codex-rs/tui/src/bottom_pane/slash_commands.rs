@@ -3,6 +3,8 @@
 //! The same sandbox- and feature-gating rules are used by both the composer
 //! and the command popup. Centralizing them here keeps those call sites small
 //! and ensures they stay in sync.
+use std::collections::HashSet;
+
 use codex_utils_fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
@@ -20,20 +22,38 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) allow_elevate_sandbox: bool,
 }
 
+fn command_enabled_for_input(cmd: SlashCommand, flags: BuiltinCommandFlags) -> bool {
+    if !flags.allow_elevate_sandbox && cmd == SlashCommand::ElevateSandbox {
+        return false;
+    }
+    if !flags.collaboration_modes_enabled
+        && matches!(cmd, SlashCommand::Collab | SlashCommand::Plan)
+    {
+        return false;
+    }
+    if !flags.connectors_enabled && cmd == SlashCommand::Apps {
+        return false;
+    }
+    if !flags.fast_command_enabled && cmd == SlashCommand::Fast {
+        return false;
+    }
+    if !flags.personality_command_enabled && cmd == SlashCommand::Personality {
+        return false;
+    }
+    if !flags.realtime_conversation_enabled && cmd == SlashCommand::Realtime {
+        return false;
+    }
+    if !flags.audio_device_selection_enabled && cmd == SlashCommand::Settings {
+        return false;
+    }
+    true
+}
+
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static str, SlashCommand)> {
     built_in_slash_commands()
         .into_iter()
-        .filter(|(_, cmd)| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-        .filter(|(_, cmd)| {
-            flags.collaboration_modes_enabled
-                || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
-        })
-        .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
-        .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
-        .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
-        .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
-        .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| command_enabled_for_input(*cmd, flags))
         .collect()
 }
 
@@ -41,16 +61,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
 pub(crate) fn visible_builtins_for_input(flags: BuiltinCommandFlags) -> Vec<SlashCommand> {
     visible_built_in_slash_commands()
         .into_iter()
-        .filter(|cmd| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-        .filter(|cmd| {
-            flags.collaboration_modes_enabled
-                || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
-        })
-        .filter(|cmd| flags.connectors_enabled || *cmd != SlashCommand::Apps)
-        .filter(|cmd| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
-        .filter(|cmd| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
-        .filter(|cmd| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
-        .filter(|cmd| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|cmd| command_enabled_for_input(*cmd, flags))
         .collect()
 }
 
@@ -60,6 +71,15 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
         .into_iter()
         .find(|(command_name, _)| *command_name == name)
         .map(|(_, cmd)| cmd)
+}
+
+/// Return every builtin name that should be reserved against custom prompt collisions.
+pub(crate) fn reserved_builtin_names_for_input(flags: BuiltinCommandFlags) -> HashSet<String> {
+    visible_builtins_for_input(flags)
+        .into_iter()
+        .flat_map(|cmd| std::iter::once(cmd.command()).chain(cmd.command_aliases().iter().copied()))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Whether any visible built-in fuzzily matches the provided prefix.

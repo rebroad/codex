@@ -729,6 +729,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    resume_queued_inputs_after_app_events: bool,
 }
 
 #[derive(Default)]
@@ -756,6 +757,19 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
+    fn on_bottom_pane_view_completed(&mut self) {
+        self.resume_queued_inputs_after_app_events = true;
+    }
+
+    fn maybe_resume_queued_inputs_after_app_events(&mut self, app_events_drained: bool) {
+        if !self.resume_queued_inputs_after_app_events || !app_events_drained {
+            return;
+        }
+
+        self.resume_queued_inputs_after_app_events = false;
+        self.chat_widget.maybe_resume_queued_inputs_when_idle();
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -2288,6 +2302,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            resume_queued_inputs_after_app_events: false,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -2420,9 +2435,7 @@ impl App {
                 // or popup flows settle. Only resume once the app-event queue is fully drained so
                 // multi-event commands (for example approvals updates) cannot interleave later
                 // queued input.
-                if app_event_rx.is_empty() {
-                    app.chat_widget.maybe_resume_queued_inputs_when_idle();
-                }
+                app.maybe_resume_queued_inputs_after_app_events(app_event_rx.is_empty());
                 match control {
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => break Ok(reason),
@@ -2767,7 +2780,9 @@ impl App {
                 self.chat_widget.handle_serialized_slash_command(draft);
                 self.refresh_status_line();
             }
-            AppEvent::BottomPaneViewCompleted => {}
+            AppEvent::BottomPaneViewCompleted => {
+                self.on_bottom_pane_view_completed();
+            }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
                 self.refresh_status_line();
@@ -6544,6 +6559,7 @@ smart_approvals = true
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            resume_queued_inputs_after_app_events: false,
         }
     }
 
@@ -6604,6 +6620,7 @@ smart_approvals = true
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                resume_queued_inputs_after_app_events: false,
             },
             rx,
             op_rx,

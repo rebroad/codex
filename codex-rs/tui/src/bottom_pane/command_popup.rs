@@ -12,12 +12,6 @@ use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use std::collections::HashSet;
-
-// Hide alias commands in the default popup list so each unique action appears once.
-// `quit` is an alias of `exit`, so we skip `quit` here.
-// `approvals` is an alias of `permissions`.
-const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +24,7 @@ pub(crate) enum CommandItem {
 pub(crate) struct CommandPopup {
     command_filter: String,
     builtins: Vec<SlashCommand>,
+    reserved_builtin_names: std::collections::HashSet<String>,
     prompts: Vec<CustomPrompt>,
     state: ScrollState,
 }
@@ -62,25 +57,27 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
-        let builtins: Vec<SlashCommand> = slash_commands::visible_builtins_for_input(flags.into())
+        let builtin_flags = flags.into();
+        let builtins = slash_commands::visible_builtins_for_input(builtin_flags)
             .into_iter()
             .filter(|cmd| !cmd.command().starts_with("debug"))
             .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude = reserved_builtin_names(&builtins);
-        prompts.retain(|p| !exclude.contains(&p.name));
+        let reserved_builtin_names =
+            slash_commands::reserved_builtin_names_for_input(builtin_flags);
+        prompts.retain(|p| !reserved_builtin_names.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             command_filter: String::new(),
             builtins,
+            reserved_builtin_names,
             prompts,
             state: ScrollState::new(),
         }
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
-        let exclude = reserved_builtin_names(&self.builtins);
-        prompts.retain(|p| !exclude.contains(&p.name));
+        prompts.retain(|p| !self.reserved_builtin_names.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         self.prompts = prompts;
     }
@@ -138,7 +135,7 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for cmd in self.builtins.iter() {
-                if ALIAS_COMMANDS.contains(cmd) {
+                if !cmd.show_in_command_popup() {
                     continue;
                 }
                 out.push((CommandItem::Builtin(*cmd), None));
@@ -263,14 +260,6 @@ impl CommandPopup {
             .selected_idx
             .and_then(|idx| matches.get(idx).copied())
     }
-}
-
-fn reserved_builtin_names(builtins: &[SlashCommand]) -> HashSet<String> {
-    builtins
-        .iter()
-        .flat_map(|cmd| std::iter::once(cmd.command()).chain(cmd.command_aliases().iter().copied()))
-        .map(str::to_string)
-        .collect()
 }
 
 impl WidgetRef for CommandPopup {
