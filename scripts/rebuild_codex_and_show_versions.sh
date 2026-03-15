@@ -96,9 +96,24 @@ elif [[ "${PUBLISH}" == "true" ]]; then
 fi
 
 if [[ "${should_publish}" == "true" ]]; then
-  VERSION="$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' "${RUST_WORKSPACE_DIR}/Cargo.toml" | head -n 1)"
+  VERSION="$(
+    awk '
+      $0 ~ /^\[workspace\.package\]/ { in=1; next }
+      in && $0 ~ /^\[/ { exit }
+      in && match($0, /^version[[:space:]]*=[[:space:]]*"([^"]+)"/, m) { print m[1]; exit }
+    ' "${RUST_WORKSPACE_DIR}/Cargo.toml"
+  )"
   if [[ -z "${VERSION}" ]]; then
-    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml"
+    version_from_codex="$("${INSTALL_BIN}" --version | awk '{print $2}')"
+    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})$ ]]; then
+      VERSION="${BASH_REMATCH[1]}"
+    else
+      VERSION="${version_from_codex}"
+    fi
+  fi
+
+  if [[ -z "${VERSION}" ]]; then
+    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml or ${INSTALL_BIN} --version"
     exit 1
   fi
 
