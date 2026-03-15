@@ -7,6 +7,7 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
+    pub(super) surviving_turn_context_item: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Default)]
@@ -26,11 +27,20 @@ enum TurnReferenceContextItem {
 }
 
 #[derive(Debug, Default)]
+enum SurvivingTurnContextItem {
+    #[default]
+    Unknown,
+    Missing,
+    Present(Box<TurnContextItem>),
+}
+
+#[derive(Debug, Default)]
 struct ActiveReplaySegment<'a> {
     turn_id: Option<String>,
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
+    surviving_turn_context_item: Option<Box<TurnContextItem>>,
     base_replacement_history: Option<&'a [ResponseItem]>,
 }
 
@@ -44,6 +54,7 @@ fn finalize_active_segment<'a>(
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
+    surviving_turn_context_item: &mut SurvivingTurnContextItem,
     pending_rollback_turns: &mut usize,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
@@ -67,6 +78,17 @@ fn finalize_active_segment<'a>(
     // `previous_turn_settings` come from the newest surviving user turn that established them.
     if previous_turn_settings.is_none() && active_segment.counts_as_user_turn {
         *previous_turn_settings = active_segment.previous_turn_settings;
+    }
+
+    if matches!(
+        surviving_turn_context_item,
+        SurvivingTurnContextItem::Unknown
+    ) && active_segment.counts_as_user_turn
+    {
+        *surviving_turn_context_item = active_segment.surviving_turn_context_item.map_or(
+            SurvivingTurnContextItem::Missing,
+            SurvivingTurnContextItem::Present,
+        );
     }
 
     // `reference_context_item` comes from the newest surviving user turn baseline, or
@@ -96,6 +118,7 @@ impl Session {
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
+        let mut surviving_turn_context_item = SurvivingTurnContextItem::Unknown;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -181,6 +204,10 @@ impl Session {
                             active_segment.reference_context_item =
                                 TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
                         }
+                        if active_segment.surviving_turn_context_item.is_none() {
+                            active_segment.surviving_turn_context_item =
+                                Some(Box::new(ctx.clone()));
+                        }
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
@@ -197,6 +224,7 @@ impl Session {
                             &mut base_replacement_history,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
+                            &mut surviving_turn_context_item,
                             &mut pending_rollback_turns,
                         );
                     }
@@ -209,6 +237,10 @@ impl Session {
             if base_replacement_history.is_some()
                 && previous_turn_settings.is_some()
                 && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
+                && !matches!(
+                    surviving_turn_context_item,
+                    SurvivingTurnContextItem::Unknown
+                )
             {
                 // At this point we have both eager resume metadata values and the replacement-
                 // history base for the surviving tail, so older rollout items cannot affect this
@@ -223,6 +255,7 @@ impl Session {
                 &mut base_replacement_history,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
+                &mut surviving_turn_context_item,
                 &mut pending_rollback_turns,
             );
         }
@@ -287,11 +320,16 @@ impl Session {
         } else {
             reference_context_item
         };
+        let surviving_turn_context_item = match surviving_turn_context_item {
+            SurvivingTurnContextItem::Unknown | SurvivingTurnContextItem::Missing => None,
+            SurvivingTurnContextItem::Present(turn_context_item) => Some(*turn_context_item),
+        };
 
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
             previous_turn_settings,
             reference_context_item,
+            surviving_turn_context_item,
         }
     }
 }

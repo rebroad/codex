@@ -45,9 +45,11 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -84,9 +86,11 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -215,7 +219,10 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            codex_protocol::protocol::ThreadRolledBackEvent {
+                num_turns: 1,
+                rolled_back_to_turn_context: None,
+            },
         )),
     ];
 
@@ -235,10 +242,16 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item)
+        serde_json::to_value(reconstructed.reference_context_item.clone())
             .expect("serialize reconstructed reference context item"),
-        serde_json::to_value(Some(first_context_item))
+        serde_json::to_value(Some(first_context_item.clone()))
             .expect("serialize expected reference context item")
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.surviving_turn_context_item)
+            .expect("serialize surviving turn context item"),
+        serde_json::to_value(Some(first_context_item))
+            .expect("serialize expected surviving turn context item")
     );
 }
 
@@ -297,7 +310,10 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
         )),
         RolloutItem::ResponseItem(turn_two_user),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            codex_protocol::protocol::ThreadRolledBackEvent {
+                num_turns: 1,
+                rolled_back_to_turn_context: None,
+            },
         )),
     ];
 
@@ -403,7 +419,10 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            codex_protocol::protocol::ThreadRolledBackEvent {
+                num_turns: 1,
+                rolled_back_to_turn_context: None,
+            },
         )),
     ];
 
@@ -464,7 +483,10 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 99 },
+            codex_protocol::protocol::ThreadRolledBackEvent {
+                num_turns: 99,
+                rolled_back_to_turn_context: None,
+            },
         )),
     ];
 
@@ -524,7 +546,10 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            codex_protocol::protocol::ThreadRolledBackEvent {
+                num_turns: 1,
+                rolled_back_to_turn_context: None,
+            },
         )),
     ];
 
@@ -593,7 +618,10 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
             replacement_history: Some(Vec::new()),
         }),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            codex_protocol::protocol::ThreadRolledBackEvent {
+                num_turns: 1,
+                rolled_back_to_turn_context: None,
+            },
         )),
     ];
 
@@ -746,9 +774,11 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -818,9 +848,11 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
             approval_policy: turn_context.approval_policy.value(),
+            approvals_reviewer: turn_context.config.approvals_reviewer,
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
             network: None,
             model: previous_model.to_string(),
+            service_tier: turn_context.config.service_tier,
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
             realtime_active: Some(turn_context.realtime_active),
@@ -847,9 +879,11 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -953,9 +987,11 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: current_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -1055,9 +1091,11 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -1199,9 +1237,11 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
