@@ -4,6 +4,7 @@ use codex_app_server::run_main_with_transport;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::path_utils::set_linux_sandbox_self_exe_from_argv0;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
@@ -24,6 +25,7 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    set_linux_sandbox_self_exe_from_argv0();
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
         let managed_config_path = managed_config_path_from_debug_env();

@@ -201,3 +201,115 @@ fn lower_ascii_path(path: PathBuf) -> PathBuf {
 #[cfg(test)]
 #[path = "path_utils_tests.rs"]
 mod tests;
+
+pub fn set_linux_sandbox_self_exe_from_argv0() {
+    let mut debug_lines: Vec<String> = Vec::new();
+    let debug_paths = std::env::var("CODEX_SANDBOX_DEBUG")
+        .map(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"))
+        .unwrap_or(true);
+
+    let existing = std::env::var("CODEX_LINUX_SANDBOX_SELF_EXE").ok();
+    let arg0 = std::env::args().next().unwrap_or_default();
+
+    if debug_paths {
+        debug_lines.push(format!("self_exe_arg0={}", arg0));
+        debug_lines.push(format!("self_exe_path_env={:?}", std::env::var("PATH")));
+        debug_lines.push(format!("self_exe_env_before={:?}", existing));
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/codex-sandbox-debug.log")
+            .and_then(|mut f| {
+                use std::io::Write;
+                for line in &debug_lines {
+                    let _ = writeln!(f, "{}", line);
+                }
+                Ok(())
+            });
+    }
+
+    if existing.is_some() {
+        return;
+    }
+    if arg0.is_empty() {
+        return;
+    }
+
+    let argv0_path = std::path::PathBuf::from(&arg0);
+    let argv0_name = argv0_path.file_name().map(|s| s.to_os_string());
+
+    if let Some(argv0_name) = argv0_name {
+        if let Some(path_var) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join(&argv0_name);
+                if candidate.is_file() {
+                    if debug_paths {
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/tmp/codex-sandbox-debug.log")
+                            .and_then(|mut f| {
+                                use std::io::Write;
+                                let _ = writeln!(
+                                    f,
+                                    "self_exe_path_pick={}",
+                                    candidate.to_string_lossy()
+                                );
+                                Ok(())
+                            });
+                    }
+                    unsafe {
+                        std::env::set_var(
+                            "CODEX_LINUX_SANDBOX_SELF_EXE",
+                            candidate.to_string_lossy().to_string(),
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    if argv0_path.is_absolute() {
+        if debug_paths {
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/codex-sandbox-debug.log")
+                .and_then(|mut f| {
+                    use std::io::Write;
+                    let _ = writeln!(f, "self_exe_path_pick={}", argv0_path.to_string_lossy());
+                    Ok(())
+                });
+        }
+        unsafe {
+            std::env::set_var(
+                "CODEX_LINUX_SANDBOX_SELF_EXE",
+                argv0_path.to_string_lossy().to_string(),
+            );
+        }
+        return;
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    let abs = codex_utils_absolute_path::AbsolutePathBuf::resolve_path_against_base(&arg0, &cwd)
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|_| std::path::PathBuf::from(arg0));
+    if debug_paths {
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/codex-sandbox-debug.log")
+            .and_then(|mut f| {
+                use std::io::Write;
+                let _ = writeln!(f, "self_exe_path_pick={}", abs.to_string_lossy());
+                Ok(())
+            });
+    }
+    unsafe {
+        std::env::set_var(
+            "CODEX_LINUX_SANDBOX_SELF_EXE",
+            abs.to_string_lossy().to_string(),
+        );
+    }
+}
