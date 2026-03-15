@@ -41,7 +41,6 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
-use crate::skills::render_skills_section;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -199,12 +198,6 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
-#[derive(Clone, Debug, Default)]
-struct AppliedRolloutReconstruction {
-    previous_turn_settings: Option<PreviousTurnSettings>,
-    surviving_turn_context_item: Option<TurnContextItem>,
-}
-
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -228,7 +221,6 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
-use crate::plugins::render_plugins_section;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -431,6 +423,7 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
+        let loaded_plugins = plugins_manager.plugins_for_config(&config);
         let loaded_skills = skills_manager.skills_for_config(&config);
 
         for err in &loaded_skills.errors {
@@ -476,7 +469,14 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config).await;
+        let allowed_skills_for_implicit_invocation =
+            loaded_skills.allowed_skills_for_implicit_invocation();
+        let user_instructions = get_user_instructions(
+            &config,
+            Some(&allowed_skills_for_implicit_invocation),
+            Some(loaded_plugins.capability_summaries()),
+        )
+        .await;
 
         let exec_policy = if crate::guardian::is_guardian_subagent_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -2075,14 +2075,13 @@ impl Session {
             InitialHistory::New => {
                 // Defer initial context insertion until the first real turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
-                self.set_previous_turn_settings(None).await;
+                self.reset_tracked_turn_context().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-                let reconstructed_rollout = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
-                let previous_turn_settings = reconstructed_rollout.previous_turn_settings;
+                let previous_turn_settings = self.previous_turn_settings().await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -2157,23 +2156,15 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> AppliedRolloutReconstruction {
+    ) {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-        let surviving_turn_context_item = reconstructed_rollout.surviving_turn_context_item.clone();
-        self.replace_history(
+        let mut state = self.state.lock().await;
+        state.replace_history_with_tracked_turn_context(
             reconstructed_rollout.history,
-            reconstructed_rollout.reference_context_item,
-        )
-        .await;
-        self.set_previous_turn_settings(previous_turn_settings.clone())
-            .await;
-        AppliedRolloutReconstruction {
-            previous_turn_settings,
-            surviving_turn_context_item,
-        }
+            reconstructed_rollout.tracked_turn_context,
+        );
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2183,17 +2174,25 @@ impl Session {
         })
     }
 
+    pub(crate) async fn latest_turn_context_item(&self) -> Option<TurnContextItem> {
+        let state = self.state.lock().await;
+        state.latest_turn_context_item()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn set_latest_turn_context_item(&self, item: Option<TurnContextItem>) {
+        let mut state = self.state.lock().await;
+        state.set_latest_turn_context_item(item);
+    }
+
+    pub(crate) async fn reset_tracked_turn_context(&self) {
+        let mut state = self.state.lock().await;
+        state.reset_tracked_turn_context();
+    }
+
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
-    }
-
-    pub(crate) async fn set_previous_turn_settings(
-        &self,
-        previous_turn_settings: Option<PreviousTurnSettings>,
-    ) {
-        let mut state = self.state.lock().await;
-        state.set_previous_turn_settings(previous_turn_settings);
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
@@ -3504,21 +3503,6 @@ impl Session {
         if turn_context.apps_enabled() {
             developer_sections.push(render_apps_section());
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
-        }
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config);
-        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
-        {
-            developer_sections.push(plugin_section);
-        }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
@@ -3632,10 +3616,11 @@ impl Session {
         self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
             .await;
 
-        // Advance the in-memory diff baseline even when this turn emitted no model-visible
-        // context items. This keeps later runtime diffing aligned with the current turn state.
+        // Advance the in-memory turn-context tracker even when this turn emitted no model-visible
+        // context items. Regular turns become both the latest turn-settings source and the active
+        // model-visible reference baseline for subsequent diffing.
         let mut state = self.state.lock().await;
-        state.set_reference_context_item(Some(turn_context_item));
+        state.record_regular_turn_context(turn_context_item);
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -5084,13 +5069,12 @@ mod handlers {
             .into_iter()
             .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
             .collect::<Vec<_>>();
-        let reconstructed_rollout = sess
-            .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+        sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
             .await;
         sess.recompute_token_usage(turn_context.as_ref()).await;
         let rollback_msg = EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns,
-            rolled_back_to_turn_context: reconstructed_rollout.surviving_turn_context_item,
+            rolled_back_to_turn_context: sess.latest_turn_context_item().await,
         });
         sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
             .await;
@@ -5653,14 +5637,6 @@ pub(crate) async fn run_turn(
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
-    // Track the previous-turn baseline from the regular user-turn path only so
-    // standalone tasks (compact/shell/review/undo) cannot suppress future
-    // model/realtime injections.
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        realtime_active: Some(turn_context.realtime_active),
-    }))
-    .await;
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -6239,25 +6215,9 @@ fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
-    let deferred_dynamic_tools = turn_context
-        .dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading)
-        .map(|tool| tool.name.as_str())
-        .collect::<HashSet<_>>();
-    let tools = if deferred_dynamic_tools.is_empty() {
-        router.model_visible_specs()
-    } else {
-        router
-            .model_visible_specs()
-            .into_iter()
-            .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
-            .collect()
-    };
-
     Prompt {
         input,
-        tools,
+        tools: router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,

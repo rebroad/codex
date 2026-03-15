@@ -235,21 +235,25 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
         vec![turn_one_user, turn_one_assistant]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed.tracked_turn_context.previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item.clone())
+        serde_json::to_value(reconstructed.tracked_turn_context.reference_context_item())
             .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item.clone()))
             .expect("serialize expected reference context item")
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.surviving_turn_context_item)
-            .expect("serialize surviving turn context item"),
+        serde_json::to_value(
+            reconstructed
+                .tracked_turn_context
+                .latest_turn_context_item()
+        )
+        .expect("serialize surviving turn context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected surviving turn context item")
     );
@@ -326,14 +330,14 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
         vec![turn_one_user, turn_one_assistant]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed.tracked_turn_context.previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item)
+        serde_json::to_value(reconstructed.tracked_turn_context.reference_context_item())
             .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
@@ -453,21 +457,25 @@ async fn reconstruct_history_rollback_backfills_surviving_turn_context_from_olde
         ]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed.tracked_turn_context.previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item.clone())
+        serde_json::to_value(reconstructed.tracked_turn_context.reference_context_item())
             .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item.clone()))
             .expect("serialize expected reference context item")
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.surviving_turn_context_item)
-            .expect("serialize surviving turn context item"),
+        serde_json::to_value(
+            reconstructed
+                .tracked_turn_context
+                .latest_turn_context_item()
+        )
+        .expect("serialize surviving turn context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected surviving turn context item")
     );
@@ -568,14 +576,14 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
         vec![turn_one_user, turn_one_assistant]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed.tracked_turn_context.previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item)
+        serde_json::to_value(reconstructed.tracked_turn_context.reference_context_item())
             .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
@@ -628,8 +636,16 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
         .await;
 
     assert_eq!(reconstructed.history, Vec::new());
-    assert_eq!(reconstructed.previous_turn_settings, None);
-    assert!(reconstructed.reference_context_item.is_none());
+    assert_eq!(
+        reconstructed.tracked_turn_context.previous_turn_settings(),
+        None
+    );
+    assert!(
+        reconstructed
+            .tracked_turn_context
+            .reference_context_item()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -846,7 +862,12 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
             user_message("legacy summary"),
         ]
     );
-    assert!(reconstructed.reference_context_item.is_none());
+    assert!(
+        reconstructed
+            .tracked_turn_context
+            .reference_context_item()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -892,7 +913,12 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
         .await;
 
-    assert!(reconstructed.reference_context_item.is_none());
+    assert!(
+        reconstructed
+            .tracked_turn_context
+            .reference_context_item()
+            .is_none()
+    );
 }
 
 #[tokio::test]

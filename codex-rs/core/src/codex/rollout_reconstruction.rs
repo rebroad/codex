@@ -1,79 +1,19 @@
 use super::*;
+use crate::context_manager::TrackedTurnContext;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
 #[derive(Debug)]
 pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
-    pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
-    pub(super) reference_context_item: Option<TurnContextItem>,
-    pub(super) surviving_turn_context_item: Option<TurnContextItem>,
-}
-
-#[derive(Debug, Default)]
-struct ReconstructedTurnContext {
-    turn_context_item: Option<TurnContextItem>,
-    compacted_since_turn_context_item: bool,
-}
-
-impl ReconstructedTurnContext {
-    fn note_compaction(&mut self) {
-        if self.turn_context_item.is_none() {
-            self.compacted_since_turn_context_item = true;
-        }
-    }
-
-    fn note_turn_context(&mut self, turn_context_item: &TurnContextItem) {
-        if self.turn_context_item.is_none() {
-            self.turn_context_item = Some(turn_context_item.clone());
-        }
-    }
-
-    fn absorb_surviving_segment(
-        &mut self,
-        segment_turn_context: ReconstructedTurnContext,
-        counts_as_user_turn: bool,
-    ) {
-        if self.turn_context_item.is_some() {
-            return;
-        }
-
-        self.compacted_since_turn_context_item |=
-            segment_turn_context.compacted_since_turn_context_item;
-        if counts_as_user_turn
-            && let Some(turn_context_item) = segment_turn_context.turn_context_item
-        {
-            self.turn_context_item = Some(turn_context_item);
-        }
-    }
-
-    fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
-        self.turn_context_item
-            .as_ref()
-            .map(|turn_context_item| PreviousTurnSettings {
-                model: turn_context_item.model.clone(),
-                realtime_active: turn_context_item.realtime_active,
-            })
-    }
-
-    fn reference_context_item(&self) -> Option<TurnContextItem> {
-        if self.compacted_since_turn_context_item {
-            None
-        } else {
-            self.turn_context_item.clone()
-        }
-    }
-
-    fn surviving_turn_context_item(&self) -> Option<TurnContextItem> {
-        self.turn_context_item.clone()
-    }
+    pub(super) tracked_turn_context: TrackedTurnContext,
 }
 
 #[derive(Debug, Default)]
 struct ActiveReplaySegment<'a> {
     turn_id: Option<String>,
     counts_as_user_turn: bool,
-    reconstructed_turn_context: ReconstructedTurnContext,
+    tracked_turn_context: TrackedTurnContext,
     base_replacement_history: Option<&'a [ResponseItem]>,
 }
 
@@ -85,7 +25,7 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
 fn finalize_active_segment<'a>(
     active_segment: ActiveReplaySegment<'a>,
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
-    reconstructed_turn_context: &mut ReconstructedTurnContext,
+    tracked_turn_context: &mut TrackedTurnContext,
     pending_rollback_turns: &mut usize,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
@@ -106,8 +46,8 @@ fn finalize_active_segment<'a>(
         *base_replacement_history = Some(segment_base_replacement_history);
     }
 
-    reconstructed_turn_context.absorb_surviving_segment(
-        active_segment.reconstructed_turn_context,
+    tracked_turn_context.absorb_surviving_segment(
+        active_segment.tracked_turn_context,
         active_segment.counts_as_user_turn,
     );
 }
@@ -124,7 +64,7 @@ impl Session {
         // context are both known; then replay only the buffered surviving tail forward to
         // preserve exact history semantics.
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
-        let mut reconstructed_turn_context = ReconstructedTurnContext::default();
+        let mut tracked_turn_context = TrackedTurnContext::default();
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -142,7 +82,9 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     // Looking backward, compaction clears any older baseline unless a newer
                     // `TurnContextItem` in this same segment has already re-established it.
-                    active_segment.reconstructed_turn_context.note_compaction();
+                    active_segment
+                        .tracked_turn_context
+                        .note_compaction_during_reverse_replay();
                     if active_segment.base_replacement_history.is_none()
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
@@ -195,8 +137,8 @@ impl Session {
                         ctx.turn_id.as_deref(),
                     ) {
                         active_segment
-                            .reconstructed_turn_context
-                            .note_turn_context(ctx);
+                            .tracked_turn_context
+                            .note_turn_context_during_reverse_replay(ctx);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
@@ -211,7 +153,7 @@ impl Session {
                         finalize_active_segment(
                             active_segment,
                             &mut base_replacement_history,
-                            &mut reconstructed_turn_context,
+                            &mut tracked_turn_context,
                             &mut pending_rollback_turns,
                         );
                     }
@@ -223,7 +165,7 @@ impl Session {
 
             if base_replacement_history.is_some()
                 && pending_rollback_turns == 0
-                && reconstructed_turn_context.turn_context_item.is_some()
+                && tracked_turn_context.latest_turn_context_item().is_some()
             {
                 // At this point the replay-derived metadata and replacement-history base for the
                 // surviving tail are both fixed, so older rollout items cannot affect this result.
@@ -235,7 +177,7 @@ impl Session {
             finalize_active_segment(
                 active_segment,
                 &mut base_replacement_history,
-                &mut reconstructed_turn_context,
+                &mut tracked_turn_context,
                 &mut pending_rollback_turns,
             );
         }
@@ -289,20 +231,12 @@ impl Session {
             }
         }
 
-        let previous_turn_settings = reconstructed_turn_context.previous_turn_settings();
-        let surviving_turn_context_item = reconstructed_turn_context.surviving_turn_context_item();
-        let reference_context_item = reconstructed_turn_context.reference_context_item();
-        let reference_context_item = if saw_legacy_compaction_without_replacement_history {
-            None
-        } else {
-            reference_context_item
-        };
-
+        if saw_legacy_compaction_without_replacement_history {
+            tracked_turn_context.note_compaction();
+        }
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
-            previous_turn_settings,
-            reference_context_item,
-            surviving_turn_context_item,
+            tracked_turn_context,
         }
     }
 }

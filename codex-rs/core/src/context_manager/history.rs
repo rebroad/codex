@@ -1,3 +1,4 @@
+use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::event_mapping::is_contextual_user_message_content;
@@ -32,15 +33,104 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
-    /// Reference context snapshot used for diffing and producing model-visible
-    /// settings update items.
-    ///
-    /// This is the baseline for the next regular model turn, and may already
-    /// match the current turn after context updates are persisted.
-    ///
-    /// When this is `None`, settings diffing treats the next turn as having no
-    /// baseline and emits a full reinjection of context state.
-    reference_context_item: Option<TurnContextItem>,
+    tracked_turn_context: TrackedTurnContext,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TrackedTurnContext {
+    latest_turn_context_item: Option<TurnContextItem>,
+    reference_turn_context_item: Option<TurnContextItem>,
+    compacted_since_model_saw_reference_turn_context: bool,
+}
+
+impl TrackedTurnContext {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(crate) fn note_compaction(&mut self) {
+        self.compacted_since_model_saw_reference_turn_context = true;
+    }
+
+    pub(crate) fn note_compaction_during_reverse_replay(&mut self) {
+        if self.reference_turn_context_item.is_none() {
+            self.compacted_since_model_saw_reference_turn_context = true;
+        }
+    }
+
+    pub(crate) fn note_turn_context_during_reverse_replay(
+        &mut self,
+        turn_context_item: &TurnContextItem,
+    ) {
+        if self.latest_turn_context_item.is_none() {
+            self.latest_turn_context_item = Some(turn_context_item.clone());
+        }
+        if self.reference_turn_context_item.is_none() {
+            self.reference_turn_context_item = Some(turn_context_item.clone());
+        }
+    }
+
+    pub(crate) fn absorb_surviving_segment(
+        &mut self,
+        segment_turn_context: TrackedTurnContext,
+        counts_as_user_turn: bool,
+    ) {
+        self.compacted_since_model_saw_reference_turn_context |=
+            segment_turn_context.compacted_since_model_saw_reference_turn_context;
+        if counts_as_user_turn
+            && let Some(turn_context_item) = segment_turn_context.latest_turn_context_item
+            && self.latest_turn_context_item.is_none()
+        {
+            self.latest_turn_context_item = Some(turn_context_item);
+        }
+        if counts_as_user_turn
+            && !self.compacted_since_model_saw_reference_turn_context
+            && self.reference_turn_context_item.is_none()
+        {
+            self.reference_turn_context_item = segment_turn_context.reference_turn_context_item;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_latest_turn_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.latest_turn_context_item = item;
+    }
+
+    pub(crate) fn record_regular_turn_context(&mut self, turn_context_item: TurnContextItem) {
+        self.latest_turn_context_item = Some(turn_context_item.clone());
+        self.reference_turn_context_item = Some(turn_context_item);
+        self.compacted_since_model_saw_reference_turn_context = false;
+    }
+
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        if let Some(item) = item {
+            self.reference_turn_context_item = Some(item);
+            self.compacted_since_model_saw_reference_turn_context = false;
+        } else {
+            self.note_compaction();
+        }
+    }
+
+    pub(crate) fn latest_turn_context_item(&self) -> Option<TurnContextItem> {
+        self.latest_turn_context_item.clone()
+    }
+
+    pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+        self.latest_turn_context_item
+            .as_ref()
+            .map(|turn_context_item| PreviousTurnSettings {
+                model: turn_context_item.model.clone(),
+                realtime_active: turn_context_item.realtime_active,
+            })
+    }
+
+    pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
+        if self.compacted_since_model_saw_reference_turn_context {
+            None
+        } else {
+            self.reference_turn_context_item.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -56,7 +146,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            reference_context_item: None,
+            tracked_turn_context: TrackedTurnContext::default(),
         }
     }
 
@@ -68,12 +158,38 @@ impl ContextManager {
         self.token_info = info;
     }
 
+    pub(crate) fn set_tracked_turn_context(&mut self, tracked_turn_context: TrackedTurnContext) {
+        self.tracked_turn_context = tracked_turn_context;
+    }
+
+    pub(crate) fn reset_tracked_turn_context(&mut self) {
+        self.tracked_turn_context.reset();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_latest_turn_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.tracked_turn_context.set_latest_turn_context_item(item);
+    }
+
+    pub(crate) fn record_regular_turn_context(&mut self, turn_context_item: TurnContextItem) {
+        self.tracked_turn_context
+            .record_regular_turn_context(turn_context_item);
+    }
+
+    pub(crate) fn latest_turn_context_item(&self) -> Option<TurnContextItem> {
+        self.tracked_turn_context.latest_turn_context_item()
+    }
+
+    pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+        self.tracked_turn_context.previous_turn_settings()
+    }
+
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.reference_context_item = item;
+        self.tracked_turn_context.set_reference_context_item(item);
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
-        self.reference_context_item.clone()
+        self.tracked_turn_context.reference_context_item()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
