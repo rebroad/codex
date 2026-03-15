@@ -203,48 +203,14 @@ fn lower_ascii_path(path: PathBuf) -> PathBuf {
 mod tests;
 
 pub fn set_linux_sandbox_self_exe_from_argv0() {
-    let mut debug_lines: Vec<String> = Vec::new();
-    let debug_paths = std::env::var("CODEX_SANDBOX_DEBUG")
-        .map(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"))
-        .unwrap_or(true);
-
-    let existing = std::env::var("CODEX_LINUX_SANDBOX_SELF_EXE").ok();
     let arg0 = std::env::args().next().unwrap_or_default();
 
     if arg0.ends_with("codex-linux-sandbox") {
         return;
     }
 
-    if debug_paths {
-        debug_lines.push(format!("self_exe_arg0={}", arg0));
-        debug_lines.push(format!("self_exe_env_before={:?}", existing));
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/codex-sandbox-debug.log")
-            .and_then(|mut f| {
-                use std::io::Write;
-                for line in &debug_lines {
-                    let _ = writeln!(f, "{}", line);
-                }
-                Ok(())
-            });
-    }
-
     if arg0.is_empty() {
         return;
-    }
-
-    if debug_paths {
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/codex-sandbox-debug.log")
-            .and_then(|mut f| {
-                use std::io::Write;
-                let _ = writeln!(f, "self_exe_path_pick={}", arg0);
-                Ok(())
-            });
     }
 
     unsafe {
