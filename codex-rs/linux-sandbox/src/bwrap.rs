@@ -277,49 +277,6 @@ fn create_filesystem_args(
             }
         }
     }
-    let mut tmpfs_roots = BTreeSet::new();
-    for writable_root in &writable_roots {
-        let root = writable_root.root.as_path();
-        if let Some(symlink_path) = find_symlink_in_path(root, &allowed_write_paths) {
-            if let Some(parent) = symlink_path.parent() {
-                if parent != Path::new("/") {
-                    tmpfs_roots.insert(parent.to_path_buf());
-                }
-            }
-        }
-    }
-    for tmpfs_root in &tmpfs_roots {
-        args.push("--tmpfs".to_string());
-        args.push(path_to_string(tmpfs_root));
-    }
-    for writable_root in &writable_roots {
-        let root = writable_root.root.as_path();
-        if let Some(symlink_path) = find_symlink_in_path(root, &allowed_write_paths) {
-            if let Some(parent) = symlink_path.parent() {
-                if parent != Path::new("/") {
-                    append_mount_target_parent_dir_args(&mut args, root, parent);
-                }
-            }
-        }
-    }
-    if let Ok(self_exe) = std::env::var("CODEX_LINUX_SANDBOX_SELF_EXE") {
-        let self_exe_path = PathBuf::from(self_exe);
-        if let Some(tmpfs_root) = tmpfs_roots
-            .iter()
-            .filter(|root| self_exe_path.starts_with(root.as_path()))
-            .max_by_key(|root| path_depth(root.as_path()))
-        {
-            append_mount_target_parent_dir_args(&mut args, &self_exe_path, tmpfs_root.as_path());
-            if let Ok(file) = File::open(&self_exe_path) {
-                preserved_files.push(file);
-                if let Some(file) = preserved_files.last() {
-                    args.push("--ro-bind-fd".to_string());
-                    args.push(file.as_raw_fd().to_string());
-                    args.push(path_to_string(&self_exe_path));
-                }
-            }
-        }
-    }
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots
         .iter()
         .map(|path| path.as_path().to_path_buf())
@@ -376,29 +333,13 @@ fn create_filesystem_args(
             append_mount_target_parent_dir_args(&mut args, root, masking_root);
         }
 
-        let mut bind_fd = None;
+        args.push("--bind".to_string());
         if let Some(target) = &symlink_target {
-            if let Ok(file) = File::open(target) {
-                preserved_files.push(file);
-                if let Some(file) = preserved_files.last() {
-                    bind_fd = Some(file.as_raw_fd());
-                }
-            }
-        }
-
-        if let Some(fd) = bind_fd {
-            args.push("--bind-fd".to_string());
-            args.push(fd.to_string());
-            args.push(path_to_string(root));
+            args.push(path_to_string(target));
         } else {
-            args.push("--bind".to_string());
-            if let Some(target) = &symlink_target {
-                args.push(path_to_string(target));
-            } else {
-                args.push(path_to_string(root));
-            }
             args.push(path_to_string(root));
         }
+        args.push(path_to_string(root));
 
         let mut read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
@@ -408,15 +349,7 @@ fn create_filesystem_args(
             .collect();
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
-            append_read_only_subpath_args(
-                &mut args,
-                &mut preserved_files,
-                &subpath,
-                &allowed_write_paths,
-                symlink_target.as_deref(),
-                root,
-                symlink_target.is_some(),
-            );
+            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -519,44 +452,14 @@ fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Pa
 
 fn append_read_only_subpath_args(
     args: &mut Vec<String>,
-    preserved_files: &mut Vec<File>,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
-    symlink_target: Option<&Path>,
-    symlink_root: &Path,
-    prefer_bind_fd: bool,
 ) {
     if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
-        if symlink_path != symlink_root {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&symlink_path));
-            return;
-        }
-    }
-
-    if prefer_bind_fd
-        && subpath.exists()
-        && is_within_allowed_write_paths(subpath, allowed_write_paths)
-    {
-        let source_path = if let Some(target) = symlink_target {
-            if let Ok(rel) = subpath.strip_prefix(symlink_root) {
-                target.join(rel)
-            } else {
-                subpath.to_path_buf()
-            }
-        } else {
-            subpath.to_path_buf()
-        };
-        if let Ok(file) = File::open(&source_path) {
-            preserved_files.push(file);
-            if let Some(file) = preserved_files.last() {
-                args.push("--ro-bind-fd".to_string());
-                args.push(file.as_raw_fd().to_string());
-                args.push(path_to_string(subpath));
-                return;
-            }
-        }
+        args.push("--ro-bind".to_string());
+        args.push("/dev/null".to_string());
+        args.push(path_to_string(&symlink_path));
+        return;
     }
 
     if !subpath.exists() {
