@@ -162,6 +162,7 @@ impl TurnDiffTracker {
         loop {
             let git_marker = cur.join(".git");
             if git_marker.is_dir() || git_marker.is_file() {
+                cur.parent()?;
                 if !self.git_root_cache.iter().any(|r| r == &cur) {
                     self.git_root_cache.push(cur.clone());
                 }
