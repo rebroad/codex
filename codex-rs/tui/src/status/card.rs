@@ -17,11 +17,13 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_sandbox_summary::summarize_sandbox_policy;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use url::Url;
 
+use super::AccountUsageDisplay;
 use super::account::StatusAccountDisplay;
 use super::format::FieldFormatter;
 use super::format::line_display_width;
@@ -40,6 +42,7 @@ use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
+use crate::terminal_palette::best_color;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 
@@ -48,6 +51,13 @@ pub(crate) enum StatusCardVariant {
     Chat,
     Cli,
 }
+
+const SEXTANT_BLOCKS: [&str; 64] = [
+    "█", "🬻", "🬺", "🬹", "🬸", "🬷", "🬶", "🬵", "🬴", "🬳", "🬲", "🬱", "🬰", "🬯", "🬮", "🬭", "🬬", "🬫", "🬪",
+    "🬩", "🬨", "▐", "🬧", "🬦", "🬥", "🬤", "🬣", "🬢", "🬡", "🬠", "🬟", "🬞", "🬝", "🬜", "🬛", "🬚", "🬙", "🬘",
+    "🬗", "🬖", "🬕", "🬔", "▌", "🬓", "🬒", "🬑", "🬐", "🬏", "🬎", "🬍", "🬌", "🬋", "🬊", "🬉", "🬈", "🬇", "🬆",
+    "🬅", "🬄", "🬃", "🬂", "🬁", "🬀", " ",
+];
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -74,6 +84,7 @@ struct StatusHistoryCell {
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
+    account_usage: Option<AccountUsageDisplay>,
     thread_name: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
@@ -92,6 +103,7 @@ pub(crate) fn new_status_output(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     _plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -108,6 +120,7 @@ pub(crate) fn new_status_output(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         snapshots,
         _plan_type,
         now,
@@ -126,6 +139,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: &[RateLimitSnapshotDisplay],
     _plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -141,6 +155,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         rate_limits,
         plan_type,
         now,
@@ -160,6 +175,7 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: &[RateLimitSnapshotDisplay],
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -176,6 +192,7 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         rate_limits,
         _plan_type,
         now,
@@ -203,6 +220,7 @@ impl StatusHistoryCell {
         session_id: &Option<ThreadId>,
         thread_name: Option<String>,
         forked_from: Option<ThreadId>,
+        account_usage: Option<&AccountUsageDisplay>,
         rate_limits: &[RateLimitSnapshotDisplay],
         _plan_type: Option<PlanType>,
         now: DateTime<Local>,
@@ -275,6 +293,7 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
         let account = compose_account_display(account_display);
+        let account_usage = account_usage.cloned();
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
@@ -309,6 +328,7 @@ impl StatusHistoryCell {
             collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
             account,
+            account_usage,
             thread_name,
             session_id,
             forked_from,
@@ -485,6 +505,55 @@ impl HistoryCell for StatusHistoryCell {
             StatusAccountDisplay::ApiKey => {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
+        });
+        let account_usage = self.account_usage.as_ref().map(|usage| {
+            let total_fmt = format_tokens_compact(usage.total_tokens);
+            let mut spans = Vec::new();
+            match usage.estimated_percent {
+                Some(percent) => {
+                    spans.push(Span::from(format!("usage {total_fmt} ({percent:.2}%)")))
+                }
+                None => spans.push(Span::from(format!("usage {total_fmt}"))),
+            }
+            if let Some(sample_count) = usage.sample_count
+                && (1..64).contains(&sample_count)
+            {
+                let count = sample_count as u8;
+                // Sextant bit order: upper-left, upper-right, middle-left, middle-right,
+                // bottom-left, bottom-right.
+                let mut pattern = 0u8;
+                if count & 1 != 0 {
+                    pattern |= 0b0000_0001;
+                }
+                if count & 2 != 0 {
+                    pattern |= 0b0000_0010;
+                }
+                if count & 4 != 0 {
+                    pattern |= 0b0000_0100;
+                }
+                if count & 8 != 0 {
+                    pattern |= 0b0000_1000;
+                }
+                if count & 16 != 0 {
+                    pattern |= 0b0001_0000;
+                }
+                if count & 32 != 0 {
+                    pattern |= 0b0010_0000;
+                }
+                let missing = (!pattern) & 0b0011_1111;
+                let glyph = SEXTANT_BLOCKS[missing as usize];
+                let fg = match best_color((255, 255, 0)) {
+                    Color::Reset => Color::LightYellow,
+                    color => color,
+                };
+                let bg = match best_color((80, 80, 0)) {
+                    Color::Reset => Color::Yellow,
+                    color => color,
+                };
+                spans.push(Span::from(" "));
+                spans.push(Span::styled(glyph, Style::default().fg(fg).bg(bg)));
+            }
+            spans
         });
         let account_value = account_value.map(|account_value| {
             let mut spans = Vec::new();
