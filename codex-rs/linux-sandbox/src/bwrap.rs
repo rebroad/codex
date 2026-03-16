@@ -302,6 +302,24 @@ fn create_filesystem_args(
             }
         }
     }
+    if let Ok(self_exe) = std::env::var("CODEX_LINUX_SANDBOX_SELF_EXE") {
+        let self_exe_path = PathBuf::from(self_exe);
+        if let Some(tmpfs_root) = tmpfs_roots
+            .iter()
+            .filter(|root| self_exe_path.starts_with(root.as_path()))
+            .max_by_key(|root| path_depth(root.as_path()))
+        {
+            append_mount_target_parent_dir_args(&mut args, &self_exe_path, tmpfs_root.as_path());
+            if let Ok(file) = File::open(&self_exe_path) {
+                preserved_files.push(file);
+                if let Some(file) = preserved_files.last() {
+                    args.push("--ro-bind-fd".to_string());
+                    args.push(file.as_raw_fd().to_string());
+                    args.push(path_to_string(&self_exe_path));
+                }
+            }
+        }
+    }
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots
         .iter()
         .map(|path| path.as_path().to_path_buf())
