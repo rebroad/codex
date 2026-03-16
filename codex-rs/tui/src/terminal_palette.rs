@@ -1,5 +1,6 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
+use std::env;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -18,11 +19,56 @@ pub enum StdoutColorLevel {
 }
 
 pub fn stdout_color_level() -> StdoutColorLevel {
-    match supports_color::on_cached(supports_color::Stream::Stdout) {
+    let colorterm = env::var("COLORTERM").ok();
+    let term = env::var("TERM").ok();
+    let term_program = env::var("TERM_PROGRAM").ok();
+    let wt_session = env::var("WT_SESSION").ok();
+    let vte_version = env::var("VTE_VERSION").ok();
+    let wezterm_exec = env::var("WEZTERM_EXECUTABLE").ok();
+    let kitty_window_id = env::var("KITTY_WINDOW_ID").ok();
+    let alacritty_socket = env::var("ALACRITTY_SOCKET").ok();
+    let foot_version = env::var("FOOT_VERSION").ok();
+
+    let colorterm_rgb = matches!(colorterm.as_deref(), Some("truecolor") | Some("24bit"));
+    let term_lower = term
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let term_program_lower = term_program
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let ncplayer_heuristic_rgb = colorterm_rgb
+        || term_lower.contains("kitty")
+        || term_lower.contains("wezterm")
+        || term_lower.contains("alacritty")
+        || term_lower.contains("foot")
+        || term_lower.contains("contour")
+        || term_lower.contains("konsole")
+        || term_lower.contains("ghostty")
+        || term_program_lower.contains("iterm")
+        || term_program_lower.contains("wezterm")
+        || term_program_lower.contains("alacritty")
+        || term_program_lower.contains("kitty")
+        || term_program_lower.contains("ghostty")
+        || wt_session.is_some()
+        || wezterm_exec.is_some()
+        || kitty_window_id.is_some()
+        || alacritty_socket.is_some()
+        || foot_version.is_some()
+        || vte_version.is_some();
+
+    let supports = supports_color::on_cached(supports_color::Stream::Stdout);
+    let detected = match supports {
         Some(level) if level.has_16m => StdoutColorLevel::TrueColor,
         Some(level) if level.has_256 => StdoutColorLevel::Ansi256,
         Some(_) => StdoutColorLevel::Ansi16,
         None => StdoutColorLevel::Unknown,
+    };
+    if ncplayer_heuristic_rgb {
+        StdoutColorLevel::TrueColor
+    } else {
+        detected
     }
 }
 
