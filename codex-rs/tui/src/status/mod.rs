@@ -27,6 +27,10 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
+use codex_state::AccountUsageSnapshot;
+use codex_state::AccountUsageStore;
+use codex_state::account_usage_display;
+use codex_state::account_usage_key;
 pub(crate) use helpers::format_directory_display;
 pub(crate) use helpers::format_tokens_compact;
 pub(crate) use helpers::plan_type_display_name;
@@ -67,6 +71,34 @@ pub(crate) async fn render_status_lines_for_cli(
     width: u16,
 ) -> Vec<String> {
     let mut plan_type = auth.as_ref().and_then(CodexAuth::account_plan_type);
+    let account_usage_store =
+        AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+            .await
+            .ok();
+    let account_id = auth.as_ref().and_then(|auth| {
+        account_usage_key(
+            auth.get_account_id().as_deref(),
+            auth.get_account_email().as_deref(),
+        )
+    });
+
+    let mut usage_snapshot = None;
+    if let Some(auth) = auth.as_ref()
+        && let Some(account_id) = account_id.as_ref()
+        && let Some(store) = account_usage_store.as_ref()
+    {
+        if let Some(account_display) = account_usage_display(auth.get_account_email().as_deref()) {
+            store
+                .cache_account_display(account_id.as_str(), account_display)
+                .await;
+        }
+        usage_snapshot = store
+            .get_account_usage(account_id.as_str())
+            .await
+            .ok()
+            .flatten();
+    }
+
     let cached_rate_limits = usage_snapshot
         .as_ref()
         .and_then(cached_rate_limit_snapshot_from_usage);
@@ -178,6 +210,8 @@ pub(crate) async fn render_status_lines_for_cli(
     );
 
     let total_usage = TokenUsage::default();
+    let account_usage =
+        fetch_account_usage_display(account_usage_store.as_deref(), auth.as_ref()).await;
     let output = card::new_status_output_with_rate_limits_variant(
         config,
         account_display.as_ref(),
@@ -186,6 +220,7 @@ pub(crate) async fn render_status_lines_for_cli(
         &Option::<ThreadId>::None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        account_usage.as_ref(),
         rate_limit_displays.as_slice(),
         plan_type,
         Local::now(),
@@ -287,6 +322,34 @@ async fn fetch_rate_limits_for_cli(base_url: String, auth: CodexAuth) -> CliRate
         Ok(Err(err)) => CliRateLimitFetchOutcome::BackendUnavailable(err.to_string()),
         Err(_) => CliRateLimitFetchOutcome::Timeout,
     }
+}
+
+async fn fetch_account_usage_display(
+    store: Option<&AccountUsageStore>,
+    auth: Option<&CodexAuth>,
+) -> Option<AccountUsageDisplay> {
+    let account_id = match auth.and_then(|auth| {
+        account_usage_key(
+            auth.get_account_id().as_deref(),
+            auth.get_account_email().as_deref(),
+        )
+    }) {
+        Some(account_id) => account_id,
+        None => return None,
+    };
+    let store = store?;
+    let usage = store.get_account_usage(account_id.as_str()).await.ok();
+    let usage = match usage {
+        Some(Some(usage)) => usage,
+        Some(None) | None => return None,
+    };
+
+    let estimated_limit = store
+        .estimate_account_limit_tokens(account_id.as_str())
+        .await
+        .ok()
+        .unwrap_or((None, 0));
+    Some(build_account_usage_display(&usage, estimated_limit))
 }
 
 fn build_account_usage_display(
