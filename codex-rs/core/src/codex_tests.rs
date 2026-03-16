@@ -2754,6 +2754,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        account_usage_store: None,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -3597,6 +3598,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        account_usage_store: None,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
     });
