@@ -98,6 +98,31 @@ impl AbsolutePathBuf {
     }
 }
 
+/// Canonicalize a path when possible, but preserve the logical (non-symlink-
+/// resolved) absolute path if canonicalization would traverse symlinks.
+///
+/// Keep the policy on the user-visible path string instead of silently
+/// rewriting it to a symlink target. For example, if `/home/user`
+/// is a symlink to `/mnt/p8/@home/user`, canonicalization would rewrite
+/// `/home/user/bin` to `/mnt/p8/@home/user/bin`. That can break sandbox policy
+/// construction because the sandbox is defined in terms of visible paths, and
+/// bubblewrap only exposes what we explicitly bind (see bubblewrap docs). Keeping
+/// the logical path lets the sandbox decide when to bind the real target instead
+/// of expanding it implicitly.
+pub fn canonicalize_preserving_symlinks(path: &Path) -> std::io::Result<PathBuf> {
+    let logical = AbsolutePathBuf::from_absolute_path(path)?.into_path_buf();
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => {
+            if canonical != logical {
+                Ok(logical)
+            } else {
+                Ok(canonical)
+            }
+        }
+        Err(_) => Ok(logical),
+    }
+}
+
 impl AsRef<Path> for AbsolutePathBuf {
     fn as_ref(&self) -> &Path {
         &self.0
