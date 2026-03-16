@@ -519,7 +519,7 @@ impl HistoryCell for StatusHistoryCell {
             match usage.estimated_percent {
                 Some(percent) => {
                     spans.push(Span::from(format!("usage {total_fmt} ({percent:.2}%)")))
-            }
+                }
                 None => spans.push(Span::from(format!("usage {total_fmt}"))),
             }
             if let Some(sample_count) = usage.sample_count
