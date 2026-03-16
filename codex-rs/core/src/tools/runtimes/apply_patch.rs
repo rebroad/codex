@@ -42,7 +42,6 @@ pub struct ApplyPatchRequest {
     pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
     pub timeout_ms: Option<u64>,
-    pub codex_exe: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -70,9 +69,7 @@ impl ApplyPatchRuntime {
         req: &ApplyPatchRequest,
         _codex_home: &std::path::Path,
     ) -> Result<CommandSpec, ToolError> {
-        let exe = if let Some(path) = &req.codex_exe {
-            path.clone()
-        } else {
+        let exe = {
             #[cfg(target_os = "windows")]
             {
                 codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
