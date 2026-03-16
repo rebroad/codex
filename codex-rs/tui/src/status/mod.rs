@@ -28,6 +28,10 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
+use codex_state::AccountUsageSnapshot;
+use codex_state::AccountUsageStore;
+use codex_state::account_usage_display;
+use codex_state::account_usage_key;
 
 #[cfg(test)]
 pub(crate) use card::new_status_output;
@@ -43,6 +47,13 @@ pub(crate) use rate_limits::rate_limit_snapshot_display_for_limit;
 #[cfg(test)]
 mod tests;
 
+#[derive(Debug, Clone)]
+pub(crate) struct AccountUsageDisplay {
+    pub total_tokens: i64,
+    pub estimated_percent: Option<f64>,
+    pub sample_count: Option<i64>,
+}
+
 pub(crate) async fn render_status_lines_for_cli(
     config: &Config,
     auth_manager: Arc<AuthManager>,
@@ -51,10 +62,32 @@ pub(crate) async fn render_status_lines_for_cli(
 ) -> Vec<String> {
     let auth = auth_manager.auth().await;
     let mut plan_type = auth.as_ref().and_then(CodexAuth::account_plan_type);
-    let rate_limits = match auth {
-        Some(auth) => fetch_rate_limits(config.chatgpt_base_url.clone(), auth).await,
+    let account_usage_store =
+        AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+            .await
+            .ok();
+    let rate_limits = match auth.as_ref() {
+        Some(auth) => fetch_rate_limits(config.chatgpt_base_url.clone(), auth.clone()).await,
         None => Vec::new(),
     };
+    if let Some(auth) = auth.as_ref()
+        && let Some(account_id) = account_usage_key(
+            auth.get_account_id().as_deref(),
+            auth.get_account_email().as_deref(),
+        )
+        && let Some(store) = account_usage_store.as_ref()
+    {
+        if let Some(account_display) = account_usage_display(auth.get_account_email().as_deref()) {
+            store
+                .cache_account_display(account_id.as_str(), account_display)
+                .await;
+        }
+        for snapshot in &rate_limits {
+            let _ = store
+                .record_account_backend_rate_limit(account_id.as_str(), snapshot)
+                .await;
+        }
+    }
     if let Some(rate_limit_plan) = rate_limits.iter().find_map(|snapshot| snapshot.plan_type) {
         plan_type = Some(rate_limit_plan);
     }
@@ -106,6 +139,8 @@ pub(crate) async fn render_status_lines_for_cli(
     };
 
     let total_usage = TokenUsage::default();
+    let account_usage =
+        fetch_account_usage_display(account_usage_store.as_deref(), auth.as_ref()).await;
     let output = new_status_output_with_rate_limits(
         config,
         auth_manager.as_ref(),
@@ -114,6 +149,7 @@ pub(crate) async fn render_status_lines_for_cli(
         &Option::<ThreadId>::None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        account_usage.as_ref(),
         rate_limit_displays.as_slice(),
         plan_type,
         Local::now(),
@@ -133,6 +169,67 @@ pub(crate) async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<
         Ok(client) => client.get_rate_limits_many().await.unwrap_or_default(),
         Err(_) => Vec::new(),
     }
+}
+
+async fn fetch_account_usage_display(
+    store: Option<&AccountUsageStore>,
+    auth: Option<&CodexAuth>,
+) -> Option<AccountUsageDisplay> {
+    let account_id = match auth.and_then(|auth| {
+        account_usage_key(
+            auth.get_account_id().as_deref(),
+            auth.get_account_email().as_deref(),
+        )
+    }) {
+        Some(account_id) => account_id,
+        None => return None,
+    };
+    let store = store?;
+    let usage = store.get_account_usage(account_id.as_str()).await.ok();
+    let usage = match usage {
+        Some(Some(usage)) => usage,
+        Some(None) | None => return None,
+    };
+
+    let estimated_limit = store
+        .estimate_account_limit_tokens(account_id.as_str())
+        .await
+        .ok()
+        .unwrap_or((None, 0));
+    Some(build_account_usage_display(&usage, estimated_limit))
+}
+
+fn build_account_usage_display(
+    usage: &AccountUsageSnapshot,
+    estimated_limit: (Option<f64>, i64),
+) -> AccountUsageDisplay {
+    let (limit, sample_count) = estimated_limit;
+    let estimated_percent = estimate_account_usage_percent(usage, limit);
+    AccountUsageDisplay {
+        total_tokens: usage.total_tokens,
+        estimated_percent,
+        sample_count: Some(sample_count).filter(|count| *count > 0),
+    }
+}
+
+fn estimate_account_usage_percent(
+    usage: &AccountUsageSnapshot,
+    estimated_limit: Option<f64>,
+) -> Option<f64> {
+    let estimated_limit = estimated_limit?;
+    if estimated_limit <= 0.0 || !estimated_limit.is_finite() {
+        return None;
+    }
+    let base_percent = usage.window_start_percent_int.unwrap_or(0) as f64;
+    let window_start_total_tokens = usage.window_start_total_tokens.unwrap_or(0).max(0) as f64;
+    let total_tokens = usage.total_tokens.max(0) as f64;
+    let delta_tokens = (total_tokens - window_start_total_tokens).max(0.0);
+    let avg_tokens_per_pct = estimated_limit / 100.0;
+    if avg_tokens_per_pct <= 0.0 || !avg_tokens_per_pct.is_finite() {
+        return None;
+    }
+    let percent = delta_tokens / avg_tokens_per_pct;
+    Some(base_percent + percent)
 }
 
 fn line_to_ansi(line: &ratatui::text::Line<'_>) -> String {

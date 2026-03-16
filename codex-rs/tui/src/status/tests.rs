@@ -18,6 +18,7 @@ use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_state::AccountUsageSnapshot;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
@@ -63,9 +64,36 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
+    fn normalize_version_line(line: String) -> String {
+        if !line.contains("OpenAI Codex (v") {
+            return line;
+        }
+        let Some(first_border) = line.find('│') else {
+            return line;
+        };
+        let Some(last_border) = line.rfind('│') else {
+            return line;
+        };
+        if last_border <= first_border {
+            return line;
+        }
+        let border_len = '│'.len_utf8();
+        let inner_width = last_border.saturating_sub(first_border + border_len);
+        let canonical = "  >_ OpenAI Codex (v0.0.0)";
+        let mut rebuilt = String::with_capacity(line.len());
+        rebuilt.push_str(&line[..first_border + border_len]);
+        rebuilt.push_str(canonical);
+        if inner_width > canonical.len() {
+            rebuilt.push_str(&" ".repeat(inner_width - canonical.len()));
+        }
+        rebuilt.push_str(&line[last_border..]);
+        rebuilt
+    }
+
     lines
         .into_iter()
         .map(|line| {
+            let line = normalize_version_line(line);
             if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];
@@ -89,6 +117,30 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
         .timestamp()
+}
+
+#[test]
+fn account_usage_estimate_can_exceed_100_percent() {
+    let usage = AccountUsageSnapshot {
+        total_tokens: 2_500,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        updated_at: 0,
+        last_backend_limit_id: None,
+        last_backend_limit_name: None,
+        last_backend_used_percent: Some(95.0),
+        last_snapshot_total_tokens: None,
+        last_snapshot_percent_int: Some(95),
+        window_start_percent_int: Some(95),
+        window_start_total_tokens: Some(500),
+        last_backend_resets_at: None,
+        last_backend_window_minutes: None,
+        last_backend_seen_at: None,
+    };
+    let estimated_percent = super::estimate_account_usage_percent(&usage, Some(1_000.0));
+    assert_eq!(estimated_percent, Some(295.0));
 }
 
 #[tokio::test]
@@ -155,6 +207,7 @@ async fn status_snapshot_includes_reasoning_details() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -210,6 +263,7 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         None,
         &usage,
         &None,
+        None,
         None,
         None,
         None,
@@ -276,6 +330,7 @@ async fn status_snapshot_includes_forked_from() {
         Some(forked_from),
         None,
         None,
+        None,
         captured_at,
         &model_slug,
         None,
@@ -336,6 +391,7 @@ async fn status_snapshot_includes_monthly_limit() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -384,6 +440,7 @@ async fn status_snapshot_shows_unlimited_credits() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         None,
         None,
         Some(&rate_display),
@@ -435,6 +492,7 @@ async fn status_snapshot_shows_positive_credits() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -484,6 +542,7 @@ async fn status_snapshot_hides_zero_credits() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -531,6 +590,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -574,6 +634,7 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         None,
         None,
         None,
@@ -638,6 +699,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -685,6 +747,7 @@ async fn status_snapshot_shows_missing_limits_message() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         None,
         None,
         None,
@@ -756,6 +819,7 @@ async fn status_snapshot_includes_credits_and_limits() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -811,6 +875,7 @@ async fn status_snapshot_shows_empty_limits_message() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         None,
         None,
         Some(&rate_display),
@@ -877,6 +942,7 @@ async fn status_snapshot_shows_stale_limits_message() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         None,
         None,
         Some(&rate_display),
@@ -949,6 +1015,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         &None,
         None,
         None,
+        None,
         Some(&rate_display),
         None,
         now,
@@ -1005,6 +1072,7 @@ async fn status_context_window_uses_last_usage() {
         Some(&token_info),
         &total_usage,
         &None,
+        None,
         None,
         None,
         None,
