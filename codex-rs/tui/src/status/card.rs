@@ -22,6 +22,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use url::Url;
 
+use super::AccountUsageDisplay;
 use super::account::StatusAccountDisplay;
 use super::format::FieldFormatter;
 use super::format::line_display_width;
@@ -69,6 +70,7 @@ struct StatusHistoryCell {
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
+    account_usage: Option<AccountUsageDisplay>,
     thread_name: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
@@ -86,6 +88,7 @@ pub(crate) fn new_status_output(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -102,6 +105,7 @@ pub(crate) fn new_status_output(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         snapshots,
         plan_type,
         now,
@@ -120,6 +124,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: &[RateLimitSnapshotDisplay],
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -136,6 +141,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         rate_limits,
         plan_type,
         now,
@@ -157,6 +163,7 @@ impl StatusHistoryCell {
         session_id: &Option<ThreadId>,
         thread_name: Option<String>,
         forked_from: Option<ThreadId>,
+        account_usage: Option<&AccountUsageDisplay>,
         rate_limits: &[RateLimitSnapshotDisplay],
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
@@ -228,6 +235,7 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
+        let account_usage = account_usage.cloned();
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
@@ -262,6 +270,7 @@ impl StatusHistoryCell {
             collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
             account,
+            account_usage,
             thread_name,
             session_id,
             forked_from,
@@ -436,6 +445,20 @@ impl HistoryCell for StatusHistoryCell {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
         });
+        let account_usage = self.account_usage.as_ref().map(|usage| {
+            let total_fmt = format_tokens_compact(usage.total_tokens);
+            match usage.estimated_percent {
+                Some(percent) => format!("usage {total_fmt} ({percent:.2}%)"),
+                None => format!("usage {total_fmt}"),
+            }
+        });
+        let account_value = account_value.map(|account_value| {
+            if let Some(account_usage) = account_usage {
+                format!("{account_value} — {account_usage}")
+            } else {
+                account_value
+            }
+        });
 
         let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
             .into_iter()
@@ -509,7 +532,6 @@ impl HistoryCell for StatusHistoryCell {
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
         }
-
         if let Some(thread_name) = thread_name {
             lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
         }
