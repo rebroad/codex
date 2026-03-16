@@ -17,6 +17,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_sandbox_summary::summarize_sandbox_policy;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -41,8 +42,16 @@ use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
+use crate::terminal_palette::best_color;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
+
+const SEXTANT_BLOCKS: [&str; 64] = [
+    "█", "🬻", "🬺", "🬹", "🬸", "🬷", "🬶", "🬵", "🬴", "🬳", "🬲", "🬱", "🬰", "🬯", "🬮", "🬭", "🬬", "🬫", "🬪",
+    "🬩", "🬨", "▐", "🬧", "🬦", "🬥", "🬤", "🬣", "🬢", "🬡", "🬠", "🬟", "🬞", "🬝", "🬜", "🬛", "🬚", "🬙", "🬘",
+    "🬗", "🬖", "🬕", "🬔", "▌", "🬓", "🬒", "🬑", "🬐", "🬏", "🬎", "🬍", "🬌", "🬋", "🬊", "🬉", "🬈", "🬇", "🬆",
+    "🬅", "🬄", "🬃", "🬂", "🬁", "🬀", " ",
+];
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -446,17 +455,61 @@ impl HistoryCell for StatusHistoryCell {
         });
         let account_usage = self.account_usage.as_ref().map(|usage| {
             let total_fmt = format_tokens_compact(usage.total_tokens);
+            let mut spans = Vec::new();
             match usage.estimated_percent {
-                Some(percent) => format!("usage {total_fmt} ({percent:.2}%)"),
-                None => format!("usage {total_fmt}"),
+                Some(percent) => {
+                    spans.push(Span::from(format!("usage {total_fmt} ({percent:.2}%)")))
+                }
+                None => spans.push(Span::from(format!("usage {total_fmt}"))),
             }
+            if let Some(sample_count) = usage.sample_count
+                && (1..64).contains(&sample_count)
+            {
+                let count = sample_count as u8;
+                // Sextant bit order: upper-left, upper-right, middle-left, middle-right,
+                // bottom-left, bottom-right.
+                let mut pattern = 0u8;
+                if count & 1 != 0 {
+                    pattern |= 0b0000_0001;
+                }
+                if count & 2 != 0 {
+                    pattern |= 0b0000_0010;
+                }
+                if count & 4 != 0 {
+                    pattern |= 0b0000_0100;
+                }
+                if count & 8 != 0 {
+                    pattern |= 0b0000_1000;
+                }
+                if count & 16 != 0 {
+                    pattern |= 0b0001_0000;
+                }
+                if count & 32 != 0 {
+                    pattern |= 0b0010_0000;
+                }
+                let missing = (!pattern) & 0b0011_1111;
+                let glyph = SEXTANT_BLOCKS[missing as usize];
+                let fg = match best_color((255, 255, 0)) {
+                    Color::Reset => Color::LightYellow,
+                    color => color,
+                };
+                let bg = match best_color((80, 80, 0)) {
+                    Color::Reset => Color::Yellow,
+                    color => color,
+                };
+                spans.push(Span::from(" "));
+                spans.push(Span::styled(glyph, Style::default().fg(fg).bg(bg)));
+            }
+            spans
         });
         let account_value = account_value.map(|account_value| {
+            let mut spans = Vec::new();
+            spans.push(Span::from(account_value));
             if let Some(account_usage) = account_usage {
-                format!("{account_value} — {account_usage}")
-            } else {
-                account_value
+                spans.push(Span::from(" — "));
+                spans.extend(account_usage);
             }
+            spans
         });
 
         let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
@@ -529,7 +582,7 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
 
         if let Some(account_value) = account_value {
-            lines.push(formatter.line("Account", vec![Span::from(account_value)]));
+            lines.push(formatter.line("Account", account_value));
         }
         if let Some(thread_name) = thread_name {
             lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
