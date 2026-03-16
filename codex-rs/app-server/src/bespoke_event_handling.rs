@@ -2165,7 +2165,7 @@ async fn handle_token_count_event(
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
-    if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
+    if let Some(token_usage) = info.as_ref().cloned().map(ThreadTokenUsage::from) {
         let notification = ThreadTokenUsageUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id,

@@ -118,6 +118,9 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_state::AccountUsageStore;
+use codex_state::account_usage_display;
+use codex_state::account_usage_key;
 use codex_terminal_detection::user_agent;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
@@ -810,6 +813,7 @@ pub(crate) struct Session {
     idle_pending_input: Mutex<Vec<ResponseInputItem>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    account_usage_store: Option<Arc<AccountUsageStore>>,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
@@ -1900,6 +1904,10 @@ impl Session {
         let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
             watch::channel(false);
 
+        let account_usage_store =
+            AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+                .await
+                .ok();
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1913,6 +1921,7 @@ impl Session {
             idle_pending_input: Mutex::new(Vec::new()),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
+            account_usage_store,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
@@ -3707,8 +3716,34 @@ impl Session {
         query_id: Option<&str>,
     ) {
         if let Some(token_usage) = token_usage {
-            let mut state = self.state.lock().await;
-            state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
+            {
+                let mut state = self.state.lock().await;
+                state
+                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+            }
+            if let Some(state_db) = self.account_usage_store.as_ref() {
+                let auth = self.services.auth_manager.auth().await;
+                if let Some(auth) = auth
+                    && let Some(account_key) = account_usage_key(
+                        auth.get_account_id().as_deref(),
+                        auth.get_account_email().as_deref(),
+                    )
+                {
+                    if let Some(account_display) =
+                        account_usage_display(auth.get_account_email().as_deref())
+                    {
+                        state_db
+                            .cache_account_display(account_key.as_str(), account_display)
+                            .await;
+                    }
+                    if let Err(err) = state_db
+                        .record_account_token_usage(account_key.as_str(), token_usage)
+                        .await
+                    {
+                        warn!("failed to record account token usage: {err}");
+                    }
+                }
+            }
         }
         self.send_token_count_event(turn_context).await;
     }
@@ -3751,9 +3786,33 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
+        let tracking_snapshot = new_rate_limits.clone();
         {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
+        }
+        if let Some(state_db) = self.account_usage_store.as_ref() {
+            let auth = self.services.auth_manager.auth().await;
+            if let Some(auth) = auth
+                && let Some(account_key) = account_usage_key(
+                    auth.get_account_id().as_deref(),
+                    auth.get_account_email().as_deref(),
+                )
+            {
+                if let Some(account_display) =
+                    account_usage_display(auth.get_account_email().as_deref())
+                {
+                    state_db
+                        .cache_account_display(account_key.as_str(), account_display)
+                        .await;
+                }
+                if let Err(err) = state_db
+                    .record_account_backend_rate_limit(account_key.as_str(), &tracking_snapshot)
+                    .await
+                {
+                    warn!("failed to record backend rate limit usage: {err}");
+                }
+            }
         }
         self.send_token_count_event(turn_context).await;
     }

@@ -5933,6 +5933,7 @@ impl ChatWidget {
             &self.thread_id,
             self.thread_name.clone(),
             self.forked_from,
+            /*account_usage*/ None,
             rate_limit_snapshots.as_slice(),
             self.plan_type,
             Local::now(),

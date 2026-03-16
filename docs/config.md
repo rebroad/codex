@@ -45,6 +45,10 @@ The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schem
 Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
+Per-account token usage aggregates and backend usage reset history are stored
+in a separate usage database under `sqlite_home` (see `docs/account-usage.md`).
+This usage DB is updated whenever token usage or rate limit snapshots are
+received, including during ephemeral sessions.
 
 ## Sandbox Debug Logging
 
