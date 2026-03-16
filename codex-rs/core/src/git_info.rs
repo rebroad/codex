@@ -49,6 +49,7 @@ pub struct GitDiffToRemote {
 /// Uses timeouts to prevent freezing on large repositories.
 /// All git commands (except the initial repo check) run in parallel for better performance.
 pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
+    get_git_repo_root(cwd)?;
     // Check if we're in a git repository first
     let is_git_repo = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd)
         .await?
@@ -104,6 +105,7 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
 
 /// Collect fetch remotes in a multi-root-friendly format: {"origin": "https://..."}.
 pub async fn get_git_remote_urls(cwd: &Path) -> Option<BTreeMap<String, String>> {
+    get_git_repo_root(cwd)?;
     let is_git_repo = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd)
         .await?
         .status
@@ -143,6 +145,7 @@ pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
 }
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
+    get_git_repo_root(cwd)?;
     let output = run_git_command_with_timeout(&["status", "--porcelain"], cwd).await?;
     if !output.status.success() {
         return None;
@@ -192,6 +195,9 @@ pub struct CommitLogEntry {
 /// Each entry contains the SHA, commit timestamp (seconds), and subject line.
 /// Returns an empty vector if not in a git repo or on error/timeout.
 pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
+    if get_git_repo_root(cwd).is_none() {
+        return Vec::new();
+    }
     // Ensure we're in a git repo first to avoid noisy errors.
     let Some(out) = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd).await else {
         return Vec::new();
@@ -633,6 +639,7 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     loop {
         let dot_git = dir.join(".git");
         if dot_git.exists() {
+            dir.parent()?;
             return Some((dir, dot_git));
         }
 
