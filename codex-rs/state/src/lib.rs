@@ -4,6 +4,7 @@
 //! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
 //! orchestration and rollout scanning live in `codex-core`.
 
+mod account_usage_store;
 mod extract;
 pub mod log_db;
 mod migrations;
@@ -19,6 +20,12 @@ pub use model::Phase2JobClaimOutcome;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 
+pub use account_usage_store::AccountUsageSnapshot;
+pub use account_usage_store::AccountUsageStore;
+pub use account_usage_store::account_usage_display;
+pub use account_usage_store::account_usage_key;
+pub use account_usage_store::usage_db_filename;
+pub use account_usage_store::usage_db_path;
 /// Low-level storage engine: useful for focused tests.
 ///
 /// Most consumers should prefer [`StateRuntime`].
