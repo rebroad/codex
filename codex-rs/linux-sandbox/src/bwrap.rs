@@ -277,6 +277,28 @@ fn create_filesystem_args(
             }
         }
     }
+    let mut symlink_targets = Vec::new();
+    for writable_root in &writable_roots {
+        let root = writable_root.root.as_path();
+        if let Ok(meta) = fs::symlink_metadata(root) {
+            if meta.file_type().is_symlink() {
+                if let Ok(target) = fs::canonicalize(root) {
+                    if target.as_path() != root {
+                        symlink_targets.push(target);
+                    }
+                }
+            }
+        }
+    }
+    symlink_targets.sort();
+    symlink_targets.dedup();
+    for target in &symlink_targets {
+        if target.exists() {
+            args.push("--bind".to_string());
+            args.push(path_to_string(target));
+            args.push(path_to_string(target));
+        }
+    }
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots
         .iter()
         .map(|path| path.as_path().to_path_buf())
