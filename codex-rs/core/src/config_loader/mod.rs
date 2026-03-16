@@ -736,6 +736,9 @@ async fn find_project_root(
     }
 
     for ancestor in cwd.as_path().ancestors() {
+        if ancestor.parent().is_none() {
+            break;
+        }
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
             if tokio::fs::metadata(&marker_path).await.is_ok() {
