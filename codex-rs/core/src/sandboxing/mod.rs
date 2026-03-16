@@ -682,9 +682,15 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
                 full_command.append(&mut args);
+                let mut sandbox_env = HashMap::new();
+                if let Some(arg0) = std::env::args().next()
+                    && !arg0.is_empty()
+                {
+                    sandbox_env.insert("CODEX_LINUX_SANDBOX_SELF_EXE".to_string(), arg0);
+                }
                 (
                     full_command,
-                    HashMap::new(),
+                    sandbox_env,
                     Some("codex-linux-sandbox".to_string()),
                 )
             }

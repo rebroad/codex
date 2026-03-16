@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::env;
 use std::ffi::CString;
 use std::fmt;
 use std::fs::File;
@@ -610,9 +611,12 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         proxy_route_spec,
         command,
     } = args;
-    let current_exe = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(err) => panic!("failed to resolve current executable path: {err}"),
+    let current_exe = match env::var("CODEX_LINUX_SANDBOX_SELF_EXE") {
+        Ok(value) if !value.is_empty() => PathBuf::from(value),
+        _ => match std::env::current_exe() {
+            Ok(path) => path,
+            Err(err) => panic!("failed to resolve current executable path: {err}"),
+        },
     };
     let policy_json = match serde_json::to_string(sandbox_policy) {
         Ok(json) => json,
