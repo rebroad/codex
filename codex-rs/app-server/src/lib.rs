@@ -5,12 +5,14 @@ use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::config::types::AppServerLogMode;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
@@ -52,9 +54,12 @@ use tracing::Level;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+use tracing_appender::non_blocking;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Targets;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -94,8 +99,6 @@ enum LogFormat {
     Default,
     Json,
 }
-
-type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
@@ -488,10 +491,10 @@ pub async fn run_main_with_transport(
         )
     })?;
 
-    // Install a simple subscriber so `tracing` output is visible. Users can
-    // control the log level with `RUST_LOG` and switch to JSON logs with
-    // `LOG_FORMAT=json`.
-    let stderr_fmt: StderrLogLayer = match log_format_from_env() {
+    // Install a subscriber so `tracing` output is visible. Users can control the log
+    // level with `RUST_LOG` and switch to JSON logs with `LOG_FORMAT=json`.
+    let log_format = log_format_from_env();
+    let stderr_layer = || match log_format {
         LogFormat::Json => tracing_subscriber::fmt::layer()
             .json()
             .with_writer(std::io::stderr)
@@ -503,6 +506,76 @@ pub async fn run_main_with_transport(
             .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
             .with_filter(EnvFilter::from_default_env())
             .boxed(),
+    };
+    let log_mode = config.app_server_log.mode;
+    let mut log_file_guard: Option<WorkerGuard> = None;
+    let log_layer: Option<Box<dyn Layer<Registry> + Send + Sync + 'static>> = match log_mode {
+        AppServerLogMode::Stderr => Some(stderr_layer()),
+        AppServerLogMode::Log | AppServerLogMode::LogAndStderr => {
+            let log_path = config.app_server_log.log_file.clone().unwrap_or_else(|| {
+                let mut path = config.log_dir.clone();
+                path.push("codex-app-server.log");
+                path
+            });
+            let mut log_file_opts = OpenOptions::new();
+            log_file_opts.create(true).append(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                log_file_opts.mode(0o600);
+            }
+            match log_file_opts.open(&log_path) {
+                Ok(file) => Some({
+                    let (non_blocking, guard) = non_blocking(file);
+                    log_file_guard = Some(guard);
+                    if matches!(log_mode, AppServerLogMode::LogAndStderr) {
+                        let writer = std::io::stderr.and(non_blocking);
+                        match log_format {
+                            LogFormat::Json => tracing_subscriber::fmt::layer()
+                                .json()
+                                .with_writer(writer)
+                                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                                .with_filter(EnvFilter::from_default_env())
+                                .boxed(),
+                            LogFormat::Default => tracing_subscriber::fmt::layer()
+                                .with_writer(writer)
+                                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                                .with_filter(EnvFilter::from_default_env())
+                                .boxed(),
+                        }
+                    } else {
+                        let writer = non_blocking;
+                        match log_format {
+                            LogFormat::Json => tracing_subscriber::fmt::layer()
+                                .json()
+                                .with_writer(writer)
+                                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                                .with_filter(EnvFilter::from_default_env())
+                                .boxed(),
+                            LogFormat::Default => tracing_subscriber::fmt::layer()
+                                .with_writer(writer)
+                                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                                .with_filter(EnvFilter::from_default_env())
+                                .boxed(),
+                        }
+                    }
+                }),
+                Err(err) => {
+                    #[allow(clippy::print_stderr)]
+                    {
+                        eprintln!(
+                            "codex-app-server: failed to open log file {}: {err}",
+                            log_path.display()
+                        );
+                    }
+                    warn!(
+                        "failed to open app-server log file {}: {err}",
+                        log_path.display()
+                    );
+                    Some(stderr_layer())
+                }
+            }
+        }
     };
 
     let feedback_layer = feedback.logger_layer();
@@ -520,13 +593,14 @@ pub async fn run_main_with_transport(
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
     let _ = tracing_subscriber::registry()
-        .with(stderr_fmt)
+        .with(log_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
         .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+    let _log_file_guard = log_file_guard;
     for warning in &config_warnings {
         match &warning.details {
             Some(details) => error!("{} {}", warning.summary, details),
