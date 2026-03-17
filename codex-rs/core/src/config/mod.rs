@@ -1,6 +1,8 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::types::AppServerLogConfig;
+use crate::config::types::AppServerLogToml;
 use crate::config::types::AppsConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
@@ -433,6 +435,8 @@ pub struct Config {
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
+    /// App-server tracing output configuration.
+    pub app_server_log: AppServerLogConfig,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -1254,6 +1258,8 @@ pub struct ConfigToml {
     /// Directory where Codex writes log files, for example `codex-tui.log`.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
+    /// App-server tracing output configuration.
+    pub app_server_log: Option<AppServerLogToml>,
 
     /// HTTP/SSE request debug tracing settings.
     #[serde(default)]
@@ -2504,6 +2510,7 @@ impl Config {
                 p.push("log");
                 p
             });
+        let app_server_log: AppServerLogConfig = cfg.app_server_log.unwrap_or_default().into();
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
@@ -2647,6 +2654,7 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
+            app_server_log,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
