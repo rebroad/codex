@@ -47,6 +47,7 @@ Tracing/log output:
 
 - `RUST_LOG` controls log filtering/verbosity.
 - Set `LOG_FORMAT=json` to emit app-server tracing logs to `stderr` as JSON (one event per line).
+- Use `[app_server_log]` in `config.toml` to switch output to a file or to both stderr and a file.
 
 Backpressure behavior:
 

@@ -98,6 +98,23 @@ The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`
 If the `log_file` path contains `$$`, Codex replaces it with the current
 process PID (for example, `"/tmp/prompt-debug-$$.log"` -> `"/tmp/prompt-debug-12345.log"`).
 
+## App-server logging
+
+Codex app-server logs default to `stderr`. You can redirect them to a file or
+duplicate them to both stderr and a file via `[app_server_log]`:
+
+```toml
+[app_server_log]
+mode = "log_and_stderr"
+log_file = "/absolute/path/to/codex-app-server.log"
+```
+
+Valid modes are `stderr` (default), `log`, and `log_and_stderr`. When `mode`
+includes `log` and `log_file` is omitted, Codex writes to
+`~/.codex/log/codex-app-server.log` (or the directory set by `log_dir`).
+If the `log_file` path contains `$$`, Codex replaces it with the current
+process PID (for example, `"/tmp/codex-app-server-$$.log"` -> `"/tmp/codex-app-server-12345.log"`).
+
 ## Bare prompt mode
 
 Set `bare_prompt = true` in `config.toml` to disable built-in/system and
