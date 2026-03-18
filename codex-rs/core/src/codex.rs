@@ -3838,7 +3838,7 @@ impl Session {
                             .await;
                     }
                     if let Err(err) = state_db
-                        .record_account_token_usage(account_key.as_str(), token_usage)
+                        .record_account_token_usage(account_key.as_str(), token_usage, query_id)
                         .await
                     {
                         warn!("failed to record account token usage: {err}");

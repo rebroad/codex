@@ -95,8 +95,8 @@ If `enabled = true`, capture files are written under `capture_dir` (defaults to 
 The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`,
 `CODEX_BACKEND_CAPTURE_OUTPUT`, `CODEX_BACKEND_CAPTURE_REASONING`, and
 `CODEX_BACKEND_CAPTURE_DIR` can force-enable or override runtime capture settings.
-If the `log_file` path contains `$$`, Codex replaces it with the current
-process PID (for example, `"/tmp/prompt-debug-$$.log"` -> `"/tmp/prompt-debug-12345.log"`).
+If the `capture_dir` path contains `$$`, Codex replaces it with the current
+process PID.
 
 ## App-server logging
 
