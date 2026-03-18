@@ -227,7 +227,10 @@ capture_dir = "/tmp/prompt-debug-http"
     let prompt_debug_http_with_pid = r#"
 [prompt_debug_http]
 enabled = true
-log_file = "/tmp/prompt-debug-$$.log"
+capture_input = true
+capture_output = false
+capture_reasoning = false
+capture_dir = "/tmp/prompt-debug-$$"
 "#;
     let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_pid)
         .expect("TOML deserialization should succeed");
@@ -239,7 +242,10 @@ log_file = "/tmp/prompt-debug-$$.log"
         prompt_debug_http_effective,
         PromptDebugHttpConfig {
             enabled: true,
-            log_file: Some(format!("/tmp/prompt-debug-{pid}.log").into()),
+            capture_input: true,
+            capture_output: false,
+            capture_reasoning: false,
+            capture_dir: Some(format!("/tmp/prompt-debug-{pid}").into()),
         }
     );
 }
