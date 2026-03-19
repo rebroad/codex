@@ -88,11 +88,14 @@ use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::parse_turn_item;
+use codex_core::RolloutRecorder;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
@@ -107,7 +110,9 @@ use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpAuthStatus;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
@@ -3137,6 +3142,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
+        fork_nth_user_message: Option<usize>,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
@@ -3297,6 +3303,27 @@ impl App {
                         let target_label = target_session.display_label();
                         format!("Failed to fork session from {target_label}")
                     })?;
+                if let Some(nth_user_message) = fork_nth_user_message {
+                    let Some(source_path) = target_session.path.as_ref() else {
+                        return Err(color_eyre::eyre::eyre!(
+                            "`--pick` requires a local rollout path for the selected session."
+                        ));
+                    };
+                    let prompt_count = count_effective_user_prompts(source_path.as_path()).await?;
+                    let rollback_turns = prompt_count.saturating_sub(nth_user_message);
+                    if rollback_turns > 0 {
+                        let rollback_turns = u32::try_from(rollback_turns).unwrap_or(u32::MAX);
+                        app_server
+                            .thread_rollback(forked.session.thread_id, rollback_turns)
+                            .await
+                            .wrap_err_with(|| {
+                                format!(
+                                    "Failed to apply --pick rollback ({rollback_turns} turns) to forked thread {}",
+                                    forked.session.thread_id
+                                )
+                            })?;
+                    }
+                }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -5659,6 +5686,31 @@ async fn fetch_plugin_uninstall(
         })
         .await
         .wrap_err("plugin/uninstall failed in app-server TUI")
+}
+
+async fn count_effective_user_prompts(rollout_path: &Path) -> Result<usize> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let items = history.get_rollout_items();
+    let mut prompts = Vec::new();
+    for item in items {
+        match item {
+            RolloutItem::ResponseItem(response_item) => {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    prompts.push(user_message.message());
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let new_len = prompts.len().saturating_sub(num_turns);
+                prompts.truncate(new_len);
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+    Ok(prompts.len())
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the
