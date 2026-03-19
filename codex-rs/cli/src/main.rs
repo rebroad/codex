@@ -50,6 +50,7 @@ use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
@@ -833,16 +834,42 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         )
                     })?;
                 let prompts = load_user_prompt_points(path.as_path()).await?;
+                if let Some(item) = load_thread_item_by_rollout_path(path.as_path()).await? {
+                    let conversation_name = if let Some(thread_id) = item.thread_id {
+                        let mut ids = HashSet::new();
+                        ids.insert(thread_id);
+                        find_thread_names_by_ids(find_codex_home()?.as_path(), &ids)
+                            .await
+                            .ok()
+                            .and_then(|names| names.get(&thread_id).cloned())
+                            .unwrap_or_else(|| {
+                                item.first_user_message
+                                    .clone()
+                                    .unwrap_or_else(|| "(no message yet)".to_string())
+                            })
+                    } else {
+                        item.first_user_message
+                            .clone()
+                            .unwrap_or_else(|| "(no message yet)".to_string())
+                    };
+                    println!("Conversation: {conversation_name}");
+                    println!("Created at: {}", item.created_at.as_deref().unwrap_or("-"));
+                    println!("Updated at: {}", item.updated_at.as_deref().unwrap_or("-"));
+                    println!("Branch: {}", item.git_branch.as_deref().unwrap_or("-"));
+                    println!(
+                        "CWD: {}",
+                        item.cwd
+                            .as_deref()
+                            .map(|cwd| cwd.display().to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    );
+                    println!();
+                }
                 if prompts.is_empty() {
                     println!("No fork points found for session {session_id}.");
                 } else {
                     for (idx, prompt) in prompts.iter().enumerate() {
-                        let first_line = prompt.lines().next().unwrap_or_default().trim();
-                        let preview = if first_line.is_empty() {
-                            "<empty prompt>"
-                        } else {
-                            first_line
-                        };
+                        let preview = prompt_preview_line(prompt);
                         println!("{}. {preview}", idx + 1);
                     }
                 }
@@ -1366,6 +1393,44 @@ async fn load_user_prompt_points(rollout_path: &std::path::Path) -> anyhow::Resu
         }
     }
     Ok(prompts)
+}
+
+async fn load_thread_item_by_rollout_path(
+    rollout_path: &std::path::Path,
+) -> anyhow::Result<Option<codex_core::ThreadItem>> {
+    let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    let mut cursor = None;
+    loop {
+        let page = RolloutRecorder::list_threads(
+            &config,
+            /*page_size*/ 100,
+            cursor.as_ref(),
+            ThreadSortKey::UpdatedAt,
+            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            /*model_providers*/ None,
+            &config.model_provider_id,
+            /*search_term*/ None,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+        if let Some(item) = page
+            .items
+            .into_iter()
+            .find(|item| item.path.as_path() == rollout_path)
+        {
+            return Ok(Some(item));
+        }
+        if page.next_cursor.is_none() {
+            return Ok(None);
+        }
+        cursor = page.next_cursor;
+    }
 }
 
 async fn run_status_command(
