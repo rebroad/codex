@@ -100,6 +100,14 @@ pub struct Cli {
     #[arg(long = "bare-prompt", default_value_t = false, global = true)]
     pub bare_prompt: bool,
 
+    /// Override developer/system instructions for this run.
+    #[arg(long = "system", value_name = "SYSTEM_PROMPT", global = true)]
+    pub system_prompt: Option<String>,
+
+    /// Force-enable backend capture for this run (`capture_dir` + query-id files).
+    #[arg(long = "debug", default_value_t = false, global = true)]
+    pub debug: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(
         long = "output-last-message",
