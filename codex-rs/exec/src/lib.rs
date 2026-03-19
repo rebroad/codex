@@ -1839,6 +1839,14 @@ async fn run_direct_request(
         user_agent(),
         SessionSource::Exec,
     );
+    let effective_reasoning_effort = config
+        .model_reasoning_effort
+        .or(model_info.default_reasoning_level)
+        .map(|effort| effort.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    eprintln!("model: {}", model_info.slug);
+    eprintln!("provider: {}", config.model_provider_id);
+    eprintln!("reasoning effort: {effective_reasoning_effort}");
 
     let effective_system_prompt = if bare_prompt {
         system_prompt.or_else(|| {
@@ -1856,9 +1864,9 @@ async fn run_direct_request(
 
     let mut prompt = Prompt::default();
     prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
-    if !bare_prompt
-        && let Some(base_instructions) = &config.base_instructions
-    {
+    if bare_prompt {
+        prompt.base_instructions.text = String::new();
+    } else if let Some(base_instructions) = &config.base_instructions {
         prompt.base_instructions.text = base_instructions.clone();
     }
     let mut client_session = ModelClient::new(
