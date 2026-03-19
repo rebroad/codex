@@ -53,6 +53,8 @@ You can enable notifications by configuring a script that is run whenever the ag
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. If you provide both a prompt argument and piped stdin, Codex appends stdin as a `<stdin>` block after the prompt so patterns like `echo "my output" | codex exec "Summarize this concisely"` work naturally. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
 Use `codex exec --system "..." ...` to set one-off developer/system instructions, and
+Use `codex exec --models` to list available models.
+Use `codex exec --direct "..."` to send one direct model request (no session/tool loop).
 
 `codex exec` remains the right choice for full Codex behavior (multi-step agent execution, tool usage, approvals/sandbox workflows, and persistent turn state).
 
