@@ -29,6 +29,7 @@ fn into_app_server_cli(cli: Cli) -> codex_tui_app_server::Cli {
         fork_last: cli.fork_last,
         fork_session_id: cli.fork_session_id,
         fork_show_all: cli.fork_show_all,
+        fork_nth_user_message: cli.fork_nth_user_message,
         model: cli.model,
         oss: cli.oss,
         oss_provider: cli.oss_provider,

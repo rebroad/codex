@@ -46,14 +46,27 @@ mod wsl_paths;
 use crate::mcp_cmd::McpCli;
 
 use codex_core::AuthManager;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
+use codex_core::RolloutRecorder;
+use codex_core::ThreadSortKey;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::find_thread_names_by_ids;
+use codex_core::find_thread_path_by_id_str;
+use codex_core::find_thread_path_by_name_str;
+use codex_core::parse_turn_item;
+use codex_core::prompt_preview_line;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
+use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use codex_terminal_detection::TerminalName;
+use std::collections::HashSet;
 
 /// Codex CLI
 ///
@@ -238,6 +251,14 @@ struct ForkCommand {
     /// Show all sessions (disables cwd filtering and shows CWD column).
     #[arg(long = "all", default_value_t = false)]
     all: bool,
+
+    /// Show available fork points (numbered) for the selected session and exit.
+    #[arg(long = "show", default_value_t = false, conflicts_with = "pick")]
+    show: bool,
+
+    /// Fork before the Nth user prompt in the selected session (1-based).
+    #[arg(long = "pick", value_name = "POINT", conflicts_with = "show")]
+    pick: Option<usize>,
 
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
@@ -780,15 +801,103 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             session_id,
             last,
             all,
+            show,
+            pick,
             remote,
             config_overrides,
         })) => {
+            if show {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "fork --show",
+                )?;
+                reject_remote_mode_for_subcommand(
+                    remote.remote.as_deref(),
+                    remote.remote_auth_token_env.as_deref(),
+                    "fork --show",
+                )?;
+                if last {
+                    anyhow::bail!(
+                        "`codex fork --show` requires SESSION_ID and does not support `--last`."
+                    );
+                }
+                let Some(session_id) = session_id else {
+                    anyhow::bail!("`codex fork --show` requires SESSION_ID.");
+                };
+                let path = resolve_fork_rollout_path(&session_id)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No saved session found with ID {session_id}. Run `codex fork` without an ID to choose from existing sessions."
+                        )
+                    })?;
+                let prompts = load_user_prompt_points(path.as_path()).await?;
+                if prompts.is_empty() {
+                    println!("No fork points found for session {session_id}.");
+                } else {
+                    for (idx, prompt) in prompts.iter().enumerate() {
+                        let first_line = prompt.lines().next().unwrap_or_default().trim();
+                        let preview = if first_line.is_empty() {
+                            "<empty prompt>"
+                        } else {
+                            first_line
+                        };
+                        println!("{}. {preview}", idx + 1);
+                    }
+                }
+                return Ok(());
+            }
+
+            let fork_nth_user_message = if let Some(point) = pick {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "fork --pick",
+                )?;
+                reject_remote_mode_for_subcommand(
+                    remote.remote.as_deref(),
+                    remote.remote_auth_token_env.as_deref(),
+                    "fork --pick",
+                )?;
+                if last {
+                    anyhow::bail!(
+                        "`codex fork --pick` requires SESSION_ID and does not support `--last`."
+                    );
+                }
+                let Some(session_id) = session_id.as_deref() else {
+                    anyhow::bail!("`codex fork --pick` requires SESSION_ID.");
+                };
+                let path = resolve_fork_rollout_path(session_id).await?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No saved session found with ID {session_id}. Run `codex fork` without an ID to choose from existing sessions."
+                    )
+                })?;
+                let prompts = load_user_prompt_points(path.as_path()).await?;
+                if prompts.is_empty() {
+                    anyhow::bail!("Session {session_id} has no fork points.");
+                }
+                if point == 0 {
+                    anyhow::bail!("`--pick` must be a positive integer (1-based).");
+                }
+                if point > prompts.len() {
+                    anyhow::bail!(
+                        "`--pick {point}` is out of range for session {session_id}. Valid range is 1..={}.",
+                        prompts.len()
+                    );
+                }
+                Some(point - 1)
+            } else {
+                None
+            };
+
             interactive = finalize_fork_interactive(
                 interactive,
                 root_config_overrides.clone(),
                 session_id,
                 last,
                 all,
+                fork_nth_user_message,
                 config_overrides,
             );
             let exit_info = run_interactive_tui(
@@ -1219,6 +1328,46 @@ fn is_status_shortcut_prompt(prompt: &str) -> bool {
     trimmed == "/status" || trimmed == "status"
 }
 
+async fn resolve_fork_rollout_path(session_id: &str) -> anyhow::Result<Option<PathBuf>> {
+    let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
+    if ThreadId::from_string(session_id).is_ok() {
+        find_thread_path_by_id_str(codex_home.as_path(), session_id)
+            .await
+            .map_err(anyhow::Error::from)
+    } else {
+        find_thread_path_by_name_str(codex_home.as_path(), session_id)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+}
+
+async fn load_user_prompt_points(rollout_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .map_err(anyhow::Error::from)?;
+    let items = history.get_rollout_items();
+    let mut prompts = Vec::new();
+    for item in items {
+        match item {
+            RolloutItem::ResponseItem(response_item) => {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    prompts.push(user_message.message());
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let new_len = prompts.len().saturating_sub(num_turns);
+                prompts.truncate(new_len);
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+    Ok(prompts)
+}
+
 async fn run_status_command(
     root_config_overrides: &CliConfigOverrides,
     interactive: &TuiCli,
@@ -1335,6 +1484,7 @@ fn into_app_server_tui_cli(cli: TuiCli) -> codex_tui_app_server::Cli {
         fork_last: cli.fork_last,
         fork_session_id: cli.fork_session_id,
         fork_show_all: cli.fork_show_all,
+        fork_nth_user_message: cli.fork_nth_user_message,
         model: cli.model,
         oss: cli.oss,
         oss_provider: cli.oss_provider,
@@ -1426,6 +1576,7 @@ fn finalize_fork_interactive(
     session_id: Option<String>,
     last: bool,
     show_all: bool,
+    fork_nth_user_message: Option<usize>,
     fork_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so fork shares the same
@@ -1435,6 +1586,7 @@ fn finalize_fork_interactive(
     interactive.fork_last = last;
     interactive.fork_session_id = fork_session_id;
     interactive.fork_show_all = show_all;
+    interactive.fork_nth_user_message = fork_nth_user_message;
 
     // Merge fork-scoped flags and overrides with highest precedence.
     merge_interactive_cli_flags(&mut interactive, fork_cli);
@@ -1557,6 +1709,8 @@ mod tests {
             session_id,
             last,
             all,
+            show: _,
+            pick: _,
             remote: _,
             config_overrides: fork_cli,
         }) = subcommand.expect("fork present")
@@ -1564,7 +1718,15 @@ mod tests {
             unreachable!()
         };
 
-        finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+        finalize_fork_interactive(
+            interactive,
+            root_overrides,
+            session_id,
+            last,
+            all,
+            None,
+            fork_cli,
+        )
     }
 
     #[test]
