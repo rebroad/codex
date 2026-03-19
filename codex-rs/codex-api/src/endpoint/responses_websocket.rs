@@ -6,10 +6,12 @@ use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::prompt_debug_http::prompt_capture_append_output;
 use crate::prompt_debug_http::prompt_capture_append_reasoning;
+use crate::prompt_debug_http::prompt_capture_write_output_json;
 use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::responses::ResponsesStreamEvent;
+use crate::sse::responses::capture_sections_from_response_item;
 use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
@@ -636,6 +638,12 @@ async fn run_websocket_response_stream(
                                     prompt_capture_append_output(capture, delta);
                                 }
                             }
+                            ResponseEvent::OutputItemAdded(item) => {
+                                maybe_capture_response_item(capture.as_ref(), "Output item added", item);
+                            }
+                            ResponseEvent::OutputItemDone(item) => {
+                                maybe_capture_response_item(capture.as_ref(), "Output item done", item);
+                            }
                             ResponseEvent::ReasoningSummaryDelta { delta, .. }
                             | ResponseEvent::ReasoningContentDelta { delta, .. } => {
                                 if let Some(capture) = capture.as_ref() {
@@ -649,8 +657,6 @@ async fn run_websocket_response_stream(
                                 }
                             }
                             ResponseEvent::Created
-                            | ResponseEvent::OutputItemDone(_)
-                            | ResponseEvent::OutputItemAdded(_)
                             | ResponseEvent::ServerModel(_)
                             | ResponseEvent::ServerReasoningIncluded(_)
                             | ResponseEvent::ReasoningSummaryPartAdded { .. }
@@ -683,6 +689,27 @@ async fn run_websocket_response_stream(
     }
 
     Ok(())
+}
+
+fn maybe_capture_response_item(
+    capture: Option<&crate::prompt_debug_http::PromptCaptureSession>,
+    label: &str,
+    item: &codex_protocol::models::ResponseItem,
+) {
+    let Some(capture) = capture else {
+        return;
+    };
+
+    let (output_text, reasoning_text) = capture_sections_from_response_item(item);
+    if let Some(output_text) = output_text {
+        prompt_capture_append_output(capture, output_text.as_str());
+    }
+    if let Some(reasoning_text) = reasoning_text {
+        prompt_capture_append_reasoning(capture, reasoning_text.as_str());
+    }
+    if let Ok(item_json) = serde_json::to_value(item) {
+        prompt_capture_write_output_json(Some(capture), label, &item_json);
+    }
 }
 
 #[cfg(test)]

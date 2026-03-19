@@ -95,8 +95,16 @@ If `enabled = true`, capture files are written under `capture_dir` (defaults to 
 The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`,
 `CODEX_BACKEND_CAPTURE_OUTPUT`, `CODEX_BACKEND_CAPTURE_REASONING`, and
 `CODEX_BACKEND_CAPTURE_DIR` can force-enable or override runtime capture settings.
+Capture file names include the query id, for example:
+`codex_backend_query_<query_id>.input.md`,
+`codex_backend_query_<query_id>.output.md`, and
+`codex_backend_query_<query_id>.reasoning.md`.
 If the `capture_dir` path contains `$$`, Codex replaces it with the current
 process PID.
+
+For a one-off run, `codex exec --debug "..."`
+force-enables capture for that invocation using the same backend capture settings
+and file naming.
 
 ## App-server logging
 
