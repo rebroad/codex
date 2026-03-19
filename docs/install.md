@@ -41,6 +41,15 @@ just fix -p <crate-you-touched>
 
 # Run the relevant tests (project-specific is fastest), for example:
 cargo test -p codex-tui
+# `codex-core` integration tests (`cargo test -p codex-core --test all`) depend on
+# helper binaries that are not always built by that test command.
+# Build them first so tests can resolve `cargo_bin(...)` paths:
+cargo build -p codex-cli --bin codex
+cargo build -p codex-rmcp-client --bin test_stdio_server
+# Linux note: also build the sandbox helper to avoid
+# `should find binary for codex-linux-sandbox` failures:
+cargo build -p codex-linux-sandbox --bin codex-linux-sandbox
+cargo test -p codex-core --test all
 # If you have cargo-nextest installed, `just test` runs the test suite via nextest:
 just test
 # Avoid `--all-features` for routine local runs because it increases build
