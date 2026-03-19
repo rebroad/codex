@@ -112,6 +112,10 @@ use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
+const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
+const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
+const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 
 enum InitialOperation {
     UserTurn {
@@ -148,6 +152,70 @@ impl RequestIdSequencer {
         let id = self.next;
         self.next += 1;
         RequestId::Integer(id)
+    }
+}
+
+struct BackendCaptureGuard {
+    prior_capture_enabled: Option<std::ffi::OsString>,
+    prior_capture_input: Option<std::ffi::OsString>,
+    prior_capture_output: Option<std::ffi::OsString>,
+    prior_capture_reasoning: Option<std::ffi::OsString>,
+}
+
+impl BackendCaptureGuard {
+    fn new() -> Self {
+        let prior_capture_enabled = std::env::var_os(CODEX_BACKEND_CAPTURE_ENV_VAR);
+        let prior_capture_input = std::env::var_os(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR);
+        let prior_capture_output = std::env::var_os(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR);
+        let prior_capture_reasoning = std::env::var_os(CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR);
+        // SAFETY: This is used by a single-process `codex exec` invocation to
+        // coordinate backend capture with downstream async tasks.
+        unsafe {
+            std::env::set_var(CODEX_BACKEND_CAPTURE_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR, "1");
+        };
+        Self {
+            prior_capture_enabled,
+            prior_capture_input,
+            prior_capture_output,
+            prior_capture_reasoning,
+        }
+    }
+}
+
+impl Drop for BackendCaptureGuard {
+    fn drop(&mut self) {
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_ENV_VAR,
+            self.prior_capture_enabled.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR,
+            self.prior_capture_input.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR,
+            self.prior_capture_output.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR,
+            self.prior_capture_reasoning.take(),
+        );
+    }
+}
+
+fn restore_env_var(name: &str, value: Option<std::ffi::OsString>) {
+    match value {
+        Some(value) => {
+            // SAFETY: Restores prior process environment on command exit.
+            unsafe { std::env::set_var(name, value) };
+        }
+        None => {
+            // SAFETY: Restores prior process environment on command exit.
+            unsafe { std::env::remove_var(name) };
+        }
     }
 }
 
