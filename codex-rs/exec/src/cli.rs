@@ -95,6 +95,14 @@ pub struct Cli {
     )]
     pub json: bool,
 
+    /// List models that can be used with `codex exec`.
+    #[arg(long = "models", conflicts_with = "prompt", default_value_t = false)]
+    pub list_models: bool,
+
+    /// Send one direct model request (no session/tool loop).
+    #[arg(long = "direct", default_value_t = false)]
+    pub direct: bool,
+
     /// Send only the user prompt text to the model by disabling built-in and
     /// contextual prompt scaffolding for this session.
     #[arg(long = "bare-prompt", default_value_t = false, global = true)]
