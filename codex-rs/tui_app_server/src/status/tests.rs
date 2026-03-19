@@ -59,9 +59,36 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
+    fn normalize_version_line(line: String) -> String {
+        if !line.contains("OpenAI Codex (v") {
+            return line;
+        }
+        let Some(first_border) = line.find('│') else {
+            return line;
+        };
+        let Some(last_border) = line.rfind('│') else {
+            return line;
+        };
+        if last_border <= first_border {
+            return line;
+        }
+        let border_len = '│'.len_utf8();
+        let inner_width = last_border.saturating_sub(first_border + border_len);
+        let canonical = "  >_ OpenAI Codex (v0.0.0)";
+        let mut rebuilt = String::with_capacity(line.len());
+        rebuilt.push_str(&line[..first_border + border_len]);
+        rebuilt.push_str(canonical);
+        if inner_width > canonical.len() {
+            rebuilt.push_str(&" ".repeat(inner_width - canonical.len()));
+        }
+        rebuilt.push_str(&line[last_border..]);
+        rebuilt
+    }
+
     lines
         .into_iter()
         .map(|line| {
+            let line = normalize_version_line(line);
             if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];
