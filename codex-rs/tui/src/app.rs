@@ -2343,6 +2343,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
+        fork_nth_user_message: Option<usize>,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
@@ -2507,9 +2508,10 @@ impl App {
                     /*inc*/ 1,
                     &[("source", "cli_subcommand")],
                 );
+                let nth_user_message = fork_nth_user_message.unwrap_or(usize::MAX);
                 let forked = thread_manager
                     .fork_thread(
-                        ForkSnapshot::Interrupted,
+                        nth_user_message,
                         config.clone(),
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
