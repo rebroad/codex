@@ -18,10 +18,16 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
+use codex_core::append_thread_name;
 use codex_core::config::Config;
 use codex_core::find_thread_names_by_ids;
+use codex_core::parse_turn_item;
 use codex_core::path_utils;
+use codex_core::prompt_preview_line;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -166,6 +172,225 @@ pub async fn run_fork_picker(
     .await
 }
 
+pub async fn run_fork_prompt_picker(tui: &mut Tui, rollout_path: &Path) -> Result<Option<usize>> {
+    let prompt_points = load_fork_prompt_points(rollout_path).await?;
+    if prompt_points.is_empty() {
+        return Ok(None);
+    }
+
+    let alt = AltScreenGuard::enter(tui);
+    let mut selected = 0usize;
+    let mut scroll_top = 0usize;
+    let mut view_rows: Option<usize> = None;
+    let mut tui_events = alt.tui.event_stream().fuse();
+    alt.tui.frame_requester().schedule_frame();
+
+    loop {
+        tokio::select! {
+            Some(ev) = tui_events.next() => {
+                match ev {
+                    TuiEvent::Key(key) => {
+                        if matches!(key.kind, KeyEventKind::Release) {
+                            continue;
+                        }
+                        match key.code {
+                            KeyCode::Enter => return Ok(Some(prompt_points[selected].nth_user_message)),
+                            KeyCode::Esc => return Ok(None),
+                            KeyCode::Char('c')
+                                if key
+                                    .modifiers
+                                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                            {
+                                return Ok(None);
+                            }
+                            KeyCode::Up => {
+                                if selected > 0 {
+                                    selected -= 1;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if selected + 1 < prompt_points.len() {
+                                    selected += 1;
+                                }
+                            }
+                            KeyCode::PageUp => {
+                                let step = view_rows.unwrap_or(10).max(1);
+                                selected = selected.saturating_sub(step);
+                            }
+                            KeyCode::PageDown => {
+                                let step = view_rows.unwrap_or(10).max(1);
+                                let max_index = prompt_points.len().saturating_sub(1);
+                                selected = (selected + step).min(max_index);
+                            }
+                            _ => {}
+                        }
+
+                        ensure_selected_visible(
+                            selected,
+                            prompt_points.len(),
+                            &mut scroll_top,
+                            view_rows,
+                        );
+                        alt.tui.frame_requester().schedule_frame();
+                    }
+                    TuiEvent::Draw => {
+                        if let Ok(size) = alt.tui.terminal.size() {
+                            view_rows = Some(size.height.saturating_sub(3) as usize);
+                            ensure_selected_visible(
+                                selected,
+                                prompt_points.len(),
+                                &mut scroll_top,
+                                view_rows,
+                            );
+                        }
+                        draw_fork_prompt_picker(
+                            alt.tui,
+                            &prompt_points,
+                            selected,
+                            scroll_top,
+                            view_rows,
+                        )?;
+                    }
+                    _ => {}
+                }
+            }
+            else => break,
+        }
+    }
+
+    Ok(None)
+}
+
+fn ensure_selected_visible(
+    selected: usize,
+    total_rows: usize,
+    scroll_top: &mut usize,
+    view_rows: Option<usize>,
+) {
+    if total_rows == 0 {
+        *scroll_top = 0;
+        return;
+    }
+
+    let capacity = view_rows.unwrap_or(total_rows).max(1);
+    if selected < *scroll_top {
+        *scroll_top = selected;
+    } else {
+        let last_visible = scroll_top.saturating_add(capacity - 1);
+        if selected > last_visible {
+            *scroll_top = selected.saturating_sub(capacity - 1);
+        }
+    }
+
+    let max_start = total_rows.saturating_sub(capacity);
+    if *scroll_top > max_start {
+        *scroll_top = max_start;
+    }
+}
+
+#[derive(Clone)]
+struct ForkPromptPoint {
+    nth_user_message: usize,
+    message: String,
+}
+
+async fn load_fork_prompt_points(rollout_path: &Path) -> Result<Vec<ForkPromptPoint>> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let items = history.get_rollout_items();
+    let mut prompts: Vec<ForkPromptPoint> = Vec::new();
+    for item in items {
+        match item {
+            RolloutItem::ResponseItem(response_item) => {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    prompts.push(ForkPromptPoint {
+                        nth_user_message: prompts.len(),
+                        message: user_message.message(),
+                    });
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let new_len = prompts.len().saturating_sub(num_turns);
+                prompts.truncate(new_len);
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+    Ok(prompts)
+}
+
+fn draw_fork_prompt_picker(
+    tui: &mut Tui,
+    prompt_points: &[ForkPromptPoint],
+    selected: usize,
+    scroll_top: usize,
+    view_rows: Option<usize>,
+) -> std::io::Result<()> {
+    let height = tui.terminal.size()?.height;
+    tui.draw(height, |frame| {
+        let area = frame.area();
+        let [header, list, hint] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(area.height.saturating_sub(2)),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        frame.render_widget_ref(Line::from("Select a fork point").bold().cyan(), header);
+
+        if prompt_points.is_empty() {
+            frame.render_widget_ref(Line::from("No user prompts found.").dim(), list);
+        } else {
+            let capacity = list.height as usize;
+            let start = scroll_top.min(prompt_points.len().saturating_sub(1));
+            let end = prompt_points.len().min(start + capacity);
+            let mut y = list.y;
+            for (idx, point) in prompt_points[start..end].iter().enumerate() {
+                let absolute_idx = start + idx;
+                let marker = if absolute_idx == selected {
+                    "> ".bold()
+                } else {
+                    "  ".into()
+                };
+                let line_text = prompt_preview_line(&point.message);
+                let numbered = format!("{}. {line_text}", absolute_idx + 1);
+                let available_width = list.width.saturating_sub(2) as usize;
+                let mut text = truncate_text(&numbered, available_width);
+                if absolute_idx != selected {
+                    text = text.dim().to_string();
+                }
+                let line: Line = vec![marker, Span::raw(text)].into();
+                frame.render_widget_ref(line, Rect::new(list.x, y, list.width, 1));
+                y = y.saturating_add(1);
+            }
+        }
+
+        let visible_rows = view_rows.unwrap_or(prompt_points.len());
+        let hint_line: Line = vec![
+            key_hint::plain(KeyCode::Enter).into(),
+            " to select ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " to cancel ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Up).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Down).into(),
+            format!(
+                " to browse ({}/{})",
+                selected.saturating_add(1).min(prompt_points.len()),
+                prompt_points.len().max(visible_rows)
+            )
+            .dim(),
+        ]
+        .into();
+        frame.render_widget_ref(hint_line, hint);
+    })
+}
+
 async fn run_session_picker(
     tui: &mut Tui,
     config: &Config,
@@ -307,7 +532,10 @@ struct PickerState {
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
+    prompt_count_cache: HashMap<PathBuf, Option<usize>>,
     inline_error: Option<String>,
+    input_mode: InputMode,
+    rename_draft: String,
 }
 
 struct PaginationState {
@@ -333,6 +561,13 @@ struct PendingLoad {
 enum SearchState {
     Idle,
     Active { token: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InputMode {
+    Navigation,
+    Search,
+    Rename,
 }
 
 enum LoadTrigger {
@@ -369,6 +604,7 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    prompt_count: Option<usize>,
 }
 
 impl Row {
@@ -425,7 +661,10 @@ impl PickerState {
             action,
             sort_key: ThreadSortKey::UpdatedAt,
             thread_name_cache: HashMap::new(),
+            prompt_count_cache: HashMap::new(),
             inline_error: None,
+            input_mode: InputMode::Navigation,
+            rename_draft: String::new(),
         }
     }
 
@@ -435,7 +674,86 @@ impl PickerState {
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
         self.inline_error = None;
+        if self.input_mode == InputMode::Search {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.input_mode = InputMode::Navigation;
+                    self.request_frame();
+                }
+                KeyCode::Backspace => {
+                    let mut new_query = self.query.clone();
+                    new_query.pop();
+                    self.set_query(new_query);
+                }
+                KeyCode::Char(c) => {
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
+                    {
+                        let mut new_query = self.query.clone();
+                        new_query.push(c);
+                        self.set_query(new_query);
+                    }
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+        if self.input_mode == InputMode::Rename {
+            match key.code {
+                KeyCode::Esc => {
+                    self.input_mode = InputMode::Navigation;
+                    self.rename_draft.clear();
+                    self.request_frame();
+                }
+                KeyCode::Enter => {
+                    let new_name = self.rename_draft.trim().to_string();
+                    if new_name.is_empty() {
+                        self.inline_error = Some("Thread name must not be empty".to_string());
+                        self.request_frame();
+                        return Ok(None);
+                    }
+                    self.rename_selected_thread(new_name).await;
+                    self.input_mode = InputMode::Navigation;
+                    self.rename_draft.clear();
+                    self.request_frame();
+                }
+                KeyCode::Backspace => {
+                    self.rename_draft.pop();
+                    self.request_frame();
+                }
+                KeyCode::Char(c) => {
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
+                    {
+                        self.rename_draft.push(c);
+                        self.request_frame();
+                    }
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
         match key.code {
+            KeyCode::Char('/') => {
+                self.input_mode = InputMode::Search;
+                self.request_frame();
+            }
+            KeyCode::Char('r')
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+            {
+                if let Some(row) = self.filtered_rows.get(self.selected) {
+                    self.rename_draft = row.display_preview().to_string();
+                    self.input_mode = InputMode::Rename;
+                    self.request_frame();
+                }
+            }
             KeyCode::Esc => return Ok(Some(SessionSelection::StartFresh)),
             KeyCode::Char('c')
                 if key
@@ -504,26 +822,43 @@ impl PickerState {
                 self.toggle_sort_key();
                 self.request_frame();
             }
-            KeyCode::Backspace => {
-                let mut new_query = self.query.clone();
-                new_query.pop();
-                self.set_query(new_query);
-            }
-            KeyCode::Char(c) => {
-                // basic text input for search
-                if !key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
-                {
-                    let mut new_query = self.query.clone();
-                    new_query.push(c);
-                    self.set_query(new_query);
-                }
-            }
             _ => {}
         }
         Ok(None)
+    }
+
+    async fn rename_selected_thread(&mut self, new_name: String) {
+        let Some(row) = self.filtered_rows.get(self.selected).cloned() else {
+            return;
+        };
+
+        let thread_id = match row.thread_id {
+            Some(thread_id) => Some(thread_id),
+            None => {
+                crate::resolve_session_thread_id(row.path.as_path(), /*id_str_if_uuid*/ None).await
+            }
+        };
+        let Some(thread_id) = thread_id else {
+            self.inline_error =
+                Some("Failed to resolve thread id for selected session".to_string());
+            return;
+        };
+
+        match append_thread_name(&self.codex_home, thread_id, &new_name).await {
+            Ok(()) => {
+                self.thread_name_cache
+                    .insert(thread_id, Some(new_name.clone()));
+                for row in self.all_rows.iter_mut() {
+                    if row.thread_id == Some(thread_id) {
+                        row.thread_name = Some(new_name.clone());
+                    }
+                }
+                self.apply_filter();
+            }
+            Err(err) => {
+                self.inline_error = Some(format!("Failed to rename thread: {err}"));
+            }
+        }
     }
 
     fn start_initial_load(&mut self) {
@@ -576,6 +911,7 @@ impl PickerState {
                 let page = page.map_err(color_eyre::Report::from)?;
                 self.ingest_page(page);
                 self.update_thread_names().await;
+                self.update_prompt_counts().await;
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
@@ -648,6 +984,42 @@ impl PickerState {
                 continue;
             }
             row.thread_name = thread_name;
+            updated = true;
+        }
+
+        if updated {
+            self.apply_filter();
+        }
+    }
+
+    async fn update_prompt_counts(&mut self) {
+        if !matches!(self.action, SessionPickerAction::Fork) {
+            return;
+        }
+
+        let mut missing_paths = Vec::new();
+        for row in &self.all_rows {
+            if row.prompt_count.is_some() {
+                continue;
+            }
+            if self.prompt_count_cache.contains_key(&row.path) {
+                continue;
+            }
+            missing_paths.push(row.path.clone());
+        }
+
+        for path in missing_paths {
+            let count = count_effective_user_prompts(path.as_path()).await.ok();
+            self.prompt_count_cache.insert(path, count);
+        }
+
+        let mut updated = false;
+        for row in self.all_rows.iter_mut() {
+            let cached = self.prompt_count_cache.get(&row.path).copied().flatten();
+            if row.prompt_count == cached {
+                continue;
+            }
+            row.prompt_count = cached;
             updated = true;
         }
 
@@ -883,6 +1255,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         updated_at,
         cwd: item.cwd.clone(),
         git_branch: item.git_branch.clone(),
+        prompt_count: None,
     }
 }
 
@@ -930,10 +1303,10 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         // Search line
         frame.render_widget_ref(search_line(state), search);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, state.action);
 
         // Column headers and list
-        render_column_headers(frame, columns, &metrics, state.sort_key);
+        render_column_headers(frame, columns, &metrics, state.sort_key, state.action);
         render_list(frame, list, state, &metrics);
 
         // Hint line
@@ -942,11 +1315,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             key_hint::plain(KeyCode::Enter).into(),
             format!(" to {action_label} ").dim(),
             "    ".dim(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to start new ".dim(),
+            key_hint::plain(KeyCode::Char('/')).into(),
+            " to search ".dim(),
             "    ".dim(),
-            key_hint::ctrl(KeyCode::Char('c')).into(),
-            " to quit ".dim(),
+            key_hint::plain(KeyCode::Char('r')).into(),
+            " to rename ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Tab).into(),
             " to toggle sort ".dim(),
@@ -965,10 +1338,13 @@ fn search_line(state: &PickerState) -> Line<'_> {
     if let Some(error) = state.inline_error.as_deref() {
         return Line::from(error.red());
     }
-    if state.query.is_empty() {
-        return Line::from("Type to search".dim());
+    if state.input_mode == InputMode::Rename {
+        return Line::from(format!("Rename: {}", state.rename_draft));
     }
-    Line::from(format!("Search: {}", state.query))
+    if state.input_mode == InputMode::Search || !state.query.is_empty() {
+        return Line::from(format!("Search: {}", state.query));
+    }
+    Line::from("Press / to search".dim())
 }
 
 fn render_list(
@@ -994,13 +1370,15 @@ fn render_list(
     let labels = &metrics.labels;
     let mut y = area.y;
 
-    let visibility = column_visibility(area.width, metrics, state.sort_key);
+    let visibility = column_visibility(area.width, metrics, state.sort_key, state.action);
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
     let max_branch_width = metrics.max_branch_width;
+    let max_prompts_width = metrics.max_prompts_width;
     let max_cwd_width = metrics.max_cwd_width;
 
-    for (idx, (row, (created_label, updated_label, branch_label, cwd_label))) in rows[start..end]
+    for (idx, (row, (created_label, updated_label, branch_label, prompts_label, cwd_label))) in rows
+        [start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -1032,6 +1410,20 @@ fn render_list(
         } else {
             Some(Span::from(format!("{branch_label:<max_branch_width$}")).cyan())
         };
+        let prompts_span = if !visibility.show_prompts {
+            None
+        } else if prompts_label.is_empty() {
+            Some(
+                Span::from(format!(
+                    "{empty:<width$}",
+                    empty = "-",
+                    width = max_prompts_width
+                ))
+                .dim(),
+            )
+        } else {
+            Some(Span::from(format!("{prompts_label:<max_prompts_width$}")).cyan())
+        };
         let cwd_span = if !visibility.show_cwd {
             None
         } else if cwd_label.is_empty() {
@@ -1058,12 +1450,16 @@ fn render_list(
         if visibility.show_branch {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
+        if visibility.show_prompts {
+            preview_width = preview_width.saturating_sub(max_prompts_width + 2);
+        }
         if visibility.show_cwd {
             preview_width = preview_width.saturating_sub(max_cwd_width + 2);
         }
         let add_leading_gap = !visibility.show_created
             && !visibility.show_updated
             && !visibility.show_branch
+            && !visibility.show_prompts
             && !visibility.show_cwd;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
@@ -1080,6 +1476,10 @@ fn render_list(
         }
         if let Some(branch) = branch_span {
             spans.push(branch);
+            spans.push("  ".into());
+        }
+        if let Some(prompts) = prompts_span {
+            spans.push(prompts);
             spans.push("  ".into());
         }
         if let Some(cwd) = cwd_span {
@@ -1187,13 +1587,14 @@ fn render_column_headers(
     area: Rect,
     metrics: &ColumnMetrics,
     sort_key: ThreadSortKey,
+    action: SessionPickerAction,
 ) {
     if area.height == 0 {
         return;
     }
 
     let mut spans: Vec<Span> = vec!["  ".into()];
-    let visibility = column_visibility(area.width, metrics, sort_key);
+    let visibility = column_visibility(area.width, metrics, sort_key, action);
     if visibility.show_created {
         let label = format!(
             "{text:<width$}",
@@ -1221,6 +1622,15 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
+    if visibility.show_prompts {
+        let label = format!(
+            "{text:<width$}",
+            text = "Prompts",
+            width = metrics.max_prompts_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
     if visibility.show_cwd {
         let label = format!(
             "{text:<width$}",
@@ -1242,9 +1652,10 @@ struct ColumnMetrics {
     max_created_width: usize,
     max_updated_width: usize,
     max_branch_width: usize,
+    max_prompts_width: usize,
     max_cwd_width: usize,
-    /// (created_label, updated_label, branch_label, cwd_label) per row.
-    labels: Vec<(String, String, String, String)>,
+    /// (created_label, updated_label, branch_label, prompts_label, cwd_label) per row.
+    labels: Vec<(String, String, String, String, String)>,
 }
 
 /// Determines which columns to render given available terminal width.
@@ -1257,10 +1668,15 @@ struct ColumnVisibility {
     show_created: bool,
     show_updated: bool,
     show_branch: bool,
+    show_prompts: bool,
     show_cwd: bool,
 }
 
-fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
+fn calculate_column_metrics(
+    rows: &[Row],
+    include_cwd: bool,
+    action: SessionPickerAction,
+) -> ColumnMetrics {
     fn right_elide(s: &str, max: usize) -> String {
         if s.chars().count() <= max {
             return s.to_string();
@@ -1280,10 +1696,19 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
+    let mut labels: Vec<(String, String, String, String, String)> = Vec::with_capacity(rows.len());
     let mut max_created_width = UnicodeWidthStr::width("Created at");
     let mut max_updated_width = UnicodeWidthStr::width("Updated at");
-    let mut max_branch_width = UnicodeWidthStr::width("Branch");
+    let mut max_branch_width = if matches!(action, SessionPickerAction::Resume) {
+        UnicodeWidthStr::width("Branch")
+    } else {
+        0
+    };
+    let mut max_prompts_width = if matches!(action, SessionPickerAction::Fork) {
+        UnicodeWidthStr::width("Prompts")
+    } else {
+        0
+    };
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
     } else {
@@ -1293,8 +1718,19 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     for row in rows {
         let created = format_created_label(row);
         let updated = format_updated_label(row);
-        let branch_raw = row.git_branch.clone().unwrap_or_default();
-        let branch = right_elide(&branch_raw, /*max*/ 24);
+        let branch = if matches!(action, SessionPickerAction::Resume) {
+            let branch_raw = row.git_branch.clone().unwrap_or_default();
+            right_elide(&branch_raw, /*max*/ 24)
+        } else {
+            String::new()
+        };
+        let prompts = if matches!(action, SessionPickerAction::Fork) {
+            row.prompt_count
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        } else {
+            String::new()
+        };
         let cwd = if include_cwd {
             let cwd_raw = row
                 .cwd
@@ -1307,15 +1743,21 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         };
         max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
-        max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
+        if matches!(action, SessionPickerAction::Resume) {
+            max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
+        }
+        if matches!(action, SessionPickerAction::Fork) {
+            max_prompts_width = max_prompts_width.max(UnicodeWidthStr::width(prompts.as_str()));
+        }
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((created, updated, branch, cwd));
+        labels.push((created, updated, branch, prompts, cwd));
     }
 
     ColumnMetrics {
         max_created_width,
         max_updated_width,
         max_branch_width,
+        max_prompts_width,
         max_cwd_width,
         labels,
     }
@@ -1330,10 +1772,12 @@ fn column_visibility(
     area_width: u16,
     metrics: &ColumnMetrics,
     sort_key: ThreadSortKey,
+    action: SessionPickerAction,
 ) -> ColumnVisibility {
     const MIN_PREVIEW_WIDTH: usize = 10;
 
-    let show_branch = metrics.max_branch_width > 0;
+    let show_branch = matches!(action, SessionPickerAction::Resume) && metrics.max_branch_width > 0;
+    let show_prompts = matches!(action, SessionPickerAction::Fork) && metrics.max_prompts_width > 0;
     let show_cwd = metrics.max_cwd_width > 0;
 
     // Calculate remaining width after all optional columns.
@@ -1347,6 +1791,9 @@ fn column_visibility(
     }
     if show_branch {
         preview_width = preview_width.saturating_sub(metrics.max_branch_width + 2);
+    }
+    if show_prompts {
+        preview_width = preview_width.saturating_sub(metrics.max_prompts_width + 2);
     }
     if show_cwd {
         preview_width = preview_width.saturating_sub(metrics.max_cwd_width + 2);
@@ -1369,8 +1816,34 @@ fn column_visibility(
         show_created,
         show_updated,
         show_branch,
+        show_prompts,
         show_cwd,
     }
+}
+
+async fn count_effective_user_prompts(rollout_path: &Path) -> Result<usize> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let items = history.get_rollout_items();
+    let mut prompts = Vec::new();
+    for item in items {
+        match item {
+            RolloutItem::ResponseItem(response_item) => {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    prompts.push(user_message.message());
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let new_len = prompts.len().saturating_sub(num_turns);
+                prompts.truncate(new_len);
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+    Ok(prompts.len())
 }
 
 #[cfg(test)]
@@ -1589,6 +2062,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            prompt_count: None,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -1623,6 +2097,7 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                prompt_count: None,
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
@@ -1633,6 +2108,7 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                prompt_count: None,
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
@@ -1643,6 +2119,7 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                prompt_count: None,
             },
         ];
         state.all_rows = rows.clone();
@@ -1652,7 +2129,7 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(3);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, state.action);
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -1665,7 +2142,13 @@ mod tests {
             let area = frame.area();
             let segments =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
+            render_column_headers(
+                &mut frame,
+                segments[0],
+                &metrics,
+                state.sort_key,
+                state.action,
+            );
             render_list(&mut frame, segments[1], &state, &metrics);
         }
         terminal.flush().expect("flush");
@@ -1937,6 +2420,7 @@ mod tests {
                 updated_at: Some(now - Duration::days(2)),
                 cwd: None,
                 git_branch: None,
+                prompt_count: None,
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
@@ -1947,6 +2431,7 @@ mod tests {
                 updated_at: Some(now - Duration::days(3)),
                 cwd: None,
                 git_branch: None,
+                prompt_count: None,
             },
         ];
         state.all_rows = rows.clone();
@@ -1958,7 +2443,7 @@ mod tests {
 
         state.update_thread_names().await;
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, state.action);
 
         let width: u16 = 80;
         let height: u16 = 5;
@@ -1971,7 +2456,13 @@ mod tests {
             let area = frame.area();
             let segments =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
+            render_column_headers(
+                &mut frame,
+                segments[0],
+                &metrics,
+                state.sort_key,
+                state.action,
+            );
             render_list(&mut frame, segments[1], &state, &metrics);
         }
         terminal.flush().expect("flush");
@@ -2087,39 +2578,58 @@ mod tests {
             max_created_width: 8,
             max_updated_width: 12,
             max_branch_width: 0,
+            max_prompts_width: 0,
             max_cwd_width: 0,
             labels: Vec::new(),
         };
 
-        let created = column_visibility(30, &metrics, ThreadSortKey::CreatedAt);
+        let created = column_visibility(
+            30,
+            &metrics,
+            ThreadSortKey::CreatedAt,
+            SessionPickerAction::Resume,
+        );
         assert_eq!(
             created,
             ColumnVisibility {
                 show_created: true,
                 show_updated: false,
                 show_branch: false,
+                show_prompts: false,
                 show_cwd: false,
             }
         );
 
-        let updated = column_visibility(30, &metrics, ThreadSortKey::UpdatedAt);
+        let updated = column_visibility(
+            30,
+            &metrics,
+            ThreadSortKey::UpdatedAt,
+            SessionPickerAction::Resume,
+        );
         assert_eq!(
             updated,
             ColumnVisibility {
                 show_created: false,
                 show_updated: true,
                 show_branch: false,
+                show_prompts: false,
                 show_cwd: false,
             }
         );
 
-        let wide = column_visibility(40, &metrics, ThreadSortKey::CreatedAt);
+        let wide = column_visibility(
+            40,
+            &metrics,
+            ThreadSortKey::CreatedAt,
+            SessionPickerAction::Resume,
+        );
         assert_eq!(
             wide,
             ColumnVisibility {
                 show_created: true,
                 show_updated: true,
                 show_branch: false,
+                show_prompts: false,
                 show_cwd: false,
             }
         );
@@ -2227,6 +2737,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            prompt_count: None,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];

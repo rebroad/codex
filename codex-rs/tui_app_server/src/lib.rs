@@ -950,7 +950,7 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
@@ -1172,10 +1172,7 @@ async fn run_ratatui_app(
                 unreachable!("session lookup app server should be initialized for --fork picker");
             };
             match resume_picker::run_fork_picker_with_app_server(
-                &mut tui,
-                &config,
-                cli.fork_show_all,
-                app_server,
+                &mut tui, &config, /*show_all*/ true, app_server,
             )
             .await?
             {
@@ -1189,6 +1186,28 @@ async fn run_ratatui_app(
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
+                }
+                resume_picker::SessionSelection::Fork(target_session) => {
+                    let mut prompt_picker_app_server =
+                        start_app_server_for_picker(&config, &app_server_target).await?;
+                    let source_thread = prompt_picker_app_server
+                        .thread_read(target_session.thread_id, /*include_turns*/ true)
+                        .await
+                        .wrap_err("failed to read source thread turns for fork-point picker")?;
+                    shutdown_app_server_if_present(Some(prompt_picker_app_server)).await;
+
+                    match resume_picker::run_fork_prompt_picker_for_turns(
+                        &mut tui,
+                        source_thread.turns.as_slice(),
+                    )
+                    .await?
+                    {
+                        Some(nth_user_message) => {
+                            cli.fork_nth_user_message = Some(nth_user_message);
+                            resume_picker::SessionSelection::Fork(target_session)
+                        }
+                        None => resume_picker::SessionSelection::Exit,
+                    }
                 }
                 other => other,
             }

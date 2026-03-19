@@ -73,6 +73,7 @@ pub(crate) mod mentions {
     pub(crate) use crate::plugins::collect_explicit_plugin_mentions;
     pub(crate) use crate::plugins::collect_tool_mentions_from_messages;
 }
+mod prompt_preview;
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
@@ -209,6 +210,7 @@ pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::format_exec_policy_error_with_source;
 pub use exec_policy::load_exec_policy;
 pub use file_watcher::FileWatcherEvent;
+pub use prompt_preview::prompt_preview_line;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;

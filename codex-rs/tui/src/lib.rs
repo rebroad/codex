@@ -596,7 +596,7 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     initial_config: Config,
     overrides: ConfigOverrides,
@@ -807,7 +807,8 @@ async fn run_ratatui_app(
                 Err(_) => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
-            match resume_picker::run_fork_picker(&mut tui, &config, cli.fork_show_all).await? {
+            // `codex fork` without an explicit session should browse all sessions first.
+            match resume_picker::run_fork_picker(&mut tui, &config, /*show_all*/ true).await? {
                 resume_picker::SessionSelection::Exit => {
                     terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
@@ -818,6 +819,20 @@ async fn run_ratatui_app(
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
+                }
+                resume_picker::SessionSelection::Fork(target_session) => {
+                    match resume_picker::run_fork_prompt_picker(
+                        &mut tui,
+                        target_session.path.as_path(),
+                    )
+                    .await?
+                    {
+                        Some(nth_user_message) => {
+                            cli.fork_nth_user_message = Some(nth_user_message);
+                            resume_picker::SessionSelection::Fork(target_session)
+                        }
+                        None => resume_picker::SessionSelection::Exit,
+                    }
                 }
                 other => other,
             }
