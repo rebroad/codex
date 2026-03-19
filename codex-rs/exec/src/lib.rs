@@ -110,6 +110,10 @@ use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
+const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
+const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
+const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 
 enum InitialOperation {
     UserTurn {
@@ -134,6 +138,70 @@ impl RequestIdSequencer {
         let id = self.next;
         self.next += 1;
         RequestId::Integer(id)
+    }
+}
+
+struct BackendCaptureGuard {
+    prior_capture_enabled: Option<std::ffi::OsString>,
+    prior_capture_input: Option<std::ffi::OsString>,
+    prior_capture_output: Option<std::ffi::OsString>,
+    prior_capture_reasoning: Option<std::ffi::OsString>,
+}
+
+impl BackendCaptureGuard {
+    fn new() -> Self {
+        let prior_capture_enabled = std::env::var_os(CODEX_BACKEND_CAPTURE_ENV_VAR);
+        let prior_capture_input = std::env::var_os(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR);
+        let prior_capture_output = std::env::var_os(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR);
+        let prior_capture_reasoning = std::env::var_os(CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR);
+        // SAFETY: This is used by a single-process `codex exec` invocation to
+        // coordinate backend capture with downstream async tasks.
+        unsafe {
+            std::env::set_var(CODEX_BACKEND_CAPTURE_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR, "1");
+        };
+        Self {
+            prior_capture_enabled,
+            prior_capture_input,
+            prior_capture_output,
+            prior_capture_reasoning,
+        }
+    }
+}
+
+impl Drop for BackendCaptureGuard {
+    fn drop(&mut self) {
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_ENV_VAR,
+            self.prior_capture_enabled.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR,
+            self.prior_capture_input.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR,
+            self.prior_capture_output.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR,
+            self.prior_capture_reasoning.take(),
+        );
+    }
+}
+
+fn restore_env_var(name: &str, value: Option<std::ffi::OsString>) {
+    match value {
+        Some(value) => {
+            // SAFETY: Restores prior process environment on command exit.
+            unsafe { std::env::set_var(name, value) };
+        }
+        None => {
+            // SAFETY: Restores prior process environment on command exit.
+            unsafe { std::env::remove_var(name) };
+        }
     }
 }
 
@@ -190,7 +258,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        system_prompt,
+        debug,
     } = cli;
+
+    let _backend_capture_guard = debug.then(BackendCaptureGuard::new);
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -337,7 +409,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         js_repl_node_module_dirs: None,
         zsh_path: None,
         base_instructions: None,
-        developer_instructions: None,
+        developer_instructions: system_prompt.clone(),
         personality: None,
         compact_prompt: None,
         bare_prompt: None,
@@ -535,7 +607,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadResume {
                         request_id: request_ids.next(),
-                        params: thread_resume_params_from_config(&config, thread_id, bare_prompt),
+                        params: thread_resume_params_from_config(
+                            &config,
+                            thread_id,
+                            bare_prompt,
+                            bare_prompt_developer_instructions.clone(),
+                        ),
                     },
                     "thread/resume",
                 )
@@ -549,7 +626,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadStart {
                         request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config, bare_prompt),
+                        params: thread_start_params_from_config(
+                            &config,
+                            bare_prompt,
+                            bare_prompt_developer_instructions.clone(),
+                        ),
                     },
                     "thread/start",
                 )
@@ -564,7 +645,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadStart {
                     request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config, bare_prompt),
+                    params: thread_start_params_from_config(
+                        &config,
+                        bare_prompt,
+                        bare_prompt_developer_instructions,
+                    ),
                 },
                 "thread/start",
             )
@@ -843,7 +928,11 @@ fn sandbox_mode_from_policy(
     }
 }
 
-fn thread_start_params_from_config(config: &Config, bare_prompt: bool) -> ThreadStartParams {
+fn thread_start_params_from_config(
+    config: &Config,
+    bare_prompt: bool,
+    bare_prompt_developer_instructions: Option<String>,
+) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
@@ -854,7 +943,11 @@ fn thread_start_params_from_config(config: &Config, bare_prompt: bool) -> Thread
         config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
         base_instructions: bare_prompt.then(String::new),
-        developer_instructions: bare_prompt.then(String::new),
+        developer_instructions: if bare_prompt {
+            Some(bare_prompt_developer_instructions.unwrap_or_default())
+        } else {
+            None
+        },
         ..ThreadStartParams::default()
     }
 }
@@ -863,6 +956,7 @@ fn thread_resume_params_from_config(
     config: &Config,
     thread_id: String,
     bare_prompt: bool,
+    bare_prompt_developer_instructions: Option<String>,
 ) -> ThreadResumeParams {
     ThreadResumeParams {
         thread_id,
@@ -874,7 +968,11 @@ fn thread_resume_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config, bare_prompt),
         base_instructions: bare_prompt.then(String::new),
-        developer_instructions: bare_prompt.then(String::new),
+        developer_instructions: if bare_prompt {
+            Some(bare_prompt_developer_instructions.unwrap_or_default())
+        } else {
+            None
+        },
         ..ThreadResumeParams::default()
     }
 }
@@ -1931,7 +2029,7 @@ mod tests {
             .await
             .expect("build default config");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(&config, false, None);
 
         assert_eq!(
             params.approvals_reviewer,
@@ -1955,7 +2053,7 @@ mod tests {
             .await
             .expect("build auto-review config");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(&config, false, None);
 
         assert_eq!(
             params.approvals_reviewer,

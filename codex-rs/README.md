@@ -52,6 +52,15 @@ You can enable notifications by configuring a script that is run whenever the ag
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
+Use `codex exec --system "..." ...` to set one-off developer/system instructions, and
+
+`codex exec` remains the right choice for full Codex behavior (multi-step agent execution, tool usage, approvals/sandbox workflows, and persistent turn state).
+
+If you want to parameterize `exec` from one command line, you can already combine model + config overrides, for example:
+
+```shell
+codex exec -m gpt-5.4 -c model_reasoning_effort="high" -c developer_instructions="Be concise." "Summarize this repo"
+```
 
 ### Experimenting with the Codex Sandbox
 
