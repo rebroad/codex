@@ -53,6 +53,10 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_show_all: bool,
 
+    /// Internal: when present, fork before this 0-based user prompt index.
+    #[clap(skip)]
+    pub fork_nth_user_message: Option<usize>,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
