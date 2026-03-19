@@ -53,6 +53,47 @@ impl ApplyPatchRuntime {
         Self
     }
 
+    fn resolve_codex_exe(
+        requested_exe: Option<&PathBuf>,
+        _codex_home: &std::path::Path,
+    ) -> Result<PathBuf, ToolError> {
+        let exe = if let Some(path) = requested_exe {
+            path.clone()
+        } else {
+            #[cfg(target_os = "windows")]
+            {
+                codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::env::current_exe().map_err(|e| {
+                    ToolError::Rejected(format!("failed to determine codex exe: {e}"))
+                })?
+            }
+        };
+
+        Ok(Self::resolve_deleted_exe_fallback(exe))
+    }
+
+    fn resolve_deleted_exe_fallback(exe: PathBuf) -> PathBuf {
+        let Some(file_name) = exe.file_name().and_then(|name| name.to_str()) else {
+            return exe;
+        };
+        let Some(stripped_name) = file_name.strip_suffix(" (deleted)") else {
+            return exe;
+        };
+
+        let Some(parent) = exe.parent() else {
+            return exe;
+        };
+        let candidate = parent.join(stripped_name);
+        if candidate.exists() {
+            candidate
+        } else {
+            exe
+        }
+    }
+
     fn build_guardian_review_request(
         req: &ApplyPatchRequest,
         call_id: &str,
@@ -68,22 +109,9 @@ impl ApplyPatchRuntime {
 
     fn build_command_spec(
         req: &ApplyPatchRequest,
-        _codex_home: &std::path::Path,
+        codex_home: &std::path::Path,
     ) -> Result<CommandSpec, ToolError> {
-        let exe = if let Some(path) = &req.codex_exe {
-            path.clone()
-        } else {
-            #[cfg(target_os = "windows")]
-            {
-                codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                std::env::current_exe().map_err(|e| {
-                    ToolError::Rejected(format!("failed to determine codex exe: {e}"))
-                })?
-            }
-        };
+        let exe = Self::resolve_codex_exe(req.codex_exe.as_ref(), codex_home)?;
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
             program,

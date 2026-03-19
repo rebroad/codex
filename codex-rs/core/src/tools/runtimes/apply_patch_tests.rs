@@ -68,3 +68,43 @@ fn guardian_review_request_includes_patch_context() {
         }
     );
 }
+
+#[test]
+fn resolve_deleted_exe_fallback_prefers_live_binary_when_present() {
+    let root = std::env::temp_dir().join(format!(
+        "apply-patch-runtime-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&root).expect("temp dir should be creatable");
+
+    let live_exe = root.join("codex");
+    std::fs::write(&live_exe, "#!/bin/sh\n").expect("test exe should be writable");
+    let deleted_exe = root.join("codex (deleted)");
+
+    let resolved = ApplyPatchRuntime::resolve_deleted_exe_fallback(deleted_exe);
+
+    assert_eq!(resolved, live_exe);
+
+    std::fs::remove_file(&live_exe).expect("temp file should be removable");
+    std::fs::remove_dir(&root).expect("temp dir should be removable");
+}
+
+#[test]
+fn resolve_deleted_exe_fallback_keeps_original_when_live_binary_missing() {
+    let deleted_exe = std::env::temp_dir().join(format!(
+        "apply-patch-runtime-missing-{}-{} (deleted)",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let resolved = ApplyPatchRuntime::resolve_deleted_exe_fallback(deleted_exe.clone());
+
+    assert_eq!(resolved, deleted_exe);
+}

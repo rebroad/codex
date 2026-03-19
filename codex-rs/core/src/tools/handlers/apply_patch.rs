@@ -35,8 +35,11 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::FileChange;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct ApplyPatchHandler;
@@ -124,6 +127,29 @@ async fn effective_patch_permissions(
     )
 }
 
+fn build_apply_patch_request(
+    action: ApplyPatchAction,
+    file_paths: Vec<AbsolutePathBuf>,
+    changes: HashMap<PathBuf, FileChange>,
+    exec_approval_requirement: crate::tools::sandboxing::ExecApprovalRequirement,
+    effective_additional_permissions: crate::tools::handlers::EffectiveAdditionalPermissions,
+    timeout_ms: Option<u64>,
+) -> ApplyPatchRequest {
+    ApplyPatchRequest {
+        action,
+        file_paths,
+        changes,
+        exec_approval_requirement,
+        sandbox_permissions: effective_additional_permissions.sandbox_permissions,
+        additional_permissions: effective_additional_permissions.additional_permissions,
+        permissions_preapproved: effective_additional_permissions.permissions_preapproved,
+        timeout_ms,
+        // Apply patch must self-invoke the codex binary that understands
+        // --codex-run-as-apply-patch. Do not override to sandbox helper binaries.
+        codex_exe: None,
+    }
+}
+
 #[async_trait]
 impl ToolHandler for ApplyPatchHandler {
     type Output = ApplyPatchToolOutput;
@@ -194,20 +220,14 @@ impl ToolHandler for ApplyPatchHandler {
                         );
                         emitter.begin(event_ctx).await;
 
-                        let req = ApplyPatchRequest {
-                            action: apply.action,
+                        let req = build_apply_patch_request(
+                            apply.action,
                             file_paths,
                             changes,
-                            exec_approval_requirement: apply.exec_approval_requirement,
-                            sandbox_permissions: effective_additional_permissions
-                                .sandbox_permissions,
-                            additional_permissions: effective_additional_permissions
-                                .additional_permissions,
-                            permissions_preapproved: effective_additional_permissions
-                                .permissions_preapproved,
-                            timeout_ms: None,
-                            codex_exe: turn.codex_linux_sandbox_exe.clone(),
-                        };
+                            apply.exec_approval_requirement,
+                            effective_additional_permissions,
+                            None,
+                        );
 
                         let mut orchestrator = ToolOrchestrator::new();
                         let mut runtime = ApplyPatchRuntime::new();
@@ -299,19 +319,14 @@ pub(crate) async fn intercept_apply_patch(
                     );
                     emitter.begin(event_ctx).await;
 
-                    let req = ApplyPatchRequest {
-                        action: apply.action,
-                        file_paths: approval_keys,
+                    let req = build_apply_patch_request(
+                        apply.action,
+                        approval_keys,
                         changes,
-                        exec_approval_requirement: apply.exec_approval_requirement,
-                        sandbox_permissions: effective_additional_permissions.sandbox_permissions,
-                        additional_permissions: effective_additional_permissions
-                            .additional_permissions,
-                        permissions_preapproved: effective_additional_permissions
-                            .permissions_preapproved,
+                        apply.exec_approval_requirement,
+                        effective_additional_permissions,
                         timeout_ms,
-                        codex_exe: turn.codex_linux_sandbox_exe.clone(),
-                    };
+                    );
 
                     let mut orchestrator = ToolOrchestrator::new();
                     let mut runtime = ApplyPatchRuntime::new();
