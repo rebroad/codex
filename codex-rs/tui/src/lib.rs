@@ -928,7 +928,7 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
@@ -1168,6 +1168,19 @@ async fn run_ratatui_app(
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
+                }
+                resume_picker::SessionSelection::Fork(target_session) => {
+                    if let Some(path) = target_session.path.as_deref() {
+                        match resume_picker::run_fork_prompt_picker(&mut tui, path).await? {
+                            Some(nth_user_message) => {
+                                cli.fork_nth_user_message = Some(nth_user_message);
+                                resume_picker::SessionSelection::Fork(target_session)
+                            }
+                            None => resume_picker::SessionSelection::Exit,
+                        }
+                    } else {
+                        resume_picker::SessionSelection::Fork(target_session)
+                    }
                 }
                 other => other,
             }
