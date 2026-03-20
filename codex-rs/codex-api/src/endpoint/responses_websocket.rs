@@ -4,6 +4,7 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
+use crate::prompt_debug_http::prompt_capture_append_input;
 use crate::prompt_debug_http::prompt_capture_append_output;
 use crate::prompt_debug_http::prompt_capture_append_reasoning;
 use crate::prompt_debug_http::prompt_capture_write_output_json;
@@ -12,6 +13,7 @@ use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::responses::ResponsesStreamEvent;
 use crate::sse::responses::capture_sections_from_response_item;
+use crate::sse::responses::event_contains_reasoning_payload;
 use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
@@ -559,6 +561,9 @@ async fn run_websocket_response_stream(
         }
     };
     trace!("websocket request: {request_text}");
+    if let Some(capture_session) = capture.as_ref() {
+        prompt_capture_append_input(capture_session, "responses_websocket", &request_text);
+    }
 
     let request_start = Instant::now();
     let result = ws_stream
@@ -601,6 +606,9 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
+                if let Some(capture) = capture.as_ref() {
+                    prompt_capture_append_output(capture, "responses_websocket", &text);
+                }
                 trace!("websocket event: {text}");
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
@@ -616,6 +624,11 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                if let Some(capture) = capture.as_ref()
+                    && event_contains_reasoning_payload(&event)
+                {
+                    prompt_capture_append_reasoning(capture, "responses_websocket", &text);
+                }
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -635,19 +648,35 @@ async fn run_websocket_response_stream(
                         match &event {
                             ResponseEvent::OutputTextDelta(delta) => {
                                 if let Some(capture) = capture.as_ref() {
-                                    prompt_capture_append_output(capture, delta);
+                                    prompt_capture_append_output(
+                                        capture,
+                                        "responses_websocket_output_text_delta",
+                                        delta,
+                                    );
                                 }
                             }
                             ResponseEvent::OutputItemAdded(item) => {
-                                maybe_capture_response_item(capture.as_ref(), "Output item added", item);
+                                maybe_capture_response_item(
+                                    capture.as_ref(),
+                                    "Output item added",
+                                    item,
+                                );
                             }
                             ResponseEvent::OutputItemDone(item) => {
-                                maybe_capture_response_item(capture.as_ref(), "Output item done", item);
+                                maybe_capture_response_item(
+                                    capture.as_ref(),
+                                    "Output item done",
+                                    item,
+                                );
                             }
                             ResponseEvent::ReasoningSummaryDelta { delta, .. }
                             | ResponseEvent::ReasoningContentDelta { delta, .. } => {
                                 if let Some(capture) = capture.as_ref() {
-                                    prompt_capture_append_reasoning(capture, delta);
+                                    prompt_capture_append_reasoning(
+                                        capture,
+                                        "responses_websocket_reasoning_delta",
+                                        delta,
+                                    );
                                 }
                             }
                             ResponseEvent::Completed { .. } => {
@@ -702,10 +731,18 @@ fn maybe_capture_response_item(
 
     let (output_text, reasoning_text) = capture_sections_from_response_item(item);
     if let Some(output_text) = output_text {
-        prompt_capture_append_output(capture, output_text.as_str());
+        prompt_capture_append_output(
+            capture,
+            "responses_websocket_output_text",
+            output_text.as_str(),
+        );
     }
     if let Some(reasoning_text) = reasoning_text {
-        prompt_capture_append_reasoning(capture, reasoning_text.as_str());
+        prompt_capture_append_reasoning(
+            capture,
+            "responses_websocket_reasoning_text",
+            reasoning_text.as_str(),
+        );
     }
     if let Ok(item_json) = serde_json::to_value(item) {
         prompt_capture_write_output_json(Some(capture), label, &item_json);
