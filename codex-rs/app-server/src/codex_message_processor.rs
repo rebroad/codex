@@ -2109,7 +2109,7 @@ impl CodexMessageProcessor {
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
-            personality,
+            personality: _personality,
             ephemeral,
             persist_extended_history,
         } = params;
@@ -2123,7 +2123,7 @@ impl CodexMessageProcessor {
             sandbox,
             base_instructions,
             developer_instructions,
-            personality,
+            /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral;
         let cloud_requirements = self.current_cloud_requirements();
@@ -3690,7 +3690,7 @@ impl CodexMessageProcessor {
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
-            personality,
+            personality: _personality,
             persist_extended_history,
         } = params;
 
@@ -3723,7 +3723,7 @@ impl CodexMessageProcessor {
             sandbox,
             base_instructions,
             developer_instructions,
-            personality,
+            /*personality*/ None,
         );
         let persisted_resume_metadata = self
             .load_and_apply_persisted_resume_metadata(
@@ -6388,8 +6388,7 @@ impl CodexMessageProcessor {
             || params.service_tier.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
-            || collaboration_mode.is_some()
-            || params.personality.is_some();
+            || collaboration_mode.is_some();
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
@@ -6410,7 +6409,7 @@ impl CodexMessageProcessor {
                         summary: params.summary,
                         service_tier: params.service_tier,
                         collaboration_mode,
-                        personality: params.personality,
+                        personality: None,
                     },
                 )
                 .await;
@@ -7893,15 +7892,6 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
-    if let Some(requested_personality) = request.personality.as_ref()
-        && config_snapshot.personality.as_ref() != Some(requested_personality)
-    {
-        mismatch_details.push(format!(
-            "personality requested={requested_personality:?} active={:?}",
-            config_snapshot.personality
-        ));
-    }
-
     if request.config.is_some() {
         mismatch_details
             .push("config overrides were provided and ignored while running".to_string());
