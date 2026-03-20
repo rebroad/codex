@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::prompt_debug_http::prompt_capture_append_input;
 use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
@@ -130,6 +131,11 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             Compression::None => RequestCompression::None,
             Compression::Zstd => RequestCompression::Zstd,
         };
+        if let Some(capture_session) = capture.as_ref()
+            && let Ok(raw_body) = serde_json::to_string(&body)
+        {
+            prompt_capture_append_input(capture_session, "responses_http", &raw_body);
+        }
 
         let stream_response = self
             .session

@@ -412,6 +412,9 @@ pub async fn process_sse(
         };
 
         trace!("SSE event: {}", &sse.data);
+        if let Some(capture) = capture.as_ref() {
+            prompt_capture_append_output(capture, "responses_sse", &sse.data);
+        }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -420,6 +423,11 @@ pub async fn process_sse(
                 continue;
             }
         };
+        if let Some(capture) = capture.as_ref()
+            && event_contains_reasoning_payload(&event)
+        {
+            prompt_capture_append_reasoning(capture, "responses_sse", &sse.data);
+        }
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -439,7 +447,11 @@ pub async fn process_sse(
                 match &event {
                     ResponseEvent::OutputTextDelta(delta) => {
                         if let Some(capture) = capture.as_ref() {
-                            prompt_capture_append_output(capture, delta);
+                            prompt_capture_append_output(
+                                capture,
+                                "responses_sse_output_text_delta",
+                                delta,
+                            );
                         }
                     }
                     ResponseEvent::OutputItemAdded(item) => {
@@ -451,7 +463,11 @@ pub async fn process_sse(
                     ResponseEvent::ReasoningSummaryDelta { delta, .. }
                     | ResponseEvent::ReasoningContentDelta { delta, .. } => {
                         if let Some(capture) = capture.as_ref() {
-                            prompt_capture_append_reasoning(capture, delta);
+                            prompt_capture_append_reasoning(
+                                capture,
+                                "responses_sse_reasoning_delta",
+                                delta,
+                            );
                         }
                     }
                     ResponseEvent::Completed { .. } => {
@@ -493,10 +509,14 @@ fn maybe_capture_response_item(
 
     let (output_text, reasoning_text) = capture_sections_from_response_item(item);
     if let Some(output_text) = output_text {
-        prompt_capture_append_output(capture, output_text.as_str());
+        prompt_capture_append_output(capture, "responses_sse_output_text", output_text.as_str());
     }
     if let Some(reasoning_text) = reasoning_text {
-        prompt_capture_append_reasoning(capture, reasoning_text.as_str());
+        prompt_capture_append_reasoning(
+            capture,
+            "responses_sse_reasoning_text",
+            reasoning_text.as_str(),
+        );
     }
 
     if let Ok(item_json) = serde_json::to_value(item) {
@@ -561,6 +581,23 @@ pub(crate) fn capture_sections_from_response_item(
         }
         _ => (None, None),
     }
+}
+
+pub(crate) fn event_contains_reasoning_payload(event: &ResponsesStreamEvent) -> bool {
+    if event.kind.starts_with("response.reasoning_") {
+        return true;
+    }
+
+    if event.kind == "response.output_item.added" || event.kind == "response.output_item.done" {
+        return event
+            .item
+            .as_ref()
+            .and_then(|item| item.get("type"))
+            .and_then(Value::as_str)
+            == Some("reasoning");
+    }
+
+    false
 }
 
 fn try_parse_retry_after(err: &Error) -> Option<Duration> {
