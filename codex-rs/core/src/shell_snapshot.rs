@@ -182,7 +182,9 @@ impl ShellSnapshot {
 
 impl Drop for ShellSnapshot {
     fn drop(&mut self) {
-        if let Err(err) = std::fs::remove_file(&self.path) {
+        if let Err(err) = std::fs::remove_file(&self.path)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
             tracing::warn!(
                 "Failed to delete shell snapshot at {:?}: {err:?}",
                 self.path
@@ -548,7 +550,9 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: Threa
 }
 
 async fn remove_snapshot_file(path: &Path) {
-    if let Err(err) = fs::remove_file(path).await {
+    if let Err(err) = fs::remove_file(path).await
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
         tracing::warn!("Failed to delete shell snapshot at {:?}: {err:?}", path);
     }
 }

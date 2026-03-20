@@ -1362,11 +1362,11 @@
           "type": "boolean"
         },
         "capture_output": {
-          "description": "Capture model output text payloads.",
+          "description": "Capture model output stream payloads.",
           "type": "boolean"
         },
         "capture_reasoning": {
-          "description": "Capture model reasoning payloads.",
+          "description": "Capture model reasoning-related stream payloads.",
           "type": "boolean"
         },
         "enabled": {
