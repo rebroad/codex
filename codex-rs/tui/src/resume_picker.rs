@@ -650,6 +650,7 @@ struct PickerState {
     sort_key: ThreadSortKey,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
     prompt_count_cache: HashMap<PathBuf, Option<usize>>,
+    context_used_percent_cache: HashMap<PathBuf, Option<i64>>,
     inline_error: Option<String>,
     input_mode: InputMode,
     rename_draft: String,
@@ -752,6 +753,7 @@ struct Row {
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
     prompt_count: Option<usize>,
+    context_used_percent: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -822,6 +824,7 @@ impl PickerState {
             sort_key: ThreadSortKey::UpdatedAt,
             thread_name_cache: HashMap::new(),
             prompt_count_cache: HashMap::new(),
+            context_used_percent_cache: HashMap::new(),
             inline_error: None,
             input_mode: InputMode::Navigation,
             rename_draft: String::new(),
@@ -1079,6 +1082,7 @@ impl PickerState {
                 self.ingest_page(page);
                 self.update_thread_names().await;
                 self.update_prompt_counts().await;
+                self.update_context_used_percent().await;
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
@@ -1193,6 +1197,68 @@ impl PickerState {
                 continue;
             }
             row.prompt_count = cached;
+            updated = true;
+        }
+
+        if updated {
+            self.apply_filter();
+        }
+    }
+
+    async fn update_context_used_percent(&mut self) {
+        if !matches!(self.action, SessionPickerAction::Resume) {
+            return;
+        }
+
+        let mut missing_paths = Vec::new();
+        for row in &self.all_rows {
+            if row.context_used_percent.is_some() {
+                continue;
+            }
+            if self.context_used_percent_cache.contains_key(&row.path) {
+                continue;
+            }
+            missing_paths.push(row.path.clone());
+        }
+
+        for path in missing_paths {
+            let context_used_percent =
+                match RolloutRecorder::get_rollout_history(path.as_path()).await {
+                    Ok(history) => {
+                        history
+                            .get_rollout_items()
+                            .iter()
+                            .rev()
+                            .find_map(|item| match item {
+                                RolloutItem::EventMsg(EventMsg::TokenCount(token_count_event)) => {
+                                    let info = token_count_event.info.as_ref()?;
+                                    let context_window = info.model_context_window?;
+                                    let remaining = info
+                                        .last_token_usage
+                                        .percent_of_context_window_remaining(context_window)
+                                        .clamp(0, 100);
+                                    Some((100 - remaining).clamp(0, 100))
+                                }
+                                _ => None,
+                            })
+                    }
+                    Err(_) => None,
+                };
+            self.context_used_percent_cache
+                .insert(path, context_used_percent);
+        }
+
+        let mut updated = false;
+        for row in self.all_rows.iter_mut() {
+            let cached = self
+                .context_used_percent_cache
+                .get(&row.path)
+                .copied()
+                .flatten();
+            if row.context_used_percent == cached {
+                continue;
+            }
+            row.context_used_percent = cached;
             updated = true;
         }
 
@@ -1441,6 +1507,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         cwd: item.cwd.clone(),
         git_branch: item.git_branch.clone(),
         prompt_count: None,
+        context_used_percent: None,
     }
 }
 
@@ -1614,9 +1681,12 @@ fn render_list(
     let max_branch_width = metrics.max_branch_width;
     let max_prompts_width = metrics.max_prompts_width;
     let max_cwd_width = metrics.max_cwd_width;
+    let max_pct_width = metrics.max_pct_width;
 
-    for (idx, (row, (created_label, updated_label, branch_label, prompts_label, cwd_label))) in rows
-        [start..end]
+    for (
+        idx,
+        (row, (created_label, updated_label, branch_label, prompts_label, cwd_label, pct_label)),
+    ) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -1694,11 +1764,15 @@ fn render_list(
         if visibility.show_cwd {
             preview_width = preview_width.saturating_sub(max_cwd_width + 2);
         }
+        if visibility.show_pct {
+            preview_width = preview_width.saturating_sub(max_pct_width + 2);
+        }
         let add_leading_gap = !visibility.show_created
             && !visibility.show_updated
             && !visibility.show_branch
             && !visibility.show_prompts
-            && !visibility.show_cwd;
+            && !visibility.show_cwd
+            && !visibility.show_pct;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
@@ -1727,7 +1801,16 @@ fn render_list(
         if add_leading_gap {
             spans.push("  ".into());
         }
+        let preview_width_used = UnicodeWidthStr::width(preview.as_str());
+        let preview_padding = preview_width.saturating_sub(preview_width_used);
         spans.push(preview.into());
+        if visibility.show_pct {
+            if preview_padding > 0 {
+                spans.push(" ".repeat(preview_padding).into());
+            }
+            spans.push("  ".into());
+            spans.push(Span::from(format!("{pct_label:>max_pct_width$}")).dim());
+        }
 
         let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
@@ -1878,7 +1961,46 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
-    spans.push("Conversation".bold());
+    let marker_width = 2usize;
+    let mut conversation_width = area.width as usize;
+    conversation_width = conversation_width.saturating_sub(marker_width);
+    if visibility.show_created {
+        conversation_width = conversation_width.saturating_sub(metrics.max_created_width + 2);
+    }
+    if visibility.show_updated {
+        conversation_width = conversation_width.saturating_sub(metrics.max_updated_width + 2);
+    }
+    if visibility.show_branch {
+        conversation_width = conversation_width.saturating_sub(metrics.max_branch_width + 2);
+    }
+    if visibility.show_prompts {
+        conversation_width = conversation_width.saturating_sub(metrics.max_prompts_width + 2);
+    }
+    if visibility.show_cwd {
+        conversation_width = conversation_width.saturating_sub(metrics.max_cwd_width + 2);
+    }
+    if visibility.show_pct {
+        conversation_width = conversation_width.saturating_sub(metrics.max_pct_width + 2);
+    }
+
+    let conversation_label = "Conversation";
+    spans.push(Span::from(conversation_label).bold());
+    if visibility.show_pct {
+        let conversation_width_used = UnicodeWidthStr::width(conversation_label);
+        let conversation_padding = conversation_width.saturating_sub(conversation_width_used);
+        if conversation_padding > 0 {
+            spans.push(" ".repeat(conversation_padding).into());
+        }
+    }
+    if visibility.show_pct {
+        spans.push("  ".into());
+        let label = format!(
+            "{text:>width$}",
+            text = "Pct",
+            width = metrics.max_pct_width
+        );
+        spans.push(Span::from(label).bold());
+    }
     frame.render_widget_ref(Line::from(spans), area);
 }
 
@@ -1892,8 +2014,9 @@ struct ColumnMetrics {
     max_branch_width: usize,
     max_prompts_width: usize,
     max_cwd_width: usize,
-    /// (created_label, updated_label, branch_label, prompts_label, cwd_label) per row.
-    labels: Vec<(String, String, String, String, String)>,
+    max_pct_width: usize,
+    /// (created_label, updated_label, branch_label, prompts_label, cwd_label, pct_label) per row.
+    labels: Vec<(String, String, String, String, String, String)>,
 }
 
 /// Determines which columns to render given available terminal width.
@@ -1908,6 +2031,7 @@ struct ColumnVisibility {
     show_branch: bool,
     show_prompts: bool,
     show_cwd: bool,
+    show_pct: bool,
 }
 
 fn calculate_column_metrics(
@@ -1934,7 +2058,8 @@ fn calculate_column_metrics(
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String, String, String)> = Vec::with_capacity(rows.len());
+    let mut labels: Vec<(String, String, String, String, String, String)> =
+        Vec::with_capacity(rows.len());
     let mut max_created_width = UnicodeWidthStr::width("Created at");
     let mut max_updated_width = UnicodeWidthStr::width("Updated at");
     let mut max_branch_width = if matches!(action, SessionPickerAction::Resume) {
@@ -1949,6 +2074,11 @@ fn calculate_column_metrics(
     };
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
+    } else {
+        0
+    };
+    let mut max_pct_width = if matches!(action, SessionPickerAction::Resume) {
+        UnicodeWidthStr::width("Pct")
     } else {
         0
     };
@@ -1979,16 +2109,24 @@ fn calculate_column_metrics(
         } else {
             String::new()
         };
+        let pct = if matches!(action, SessionPickerAction::Resume) {
+            row.context_used_percent
+                .map(|percent| format!("{percent}%"))
+                .unwrap_or_else(|| "-".to_string())
+        } else {
+            String::new()
+        };
         max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         if matches!(action, SessionPickerAction::Resume) {
             max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
+            max_pct_width = max_pct_width.max(UnicodeWidthStr::width(pct.as_str()));
         }
         if matches!(action, SessionPickerAction::Fork) {
             max_prompts_width = max_prompts_width.max(UnicodeWidthStr::width(prompts.as_str()));
         }
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((created, updated, branch, prompts, cwd));
+        labels.push((created, updated, branch, prompts, cwd, pct));
     }
 
     ColumnMetrics {
@@ -1997,6 +2135,7 @@ fn calculate_column_metrics(
         max_branch_width,
         max_prompts_width,
         max_cwd_width,
+        max_pct_width,
         labels,
     }
 }
@@ -2017,6 +2156,7 @@ fn column_visibility(
     let show_branch = matches!(action, SessionPickerAction::Resume) && metrics.max_branch_width > 0;
     let show_prompts = matches!(action, SessionPickerAction::Fork) && metrics.max_prompts_width > 0;
     let show_cwd = metrics.max_cwd_width > 0;
+    let show_pct = matches!(action, SessionPickerAction::Resume) && metrics.max_pct_width > 0;
 
     // Calculate remaining width after all optional columns.
     let mut preview_width = area_width as usize;
@@ -2035,6 +2175,9 @@ fn column_visibility(
     }
     if show_cwd {
         preview_width = preview_width.saturating_sub(metrics.max_cwd_width + 2);
+    }
+    if show_pct {
+        preview_width = preview_width.saturating_sub(metrics.max_pct_width + 2);
     }
 
     // If preview would be too narrow, hide the non-active timestamp column.
@@ -2056,6 +2199,7 @@ fn column_visibility(
         show_branch,
         show_prompts,
         show_cwd,
+        show_pct,
     }
 }
 
@@ -2301,6 +2445,7 @@ mod tests {
             cwd: None,
             git_branch: None,
             prompt_count: None,
+            context_used_percent: None,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -2358,6 +2503,8 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
             git_branch: None,
+            prompt_count: None,
+            context_used_percent: None,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -2393,6 +2540,7 @@ mod tests {
                 cwd: None,
                 git_branch: None,
                 prompt_count: None,
+                context_used_percent: None,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
@@ -2404,6 +2552,7 @@ mod tests {
                 cwd: None,
                 git_branch: None,
                 prompt_count: None,
+                context_used_percent: None,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/c.jsonl")),
@@ -2415,6 +2564,7 @@ mod tests {
                 cwd: None,
                 git_branch: None,
                 prompt_count: None,
+                context_used_percent: None,
             },
         ];
         state.all_rows = rows.clone();
@@ -2716,6 +2866,7 @@ mod tests {
                 cwd: None,
                 git_branch: None,
                 prompt_count: None,
+                context_used_percent: None,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
@@ -2727,6 +2878,7 @@ mod tests {
                 cwd: None,
                 git_branch: None,
                 prompt_count: None,
+                context_used_percent: None,
             },
         ];
         state.all_rows = rows.clone();
@@ -2875,6 +3027,7 @@ mod tests {
             max_branch_width: 0,
             max_prompts_width: 0,
             max_cwd_width: 0,
+            max_pct_width: 0,
             labels: Vec::new(),
         };
 
@@ -2892,6 +3045,7 @@ mod tests {
                 show_branch: false,
                 show_prompts: false,
                 show_cwd: false,
+                show_pct: false,
             }
         );
 
@@ -2909,6 +3063,7 @@ mod tests {
                 show_branch: false,
                 show_prompts: false,
                 show_cwd: false,
+                show_pct: false,
             }
         );
 
@@ -2926,6 +3081,7 @@ mod tests {
                 show_branch: false,
                 show_prompts: false,
                 show_cwd: false,
+                show_pct: false,
             }
         );
     }
@@ -3036,6 +3192,7 @@ mod tests {
             cwd: None,
             git_branch: None,
             prompt_count: None,
+            context_used_percent: None,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -3076,6 +3233,8 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            prompt_count: None,
+            context_used_percent: None,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
