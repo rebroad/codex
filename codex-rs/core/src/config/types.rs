@@ -409,13 +409,13 @@ pub struct ToolSuggestConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PromptDebugHttpToml {
-    /// When `true`, captures backend query payloads to human-readable files.
+    /// When `true`, captures backend query payloads.
     pub enabled: Option<bool>,
     /// Capture query input payloads.
     pub capture_input: Option<bool>,
-    /// Capture model output text payloads.
+    /// Capture model output stream payloads.
     pub capture_output: Option<bool>,
-    /// Capture model reasoning payloads.
+    /// Capture model reasoning-related stream payloads.
     pub capture_reasoning: Option<bool>,
     /// Directory used for captured backend files.
     pub capture_dir: Option<AbsolutePathBuf>,
