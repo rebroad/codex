@@ -2462,6 +2462,10 @@ impl Config {
                     .enabled(Feature::Personality)
                     .then_some(Personality::Pragmatic)
             });
+        let personality = features
+            .enabled(Feature::Personality)
+            .then_some(personality)
+            .flatten();
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
