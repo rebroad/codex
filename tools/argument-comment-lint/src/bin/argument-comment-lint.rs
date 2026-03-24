@@ -85,13 +85,13 @@ fn has_library_selection(args: &[OsString]) -> bool {
 fn set_default_env(command: &mut Command) -> Result<(), String> {
     if let Some(flags) = env::var_os("DYLINT_RUSTFLAGS") {
         let mut flags = flags.to_string_lossy().to_string();
-        append_flag_if_missing(&mut flags, "-D uncommented-anonymous-literal-argument");
         append_flag_if_missing(&mut flags, "-A unknown_lints");
+        append_flag_if_missing(&mut flags, "-D uncommented-anonymous-literal-argument");
         command.env("DYLINT_RUSTFLAGS", flags);
     } else {
         command.env(
             "DYLINT_RUSTFLAGS",
-            "-D uncommented-anonymous-literal-argument -A unknown_lints",
+            "-A unknown_lints -D uncommented-anonymous-literal-argument",
         );
     }
 
