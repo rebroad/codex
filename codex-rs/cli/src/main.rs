@@ -97,6 +97,10 @@ struct MultitoolCli {
     #[clap(flatten)]
     interactive: TuiCli,
 
+    /// Override the auth file location (defaults to `$CODEX_HOME/auth.json`).
+    #[arg(long = "auth-file", value_name = "FILE", global = true)]
+    auth_file: Option<PathBuf>,
+
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
 }
@@ -632,8 +636,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         feature_toggles,
         remote,
         mut interactive,
+        auth_file,
         subcommand,
     } = MultitoolCli::parse();
+
+    codex_login::set_auth_file_override(auth_file);
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
@@ -1659,6 +1666,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -1692,6 +1700,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
 
         let Subcommand::Fork(ForkCommand {
