@@ -25,6 +25,9 @@ use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use once_cell::sync::Lazy;
 
+pub const AUTH_FILE_ENV_VAR: &str = "CODEX_AUTH_FILE";
+static AUTH_FILE_OVERRIDE: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -57,7 +60,33 @@ pub struct AuthDotJson {
 }
 
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
+    if let Some(path) = auth_file_override_from_cli() {
+        return path;
+    }
+    if let Some(path) = auth_file_override_from_env() {
+        return path;
+    }
     codex_home.join("auth.json")
+}
+
+pub fn set_auth_file_override(path: Option<PathBuf>) {
+    if let Ok(mut override_slot) = AUTH_FILE_OVERRIDE.lock() {
+        *override_slot = path;
+    }
+}
+
+fn auth_file_override_from_cli() -> Option<PathBuf> {
+    AUTH_FILE_OVERRIDE.lock().ok().and_then(|path| path.clone())
+}
+
+fn auth_file_override_from_env() -> Option<PathBuf> {
+    let value = std::env::var_os(AUTH_FILE_ENV_VAR)?;
+    let path = PathBuf::from(value);
+    if path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
