@@ -102,14 +102,30 @@ write-hooks-schema:
 [no-cd]
 argument-comment-lint *args:
     if [ "$#" -eq 0 ]; then \
-      bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh); \
+      just argument-comment-lint-remote; \
     else \
-      ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
+      "{{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py" "$@"; \
+    fi
+
+[no-cd]
+argument-comment-lint-local *args:
+    if [ "$#" -eq 0 ]; then \
+      bazel build --config=argument-comment-lint -- $("{{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh"); \
+    else \
+      "{{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py" "$@"; \
+    fi
+
+[no-cd]
+argument-comment-lint-remote *args:
+    if [ "$#" -eq 0 ]; then \
+      bazel build --config=argument-comment-lint --config=ci-linux -- $("{{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh"); \
+    else \
+      "{{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py" "$@"; \
     fi
 
 [no-cd]
 argument-comment-lint-from-source *args:
-    ./tools/argument-comment-lint/run.py "$@"
+    "{{ justfile_directory() }}/tools/argument-comment-lint/run.py" "$@"
 
 # Tail logs from the state SQLite database
 log *args:
