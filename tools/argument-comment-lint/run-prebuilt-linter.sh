@@ -140,14 +140,14 @@ if [[ "$library_stem" =~ ^(.+@nightly-[0-9]{4}-[0-9]{2}-[0-9]{2})-.+$ ]]; then
 fi
 
 if [[ -n "${DYLINT_RUSTFLAGS:-}" ]]; then
-    if [[ "$DYLINT_RUSTFLAGS" != *"-D uncommented-anonymous-literal-argument"* ]]; then
-        DYLINT_RUSTFLAGS+=" -D uncommented-anonymous-literal-argument"
-    fi
     if [[ "$DYLINT_RUSTFLAGS" != *"-A unknown_lints"* ]]; then
         DYLINT_RUSTFLAGS+=" -A unknown_lints"
     fi
+    if [[ "$DYLINT_RUSTFLAGS" != *"-D uncommented-anonymous-literal-argument"* ]]; then
+        DYLINT_RUSTFLAGS+=" -D uncommented-anonymous-literal-argument"
+    fi
 else
-    DYLINT_RUSTFLAGS="-D uncommented-anonymous-literal-argument -A unknown_lints"
+    DYLINT_RUSTFLAGS="-A unknown_lints -D uncommented-anonymous-literal-argument"
 fi
 export DYLINT_RUSTFLAGS
 

@@ -39,11 +39,11 @@ EOF
 }
 
 set_default_env() {
-    if [[ "${DYLINT_RUSTFLAGS:-}" != *"$strict_lint"* ]]; then
-        export DYLINT_RUSTFLAGS="${DYLINT_RUSTFLAGS:+${DYLINT_RUSTFLAGS} }-D $strict_lint"
-    fi
     if [[ "${DYLINT_RUSTFLAGS:-}" != *"$noise_lint"* ]]; then
         export DYLINT_RUSTFLAGS="${DYLINT_RUSTFLAGS:+${DYLINT_RUSTFLAGS} }-A $noise_lint"
+    fi
+    if [[ "${DYLINT_RUSTFLAGS:-}" != *"$strict_lint"* ]]; then
+        export DYLINT_RUSTFLAGS="${DYLINT_RUSTFLAGS:+${DYLINT_RUSTFLAGS} }-D $strict_lint"
     fi
 
     if [[ -z "${CARGO_INCREMENTAL:-}" ]]; then
