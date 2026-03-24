@@ -15,6 +15,7 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
+pub use auth::AUTH_FILE_ENV_VAR;
 pub use auth::AuthConfig;
 pub use auth::AuthCredentialsStoreMode;
 pub use auth::AuthDotJson;
@@ -38,5 +39,6 @@ pub use auth::login_with_api_key;
 pub use auth::logout;
 pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
+pub use auth::set_auth_file_override;
 pub use codex_app_server_protocol::AuthMode;
 pub use token_data::TokenData;
