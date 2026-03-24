@@ -90,10 +90,10 @@ fn has_library_selection(args: &[OsString]) -> bool {
 fn set_default_env(command: &mut Command) -> Result<(), String> {
     if let Some(flags) = env::var_os("DYLINT_RUSTFLAGS") {
         let mut flags = flags.to_string_lossy().to_string();
+        append_flag_if_missing(&mut flags, "-A unknown_lints");
         for strict_lint in STRICT_LINTS {
             append_flag_if_missing(&mut flags, &format!("-D {strict_lint}"));
         }
-        append_flag_if_missing(&mut flags, "-A unknown_lints");
         command.env("DYLINT_RUSTFLAGS", flags);
     } else {
         command.env("DYLINT_RUSTFLAGS", strict_rustflags());
@@ -118,7 +118,7 @@ fn strict_rustflags() -> String {
         .map(|lint| format!("-D {lint}"))
         .collect::<Vec<_>>()
         .join(" ");
-    format!("{strict_flags} -A unknown_lints")
+    format!("-A unknown_lints {strict_flags}")
 }
 
 fn append_flag_if_missing(flags: &mut String, flag: &str) {
