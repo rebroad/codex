@@ -1133,6 +1133,32 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         Ok(())
     }
 
+    pub async fn record_usage_limit_reached(&self, account_id: &str) -> anyhow::Result<()> {
+        let previous_percent = sqlx::query(
+            r#"
+SELECT
+    last_backend_used_percent
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .fetch_optional(self.pool.as_ref())
+        .await?
+        .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+
+        self.log_usage_event(
+            account_id,
+            Some(101.0),
+            previous_percent,
+            "usage_limit_reached=1 synthetic_used_percent=101".to_string(),
+        )
+        .await;
+
+        Ok(())
+    }
+
     async fn log_usage_event(
         &self,
         account_id: &str,

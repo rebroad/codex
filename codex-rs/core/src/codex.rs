@@ -3918,6 +3918,32 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
+    pub(crate) async fn record_usage_limit_reached(&self) {
+        if let Some(state_db) = self.account_usage_store.as_ref() {
+            let auth = self.services.auth_manager.auth().await;
+            if let Some(auth) = auth
+                && let Some(account_key) = account_usage_key(
+                    auth.get_account_id().as_deref(),
+                    auth.get_account_email().as_deref(),
+                )
+            {
+                if let Some(account_display) =
+                    account_usage_display(auth.get_account_email().as_deref())
+                {
+                    state_db
+                        .cache_account_display(account_key.as_str(), account_display)
+                        .await;
+                }
+                if let Err(err) = state_db
+                    .record_usage_limit_reached(account_key.as_str())
+                    .await
+                {
+                    warn!("failed to record usage limit reached event: {err}");
+                }
+            }
+        }
+    }
+
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
         let state = self.state.lock().await;
         state.mcp_dependency_prompted()
@@ -6699,6 +6725,7 @@ async fn run_sampling_request(
                 if let Some(rate_limits) = rate_limits {
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
+                sess.record_usage_limit_reached().await;
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(err) => err,
