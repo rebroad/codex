@@ -245,9 +245,8 @@ fn remote_container_ip(container_name: &str) -> Result<String> {
     ])?;
     let ip = ip.trim();
     if ip.is_empty() {
-        return Err(anyhow!(
-            "container `{container_name}` has no IP address; cannot connect to remote exec-server"
-        ));
+        // Host-network containers can report no per-network IP; in that mode, loop back to host.
+        return Ok("127.0.0.1".to_string());
     }
     Ok(ip.to_string())
 }
