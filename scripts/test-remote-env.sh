@@ -48,7 +48,7 @@ setup_remote_env() {
   fi
 
   docker rm -f "${container_name}" >/dev/null 2>&1 || true
-  docker run -d --name "${container_name}" ubuntu:24.04 sleep infinity >/dev/null
+  docker run -d --network host --name "${container_name}" ubuntu:24.04 sleep infinity >/dev/null
 
   export CODEX_TEST_REMOTE_ENV="${container_name}"
 }
