@@ -56,12 +56,10 @@ impl Environment {
     ) -> Result<Self, ExecServerError> {
         let remote_exec_server_client = if let Some(url) = &experimental_exec_server_url {
             Some(
-                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
-                    websocket_url: url.clone(),
-                    client_name: "codex-environment".to_string(),
-                    connect_timeout: std::time::Duration::from_secs(5),
-                    initialize_timeout: std::time::Duration::from_secs(5),
-                })
+                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+                    url.clone(),
+                    "codex-environment".to_string(),
+                ))
                 .await?,
             )
         } else {
