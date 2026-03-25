@@ -10,6 +10,7 @@ has_manifest_path=false
 has_package_selection=false
 has_library_selection=false
 has_no_deps=false
+has_keep_going=false
 expect_value=""
 
 for arg in "$@"; do
@@ -57,6 +58,9 @@ for arg in "$@"; do
         --no-deps)
             has_no_deps=true
             ;;
+        --keep-going)
+            has_keep_going=true
+            ;;
     esac
 done
 
@@ -69,6 +73,9 @@ if [[ "$has_package_selection" == false ]]; then
 fi
 if [[ "$has_no_deps" == false ]]; then
     lint_args+=(--no-deps)
+fi
+if [[ "$has_keep_going" == false ]]; then
+    lint_args+=(--keep-going)
 fi
 lint_args+=("$@")
 

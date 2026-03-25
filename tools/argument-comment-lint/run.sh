@@ -13,6 +13,7 @@ has_manifest_path=false
 has_package_selection=false
 has_no_deps=false
 has_library_selection=false
+has_keep_going=false
 expect_value=""
 
 ensure_local_prerequisites() {
@@ -96,6 +97,9 @@ for arg in "$@"; do
         --lib=*|--lib-path=*)
             has_library_selection=true
             ;;
+        --keep-going)
+            has_keep_going=true
+            ;;
     esac
 done
 
@@ -108,6 +112,9 @@ if [[ "$has_package_selection" == false ]]; then
 fi
 if [[ "$has_no_deps" == false ]]; then
     lint_args+=(--no-deps)
+fi
+if [[ "$has_keep_going" == false ]]; then
+    lint_args+=(--keep-going)
 fi
 lint_args+=("$@")
 
