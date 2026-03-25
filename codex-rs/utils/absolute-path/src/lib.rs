@@ -101,6 +101,22 @@ impl AbsolutePathBuf {
     }
 }
 
+/// Canonicalize a path while preserving the logical absolute path when
+/// canonicalization would traverse symlinks.
+pub fn canonicalize_preserving_symlinks(path: &Path) -> std::io::Result<PathBuf> {
+    let logical = AbsolutePathBuf::from_absolute_path(path)?.into_path_buf();
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => {
+            if canonical != logical {
+                Ok(logical)
+            } else {
+                Ok(canonical)
+            }
+        }
+        Err(_) => Ok(logical),
+    }
+}
+
 impl AsRef<Path> for AbsolutePathBuf {
     fn as_ref(&self) -> &Path {
         &self.0
