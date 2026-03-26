@@ -105,3 +105,18 @@ SELECT account_id, total_tokens, last_backend_used_percent
 FROM account_usage
 WHERE provider = 'openai';
 ```
+
+## Clearing Usage Data
+
+Use the CLI command below to remove local usage tracking rows:
+
+```bash
+codex usage clear
+```
+
+This targets the current resolved account identity for the active provider.
+To clear all locally tracked accounts for the active provider:
+
+```bash
+codex usage clear --all-accounts
+```
