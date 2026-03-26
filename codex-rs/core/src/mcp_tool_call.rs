@@ -160,15 +160,16 @@ pub(crate) async fn handle_mcp_tool_call(
     });
     notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
-    if let Some(decision) = maybe_request_mcp_tool_approval(
-        &sess,
-        turn_context,
-        &call_id,
-        &invocation,
-        metadata.as_ref(),
-        approval_mode,
-    )
-    .await
+    if server == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(decision) = maybe_request_mcp_tool_approval(
+            &sess,
+            turn_context,
+            &call_id,
+            &invocation,
+            metadata.as_ref(),
+            approval_mode,
+        )
+        .await
     {
         let (result, call_duration) = match decision {
             McpToolApprovalDecision::Accept
