@@ -306,6 +306,12 @@ where
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
+        if let codex_protocol::protocol::EventMsg::Error(err) = &ev.msg {
+            panic!(
+                "received error event while waiting for matching event: {}",
+                err.message
+            );
+        }
         if predicate(&ev.msg) {
             return ev.msg;
         }
