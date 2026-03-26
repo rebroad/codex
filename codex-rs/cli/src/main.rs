@@ -24,7 +24,9 @@ use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_state::StateRuntime;
+use codex_state::account_usage_key;
 use codex_state::state_db_path;
+use codex_state::usage_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
@@ -129,6 +131,9 @@ enum Subcommand {
     /// Show local session configuration status and exit.
     Status,
 
+    /// Manage local account usage tracking data.
+    Usage(UsageCommand),
+
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
@@ -180,6 +185,29 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct UsageCommand {
+    #[command(subcommand)]
+    subcommand: UsageSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum UsageSubcommand {
+    /// Clear locally tracked account usage samples and totals.
+    Clear(UsageClearCommand),
+}
+
+#[derive(Debug, Parser)]
+struct UsageClearCommand {
+    /// Clear usage for all locally tracked accounts on the active provider.
+    #[arg(long = "all-accounts", default_value_t = false)]
+    all_accounts: bool,
+
+    /// Skip the interactive confirmation prompt.
+    #[arg(long = "yes", short = 'y', default_value_t = false)]
+    yes: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -650,14 +678,15 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 
     match subcommand {
         None => {
-            if interactive
-                .prompt
-                .as_deref()
-                .is_some_and(is_status_shortcut_prompt)
-                && interactive.images.is_empty()
-            {
-                run_status_command(&root_config_overrides, &interactive).await?;
-                return Ok(());
+            if let Some(prompt) = interactive.prompt.as_deref() {
+                if is_status_shortcut_prompt(prompt) && interactive.images.is_empty() {
+                    run_status_command(&root_config_overrides, &interactive).await?;
+                    return Ok(());
+                }
+                let candidate = prompt.trim();
+                anyhow::bail!(
+                    "Unknown command `{candidate}`. Positional prompts are only supported via `codex exec`."
+                );
             }
             prepend_config_flags(
                 &mut interactive.config_overrides,
@@ -767,6 +796,19 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         }
         Some(Subcommand::Status) => {
             run_status_command(&root_config_overrides, &interactive).await?;
+        }
+        Some(Subcommand::Usage(usage_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "usage",
+            )?;
+            match usage_cli.subcommand {
+                UsageSubcommand::Clear(clear_command) => {
+                    run_usage_clear_command(&root_config_overrides, &interactive, clear_command)
+                        .await?;
+                }
+            }
         }
         #[cfg(target_os = "macos")]
         Some(Subcommand::App(app_cli)) => {
@@ -1546,6 +1588,81 @@ async fn run_status_command(
     Ok(())
 }
 
+async fn run_usage_clear_command(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+    clear_command: UsageClearCommand,
+) -> anyhow::Result<()> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        ..Default::default()
+    };
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let usage_path = usage_db_path(config.sqlite_home.as_path());
+
+    if !clear_command.yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "Refusing to clear usage data without confirmation in a non-interactive shell. Re-run with `--yes`."
+            );
+        }
+
+        let scope = if clear_command.all_accounts {
+            "all accounts".to_string()
+        } else if let Some((_, Some(account_email))) = current_account.as_ref() {
+            format!("the account `{account_email}`")
+        } else {
+            "the current account".to_string()
+        };
+        let provider = config.model_provider_id.as_str();
+        let prompt = format!(
+            "This will clear local usage tracking for {scope} on provider `{provider}` from {}. Continue? [y/N]: ",
+            usage_path.display()
+        );
+        if !confirm(&prompt)? {
+            eprintln!("Usage clear aborted.");
+            return Ok(());
+        }
+    }
+
+    let usage_store =
+        codex_state::AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id)
+            .await?;
+
+    let (usage_rows_deleted, sample_rows_deleted, scope) = if clear_command.all_accounts {
+        let (usage_rows_deleted, sample_rows_deleted) =
+            usage_store.clear_usage_for_all_accounts().await?;
+        (
+            usage_rows_deleted,
+            sample_rows_deleted,
+            "all accounts".to_string(),
+        )
+    } else {
+        let (account_id, account_email) = current_account
+            .ok_or_else(|| anyhow::anyhow!("Missing current account resolution state."))?;
+        let (usage_rows_deleted, sample_rows_deleted) = usage_store
+            .clear_usage_for_account(account_id.as_str())
+            .await?;
+        let scope = if let Some(account_email) = account_email {
+            format!("account `{account_email}`")
+        } else {
+            format!("account `{account_id}`")
+        };
+        (usage_rows_deleted, sample_rows_deleted, scope)
+    };
+
+    println!(
+        "Cleared usage tracking for {scope} from {} (account_usage rows: {usage_rows_deleted}, account_usage_samples rows: {sample_rows_deleted}).",
+        usage_path.display()
+    );
+
+    Ok(())
+}
+
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     remote: Option<String>,
@@ -1887,6 +2004,19 @@ mod tests {
         assert_eq!(is_status_shortcut_prompt("/status now"), false);
         assert_eq!(is_status_shortcut_prompt("status please"), false);
         assert_eq!(is_status_shortcut_prompt("/model"), false);
+    }
+
+    #[test]
+    fn root_prompt_is_rejected_outside_exec() {
+        let err =
+            MultitoolCli::try_parse_from(["codex", "hello world"]).expect("parse should succeed");
+        let MultitoolCli {
+            subcommand,
+            interactive,
+            ..
+        } = err;
+        assert!(subcommand.is_none());
+        assert_eq!(interactive.prompt.as_deref(), Some("hello world"));
     }
 
     #[test]
@@ -2384,6 +2514,19 @@ mod tests {
             "--allow-unauthenticated-non-loopback-ws",
         ]);
         assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn usage_clear_parses_flags() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "usage", "clear", "--all-accounts", "--yes"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Usage(UsageCommand { subcommand })) = cli.subcommand else {
+            panic!("expected usage subcommand");
+        };
+        let UsageSubcommand::Clear(UsageClearCommand { all_accounts, yes }) = subcommand;
+        assert!(all_accounts);
+        assert!(yes);
     }
 
     #[test]
