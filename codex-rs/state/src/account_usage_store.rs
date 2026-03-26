@@ -115,6 +115,82 @@ impl AccountUsageStore {
         self.sqlite_home.as_path()
     }
 
+    pub async fn clear_usage_for_account(&self, account_id: &str) -> anyhow::Result<(u64, u64)> {
+        let mut tx = self.pool.begin().await?;
+        let sample_rows_deleted = sqlx::query(
+            r#"
+DELETE FROM account_usage_samples
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        let usage_rows_deleted = sqlx::query(
+            r#"
+DELETE FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+
+        let key = (account_id.to_string(), self.default_provider.clone());
+        {
+            let mut last_deltas = self.last_deltas.lock().await;
+            last_deltas.remove(&key);
+        }
+        {
+            let mut account_displays = self.account_displays.lock().await;
+            account_displays.remove(account_id);
+        }
+
+        Ok((usage_rows_deleted, sample_rows_deleted))
+    }
+
+    pub async fn clear_usage_for_all_accounts(&self) -> anyhow::Result<(u64, u64)> {
+        let mut tx = self.pool.begin().await?;
+        let sample_rows_deleted = sqlx::query(
+            r#"
+DELETE FROM account_usage_samples
+WHERE provider = ?
+            "#,
+        )
+        .bind(self.default_provider.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        let usage_rows_deleted = sqlx::query(
+            r#"
+DELETE FROM account_usage
+WHERE provider = ?
+            "#,
+        )
+        .bind(self.default_provider.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+
+        {
+            let provider = self.default_provider.as_str();
+            let mut last_deltas = self.last_deltas.lock().await;
+            last_deltas.retain(|(_, key_provider), _| key_provider.as_str() != provider);
+        }
+        {
+            let mut account_displays = self.account_displays.lock().await;
+            account_displays.clear();
+        }
+
+        Ok((usage_rows_deleted, sample_rows_deleted))
+    }
+
     pub async fn get_account_usage(
         &self,
         account_id: &str,
@@ -532,8 +608,9 @@ WHERE account_id = ? AND provider = ?
                     row.try_get("window_start_cached_input_tokens").unwrap_or(0);
                 let window_start_output_tokens: i64 =
                     row.try_get("window_start_output_tokens").unwrap_or(0);
-                let window_start_context_total_tokens: i64 =
-                    row.try_get("window_start_context_total_tokens").unwrap_or(0);
+                let window_start_context_total_tokens: i64 = row
+                    .try_get("window_start_context_total_tokens")
+                    .unwrap_or(0);
                 let window_start_min_total_cached_output_tokens: i64 = row
                     .try_get("window_start_min_total_cached_output_tokens")
                     .unwrap_or(0);
@@ -837,7 +914,7 @@ WHERE account_id = ? AND provider = ?
                     if reached_full_window { 1 } else { 0 }
                 ),
             )
-                .await;
+            .await;
 
             return Ok(());
         }
@@ -1689,6 +1766,238 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clear_usage_for_account_deletes_only_target_account_rows() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 100,
+            input_tokens: 80,
+            cached_input_tokens: 0,
+            output_tokens: 20,
+            reasoning_output_tokens: 0,
+        };
+        runtime
+            .record_account_token_usage("account-1", &usage, None)
+            .await
+            .expect("record account-1");
+        runtime
+            .record_account_token_usage("account-2", &usage, None)
+            .await
+            .expect("record account-2");
+
+        insert_account_usage_sample(
+            runtime.pool.as_ref(),
+            "account-1",
+            "test-provider",
+            1,
+            0,
+            1,
+            1,
+            &SampleTokenDeltas {
+                blended_tokens: 100,
+                input_tokens: 80,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                context_total_tokens: 100,
+                min_total_cached_output_tokens: 20,
+            },
+            Some(60),
+            Some(123),
+        )
+        .await
+        .expect("insert account-1 sample");
+        insert_account_usage_sample(
+            runtime.pool.as_ref(),
+            "account-2",
+            "test-provider",
+            1,
+            0,
+            1,
+            1,
+            &SampleTokenDeltas {
+                blended_tokens: 100,
+                input_tokens: 80,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                context_total_tokens: 100,
+                min_total_cached_output_tokens: 20,
+            },
+            Some(60),
+            Some(123),
+        )
+        .await
+        .expect("insert account-2 sample");
+
+        let (usage_rows_deleted, sample_rows_deleted) = runtime
+            .clear_usage_for_account("account-1")
+            .await
+            .expect("clear account-1");
+        assert_eq!(usage_rows_deleted, 1);
+        assert_eq!(sample_rows_deleted, 1);
+
+        let account_1_usage = runtime
+            .get_account_usage("account-1")
+            .await
+            .expect("read account-1");
+        assert!(account_1_usage.is_none());
+        let account_2_usage = runtime
+            .get_account_usage("account-2")
+            .await
+            .expect("read account-2");
+        assert!(account_2_usage.is_some());
+
+        let account_1_samples: i64 = sqlx::query_scalar(
+            r#"
+SELECT COUNT(*) FROM account_usage_samples
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count account-1 samples");
+        let account_2_samples: i64 = sqlx::query_scalar(
+            r#"
+SELECT COUNT(*) FROM account_usage_samples
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-2")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count account-2 samples");
+        assert_eq!(account_1_samples, 0);
+        assert_eq!(account_2_samples, 1);
+    }
+
+    #[tokio::test]
+    async fn clear_usage_for_all_accounts_deletes_only_default_provider_rows() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 100,
+            input_tokens: 80,
+            cached_input_tokens: 0,
+            output_tokens: 20,
+            reasoning_output_tokens: 0,
+        };
+        runtime
+            .record_account_token_usage("account-1", &usage, None)
+            .await
+            .expect("record usage");
+
+        sqlx::query(
+            r#"
+INSERT INTO account_usage (
+    account_id,
+    provider,
+    total_tokens,
+    input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    reasoning_output_tokens,
+    updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("account-external")
+        .bind("other-provider")
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(1_i64)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert other-provider account_usage");
+        sqlx::query(
+            r#"
+INSERT INTO account_usage_samples (
+    account_id,
+    provider,
+    observed_at,
+    start_percent_int,
+    end_percent_int,
+    delta_percent_int,
+    delta_tokens,
+    delta_input_tokens,
+    delta_cached_input_tokens,
+    delta_output_tokens,
+    delta_context_total_tokens,
+    delta_min_total_cached_output_tokens
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("account-external")
+        .bind("other-provider")
+        .bind(1_i64)
+        .bind(0_i64)
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(1_i64)
+        .bind(0_i64)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert other-provider account_usage_samples");
+
+        let (usage_rows_deleted, sample_rows_deleted) = runtime
+            .clear_usage_for_all_accounts()
+            .await
+            .expect("clear all test-provider accounts");
+        assert_eq!(usage_rows_deleted, 1);
+        assert_eq!(sample_rows_deleted, 0);
+
+        let default_provider_usage_count: i64 = sqlx::query_scalar(
+            r#"
+SELECT COUNT(*) FROM account_usage
+WHERE provider = ?
+            "#,
+        )
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count test-provider usage");
+        let other_provider_usage_count: i64 = sqlx::query_scalar(
+            r#"
+SELECT COUNT(*) FROM account_usage
+WHERE provider = ?
+            "#,
+        )
+        .bind("other-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count other-provider usage");
+        let other_provider_sample_count: i64 = sqlx::query_scalar(
+            r#"
+SELECT COUNT(*) FROM account_usage_samples
+WHERE provider = ?
+            "#,
+        )
+        .bind("other-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count other-provider samples");
+        assert_eq!(default_provider_usage_count, 0);
+        assert_eq!(other_provider_usage_count, 1);
+        assert_eq!(other_provider_sample_count, 1);
+    }
+
+    #[tokio::test]
     async fn account_usage_resets_totals_when_backend_window_resets() {
         let home = tempfile::tempdir().expect("tempdir");
         let runtime =
@@ -2182,16 +2491,14 @@ WHERE account_id = ? AND provider = ?
     fn min_input_cached_output_tokens_uses_min_input_plus_output() {
         assert_eq!(
             min_input_cached_output_tokens(
-                /*input_tokens*/ 120,
-                /*cached_input_tokens*/ 80,
+                /*input_tokens*/ 120, /*cached_input_tokens*/ 80,
                 /*output_tokens*/ 35,
             ),
             115
         );
         assert_eq!(
             min_input_cached_output_tokens(
-                /*input_tokens*/ 40,
-                /*cached_input_tokens*/ 150,
+                /*input_tokens*/ 40, /*cached_input_tokens*/ 150,
                 /*output_tokens*/ 10,
             ),
             50
