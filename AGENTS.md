@@ -27,6 +27,10 @@ In the codex-rs folder where the rust code lives:
 - For commands that require escalated permissions, run them directly with escalation; do not ask for
   manual approval in chat (the UI will handle approval prompts).
 - Rust commands can wait on lockfiles and appear stuck; be patient and avoid killing them early.
+- `codex-rs/Cargo.lock` may already be dirty from normal local Cargo usage. Treat a pre-existing or incidental `Cargo.lock` modification as expected and do not stop work solely for that reason.
+- If you did not intentionally change dependencies, do not include `codex-rs/Cargo.lock` in commits.
+- For Cargo commands that support it, prefer `--locked` to avoid incidental lockfile rewrites (for example `cargo check --locked`, `cargo build --locked`, `cargo clippy --locked`, `cargo test --locked`).
+- Any `git` write operation from Codex (`git add`, `git commit`, `git tag`, `git push`) should be run in an escalated shell.
 
 Testing/formatting:
 
