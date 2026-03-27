@@ -459,7 +459,7 @@ fn send_response_with_disconnect(
     writer.flush()
 }
 
-fn build_authorize_url(
+pub fn build_authorize_url(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -501,6 +501,10 @@ fn generate_state() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+pub fn generate_oauth_state() -> String {
+    generate_state()
 }
 
 fn send_cancel_request(port: u16) -> io::Result<()> {
@@ -566,7 +570,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
 }
 
 /// Tokens returned by the OAuth authorization-code exchange.
-pub(crate) struct ExchangedTokens {
+pub struct ExchangedTokens {
     pub id_token: String,
     pub access_token: String,
     pub refresh_token: String,
@@ -675,7 +679,7 @@ fn sanitize_url_for_logging(url: &str) -> String {
 /// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
 /// fields from parsed token responses and redacted transport errors, but does not log the final
 /// callback-layer `%err` string.
-pub(crate) async fn exchange_code_for_tokens(
+pub async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -747,7 +751,7 @@ pub(crate) async fn exchange_code_for_tokens(
 }
 
 /// Persists exchanged credentials using the configured local auth store.
-pub(crate) async fn persist_tokens_async(
+pub async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
@@ -862,10 +866,7 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
 }
 
 /// Validates the ID token against an optional workspace restriction.
-pub(crate) fn ensure_workspace_allowed(
-    expected: Option<&str>,
-    id_token: &str,
-) -> Result<(), String> {
+pub fn ensure_workspace_allowed(expected: Option<&str>, id_token: &str) -> Result<(), String> {
     let Some(expected) = expected else {
         return Ok(());
     };

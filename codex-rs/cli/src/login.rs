@@ -15,6 +15,8 @@ use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
 use codex_core::config::Config;
 use codex_login::ServerOptions;
+use codex_login::complete_device_code_login;
+use codex_login::request_device_code;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::account::PlanType;
@@ -36,6 +38,7 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const TELEGRAM_LOGIN_PENDING_DIR: &str = "telegram-login";
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -419,6 +422,127 @@ fn safe_format_key(key: &str) -> String {
     let prefix = &key[..8];
     let suffix = &key[key.len() - 5..];
     format!("{prefix}***{suffix}")
+}
+
+pub struct TelegramLoginStartResult {
+    pub verification_url: String,
+    pub user_code: String,
+    pub message: String,
+}
+
+pub async fn run_tlogin_start(
+    cli_config_overrides: CliConfigOverrides,
+    user_id: String,
+) -> std::io::Result<TelegramLoginStartResult> {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("starting telegram device login flow");
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        return Err(std::io::Error::other(CHATGPT_LOGIN_DISABLED_MESSAGE));
+    }
+
+    let opts = ServerOptions::new(
+        config.codex_home.clone(),
+        CLIENT_ID.to_string(),
+        config.forced_chatgpt_workspace_id.clone(),
+        config.cli_auth_credentials_store_mode,
+    );
+    let device_code = request_device_code(&opts).await?;
+
+    let pending_root = config.codex_home.join(TELEGRAM_LOGIN_PENDING_DIR);
+    std::fs::create_dir_all(&pending_root)?;
+    let pending_file = pending_root.join(format!("{user_id}.json"));
+    let pending = serde_json::json!({
+        "issuer": opts.issuer,
+        "client_id": opts.client_id,
+        "device_code": device_code,
+        "forced_chatgpt_workspace_id": opts.forced_chatgpt_workspace_id,
+        "created_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0),
+    });
+    write_json_secure(&pending_file, &pending)?;
+
+    Ok(TelegramLoginStartResult {
+        verification_url: device_code.verification_url.clone(),
+        user_code: device_code.user_code.clone(),
+        message: format!(
+            "Open this link and enter the one-time code:\n\n{}\n\nCode: {}",
+            device_code.verification_url, device_code.user_code
+        ),
+    })
+}
+
+pub async fn run_tlogin_complete(
+    cli_config_overrides: CliConfigOverrides,
+    user_id: String,
+) -> std::io::Result<()> {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("completing telegram device login flow");
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        return Err(std::io::Error::other(CHATGPT_LOGIN_DISABLED_MESSAGE));
+    }
+
+    let pending_file = config
+        .codex_home
+        .join(TELEGRAM_LOGIN_PENDING_DIR)
+        .join(format!("{user_id}.json"));
+    let pending = read_pending_login(pending_file.as_path())?;
+
+    let issuer = pending
+        .get("issuer")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| std::io::Error::other("missing issuer in pending login"))?;
+    let client_id = pending
+        .get("client_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| std::io::Error::other("missing client_id in pending login"))?;
+    let forced_workspace = pending
+        .get("forced_chatgpt_workspace_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let device_code: codex_login::DeviceCode =
+        serde_json::from_value(pending["device_code"].clone()).map_err(std::io::Error::other)?;
+
+    let mut opts = ServerOptions::new(
+        config.codex_home.clone(),
+        client_id.to_string(),
+        forced_workspace,
+        config.cli_auth_credentials_store_mode,
+    );
+    opts.issuer = issuer.to_string();
+    opts.open_browser = false;
+
+    complete_device_code_login(opts, device_code).await?;
+
+    let _ = std::fs::remove_file(&pending_file);
+    Ok(())
+}
+
+fn read_pending_login(path: &std::path::Path) -> std::io::Result<serde_json::Value> {
+    let raw = std::fs::read_to_string(path)?;
+    serde_json::from_str(&raw).map_err(std::io::Error::other)
+}
+
+fn write_json_secure(path: &std::path::Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path)?;
+    use std::io::Write;
+    file.write_all(
+        serde_json::to_string_pretty(value)
+            .map_err(std::io::Error::other)?
+            .as_bytes(),
+    )?;
+    file.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]
