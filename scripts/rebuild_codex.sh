@@ -149,6 +149,30 @@ assert_npm_linux_tags() {
   done
 }
 
+run_release_build_with_locked_fallback() {
+  local build_log
+  build_log="$(mktemp)"
+  set +e
+  RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked 2>&1 | tee "${build_log}"
+  local status=${PIPESTATUS[0]}
+  set -e
+
+  if (( status == 0 )); then
+    rm -f "${build_log}"
+    return 0
+  fi
+
+  if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
+    echo "Locked build needs lockfile regeneration; retrying release build without --locked."
+    rm -f "${build_log}"
+    RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release
+    return 0
+  fi
+
+  rm -f "${build_log}"
+  return "${status}"
+}
+
 MODE="debug"
 PUBLISH="auto"
 REGEN_SCHEMA="auto"
@@ -267,7 +291,7 @@ fi
 
 if [[ "${MODE}" == "release" ]]; then
   echo "[2/4] Building release codex..."
-  RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked
+  run_release_build_with_locked_fallback
   echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
   install -D -m 755 "${RUST_WORKSPACE_DIR}/target/release/codex" "${INSTALL_BIN}"
 else
