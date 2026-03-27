@@ -232,7 +232,7 @@ struct ResumeCommand {
     all: bool,
 
     /// Include non-interactive sessions in the resume picker and --last selection.
-    #[arg(long = "include-non-interactive", default_value_t = false)]
+    #[arg(long = "include-non-interactive", default_value_t = true)]
     include_non_interactive: bool,
 
     #[clap(flatten)]
@@ -785,6 +785,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             remote,
             config_overrides,
         })) => {
+            if all && !std::io::stdout().is_terminal() {
+                print_resume_sessions_non_interactive(all, include_non_interactive).await?;
+                return Ok(());
+            }
             interactive = finalize_resume_interactive(
                 interactive,
                 root_config_overrides.clone(),
@@ -1440,6 +1444,74 @@ async fn load_thread_item_by_rollout_path(
     }
 }
 
+async fn print_resume_sessions_non_interactive(
+    show_all: bool,
+    include_non_interactive: bool,
+) -> anyhow::Result<()> {
+    let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    let provider_filter = vec![config.model_provider_id.clone()];
+    let allowed_sources = if include_non_interactive {
+        &[][..]
+    } else {
+        INTERACTIVE_SESSION_SOURCES.as_slice()
+    };
+    let filter_cwd = if show_all {
+        None
+    } else {
+        Some(config.cwd.as_path())
+    };
+
+    let mut cursor = None;
+    loop {
+        let page = RolloutRecorder::list_threads(
+            &config,
+            /*page_size*/ 100,
+            cursor.as_ref(),
+            ThreadSortKey::UpdatedAt,
+            allowed_sources,
+            Some(provider_filter.as_slice()),
+            &config.model_provider_id,
+            /*search_term*/ None,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+
+        for item in page.items.into_iter().filter(|item| {
+            filter_cwd.is_none()
+                || item
+                    .cwd
+                    .as_deref()
+                    .is_some_and(|cwd| cwd == config.cwd.as_path())
+        }) {
+            let thread = item
+                .thread_id
+                .map(|thread_id| thread_id.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let updated_at = item.updated_at.unwrap_or_else(|| "-".to_string());
+            let cwd = item
+                .cwd
+                .as_deref()
+                .map(|cwd| cwd.display().to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let preview = item.first_user_message.unwrap_or_else(|| "-".to_string());
+            println!("{thread}\t{updated_at}\t{cwd}\t{preview}");
+        }
+
+        if page.next_cursor.is_none() {
+            break;
+        }
+        cursor = page.next_cursor;
+    }
+
+    Ok(())
+}
+
 async fn run_status_command(
     root_config_overrides: &CliConfigOverrides,
     interactive: &TuiCli,
@@ -1957,6 +2029,7 @@ mod tests {
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
         assert!(!interactive.resume_show_all);
+        assert!(interactive.resume_include_non_interactive);
     }
 
     #[test]
