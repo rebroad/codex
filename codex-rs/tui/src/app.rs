@@ -3999,7 +3999,7 @@ impl App {
                     tui,
                     &self.config,
                     /*show_all*/ false,
-                    /*include_non_interactive*/ false,
+                    /*include_non_interactive*/ true,
                     picker_app_server,
                 )
                 .await?
