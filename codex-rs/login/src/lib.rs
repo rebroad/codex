@@ -10,9 +10,17 @@ pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;
 pub use device_code_auth::run_device_code_login;
+pub use pkce::PkceCodes;
+pub use pkce::generate_pkce;
+pub use server::ExchangedTokens;
 pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
+pub use server::build_authorize_url;
+pub use server::ensure_workspace_allowed;
+pub use server::exchange_code_for_tokens;
+pub use server::generate_oauth_state;
+pub use server::persist_tokens_async;
 pub use server::run_login_server;
 
 pub use auth::AUTH_FILE_ENV_VAR;
