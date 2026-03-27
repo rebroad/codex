@@ -7,16 +7,153 @@ RUST_WORKSPACE_DIR="${REPO_DIR}/codex-rs"
 TOOLCHAIN_FILE="${RUST_WORKSPACE_DIR}/rust-toolchain.toml"
 INSTALL_BIN="${HOME}/.cargo/bin/codex"
 CARGO_LOCK_REL="codex-rs/Cargo.lock"
+PUBLISH_TIMEOUT_MINUTES_DEFAULT=45
 
 restore_cargo_lock_if_needed() {
   git -C "${REPO_DIR}" checkout -- "./${CARGO_LOCK_REL}" >/dev/null 2>&1 || true
 }
 trap restore_cargo_lock_if_needed EXIT
 
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+is_only_cargo_lock_dirty() {
+  local status_lines filtered_status
+  status_lines="$(git -C "${REPO_DIR}" status --porcelain)"
+  if [[ -z "${status_lines}" ]]; then
+    return 0
+  fi
+  filtered_status="$(grep -Ev "^[ MARCUD?]{2} ${CARGO_LOCK_REL}$" <<<"${status_lines}" || true)"
+  [[ -z "${filtered_status}" ]]
+}
+
+assert_publish_worktree_state() {
+  if is_only_cargo_lock_dirty; then
+    return 0
+  fi
+  echo "Working tree has changes beyond ${CARGO_LOCK_REL}; refusing to publish." >&2
+  git -C "${REPO_DIR}" status --short >&2
+  exit 1
+}
+
+find_release_run_id() {
+  local tag_name="$1"
+  gh run list \
+    --workflow custom-codex-release.yml \
+    --limit 50 \
+    --json databaseId,displayTitle,event \
+    --jq ".[] | select(.event == \"push\" and .displayTitle == \"${tag_name}\") | .databaseId" \
+    | head -n 1
+}
+
+wait_for_run_to_appear() {
+  local tag_name="$1"
+  local timeout_secs="$2"
+  local start_secs now elapsed run_id
+  start_secs="$(date +%s)"
+  while true; do
+    run_id="$(find_release_run_id "${tag_name}" || true)"
+    if [[ -n "${run_id}" ]]; then
+      echo "${run_id}"
+      return 0
+    fi
+    now="$(date +%s)"
+    elapsed="$((now - start_secs))"
+    if (( elapsed > timeout_secs )); then
+      echo "Timed out waiting for custom-codex-release run for ${tag_name}" >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+wait_for_run_completion() {
+  local run_id="$1"
+  local timeout_secs="$2"
+  local start_secs now elapsed status conclusion url
+  start_secs="$(date +%s)"
+  while true; do
+    status="$(gh run view "${run_id}" --json status --jq '.status')"
+    conclusion="$(gh run view "${run_id}" --json conclusion --jq '.conclusion // ""')"
+    url="$(gh run view "${run_id}" --json url --jq '.url')"
+    echo "run=${run_id} status=${status} conclusion=${conclusion} url=${url}"
+
+    if [[ "${status}" == "completed" ]]; then
+      if [[ "${conclusion}" != "success" ]]; then
+        echo "Release workflow failed: ${url}" >&2
+        return 1
+      fi
+      return 0
+    fi
+
+    now="$(date +%s)"
+    elapsed="$((now - start_secs))"
+    if (( elapsed > timeout_secs )); then
+      echo "Timed out waiting for run ${run_id} to complete (${url})" >&2
+      return 1
+    fi
+    sleep 10
+  done
+}
+
+assert_release_assets() {
+  local tag_name="$1"
+  local version="$2"
+  local assets missing
+  assets="$(gh release view "${tag_name}" --json assets --jq '.assets[].name')"
+  missing=0
+  for asset in \
+    "codex-npm-${version}.tgz" \
+    "codex-npm-linux-x64-${version}.tgz" \
+    "codex-npm-linux-armv7-${version}.tgz"; do
+    if ! grep -Fxq "${asset}" <<<"${assets}"; then
+      echo "Missing GitHub release asset: ${asset}" >&2
+      missing=1
+    fi
+  done
+  if (( missing != 0 )); then
+    echo "Current assets for ${tag_name}:" >&2
+    echo "${assets}" >&2
+    return 1
+  fi
+}
+
+assert_npm_linux_tags() {
+  local timeout_secs="$1"
+  local start_secs now elapsed tags_json has_linux_x64 has_linux_armv7
+  start_secs="$(date +%s)"
+  while true; do
+    if tags_json="$(npm view @reb.ai/codex dist-tags --json 2>/dev/null)"; then
+      has_linux_x64="$(jq -r 'has("linux-x64")' <<<"${tags_json}")"
+      has_linux_armv7="$(jq -r 'has("linux-armv7")' <<<"${tags_json}")"
+      if [[ "${has_linux_x64}" == "true" && "${has_linux_armv7}" == "true" ]]; then
+        echo "npm dist-tags: ${tags_json}"
+        return 0
+      fi
+      echo "Waiting for npm linux tags. Current dist-tags: ${tags_json}"
+    else
+      echo "Waiting for @reb.ai/codex visibility on npm..."
+    fi
+
+    now="$(date +%s)"
+    elapsed="$((now - start_secs))"
+    if (( elapsed > timeout_secs )); then
+      echo "Timed out waiting for npm linux-x64/linux-armv7 dist-tags on @reb.ai/codex" >&2
+      return 1
+    fi
+    sleep 15
+  done
+}
+
 MODE="debug"
 PUBLISH="auto"
 REGEN_SCHEMA="auto"
 FORCE_TAG="true"
+PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
 for arg in "$@"; do
   case "${arg}" in
@@ -41,9 +178,12 @@ for arg in "$@"; do
     --no-regen-schema)
       REGEN_SCHEMA="false"
       ;;
+    --publish-timeout-minutes=*)
+      PUBLISH_TIMEOUT_MINUTES="${arg#*=}"
+      ;;
     -h|--help)
       cat <<'EOF'
-Usage: rebuild_codex.sh [--release] [--publish|--no-publish]
+Usage: rebuild_codex.sh [--release] [--publish|--no-publish] [--publish-timeout-minutes=N]
 
 Default behavior:
 - Regenerate app-server schema (just write-app-server-schema)
@@ -61,6 +201,8 @@ Options:
              Force schema regeneration
   --no-regen-schema
              Skip schema regeneration
+  --publish-timeout-minutes=N
+             Timeout in minutes for release workflow/npm verification (default: 45)
 EOF
       exit 0
       ;;
@@ -151,6 +293,11 @@ elif [[ "${PUBLISH}" == "true" ]]; then
 fi
 
 if [[ "${should_publish}" == "true" ]]; then
+  require_cmd gh
+  require_cmd jq
+  require_cmd npm
+
+  timeout_secs="$((PUBLISH_TIMEOUT_MINUTES * 60))"
   VERSION="$(
     RUST_WORKSPACE_DIR="${RUST_WORKSPACE_DIR}" python3 - <<'PY'
 import os
@@ -180,9 +327,26 @@ PY
 
   TAG="codex-v${VERSION}"
 
-  if [[ -n "$(git status --porcelain)" ]]; then
-    echo "Working tree is not clean; refusing to tag ${TAG}."
+  assert_publish_worktree_state
+
+  current_branch="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD)"
+  if [[ "${current_branch}" != "main" ]]; then
+    echo "Publish requires main branch (current: ${current_branch})." >&2
     exit 1
+  fi
+
+  echo "Syncing with origin..."
+  git -C "${REPO_DIR}" fetch origin --prune
+  local_head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+  remote_head="$(git -C "${REPO_DIR}" rev-parse origin/main)"
+  if [[ "${local_head}" != "${remote_head}" ]]; then
+    if git -C "${REPO_DIR}" merge-base --is-ancestor "${remote_head}" "${local_head}"; then
+      echo "Local main is ahead of origin/main; pushing main..."
+      git -C "${REPO_DIR}" push origin main
+    else
+      echo "Local main is behind/diverged from origin/main; sync manually first." >&2
+      exit 1
+    fi
   fi
 
   if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
@@ -222,6 +386,17 @@ PY
     repo="${BASH_REMATCH[2]%\.git}"
     workflow_url="https://github.com/${owner}/${repo}/actions/workflows/custom-codex-release.yml"
     echo "GitHub Actions workflow: ${workflow_url}"
-    echo "Look for the run triggered by tag ${TAG}."
+    echo "Waiting for run triggered by ${TAG}..."
   fi
+
+  run_id="$(wait_for_run_to_appear "${TAG}" "${timeout_secs}")"
+  echo "Found run: ${run_id}"
+  wait_for_run_completion "${run_id}" "${timeout_secs}"
+
+  echo "Verifying GitHub release assets..."
+  assert_release_assets "${TAG}" "${VERSION}"
+
+  echo "Verifying npm linux tags..."
+  assert_npm_linux_tags "${timeout_secs}"
+  echo "Publish flow completed successfully for ${TAG}."
 fi
