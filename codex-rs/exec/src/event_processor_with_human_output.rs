@@ -496,6 +496,7 @@ fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             let mut writable_entries = vec!["workdir".to_string()];
             if !*exclude_slash_tmp {
                 writable_entries.push("/tmp".to_string());
+                writable_entries.push("/var/tmp".to_string());
             }
             if !*exclude_tmpdir_env_var {
                 writable_entries.push("$TMPDIR".to_string());
