@@ -237,6 +237,12 @@ run_release_build_with_locked_fallback() {
 }
 
 run_ci_preflight_checks() {
+  local preflight_ts preflight_dir shear_log shear_errors
+  preflight_ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  preflight_dir="${REPO_DIR}/tmp/preflight/${preflight_ts}"
+  mkdir -p "${preflight_dir}"
+  echo "[preflight] Artifacts directory: ${preflight_dir}"
+
   require_cmd just
   init_pnpm
 
@@ -284,10 +290,44 @@ run_ci_preflight_checks() {
   fi
 
   echo "[preflight] Running cargo shear..."
+  shear_log="${preflight_dir}/cargo-shear.log"
+  shear_errors="${preflight_dir}/cargo-shear-errors.txt"
+  set +e
   (
     cd "${RUST_WORKSPACE_DIR}"
-    cargo +"${TOOLCHAIN}" shear
-  )
+    cargo +"${TOOLCHAIN}" shear 2>&1
+  ) | tee "${shear_log}"
+  local shear_status=${PIPESTATUS[0]}
+  set -e
+
+  awk '
+    /^shear\/[a-z0-9_]+/ {section=$0; mode=0}
+    /^[[:space:]]*× / {
+      print section
+      print $0
+      mode=1
+      next
+    }
+    mode==1 {
+      if ($0 ~ /^[[:space:]]*$/) {
+        print ""
+        mode=0
+      } else {
+        print $0
+      }
+    }
+  ' "${shear_log}" > "${shear_errors}"
+
+  if [[ -s "${shear_errors}" ]]; then
+    echo "[preflight] cargo-shear actionable errors: ${shear_errors}"
+  else
+    echo "[preflight] cargo-shear found no actionable '×' errors."
+  fi
+  echo "[preflight] cargo-shear full log: ${shear_log}"
+
+  if (( shear_status != 0 )); then
+    return "${shear_status}"
+  fi
 }
 
 init_pnpm() {
@@ -367,39 +407,67 @@ is_commit_preflight_passed() {
     ' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1
 }
 
+is_tree_preflight_passed() {
+  local tree_hash="$1"
+  local version="$2"
+  [[ -f "${TRIAGE_STATE_FILE}" ]] || return 1
+  jq -e \
+    --arg tree_hash "${tree_hash}" \
+    --arg version "${version}" \
+    '
+      .trees[$tree_hash] as $record
+      | $record != null
+      | if . then
+          (($record.version // "") == "" or $record.version == $version)
+        else
+          false
+        end
+    ' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1
+}
+
 ensure_triage_state_file() {
   mkdir -p "$(dirname "${TRIAGE_STATE_FILE}")"
   if [[ ! -f "${TRIAGE_STATE_FILE}" ]]; then
     cat > "${TRIAGE_STATE_FILE}" <<'EOF'
-{"version":1,"commits":{}}
+{"version":1,"commits":{},"trees":{}}
 EOF
     return 0
   fi
-  if jq -e '.commits == null' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1; then
+  if jq -e '.commits == null or .trees == null' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1; then
     local tmp
     tmp="$(mktemp)"
-    jq '.version = 1 | .commits = (.commits // {})' "${TRIAGE_STATE_FILE}" > "${tmp}"
+    jq '.version = 1 | .commits = (.commits // {}) | .trees = (.trees // {})' "${TRIAGE_STATE_FILE}" > "${tmp}"
     mv "${tmp}" "${TRIAGE_STATE_FILE}"
   fi
 }
 
-record_preflight_success_for_commit() {
+record_preflight_success_for_commit_and_tree() {
   local commit_sha="$1"
-  local version="$2"
+  local tree_hash="$2"
+  local version="$3"
   local now tmp
   ensure_triage_state_file
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   tmp="$(mktemp)"
   jq \
     --arg commit_sha "${commit_sha}" \
+    --arg tree_hash "${tree_hash}" \
     --arg now "${now}" \
     --arg version "${version}" \
     '
       .version = 1
       | .commits = (.commits // {})
+      | .trees = (.trees // {})
       | .commits[$commit_sha] = {
           markedAt: $now,
           version: $version,
+          treeHash: $tree_hash,
+          source: "rebuild_codex_preflight"
+        }
+      | .trees[$tree_hash] = {
+          markedAt: $now,
+          version: $version,
+          commitSha: $commit_sha,
           source: "rebuild_codex_preflight"
         }
     ' "${TRIAGE_STATE_FILE}" > "${tmp}"
@@ -458,7 +526,7 @@ Default behavior:
 - Build debug codex, copy it to ~/.cargo/bin/codex
 - Remove workspace codex build artifacts under target/
 - Skip CI preflight checks unless publishing
-- Record successful preflight checks by commit hash for future publish skip decisions
+- Record successful preflight checks by content hash (git tree hash) for future publish skip decisions
 
 Options:
   --release   Build/install release codex into ~/.cargo/bin/codex, then clean target binaries
@@ -478,7 +546,7 @@ Options:
   --publish-timeout-minutes=N
              Timeout in minutes for release workflow/npm verification (default: 45)
   --triage-state-file=<path>
-             Local triage registry path keyed by commit hash (default: tmp/ci-triaged-tags.json)
+             Local triage registry path keyed by content hash (default: tmp/ci-triaged-tags.json)
 EOF
       exit 0
       ;;
@@ -575,6 +643,7 @@ if [[ "${should_publish}" == "true" ]]; then
 fi
 
 HEAD_COMMIT_SHA="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+HEAD_TREE_HASH="$(git -C "${REPO_DIR}" rev-parse HEAD^{tree})"
 VERSION=""
 TAG=""
 if [[ "${should_publish}" == "true" ]]; then
@@ -590,7 +659,10 @@ run_ci_preflight="false"
 if [[ "${CI_PREFLIGHT}" == "true" ]]; then
   run_ci_preflight="true"
 elif [[ "${CI_PREFLIGHT}" != "false" && "${should_publish}" == "true" ]]; then
-  if [[ -n "${VERSION}" ]] && is_commit_preflight_passed "${HEAD_COMMIT_SHA}" "${VERSION}"; then
+  if [[ -n "${VERSION}" ]] && is_tree_preflight_passed "${HEAD_TREE_HASH}" "${VERSION}"; then
+    echo "Skipping CI preflight checks for tree ${HEAD_TREE_HASH} (version ${VERSION}) from ${TRIAGE_STATE_FILE}."
+  elif [[ -n "${VERSION}" ]] && is_commit_preflight_passed "${HEAD_COMMIT_SHA}" "${VERSION}"; then
+    # Backward compatibility for previously recorded entries.
     echo "Skipping CI preflight checks for commit ${HEAD_COMMIT_SHA} (version ${VERSION}) from ${TRIAGE_STATE_FILE}."
   else
     run_ci_preflight="true"
@@ -611,10 +683,10 @@ if [[ "${run_ci_preflight}" == "true" ]]; then
     VERSION="$(resolve_publish_version)"
   fi
   if [[ -n "${VERSION}" ]]; then
-    record_preflight_success_for_commit "${HEAD_COMMIT_SHA}" "${VERSION}"
-    echo "Recorded successful preflight for commit ${HEAD_COMMIT_SHA} (version ${VERSION}) in ${TRIAGE_STATE_FILE}."
+    record_preflight_success_for_commit_and_tree "${HEAD_COMMIT_SHA}" "${HEAD_TREE_HASH}" "${VERSION}"
+    echo "Recorded successful preflight for commit ${HEAD_COMMIT_SHA} and tree ${HEAD_TREE_HASH} (version ${VERSION}) in ${TRIAGE_STATE_FILE}."
   else
-    echo "Warning: unable to resolve version for preflight recording; skipping commit preflight record."
+    echo "Warning: unable to resolve version for preflight recording; skipping preflight record."
   fi
 fi
 
