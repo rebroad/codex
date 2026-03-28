@@ -1,5 +1,6 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::TransportByteStats;
 use crate::error::ApiError;
 use crate::prompt_debug_http::PromptCaptureSession;
 use crate::prompt_debug_http::prompt_capture_append_output;
@@ -58,6 +59,7 @@ pub fn stream_from_fixture(
         idle_timeout,
         /*telemetry*/ None,
         /*capture*/ None,
+        /*sent_bytes*/ 0,
     ));
     Ok(ResponseStream { rx_event })
 }
@@ -68,6 +70,7 @@ pub fn spawn_response_stream(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
     capture: Option<PromptCaptureSession>,
+    sent_bytes: i64,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -114,6 +117,7 @@ pub fn spawn_response_stream(
             idle_timeout,
             telemetry,
             capture,
+            sent_bytes,
         )
         .await;
     });
@@ -338,6 +342,7 @@ pub fn process_responses_event(
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
                             capture_id: None,
+                            transport_bytes: None,
                         }));
                     }
                     Err(err) => {
@@ -377,11 +382,13 @@ pub async fn process_sse(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     capture: Option<PromptCaptureSession>,
+    sent_bytes: i64,
 ) {
     let capture_id = capture.as_ref().map(|session| session.id().to_string());
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut recv_bytes = 0_i64;
 
     loop {
         let start = Instant::now();
@@ -412,6 +419,7 @@ pub async fn process_sse(
         };
 
         trace!("SSE event: {}", &sse.data);
+        recv_bytes = recv_bytes.saturating_add(sse.data.len() as i64);
         if let Some(capture) = capture.as_ref() {
             prompt_capture_append_output(capture, "responses_sse", &sse.data);
         }
@@ -471,8 +479,17 @@ pub async fn process_sse(
                         }
                     }
                     ResponseEvent::Completed { .. } => {
-                        if let ResponseEvent::Completed { capture_id: id, .. } = &mut event {
+                        if let ResponseEvent::Completed {
+                            capture_id: id,
+                            transport_bytes,
+                            ..
+                        } = &mut event
+                        {
                             *id = capture_id.clone();
+                            *transport_bytes = Some(TransportByteStats {
+                                sent: sent_bytes.max(0),
+                                recv: recv_bytes.max(0),
+                            });
                         }
                     }
                     ResponseEvent::Created
@@ -688,6 +705,7 @@ mod tests {
             idle_timeout(),
             None,
             None,
+            0,
         ));
 
         let mut events = Vec::new();
@@ -720,6 +738,7 @@ mod tests {
             idle_timeout(),
             None,
             None,
+            0,
         ));
 
         let mut out = Vec::new();
@@ -875,7 +894,7 @@ mod tests {
         let stream: ByteStream = Box::pin(stream);
 
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
-        tokio::spawn(process_sse(stream, tx, idle_timeout(), None, None));
+        tokio::spawn(process_sse(stream, tx, idle_timeout(), None, None, 0));
 
         let events = tokio::time::timeout(Duration::from_millis(1000), async {
             let mut events = Vec::new();
@@ -1075,7 +1094,8 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(stream_response, idle_timeout(), None, None, None);
+        let mut stream =
+            spawn_response_stream(stream_response, idle_timeout(), None, None, None, 0);
         let event = stream
             .rx_event
             .recv()

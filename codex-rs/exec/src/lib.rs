@@ -94,6 +94,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
@@ -2011,6 +2012,7 @@ async fn consume_direct_stream(
             ResponseEvent::Completed {
                 token_usage,
                 capture_id,
+                transport_bytes,
                 ..
             } => {
                 if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
@@ -2038,7 +2040,11 @@ async fn consume_direct_stream(
                             .record_account_token_usage(
                                 account_key.as_str(),
                                 &usage,
-                                capture_id.as_deref(),
+                                AccountUsageEventMeta {
+                                    query_id: capture_id.as_deref(),
+                                    sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
+                                    recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                },
                             )
                             .await
                         {
