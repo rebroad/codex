@@ -440,6 +440,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "local_compaction": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -2127,6 +2130,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "local_compaction": {
           "type": "boolean"
         },
         "memories": {
