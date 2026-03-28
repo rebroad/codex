@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use codex_protocol::protocol::TokenUsage;
+use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
 use codex_state::usage_db_path;
 use predicates::str::contains;
@@ -38,7 +39,7 @@ async fn usage_clear_all_accounts_deletes_default_provider_rows() -> Result<()> 
         reasoning_output_tokens: 0,
     };
     usage_store
-        .record_account_token_usage("account-1", &usage, None)
+        .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
         .await?;
 
     let mut cmd = codex_command(codex_home.path())?;

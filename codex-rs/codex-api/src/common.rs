@@ -78,6 +78,7 @@ pub enum ResponseEvent {
         response_id: String,
         token_usage: Option<TokenUsage>,
         capture_id: Option<String>,
+        transport_bytes: Option<TransportByteStats>,
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta {
@@ -93,6 +94,12 @@ pub enum ResponseEvent {
     },
     RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportByteStats {
+    pub sent: i64,
+    pub recv: i64,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]

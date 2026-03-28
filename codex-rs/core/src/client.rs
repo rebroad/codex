@@ -1455,6 +1455,7 @@ where
                     response_id,
                     token_usage,
                     capture_id,
+                    transport_bytes,
                 }) => {
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
@@ -1476,6 +1477,7 @@ where
                             response_id,
                             token_usage,
                             capture_id,
+                            transport_bytes,
                         }))
                         .await
                         .is_err()
