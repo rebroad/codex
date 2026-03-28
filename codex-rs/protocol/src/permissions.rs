@@ -620,6 +620,8 @@ impl FileSystemSandboxPolicy {
                             if entry.access.can_write() {
                                 if cwd_absolute.as_ref().is_some_and(|cwd| cwd == path) {
                                     workspace_root_writable = true;
+                                } else if is_slash_tmp_absolute_path(path) {
+                                    slash_tmp_writable = true;
                                 } else {
                                     writable_roots.push(path.clone());
                                 }
@@ -871,6 +873,15 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
                         },
                         access: FileSystemAccessMode::Write,
                     });
+                    #[cfg(unix)]
+                    entries.push(FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            #[allow(clippy::expect_used)]
+                            path: AbsolutePathBuf::from_absolute_path("/var/tmp")
+                                .expect("/var/tmp is absolute"),
+                        },
+                        access: FileSystemAccessMode::Write,
+                    });
                 }
                 if !exclude_tmpdir_env_var {
                     entries.push(FileSystemSandboxEntry {
@@ -988,16 +999,24 @@ fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSp
 /// they name the same location.
 ///
 /// We intentionally only fold the special paths whose concrete meaning is
-/// stable without a cwd, such as `/` and `/tmp`.
+/// stable without a cwd, such as `/`, `/tmp`, and `/var/tmp`.
 fn special_path_matches_absolute_path(
     value: &FileSystemSpecialPath,
     path: &AbsolutePathBuf,
 ) -> bool {
     match value {
         FileSystemSpecialPath::Root => path.as_path().parent().is_none(),
-        FileSystemSpecialPath::SlashTmp => path.as_path() == Path::new("/tmp"),
+        FileSystemSpecialPath::SlashTmp => is_slash_tmp_path(path.as_path()),
         _ => false,
     }
+}
+
+fn is_slash_tmp_absolute_path(path: &AbsolutePathBuf) -> bool {
+    is_slash_tmp_path(path.as_path())
+}
+
+fn is_slash_tmp_path(path: &Path) -> bool {
+    cfg!(unix) && (path == Path::new("/tmp") || path == Path::new("/var/tmp"))
 }
 
 /// Orders resolved entries so the most specific path wins first, then applies
