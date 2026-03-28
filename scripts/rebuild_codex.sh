@@ -9,6 +9,15 @@ INSTALL_BIN="${HOME}/.cargo/bin/codex"
 CARGO_LOCK_REL="codex-rs/Cargo.lock"
 PUBLISH_TIMEOUT_MINUTES_DEFAULT=45
 TRIAGE_STATE_FILE_DEFAULT="tmp/ci-triaged-tags.json"
+PNPM_VERSION_DEFAULT="10.29.3"
+
+RED=$'\033[31m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
+
+log_error() {
+  echo "${BOLD}${RED}ERROR:${RESET} $*" >&2
+}
 
 restore_cargo_lock_if_needed() {
   git -C "${REPO_DIR}" checkout -- "./${CARGO_LOCK_REL}" >/dev/null 2>&1 || true
@@ -229,25 +238,25 @@ run_release_build_with_locked_fallback() {
 
 run_ci_preflight_checks() {
   require_cmd just
-  require_cmd pnpm
+  init_pnpm
 
   if [[ ! -d "${REPO_DIR}/node_modules" ]]; then
     echo "[preflight] Installing JS dependencies with pnpm..."
     (
       cd "${REPO_DIR}"
-      pnpm install --frozen-lockfile
+      run_pnpm install --frozen-lockfile
     )
   fi
 
   echo "[preflight] Checking docs/JS formatting (pnpm run format)..."
   if ! (
     cd "${REPO_DIR}"
-    pnpm run format
+    run_pnpm run format
   ); then
     echo "[preflight] Formatting drift detected; applying pnpm run format:fix..."
     (
       cd "${REPO_DIR}"
-      pnpm run format:fix
+      run_pnpm run format:fix
     )
   fi
 
@@ -281,6 +290,37 @@ run_ci_preflight_checks() {
   )
 }
 
+init_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
+
+  if ! command -v corepack >/dev/null 2>&1; then
+    log_error "pnpm is missing and corepack is not installed."
+    log_error "Install pnpm ${PNPM_VERSION_DEFAULT}+ or install Node.js with corepack enabled."
+    return 1
+  fi
+
+  echo "[preflight] pnpm not found; installing pnpm ${PNPM_VERSION_DEFAULT} via corepack..."
+  mkdir -p "${HOME}/.cache/node/corepack/v1"
+  if ! corepack prepare "pnpm@${PNPM_VERSION_DEFAULT}" --activate; then
+    log_error "Failed to install pnpm via corepack."
+    return 1
+  fi
+
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+  else
+    # Some environments cannot create a global pnpm shim; corepack pnpm still works.
+    PNPM_CMD=(corepack pnpm)
+  fi
+}
+
+run_pnpm() {
+  "${PNPM_CMD[@]}" "$@"
+}
+
 read_workspace_version() {
   RUST_WORKSPACE_DIR="${RUST_WORKSPACE_DIR}" python3 - <<'PY'
 import os
@@ -309,10 +349,61 @@ resolve_publish_version() {
   echo "${version}"
 }
 
-is_tag_triaged() {
-  local tag="$1"
+is_commit_preflight_passed() {
+  local commit_sha="$1"
+  local version="$2"
   [[ -f "${TRIAGE_STATE_FILE}" ]] || return 1
-  jq -e --arg tag "${tag}" '.tags[$tag] != null' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1
+  jq -e \
+    --arg commit_sha "${commit_sha}" \
+    --arg version "${version}" \
+    '
+      .commits[$commit_sha] as $record
+      | $record != null
+      | if . then
+          (($record.version // "") == "" or $record.version == $version)
+        else
+          false
+        end
+    ' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1
+}
+
+ensure_triage_state_file() {
+  mkdir -p "$(dirname "${TRIAGE_STATE_FILE}")"
+  if [[ ! -f "${TRIAGE_STATE_FILE}" ]]; then
+    cat > "${TRIAGE_STATE_FILE}" <<'EOF'
+{"version":1,"commits":{}}
+EOF
+    return 0
+  fi
+  if jq -e '.commits == null' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1; then
+    local tmp
+    tmp="$(mktemp)"
+    jq '.version = 1 | .commits = (.commits // {})' "${TRIAGE_STATE_FILE}" > "${tmp}"
+    mv "${tmp}" "${TRIAGE_STATE_FILE}"
+  fi
+}
+
+record_preflight_success_for_commit() {
+  local commit_sha="$1"
+  local version="$2"
+  local now tmp
+  ensure_triage_state_file
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  tmp="$(mktemp)"
+  jq \
+    --arg commit_sha "${commit_sha}" \
+    --arg now "${now}" \
+    --arg version "${version}" \
+    '
+      .version = 1
+      | .commits = (.commits // {})
+      | .commits[$commit_sha] = {
+          markedAt: $now,
+          version: $version,
+          source: "rebuild_codex_preflight"
+        }
+    ' "${TRIAGE_STATE_FILE}" > "${tmp}"
+  mv "${tmp}" "${TRIAGE_STATE_FILE}"
 }
 
 MODE="debug"
@@ -367,6 +458,7 @@ Default behavior:
 - Build debug codex, copy it to ~/.cargo/bin/codex
 - Remove workspace codex build artifacts under target/
 - Skip CI preflight checks unless publishing
+- Record successful preflight checks by commit hash for future publish skip decisions
 
 Options:
   --release   Build/install release codex into ~/.cargo/bin/codex, then clean target binaries
@@ -386,7 +478,7 @@ Options:
   --publish-timeout-minutes=N
              Timeout in minutes for release workflow/npm verification (default: 45)
   --triage-state-file=<path>
-             Local triaged-tags registry path (default: tmp/ci-triaged-tags.json)
+             Local triage registry path keyed by commit hash (default: tmp/ci-triaged-tags.json)
 EOF
       exit 0
       ;;
@@ -482,6 +574,7 @@ if [[ "${should_publish}" == "true" ]]; then
   require_cmd npm
 fi
 
+HEAD_COMMIT_SHA="$(git -C "${REPO_DIR}" rev-parse HEAD)"
 VERSION=""
 TAG=""
 if [[ "${should_publish}" == "true" ]]; then
@@ -497,17 +590,32 @@ run_ci_preflight="false"
 if [[ "${CI_PREFLIGHT}" == "true" ]]; then
   run_ci_preflight="true"
 elif [[ "${CI_PREFLIGHT}" != "false" && "${should_publish}" == "true" ]]; then
-  if [[ -n "${TAG}" ]] && is_tag_triaged "${TAG}"; then
-    echo "Skipping CI preflight checks for triaged tag ${TAG} (${TRIAGE_STATE_FILE})."
+  if [[ -n "${VERSION}" ]] && is_commit_preflight_passed "${HEAD_COMMIT_SHA}" "${VERSION}"; then
+    echo "Skipping CI preflight checks for commit ${HEAD_COMMIT_SHA} (version ${VERSION}) from ${TRIAGE_STATE_FILE}."
   else
     run_ci_preflight="true"
   fi
 fi
 
 if [[ "${run_ci_preflight}" == "true" ]]; then
-  echo "Running CI preflight checks..."
-  run_ci_preflight_checks
+  echo
+  echo "${BOLD}=== CI PREFLIGHT START ===${RESET}"
+  if ! run_ci_preflight_checks; then
+    echo "${BOLD}${RED}=== CI PREFLIGHT FAILED ===${RESET}" >&2
+    log_error "Fix the preflight issue above, then re-run rebuild_codex.sh."
+    exit 1
+  fi
+  echo "${BOLD}=== CI PREFLIGHT PASSED ===${RESET}"
   echo "CI preflight checks completed."
+  if [[ -z "${VERSION}" ]]; then
+    VERSION="$(resolve_publish_version)"
+  fi
+  if [[ -n "${VERSION}" ]]; then
+    record_preflight_success_for_commit "${HEAD_COMMIT_SHA}" "${VERSION}"
+    echo "Recorded successful preflight for commit ${HEAD_COMMIT_SHA} (version ${VERSION}) in ${TRIAGE_STATE_FILE}."
+  else
+    echo "Warning: unable to resolve version for preflight recording; skipping commit preflight record."
+  fi
 fi
 
 if [[ "${should_publish}" == "true" ]]; then
