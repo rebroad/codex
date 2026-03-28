@@ -31,6 +31,7 @@ use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -87,12 +88,64 @@ impl ApplyPatchRuntime {
 
     #[cfg(not(target_os = "windows"))]
     fn resolve_apply_patch_program(codex_self_exe: Option<&PathBuf>) -> Result<PathBuf, ToolError> {
-        if let Some(path) = codex_self_exe {
+        if let Some(path) = codex_self_exe
+            && !Self::is_deleted_executable(path)
+        {
             return Ok(path.clone());
         }
 
-        std::env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
+        if let Some(path) = Self::resolve_from_argv0() {
+            return Ok(path);
+        }
+
+        if let Ok(path) = std::env::current_exe()
+            && Self::is_usable_executable(&path)
+        {
+            return Ok(path);
+        }
+
+        if let Ok(path) = which::which("codex")
+            && Self::is_usable_executable(&path)
+        {
+            return Ok(path);
+        }
+
+        Err(ToolError::Rejected(
+            "failed to determine a live codex executable for apply_patch".to_string(),
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_from_argv0() -> Option<PathBuf> {
+        let argv0 = std::env::args_os().next()?;
+        let argv0_path = PathBuf::from(argv0);
+        if argv0_path.as_os_str().is_empty() {
+            return None;
+        }
+
+        if argv0_path.is_absolute() {
+            return Self::is_usable_executable(&argv0_path).then_some(argv0_path);
+        }
+
+        if argv0_path.components().count() > 1 {
+            let cwd = std::env::current_dir().ok()?;
+            let candidate = cwd.join(argv0_path);
+            return Self::is_usable_executable(&candidate).then_some(candidate);
+        }
+
+        which::which(&argv0_path)
+            .ok()
+            .filter(|path| Self::is_usable_executable(path))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn is_usable_executable(path: &Path) -> bool {
+        !Self::is_deleted_executable(path) && path.is_file()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn is_deleted_executable(path: &Path) -> bool {
+        path.to_string_lossy().ends_with(" (deleted)")
     }
 
     fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
