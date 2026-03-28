@@ -26,6 +26,8 @@ use codex_keyring_store::KeyringStore;
 use once_cell::sync::Lazy;
 
 pub const AUTH_FILE_ENV_VAR: &str = "CODEX_AUTH_FILE";
+const AUTH_FILE_NAME: &str = "auth.json";
+const AUTH_PROFILE_DIR_NAME: &str = "auth.json.d";
 static AUTH_FILE_OVERRIDE: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
 /// Determine where Codex should store CLI auth credentials.
@@ -66,7 +68,7 @@ pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
     if let Some(path) = auth_file_override_from_env() {
         return path;
     }
-    codex_home.join("auth.json")
+    default_auth_file(codex_home)
 }
 
 pub fn set_auth_file_override(path: Option<PathBuf>) {
@@ -89,7 +91,140 @@ fn auth_file_override_from_env() -> Option<PathBuf> {
     }
 }
 
+fn is_auth_file_overridden() -> bool {
+    auth_file_override_from_cli().is_some() || auth_file_override_from_env().is_some()
+}
+
+fn default_auth_file(codex_home: &Path) -> PathBuf {
+    codex_home.join(AUTH_FILE_NAME)
+}
+
+fn auth_profile_dir(codex_home: &Path) -> PathBuf {
+    codex_home.join(AUTH_PROFILE_DIR_NAME)
+}
+
+fn sanitize_email_for_filename(email: &str) -> String {
+    let mut out = String::with_capacity(email.len());
+    for ch in email.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '@' | '+') {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "unknown".to_string()
+    } else {
+        out
+    }
+}
+
+fn auth_profile_file_for_email(codex_home: &Path, email: &str) -> PathBuf {
+    auth_profile_dir(codex_home).join(sanitize_email_for_filename(email))
+}
+
+fn write_auth_json_file(path: &Path, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json_data = serde_json::to_string_pretty(auth_dot_json)?;
+    let mut options = OpenOptions::new();
+    options.truncate(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(json_data.as_bytes())?;
+    file.flush()?;
+    Ok(())
+}
+
+fn auth_json_email(path: &Path) -> std::io::Result<Option<String>> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    let parsed: AuthDotJson = serde_json::from_str(&contents)?;
+    Ok(parsed
+        .tokens
+        .and_then(|tokens| tokens.id_token.email)
+        .filter(|email| !email.trim().is_empty()))
+}
+
+fn active_profile_path_from_symlink(codex_home: &Path) -> Option<PathBuf> {
+    let auth_file = default_auth_file(codex_home);
+    let target = std::fs::read_link(&auth_file).ok()?;
+    let resolved = if target.is_absolute() {
+        target
+    } else {
+        auth_file.parent()?.join(target)
+    };
+    if resolved.starts_with(auth_profile_dir(codex_home)) {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
+fn write_default_auth_pointer(codex_home: &Path, profile_path: &Path) -> std::io::Result<()> {
+    let auth_file = default_auth_file(codex_home);
+    if let Some(parent) = auth_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::remove_file(&auth_file) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+
+    #[cfg(unix)]
+    {
+        if std::os::unix::fs::symlink(profile_path, &auth_file).is_ok() {
+            return Ok(());
+        }
+    }
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_file(profile_path, &auth_file).is_ok() {
+            return Ok(());
+        }
+    }
+
+    std::fs::copy(profile_path, &auth_file).map(|_| ())
+}
+
 pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
+    if !is_auth_file_overridden() {
+        let mut removed_any = false;
+        let auth_file = default_auth_file(codex_home);
+        if let Some(profile_path) = active_profile_path_from_symlink(codex_home) {
+            match std::fs::remove_file(&profile_path) {
+                Ok(()) => removed_any = true,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        } else if let Some(email) = auth_json_email(&auth_file)? {
+            let profile_path = auth_profile_file_for_email(codex_home, &email);
+            match std::fs::remove_file(profile_path) {
+                Ok(()) => removed_any = true,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+        match std::fs::remove_file(&auth_file) {
+            Ok(()) => {
+                removed_any = true;
+                return Ok(removed_any);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(removed_any),
+            Err(err) => return Err(err),
+        }
+    }
+
     let auth_file = get_auth_file(codex_home);
     match std::fs::remove_file(&auth_file) {
         Ok(()) => Ok(true),
@@ -138,22 +273,21 @@ impl AuthStorageBackend for FileAuthStorage {
     }
 
     fn save(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
-        let auth_file = get_auth_file(&self.codex_home);
-
-        if let Some(parent) = auth_file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let json_data = serde_json::to_string_pretty(auth_dot_json)?;
-        let mut options = OpenOptions::new();
-        options.truncate(true).write(true).create(true);
-        #[cfg(unix)]
+        if !is_auth_file_overridden()
+            && let Some(email) = auth_dot_json
+                .tokens
+                .as_ref()
+                .and_then(|tokens| tokens.id_token.email.as_deref())
+            && !email.trim().is_empty()
         {
-            options.mode(0o600);
+            let profile_path = auth_profile_file_for_email(&self.codex_home, email);
+            write_auth_json_file(profile_path.as_path(), auth_dot_json)?;
+            write_default_auth_pointer(&self.codex_home, profile_path.as_path())?;
+            return Ok(());
         }
-        let mut file = options.open(auth_file)?;
-        file.write_all(json_data.as_bytes())?;
-        file.flush()?;
-        Ok(())
+
+        let auth_file = get_auth_file(&self.codex_home);
+        write_auth_json_file(auth_file.as_path(), auth_dot_json)
     }
 
     fn delete(&self) -> std::io::Result<bool> {

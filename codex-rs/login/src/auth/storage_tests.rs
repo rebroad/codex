@@ -53,6 +53,49 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
 }
 
 #[test]
+fn file_storage_save_with_email_creates_profile_file_and_default_pointer() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: id_token_with_prefix("alice"),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            account_id: Some("acct".to_string()),
+        }),
+        last_refresh: Some(Utc::now()),
+    };
+
+    storage.save(&auth_dot_json)?;
+
+    let profile_path = auth_profile_file_for_email(codex_home.path(), "alice@example.com");
+    assert!(profile_path.exists(), "profile file should be created");
+    let auth_file = get_auth_file(codex_home.path());
+    assert!(auth_file.exists(), "auth.json should exist");
+
+    let loaded = storage.load()?.context("auth should load")?;
+    assert_eq!(loaded, auth_dot_json);
+
+    if auth_file.is_symlink() {
+        let target = std::fs::read_link(&auth_file)?;
+        let resolved = if target.is_absolute() {
+            target
+        } else {
+            auth_file.parent().context("auth file parent")?.join(target)
+        };
+        assert_eq!(resolved, profile_path);
+    } else {
+        let default_contents = std::fs::read_to_string(&auth_file)?;
+        let profile_contents = std::fs::read_to_string(&profile_path)?;
+        assert_eq!(default_contents, profile_contents);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let auth_dot_json = AuthDotJson {
@@ -68,6 +111,33 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let removed = storage.delete()?;
     assert!(removed);
     assert!(!dir.path().join("auth.json").exists());
+    Ok(())
+}
+
+#[test]
+fn file_storage_delete_removes_active_profile_file() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: id_token_with_prefix("delete-me"),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            account_id: Some("acct".to_string()),
+        }),
+        last_refresh: None,
+    };
+    storage.save(&auth_dot_json)?;
+    let profile_path = auth_profile_file_for_email(dir.path(), "delete-me@example.com");
+    assert!(profile_path.exists(), "profile should exist before delete");
+    assert!(dir.path().join("auth.json").exists());
+
+    let removed = storage.delete()?;
+    assert!(removed);
+    assert!(!dir.path().join("auth.json").exists());
+    assert!(!profile_path.exists());
     Ok(())
 }
 
