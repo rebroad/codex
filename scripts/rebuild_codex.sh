@@ -226,9 +226,64 @@ run_release_build_with_locked_fallback() {
   return "${status}"
 }
 
+run_ci_preflight_checks() {
+  require_cmd just
+  require_cmd pnpm
+
+  if [[ ! -d "${REPO_DIR}/node_modules" ]]; then
+    echo "[preflight] Installing JS dependencies with pnpm..."
+    (
+      cd "${REPO_DIR}"
+      pnpm install --frozen-lockfile
+    )
+  fi
+
+  echo "[preflight] Checking docs/JS formatting (pnpm run format)..."
+  if ! (
+    cd "${REPO_DIR}"
+    pnpm run format
+  ); then
+    echo "[preflight] Formatting drift detected; applying pnpm run format:fix..."
+    (
+      cd "${REPO_DIR}"
+      pnpm run format:fix
+    )
+  fi
+
+  echo "[preflight] Checking Rust formatting (cargo fmt --check)..."
+  if ! (
+    cd "${RUST_WORKSPACE_DIR}"
+    cargo +"${TOOLCHAIN}" fmt -- --config imports_granularity=Item --check
+  ); then
+    echo "[preflight] Rust formatting drift detected; applying cargo fmt..."
+    (
+      cd "${RUST_WORKSPACE_DIR}"
+      cargo +"${TOOLCHAIN}" fmt -- --config imports_granularity=Item
+    )
+  fi
+
+  echo "[preflight] Running argument comment lint..."
+  (
+    cd "${REPO_DIR}"
+    just argument-comment-lint
+  )
+
+  if ! command -v cargo-shear >/dev/null 2>&1; then
+    echo "[preflight] Installing cargo-shear..."
+    cargo +"${TOOLCHAIN}" install --locked cargo-shear
+  fi
+
+  echo "[preflight] Running cargo shear..."
+  (
+    cd "${RUST_WORKSPACE_DIR}"
+    cargo +"${TOOLCHAIN}" shear
+  )
+}
+
 MODE="debug"
 PUBLISH="auto"
 REGEN_SCHEMA="auto"
+CI_PREFLIGHT="auto"
 FORCE_TAG="true"
 PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
@@ -255,6 +310,12 @@ for arg in "$@"; do
     --no-regen-schema)
       REGEN_SCHEMA="false"
       ;;
+    --ci-preflight)
+      CI_PREFLIGHT="true"
+      ;;
+    --no-ci-preflight)
+      CI_PREFLIGHT="false"
+      ;;
     --publish-timeout-minutes=*)
       PUBLISH_TIMEOUT_MINUTES="${arg#*=}"
       ;;
@@ -266,12 +327,17 @@ Default behavior:
 - Regenerate app-server schema (just write-app-server-schema)
 - Build debug codex, copy it to ~/.cargo/bin/codex
 - Remove workspace codex build artifacts under target/
+- Skip CI preflight checks unless publishing
 
 Options:
   --release   Build/install release codex into ~/.cargo/bin/codex, then clean target binaries
   --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
   --no-publish
              Skip tag/push even in release mode
+  --ci-preflight
+             Run CI-like preflight checks (pnpm format, cargo fmt, argument-comment-lint, cargo shear)
+  --no-ci-preflight
+             Skip preflight checks even when publishing
   --no-force-tag
              Do not replace existing tags (default is to replace)
   --regen-schema
@@ -373,6 +439,22 @@ if [[ "${should_publish}" == "true" ]]; then
   require_cmd gh
   require_cmd jq
   require_cmd npm
+fi
+
+run_ci_preflight="false"
+if [[ "${CI_PREFLIGHT}" == "true" ]]; then
+  run_ci_preflight="true"
+elif [[ "${CI_PREFLIGHT}" != "false" && "${should_publish}" == "true" ]]; then
+  run_ci_preflight="true"
+fi
+
+if [[ "${run_ci_preflight}" == "true" ]]; then
+  echo "Running CI preflight checks..."
+  run_ci_preflight_checks
+  echo "CI preflight checks completed."
+fi
+
+if [[ "${should_publish}" == "true" ]]; then
 
   timeout_secs="$((PUBLISH_TIMEOUT_MINUTES * 60))"
   VERSION="$(
