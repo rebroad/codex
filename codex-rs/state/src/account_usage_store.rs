@@ -28,7 +28,9 @@ pub(crate) static USAGE_MIGRATOR: Migrator = sqlx::migrate!("./usage_migrations"
 const USAGE_DB_FILENAME: &str = "usage";
 const USAGE_DB_VERSION: u32 = 1;
 const USED_PERCENT_REFUND_EPSILON: f64 = 0.0001;
-const USAGE_LOG_FILENAME: &str = "usage.log";
+const USAGE_LOG_DIRNAME: &str = "log";
+const USAGE_LOG_FILENAME_PREFIX: &str = "usage-";
+const USAGE_LOG_FILENAME_SUFFIX: &str = ".log";
 
 pub fn account_usage_key(account_id: Option<&str>, account_email: Option<&str>) -> Option<String> {
     account_id
@@ -1476,30 +1478,27 @@ WHERE account_id = ? AND provider = ?
                 String::new()
             }
         };
-        if let Some(mut file) = open_usage_log_file() {
+        if let Some(mut file) = open_usage_log_file(&account_display) {
             let suffix = if message.is_empty() {
                 String::new()
             } else {
                 format!(" {message}")
             };
             if is_token_usage_event {
-                let _ = writeln!(
-                    file,
-                    "{ts} {pid_label}{pid} {account_display}{usage_pct_suffix}{suffix}"
-                );
+                let _ = writeln!(file, "{ts} {pid_label}{pid}{usage_pct_suffix}{suffix}");
             } else {
                 let percent_display =
                     percent_display.unwrap_or_else(|| "percent=unknown".to_string());
                 if is_backend_delta_event {
                     let _ = writeln!(
                         file,
-                        "{ts} {pid_label}{pid} {account_display} {percent_display}{usage_pct_suffix}{suffix}"
+                        "{ts} {pid_label}{pid} {percent_display}{usage_pct_suffix}{suffix}"
                     );
                 } else {
                     let sample_count = sample_count.unwrap_or(0);
                     let _ = writeln!(
                         file,
-                        "{ts} {pid_label}{pid} {account_display} {percent_display} samples={sample_count}{usage_pct_suffix}{suffix}",
+                        "{ts} {pid_label}{pid} {percent_display} samples={sample_count}{usage_pct_suffix}{suffix}",
                     );
                 }
             }
@@ -1550,13 +1549,21 @@ pub fn usage_db_path(sqlite_home: &Path) -> PathBuf {
     sqlite_home.join(usage_db_filename())
 }
 
-fn usage_log_path() -> Option<PathBuf> {
-    let codex_home = find_codex_home().ok()?;
-    Some(codex_home.join(USAGE_LOG_FILENAME))
+fn usage_log_filename(account_display: &str) -> String {
+    format!("{USAGE_LOG_FILENAME_PREFIX}{account_display}{USAGE_LOG_FILENAME_SUFFIX}")
 }
 
-fn open_usage_log_file() -> Option<std::fs::File> {
-    let path = usage_log_path()?;
+fn usage_log_path(account_display: &str) -> Option<PathBuf> {
+    let codex_home = find_codex_home().ok()?;
+    Some(
+        codex_home
+            .join(USAGE_LOG_DIRNAME)
+            .join(usage_log_filename(account_display)),
+    )
+}
+
+fn open_usage_log_file(account_display: &str) -> Option<std::fs::File> {
+    let path = usage_log_path(account_display)?;
     let parent = path.parent()?;
     std::fs::create_dir_all(parent).ok()?;
     OpenOptions::new().create(true).append(true).open(path).ok()
