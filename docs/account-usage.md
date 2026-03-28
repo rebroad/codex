@@ -52,8 +52,8 @@ Fields:
 - `last_backend_used_percent`
 - `last_snapshot_total_tokens` (local total captured at snapshot time)
 - `last_snapshot_percent_int`
-- `window_start_percent_int`
-- `window_start_total_tokens`
+- `window_start_percent_int` (latest backend integer anchor used for prediction)
+- `window_start_total_tokens` (local token total at latest backend anchor)
 - `last_backend_resets_at`
 - `last_backend_window_minutes`
 - `last_backend_seen_at`
@@ -84,11 +84,13 @@ Retention:
 
 ## Correlating With Backend Usage
 
-The backend provides `used_percent` for the window. When one or more samples exist for the current `resets_at`, we estimate the token allowance using the total positive percent deltas and total token deltas, then compute an approximate percent for the locally tracked total:
+The backend provides `used_percent` for the window. When one or more samples exist for the current `resets_at`, we estimate the token allowance using the total positive percent deltas and total token deltas, then compute an approximate percent for the locally tracked total.
+
+`usage_pct` prediction is anchored to the latest backend snapshot percent and the local token totals observed at that same snapshot. As local token totals increase between backend snapshots, predicted percent advances using the estimated allowance:
 
 ```
 estimated_limit = sum(delta_tokens) / (sum(delta_percent_int) / 100)
-estimated_percent = local_total_tokens / estimated_limit * 100
+estimated_percent = backend_anchor_percent + ((local_total_tokens - anchor_total_tokens) / estimated_limit * 100)
 ```
 
 This estimate is displayed in `/status` when the correlation is available.
