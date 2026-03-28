@@ -93,18 +93,48 @@ wait_for_run_completion() {
   local run_id="$1"
   local timeout_secs="$2"
   local start_secs now elapsed status conclusion url started_at last_log_secs
+  local run_json activity active_jobs prev_activity
   start_secs="$(date +%s)"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   last_log_secs=0
+  prev_activity=""
   echo "Completion wait start (UTC): ${started_at} for run=${run_id}"
   while true; do
-    status="$(gh run view "${run_id}" --json status --jq '.status')"
-    conclusion="$(gh run view "${run_id}" --json conclusion --jq '.conclusion // ""')"
-    url="$(gh run view "${run_id}" --json url --jq '.url')"
+    run_json="$(gh run view "${run_id}" --json status,conclusion,url,jobs)"
+    status="$(jq -r '.status' <<<"${run_json}")"
+    conclusion="$(jq -r '.conclusion // ""' <<<"${run_json}")"
+    url="$(jq -r '.url' <<<"${run_json}")"
     now="$(date +%s)"
     elapsed="$((now - start_secs))"
+    activity="$(jq -r '
+      .jobs as $jobs
+      | ([$jobs[] | select(.status == "completed" and .completedAt != null)
+          | {t: .completedAt, msg: (.name + " -> " + (.conclusion // ""))}]
+         | sort_by(.t) | last // {t: "", msg: ""}) as $done
+      | ([$jobs[] | select(.status != "completed" and .startedAt != null)
+          | {t: .startedAt, msg: (.name + " -> " + .status)}]
+         | sort_by(.t) | last // {t: "", msg: ""}) as $active
+      | if $done.t != "" and ($active.t == "" or $done.t > $active.t) then
+          $done.msg
+        elif $active.t != "" then
+          $active.msg
+        else
+          "queued"
+        end
+    ' <<<"${run_json}")"
+    active_jobs="$(jq -r '
+      [.jobs[] | select(.status != "completed") | .name] | join(", ")
+    ' <<<"${run_json}")"
+    if [[ -z "${active_jobs}" ]]; then
+      active_jobs="none"
+    fi
     if (( elapsed - last_log_secs >= 20 || elapsed == 0 )); then
-      echo "run=${run_id} elapsed=${elapsed}s status=${status} conclusion=${conclusion} url=${url}"
+      if [[ "${activity}" != "${prev_activity}" ]]; then
+        echo "run=${run_id} elapsed=${elapsed}s status=${status} conclusion=${conclusion} active=${active_jobs} last_activity=${activity} url=${url}"
+        prev_activity="${activity}"
+      else
+        echo "run=${run_id} elapsed=${elapsed}s status=${status} conclusion=${conclusion} active=${active_jobs} url=${url}"
+      fi
       last_log_secs="${elapsed}"
     fi
     if [[ "${status}" == "completed" ]]; then
