@@ -141,7 +141,7 @@ pub(crate) async fn render_status_lines_for_cli(
     let total_usage = TokenUsage::default();
     let account_usage =
         fetch_account_usage_display(account_usage_store.as_deref(), auth.as_ref()).await;
-    let output = new_status_output_with_rate_limits(
+    let output = card::new_status_output_with_rate_limits_variant(
         config,
         auth_manager.as_ref(),
         /*token_info*/ None,
@@ -156,6 +156,7 @@ pub(crate) async fn render_status_lines_for_cli(
         model_name,
         /*collaboration_mode*/ None,
         reasoning_effort_override,
+        card::StatusCardVariant::Cli,
     );
     output
         .display_lines(width)
