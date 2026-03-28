@@ -704,7 +704,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         subcommand,
     } = MultitoolCli::parse();
 
-    let auth_file_override = auth_file.clone();
     codex_login::set_auth_file_override(auth_file);
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
@@ -1070,9 +1069,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "tlogin",
             )?;
-            if auth_file_override.is_none() {
-                anyhow::bail!("`codex tlogin` requires `--auth-file`.");
-            }
             match tlogin_cli.action {
                 TloginSubcommand::Start(start) => {
                     let result =
