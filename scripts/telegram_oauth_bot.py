@@ -34,6 +34,7 @@ EXEC_TIMEOUT_SECONDS = 300
 POLL_TIMEOUT_SECONDS = 20
 POLL_HTTP_TIMEOUT_SECONDS = 35
 TRANSIENT_LOG_INTERVAL_SECONDS = 60
+STARTUP_RETRY_SECONDS = 5
 
 
 def telegram_request(
@@ -76,6 +77,15 @@ def is_transient_telegram_error(exc: Exception) -> bool:
         return True
     if isinstance(exc, OSError):
         return True
+    return False
+
+
+def is_transient_error(exc: Exception) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, Exception) and is_transient_telegram_error(current):
+            return True
+        current = current.__cause__ or current.__context__
     return False
 
 
@@ -649,6 +659,32 @@ def reset_webhook(token: str, bot_username: str) -> None:
         raise RuntimeError(f"failed to reset webhook for @{bot_username}: {exc}") from exc
 
 
+def initialize_bot(
+    token: str,
+    stop_event: threading.Event,
+) -> tuple[int, str]:
+    next_transient_log_at = 0.0
+    while not stop_event.is_set():
+        try:
+            me = telegram_request(token, "getMe", {})["result"]
+            bot_id = int(me.get("id"))
+            bot_username = me.get("username") or f"bot-{bot_id}"
+            reset_webhook(token, bot_username)
+            return bot_id, bot_username
+        except Exception as exc:
+            if not is_transient_error(exc):
+                raise
+            now = time.time()
+            if now >= next_transient_log_at:
+                print(
+                    "[telegram] transient startup error "
+                    f"({exc}); retrying in {STARTUP_RETRY_SECONDS}s"
+                )
+                next_transient_log_at = now + TRANSIENT_LOG_INTERVAL_SECONDS
+            time.sleep(STARTUP_RETRY_SECONDS)
+    raise RuntimeError("startup cancelled")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -675,10 +711,11 @@ def main() -> int:
     workers = []
     stop_event = threading.Event()
     for token in tokens:
-        me = telegram_request(token, "getMe", {})["result"]
-        bot_id = int(me.get("id"))
-        bot_username = me.get("username") or f"bot-{bot_id}"
-        reset_webhook(token, bot_username)
+        try:
+            bot_id, bot_username = initialize_bot(token, stop_event)
+        except Exception as exc:
+            print(f"[telegram] failed to initialize bot token: {exc}")
+            continue
         print(f"Telegram bot @{bot_username} running.")
 
         store = PendingStore()
@@ -698,6 +735,10 @@ def main() -> int:
         )
         worker.start()
         workers.append(worker)
+
+    if not workers:
+        print("[telegram] no bot workers started.")
+        return 1
 
     try:
         while any(worker.is_alive() for worker in workers):
