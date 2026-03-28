@@ -771,11 +771,11 @@ WHERE account_id = ? AND provider = ?
             last_sample_percent,
             window_start_percent,
             window_start_tokens,
-            _window_start_input_tokens,
-            _window_start_cached_input_tokens,
-            _window_start_output_tokens,
-            _window_start_context_total_tokens,
-            _window_start_min_total_cached_output_tokens,
+            window_start_input_tokens,
+            window_start_cached_input_tokens,
+            window_start_output_tokens,
+            window_start_context_total_tokens,
+            window_start_min_total_cached_output_tokens,
         ) = if let Some(row) = prior_usage.as_ref() {
             (
                 row.try_get("total_tokens")?,
@@ -956,43 +956,6 @@ WHERE account_id = ? AND provider = ?
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("last_snapshot_percent_int").ok())
             .unwrap_or(current_percent_int);
-        let mut window_start_percent_int = prior_usage
-            .as_ref()
-            .and_then(|row| row.try_get::<i64, _>("window_start_percent_int").ok())
-            .unwrap_or(0);
-        let mut window_start_total_tokens = prior_usage
-            .as_ref()
-            .and_then(|row| row.try_get::<i64, _>("window_start_total_tokens").ok())
-            .unwrap_or(0);
-        let mut window_start_input_tokens = prior_usage
-            .as_ref()
-            .and_then(|row| row.try_get::<i64, _>("window_start_input_tokens").ok())
-            .unwrap_or(0);
-        let mut window_start_cached_input_tokens = prior_usage
-            .as_ref()
-            .and_then(|row| {
-                row.try_get::<i64, _>("window_start_cached_input_tokens")
-                    .ok()
-            })
-            .unwrap_or(0);
-        let mut window_start_output_tokens = prior_usage
-            .as_ref()
-            .and_then(|row| row.try_get::<i64, _>("window_start_output_tokens").ok())
-            .unwrap_or(0);
-        let mut window_start_context_total_tokens = prior_usage
-            .as_ref()
-            .and_then(|row| {
-                row.try_get::<i64, _>("window_start_context_total_tokens")
-                    .ok()
-            })
-            .unwrap_or(0);
-        let mut window_start_min_total_cached_output_tokens = prior_usage
-            .as_ref()
-            .and_then(|row| {
-                row.try_get::<i64, _>("window_start_min_total_cached_output_tokens")
-                    .ok()
-            })
-            .unwrap_or(0);
 
         let last_sample_percent = if previous_percent.is_none() {
             0
@@ -1066,14 +1029,6 @@ WHERE account_id = ? AND provider = ?
             snapshot_context_total_tokens = context_total_tokens_now;
             snapshot_min_total_cached_output_tokens = min_total_cached_output_tokens_now;
             snapshot_percent_int = current_percent_int;
-            window_start_percent_int = updated_window_start_percent;
-            window_start_total_tokens = updated_window_start_tokens;
-            window_start_input_tokens = updated_window_start_input_tokens;
-            window_start_cached_input_tokens = updated_window_start_cached_input_tokens;
-            window_start_output_tokens = updated_window_start_output_tokens;
-            window_start_context_total_tokens = updated_window_start_context_total_tokens;
-            window_start_min_total_cached_output_tokens =
-                updated_window_start_min_total_cached_output_tokens;
 
             sqlx::query(
                 r#"
@@ -1115,6 +1070,38 @@ WHERE account_id = ? AND provider = ?
             .execute(self.pool.as_ref())
             .await?;
         }
+
+        // Keep the usage_pct predictor anchored within each integer-percent window.
+        // This prevents regressions between visible backend percent jumps.
+        let (
+            anchor_percent_int,
+            anchor_total_tokens,
+            anchor_input_tokens,
+            anchor_cached_input_tokens,
+            anchor_output_tokens,
+            anchor_context_total_tokens,
+            anchor_min_total_cached_output_tokens,
+        ) = if current_percent_int != last_sample_percent {
+            (
+                current_percent_int,
+                total_tokens_now,
+                input_tokens_now,
+                cached_input_tokens_now,
+                output_tokens_now,
+                context_total_tokens_now,
+                min_total_cached_output_tokens_now,
+            )
+        } else {
+            (
+                window_start_percent,
+                window_start_tokens,
+                window_start_input_tokens,
+                window_start_cached_input_tokens,
+                window_start_output_tokens,
+                window_start_context_total_tokens,
+                window_start_min_total_cached_output_tokens,
+            )
+        };
 
         sqlx::query(
             r#"
@@ -1194,13 +1181,13 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(snapshot_context_total_tokens)
         .bind(snapshot_min_total_cached_output_tokens)
         .bind(snapshot_percent_int)
-        .bind(window_start_percent_int)
-        .bind(window_start_total_tokens)
-        .bind(window_start_input_tokens)
-        .bind(window_start_cached_input_tokens)
-        .bind(window_start_output_tokens)
-        .bind(window_start_context_total_tokens)
-        .bind(window_start_min_total_cached_output_tokens)
+        .bind(anchor_percent_int)
+        .bind(anchor_total_tokens)
+        .bind(anchor_input_tokens)
+        .bind(anchor_cached_input_tokens)
+        .bind(anchor_output_tokens)
+        .bind(anchor_context_total_tokens)
+        .bind(anchor_min_total_cached_output_tokens)
         .bind(resets_at)
         .bind(window_minutes)
         .bind(seen_at)
@@ -1317,6 +1304,7 @@ WHERE account_id = ? AND provider = ?
             let usage_row = sqlx::query(
                 r#"
 SELECT
+    last_backend_used_percent,
     window_start_percent_int,
     window_start_total_tokens,
     total_tokens,
@@ -1341,6 +1329,10 @@ WHERE account_id = ? AND provider = ?
             .ok()
             .flatten()
             .map(|row| {
+                let backend_anchor_percent = row
+                    .try_get::<Option<f64>, _>("last_backend_used_percent")
+                    .ok()
+                    .flatten();
                 let window_start_percent = row.try_get::<i64, _>("window_start_percent_int").ok();
                 let window_start_total_tokens =
                     row.try_get::<i64, _>("window_start_total_tokens").ok();
@@ -1365,6 +1357,7 @@ WHERE account_id = ? AND provider = ?
                 let min_total_cached_output_tokens_now =
                     row.try_get::<i64, _>("min_total_cached_output_tokens").ok();
                 (
+                    backend_anchor_percent,
                     window_start_percent,
                     window_start_total_tokens,
                     total_tokens_now,
@@ -1381,6 +1374,7 @@ WHERE account_id = ? AND provider = ?
                 )
             });
             if let Some((
+                Some(backend_anchor_percent),
                 Some(window_start_percent),
                 Some(window_start_total_tokens),
                 Some(total_tokens_now),
@@ -1412,6 +1406,7 @@ WHERE account_id = ? AND provider = ?
                     estimates.blended_limit.and_then(|allowance| {
                         estimate_account_usage_percent_for_log(
                             total_tokens_now,
+                            backend_anchor_percent,
                             window_start_percent,
                             window_start_total_tokens,
                             allowance,
@@ -1420,6 +1415,7 @@ WHERE account_id = ? AND provider = ?
                     estimates.cached_input_limit.and_then(|allowance| {
                         estimate_account_usage_percent_for_log(
                             cached_input_tokens_now,
+                            backend_anchor_percent,
                             window_start_percent,
                             window_start_cached_input_tokens,
                             allowance,
@@ -1428,6 +1424,7 @@ WHERE account_id = ? AND provider = ?
                     estimates.output_limit.and_then(|allowance| {
                         estimate_account_usage_percent_for_log(
                             output_tokens_now,
+                            backend_anchor_percent,
                             window_start_percent,
                             window_start_output_tokens,
                             allowance,
@@ -1436,6 +1433,7 @@ WHERE account_id = ? AND provider = ?
                     estimates.context_total_limit.and_then(|allowance| {
                         estimate_account_usage_percent_for_log(
                             context_total_tokens_now,
+                            backend_anchor_percent,
                             window_start_percent,
                             window_start_context_total_tokens,
                             allowance,
@@ -1446,6 +1444,7 @@ WHERE account_id = ? AND provider = ?
                         .and_then(|allowance| {
                             estimate_account_usage_percent_for_log(
                                 min_total_cached_output_tokens_now,
+                                backend_anchor_percent,
                                 window_start_percent,
                                 window_start_min_total_cached_output_tokens,
                                 allowance,
@@ -1460,6 +1459,7 @@ WHERE account_id = ? AND provider = ?
                                     cached_input_tokens_now,
                                     output_tokens_now,
                                 ),
+                                backend_anchor_percent,
                                 window_start_percent,
                                 min_input_cached_output_tokens(
                                     window_start_input_tokens,
@@ -1564,15 +1564,20 @@ fn open_usage_log_file() -> Option<std::fs::File> {
 
 fn estimate_account_usage_percent_for_log(
     total_tokens: i64,
-    window_start_percent: i64,
-    window_start_total_tokens: i64,
+    backend_anchor_percent: f64,
+    backend_anchor_percent_int: i64,
+    backend_anchor_tokens: i64,
     estimated_limit: f64,
 ) -> Option<f64> {
     if estimated_limit <= 0.0 || !estimated_limit.is_finite() {
         return None;
     }
-    let base_percent = window_start_percent.max(0) as f64;
-    let delta_tokens = (total_tokens - window_start_total_tokens).max(0) as f64;
+    let base_percent = if backend_anchor_percent.is_finite() {
+        backend_anchor_percent.max(backend_anchor_percent_int.max(0) as f64)
+    } else {
+        backend_anchor_percent_int.max(0) as f64
+    };
+    let delta_tokens = (total_tokens - backend_anchor_tokens).max(0) as f64;
     let avg_tokens_per_pct = estimated_limit / 100.0;
     if avg_tokens_per_pct <= 0.0 || !avg_tokens_per_pct.is_finite() {
         return None;
@@ -1603,7 +1608,7 @@ fn min_input_cached_output_tokens(
 }
 
 fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
-    let avg = format_metric_values(
+    let avg = format_metric_values_si(
         estimates.blended_limit.map(|value| value / 100.0),
         estimates.cached_input_limit.map(|value| value / 100.0),
         estimates.output_limit.map(|value| value / 100.0),
@@ -1614,19 +1619,41 @@ fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
         estimates
             .min_input_cached_output_limit
             .map(|value| value / 100.0),
-        /*precision*/ 0,
     );
-    let allowance = format_metric_values(
+    let allowance = format_metric_values_si(
         estimates.blended_limit,
         estimates.cached_input_limit,
         estimates.output_limit,
         estimates.context_total_limit,
         estimates.min_total_cached_output_limit,
         estimates.min_input_cached_output_limit,
-        /*precision*/ 0,
     );
     format!("metric_order=b/c/o/x/m/n avg_tpp={avg} est_allow={allowance}",)
 }
+
+fn format_metric_values_si(
+    blended: Option<f64>,
+    cached_input: Option<f64>,
+    output: Option<f64>,
+    context_total: Option<f64>,
+    min_total_cached_output: Option<f64>,
+    min_input_cached_output: Option<f64>,
+) -> String {
+    let value = |entry: Option<f64>| match entry {
+        Some(number) if number.is_finite() && number >= 0.0 => format_si_three_digits(number),
+        _ => "-".to_string(),
+    };
+    [
+        value(blended),
+        value(cached_input),
+        value(output),
+        value(context_total),
+        value(min_total_cached_output),
+        value(min_input_cached_output),
+    ]
+    .join("/")
+}
+
 
 fn format_metric_values(
     blended: Option<f64>,
@@ -1650,6 +1677,27 @@ fn format_metric_values(
         value(min_input_cached_output),
     ]
     .join("/")
+}
+
+fn format_si_three_digits(mut value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let suffixes = ["", "K", "M", "G", "T", "P", "E"];
+    let mut suffix_index = 0usize;
+    while value >= 1000.0 && suffix_index + 1 < suffixes.len() {
+        value /= 1000.0;
+        suffix_index += 1;
+    }
+
+    let decimals = if value >= 100.0 {
+        0
+    } else if value >= 10.0 {
+        1
+    } else {
+        2
+    };
+    format!("{value:.decimals$}{}", suffixes[suffix_index])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2159,7 +2207,7 @@ WHERE account_id = ? AND provider = ?
     }
 
     #[tokio::test]
-    async fn account_usage_keeps_window_start_at_zero() {
+    async fn account_usage_tracks_latest_backend_anchor() {
         let home = tempfile::tempdir().expect("tempdir");
         let runtime =
             AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
@@ -2229,11 +2277,11 @@ WHERE account_id = ? AND provider = ?
             .try_get("window_start_output_tokens")
             .expect("window_start_output_tokens");
 
-        assert_eq!(window_start_percent, 0);
-        assert_eq!(window_start_total, 0);
-        assert_eq!(window_start_input, 0);
-        assert_eq!(window_start_cached_input, 0);
-        assert_eq!(window_start_output, 0);
+        assert_eq!(window_start_percent, 1);
+        assert_eq!(window_start_total, 120);
+        assert_eq!(window_start_input, 90);
+        assert_eq!(window_start_cached_input, 10);
+        assert_eq!(window_start_output, 20);
     }
 
     #[tokio::test]
@@ -2456,14 +2504,24 @@ WHERE account_id = ? AND provider = ?
     #[test]
     fn estimate_account_usage_percent_for_log_can_exceed_100() {
         // estimated_limit=1000 -> avg_tokens_per_pct=10.
-        // base_percent=95 and delta_tokens=1000 => +100 percentage points.
+        // base_percent=95.2 and delta_tokens=1000 => +100 percentage points.
         let usage_pct = estimate_account_usage_percent_for_log(
-            /*total_tokens*/ 1_050, /*window_start_percent*/ 95,
-            /*window_start_total_tokens*/ 50, /*estimated_limit*/ 1_000.0,
+            /*total_tokens*/ 1_050,
+            /*backend_anchor_percent*/ 95.2,
+            /*backend_anchor_percent_int*/ 95,
+            /*backend_anchor_tokens*/ 50,
+            /*estimated_limit*/ 1_000.0,
         );
-        assert_eq!(usage_pct, Some(195.0));
+        assert_eq!(usage_pct, Some(195.2));
     }
 
+
+    #[test]
+    fn format_si_three_digits_uses_three_significant_digits() {
+        assert_eq!(format_si_three_digits(2_646_777.0), "2.65M");
+        assert_eq!(format_si_three_digits(35_705_600.0), "35.7M");
+        assert_eq!(format_si_three_digits(24_813.0), "24.8K");
+    }
     #[test]
     fn normalize_usage_for_accounting_uses_non_cached_input() {
         let usage = TokenUsage {
