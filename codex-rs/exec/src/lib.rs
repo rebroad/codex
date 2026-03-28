@@ -94,6 +94,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
