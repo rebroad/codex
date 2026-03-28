@@ -8,6 +8,7 @@ TOOLCHAIN_FILE="${RUST_WORKSPACE_DIR}/rust-toolchain.toml"
 INSTALL_BIN="${HOME}/.cargo/bin/codex"
 CARGO_LOCK_REL="codex-rs/Cargo.lock"
 PUBLISH_TIMEOUT_MINUTES_DEFAULT=45
+TRIAGE_STATE_FILE_DEFAULT="tmp/ci-triaged-tags.json"
 
 restore_cargo_lock_if_needed() {
   git -C "${REPO_DIR}" checkout -- "./${CARGO_LOCK_REL}" >/dev/null 2>&1 || true
@@ -280,6 +281,40 @@ run_ci_preflight_checks() {
   )
 }
 
+read_workspace_version() {
+  RUST_WORKSPACE_DIR="${RUST_WORKSPACE_DIR}" python3 - <<'PY'
+import os
+import tomllib
+from pathlib import Path
+
+toml_path = Path(os.environ["RUST_WORKSPACE_DIR"]) / "Cargo.toml"
+data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+version = data.get("workspace", {}).get("package", {}).get("version")
+if version:
+    print(version)
+PY
+}
+
+resolve_publish_version() {
+  local version version_from_codex
+  version="$(read_workspace_version)"
+  if [[ -z "${version}" ]]; then
+    version_from_codex="$("${INSTALL_BIN}" --version | awk '{print $2}')"
+    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})$ ]]; then
+      version="${BASH_REMATCH[1]}"
+    else
+      version="${version_from_codex}"
+    fi
+  fi
+  echo "${version}"
+}
+
+is_tag_triaged() {
+  local tag="$1"
+  [[ -f "${TRIAGE_STATE_FILE}" ]] || return 1
+  jq -e --arg tag "${tag}" '.tags[$tag] != null' "${TRIAGE_STATE_FILE}" >/dev/null 2>&1
+}
+
 MODE="debug"
 PUBLISH="auto"
 REGEN_SCHEMA="auto"
@@ -287,6 +322,7 @@ CI_PREFLIGHT="auto"
 FORCE_TAG="true"
 PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
+TRIAGE_STATE_FILE="${REPO_DIR}/${TRIAGE_STATE_FILE_DEFAULT}"
 for arg in "$@"; do
   case "${arg}" in
     --debug)
@@ -319,6 +355,9 @@ for arg in "$@"; do
     --publish-timeout-minutes=*)
       PUBLISH_TIMEOUT_MINUTES="${arg#*=}"
       ;;
+    --triage-state-file=*)
+      TRIAGE_STATE_FILE="${arg#*=}"
+      ;;
     -h|--help)
       cat <<'EOF'
 Usage: rebuild_codex.sh [--release] [--publish|--no-publish] [--publish-timeout-minutes=N]
@@ -346,6 +385,8 @@ Options:
              Skip schema regeneration
   --publish-timeout-minutes=N
              Timeout in minutes for release workflow/npm verification (default: 45)
+  --triage-state-file=<path>
+             Local triaged-tags registry path (default: tmp/ci-triaged-tags.json)
 EOF
       exit 0
       ;;
@@ -441,11 +482,26 @@ if [[ "${should_publish}" == "true" ]]; then
   require_cmd npm
 fi
 
+VERSION=""
+TAG=""
+if [[ "${should_publish}" == "true" ]]; then
+  VERSION="$(resolve_publish_version)"
+  if [[ -z "${VERSION}" ]]; then
+    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml or ${INSTALL_BIN} --version"
+    exit 1
+  fi
+  TAG="codex-v${VERSION}"
+fi
+
 run_ci_preflight="false"
 if [[ "${CI_PREFLIGHT}" == "true" ]]; then
   run_ci_preflight="true"
 elif [[ "${CI_PREFLIGHT}" != "false" && "${should_publish}" == "true" ]]; then
-  run_ci_preflight="true"
+  if [[ -n "${TAG}" ]] && is_tag_triaged "${TAG}"; then
+    echo "Skipping CI preflight checks for triaged tag ${TAG} (${TRIAGE_STATE_FILE})."
+  else
+    run_ci_preflight="true"
+  fi
 fi
 
 if [[ "${run_ci_preflight}" == "true" ]]; then
@@ -457,34 +513,6 @@ fi
 if [[ "${should_publish}" == "true" ]]; then
 
   timeout_secs="$((PUBLISH_TIMEOUT_MINUTES * 60))"
-  VERSION="$(
-    RUST_WORKSPACE_DIR="${RUST_WORKSPACE_DIR}" python3 - <<'PY'
-import os
-import tomllib
-from pathlib import Path
-
-toml_path = Path(os.environ["RUST_WORKSPACE_DIR"]) / "Cargo.toml"
-data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
-version = data.get("workspace", {}).get("package", {}).get("version")
-if version:
-    print(version)
-PY
-  )"
-  if [[ -z "${VERSION}" ]]; then
-    version_from_codex="$("${INSTALL_BIN}" --version | awk '{print $2}')"
-    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})$ ]]; then
-      VERSION="${BASH_REMATCH[1]}"
-    else
-      VERSION="${version_from_codex}"
-    fi
-  fi
-
-  if [[ -z "${VERSION}" ]]; then
-    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml or ${INSTALL_BIN} --version"
-    exit 1
-  fi
-
-  TAG="codex-v${VERSION}"
 
   assert_publish_worktree_state
 
