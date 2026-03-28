@@ -13,7 +13,7 @@ jobs:
   build:
     name: Build - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 180
     permissions:
       contents: read
     defaults:
@@ -109,25 +109,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ubsan=""
-          if command -v ldconfig >/dev/null 2>&1; then
-            ubsan="$(ldconfig -p 2>/dev/null | grep -m1 'libubsan\\.so\\.1' | sed -E 's/.*=> (.*)$/\\1/' || true)"
+          ubsan="$(gcc -print-file-name=libubsan.so.1)"
+          if [[ -z "${ubsan}" || "${ubsan}" == "libubsan.so.1" || ! -f "${ubsan}" ]]; then
+            echo "Unable to resolve libubsan.so.1 via gcc." >&2
+            exit 1
           fi
           wrapper_root="${RUNNER_TEMP:-/tmp}"
           wrapper="${wrapper_root}/rustc-ubsan-wrapper"
-          cat > "${wrapper}" <<'EOF'
+          cat > "${wrapper}" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          if [[ -n "${UBSAN_PATH-}" ]]; then
-            export LD_PRELOAD="${UBSAN_PATH}${LD_PRELOAD:+:${LD_PRELOAD}}"
-          fi
-          exec "$@"
+          export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
+          exec "\$1" "\${@:2}"
           EOF
           chmod +x "${wrapper}"
-          echo "UBSAN_PATH=${ubsan}" >> "$GITHUB_ENV"
-          if [[ -n "${ubsan}" ]]; then
-            echo "LD_PRELOAD=${ubsan}" >> "$GITHUB_ENV"
-          fi
           echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
           echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
 
@@ -171,6 +166,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
+            export V8_FROM_SOURCE=1
+            export PYTHON=python3
             export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
             export PKG_CONFIG_ALLOW_CROSS=1
             export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/lib/arm-linux-gnueabihf/pkgconfig"
