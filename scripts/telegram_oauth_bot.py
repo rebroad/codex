@@ -6,10 +6,10 @@ Flow:
 1. User sends any message.
 2. If per-user auth is valid, bot forwards the message to `codex exec --bare-prompt`.
 3. If auth is missing and no login started in last hour, bot runs:
-   codex --auth-file <file> tlogin start --user-id <chat_id> --json
+   codex tlogin start --user-id <chat_id> --json
    and returns verification URL + one-time code.
 4. When user sends any message again, bot attempts completion in background:
-   codex --auth-file <file> tlogin complete --user-id <chat_id>
+   codex tlogin complete --user-id <chat_id>
 """
 
 from __future__ import annotations
@@ -154,10 +154,6 @@ def sanitize_user_key(raw: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", raw).strip("._-") or "unknown"
 
 
-def auth_file_for_user(auth_root: Path, user_key: str) -> Path:
-    return auth_root / f"{sanitize_user_key(user_key)}.auth.json"
-
-
 def codex_home_for_user(auth_root: Path, user_key: str) -> Path:
     return auth_root / "homes" / sanitize_user_key(user_key)
 
@@ -229,11 +225,11 @@ def tlogin_user_id(bot_id: int, chat_id: int) -> str:
     return f"{bot_id}:{chat_id}"
 
 
-def has_valid_auth(codex_bin: str, auth_file: Path, auth_root: Path, user_key: str) -> bool:
+def has_valid_auth(codex_bin: str, auth_root: Path, user_key: str) -> bool:
     runtime_cwd, runtime_env = resolve_user_runtime_context(auth_root, user_key)
     env = codex_env_for_user(auth_root, user_key)
     env.update(runtime_env)
-    cmd = [codex_bin, "--auth-file", str(auth_file), "login", "status"]
+    cmd = [codex_bin, "login", "status"]
     completed = subprocess.run(
         cmd,
         capture_output=True,
@@ -256,6 +252,39 @@ def should_force_new_code(text: str) -> bool:
     }
 
 
+def is_usage_limit_error_text(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "you've hit your usage limit" in lowered
+        or "the usage limit has been reached" in lowered
+        or "usage_limit" in lowered
+    )
+
+
+def parse_login_status_email(status_text: str) -> str | None:
+    match = re.search(r"email=([^,\)\s]+)", status_text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def login_status_output(
+    codex_bin: str, auth_root: Path, user_key: str
+) -> str:
+    runtime_cwd, runtime_env = resolve_user_runtime_context(auth_root, user_key)
+    env = codex_env_for_user(auth_root, user_key)
+    env.update(runtime_env)
+    cmd = [codex_bin, "login", "status"]
+    completed = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+        cwd=str(runtime_cwd) if runtime_cwd else None,
+    )
+    return f"{completed.stdout}\n{completed.stderr}".strip()
+
+
 def start_login_for_chat(
     token: str,
     bot_id: int,
@@ -269,11 +298,8 @@ def start_login_for_chat(
     runtime_cwd, runtime_env = resolve_user_runtime_context(auth_root, user_key)
     env = codex_env_for_user(auth_root, user_key)
     env.update(runtime_env)
-    auth_file = auth_file_for_user(auth_root, user_key)
     cmd = [
         codex_bin,
-        "--auth-file",
-        str(auth_file),
         "tlogin",
         "start",
         "--user-id",
@@ -296,7 +322,7 @@ def start_login_for_chat(
         )
         return
 
-    store.put(chat_id, {"auth_file": str(auth_file), "user_key": user_key})
+    store.put(chat_id, {"user_key": user_key})
     verification_url = parsed.get("verificationUrl", "")
     user_code = parsed.get("userCode", "")
     send_message(
@@ -332,7 +358,6 @@ def send_long_message(token: str, chat_id: int, text: str) -> None:
 
 def run_exec_prompt(
     codex_bin: str,
-    auth_file: Path,
     auth_root: Path,
     user_key: str,
     prompt: str,
@@ -346,8 +371,6 @@ def run_exec_prompt(
     with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", delete=True) as out_file:
         resume_cmd = [
             codex_bin,
-            "--auth-file",
-            str(auth_file),
             "exec",
             "--bare-prompt",
             "--skip-git-repo-check",
@@ -374,8 +397,6 @@ def run_exec_prompt(
         except Exception:
             fresh_cmd = [
                 codex_bin,
-                "--auth-file",
-                str(auth_file),
                 "exec",
                 "--bare-prompt",
                 "--skip-git-repo-check",
@@ -414,15 +435,12 @@ def complete_login_for_chat(
 
     def _worker() -> None:
         try:
-            auth_file = pending["auth_file"]
             user_key = pending["user_key"]
             runtime_cwd, runtime_env = resolve_user_runtime_context(auth_root, user_key)
             env = codex_env_for_user(auth_root, user_key)
             env.update(runtime_env)
             cmd = [
                 codex_bin,
-                "--auth-file",
-                auth_file,
                 "tlogin",
                 "complete",
                 "--user-id",
@@ -518,11 +536,10 @@ def run_bot_loop(
                 )
                 continue
 
-            auth_file = auth_file_for_user(auth_root, user_key)
-            if has_valid_auth(codex_bin, auth_file, auth_root, user_key):
+            if has_valid_auth(codex_bin, auth_root, user_key):
                 try:
                     reply = run_exec_prompt(
-                        codex_bin, auth_file, auth_root, user_key, text, system_prompt
+                        codex_bin, auth_root, user_key, text, system_prompt
                     )
                     send_long_message(token, chat_id, reply)
                 except subprocess.TimeoutExpired:
@@ -535,6 +552,29 @@ def run_bot_loop(
                     print(
                         f"[telegram:@{bot_username}] exec failed for user {user_key} chat {chat_id}: {exc}"
                     )
+                    if is_usage_limit_error_text(str(exc)):
+                        status_text = login_status_output(
+                            codex_bin, auth_root, user_key
+                        )
+                        account_email = parse_login_status_email(status_text)
+                        if account_email:
+                            send_message(
+                                token,
+                                chat_id,
+                                "You've reached your Codex usage allowance for "
+                                f"{account_email}. Please sign in again to continue.",
+                            )
+                        else:
+                            send_message(
+                                token,
+                                chat_id,
+                                "You've reached your Codex usage allowance. "
+                                "Please sign in again to continue.",
+                            )
+                        start_login_for_chat(
+                            token, bot_id, chat_id, user_key, codex_bin, auth_root, store
+                        )
+                        continue
                     send_message(
                         token,
                         chat_id,

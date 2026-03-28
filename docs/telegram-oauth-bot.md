@@ -10,7 +10,7 @@ The bot keeps Codex non-blocking:
 2. Bot sends the verification URL and one-time user code to Telegram.
 3. User completes approval in browser at the verification URL.
 4. User sends any message to the bot.
-5. `codex tlogin complete --user-id <id>` finalizes auth and writes credentials to `--auth-file`.
+5. `codex tlogin complete --user-id <id>` finalizes auth using that user's `CODEX_HOME`.
 
 No localhost callback, public callback URL, or cloudflared tunnel is required.
 
@@ -18,7 +18,6 @@ No localhost callback, public callback URL, or cloudflared tunnel is required.
 
 - `codex tlogin ...`:
   - `start` and `complete` CLI subcommands in `codex-cli`
-  - requires `--auth-file`
 - `scripts/telegram_oauth_bot.py`:
   - Telegram polling worker
   - auto-starts login when auth is missing and cooldown allows
@@ -33,18 +32,11 @@ No localhost callback, public callback URL, or cloudflared tunnel is required.
 
 `--auth-root` is the directory where per-user auth files are stored.
 
-Each Telegram user gets:
-
-- `<auth-root>/<telegram_username>.auth.json` (sanitized for filesystem safety)
-- fallback when username is unavailable: `<auth-root>/id-<telegram_numeric_id>.auth.json`
-
-That file path is passed to `codex --auth-file` during `tlogin start/complete`.
-
-The bot also keeps a per-user `CODEX_HOME` at:
+Each Telegram user gets a per-user `CODEX_HOME` at:
 
 - `<auth-root>/homes/<telegram_username>/`
 
-This keeps Codex sessions isolated per Telegram user.
+This keeps Codex sessions and auth isolated per Telegram user.
 
 For each Telegram user invocation, if a `config.toml` is not present in that
 user's `CODEX_HOME`, the bot searches parent directories for `config.toml`,
@@ -114,4 +106,4 @@ scripts/run_telegram_oauth_bot.sh -- \
 - Bot says login is not complete:
   - finish browser approval first, then send another Telegram message.
 - Credentials not found:
-  - check files under `--auth-root` and confirm `codex --auth-file <file> login status`.
+  - check files under `--auth-root/homes/<user>/` and confirm `CODEX_HOME=<that-home> codex login status`.
