@@ -136,6 +136,9 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         {
             prompt_capture_append_input(capture_session, "responses_http", &raw_body);
         }
+        let sent_bytes = serde_json::to_vec(&body)
+            .map(|bytes| bytes.len() as i64)
+            .unwrap_or(0);
 
         let stream_response = self
             .session
@@ -160,6 +163,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             self.sse_telemetry.clone(),
             turn_state,
             capture,
+            sent_bytes,
         ))
     }
 }

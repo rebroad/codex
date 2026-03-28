@@ -440,6 +440,7 @@ async fn drain_to_completed(
                     turn_context,
                     token_usage.as_ref(),
                     /*query_id*/ None,
+                    /*transport_bytes*/ None,
                 )
                 .await;
                 return Ok(());

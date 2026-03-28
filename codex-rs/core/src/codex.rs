@@ -122,6 +122,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
@@ -3814,6 +3815,7 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
         query_id: Option<&str>,
+        transport_bytes: Option<&codex_api::common::TransportByteStats>,
     ) {
         if let Some(token_usage) = token_usage {
             let mut state = self.state.lock().await;
@@ -3834,7 +3836,15 @@ impl Session {
                             .await;
                     }
                     if let Err(err) = state_db
-                        .record_account_token_usage(account_key.as_str(), token_usage, query_id)
+                        .record_account_token_usage(
+                            account_key.as_str(),
+                            token_usage,
+                            AccountUsageEventMeta {
+                                query_id,
+                                sent_bytes: transport_bytes.map(|value| value.sent),
+                                recv_bytes: transport_bytes.map(|value| value.recv),
+                            },
+                        )
                         .await
                     {
                         warn!("failed to record account token usage: {err}");
@@ -7674,6 +7684,7 @@ async fn try_run_sampling_request(
                 response_id: _,
                 token_usage,
                 capture_id,
+                transport_bytes,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -7686,6 +7697,7 @@ async fn try_run_sampling_request(
                     &turn_context,
                     token_usage.as_ref(),
                     capture_id.as_deref(),
+                    transport_bytes.as_ref(),
                 )
                 .await;
                 should_emit_turn_diff = true;
