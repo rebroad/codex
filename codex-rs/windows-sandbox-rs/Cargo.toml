@@ -90,4 +90,4 @@ pretty_assertions = { workspace = true }
 winres = "0.1"
 
 [package.metadata.cargo-shear]
-ignored = ["codex-utils-pty", "tokio"]
+ignored = ["tokio"]
