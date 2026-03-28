@@ -44,25 +44,37 @@ find_release_run_id() {
   local tag_name="$1"
   gh run list \
     --workflow custom-codex-release.yml \
+    --branch "${tag_name}" \
+    --event push \
     --limit 50 \
-    --json databaseId,displayTitle,event \
-    --jq ".[] | select(.event == \"push\" and .displayTitle == \"${tag_name}\") | .databaseId" \
+    --json databaseId,createdAt \
+    --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty' \
     | head -n 1
 }
 
 wait_for_run_to_appear() {
   local tag_name="$1"
   local timeout_secs="$2"
-  local start_secs now elapsed run_id
+  local start_secs now elapsed run_id started_at last_log_secs
   start_secs="$(date +%s)"
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  last_log_secs=0
+  echo "Wait start (UTC): ${started_at}. Polling for custom-codex-release run on tag branch ${tag_name}."
   while true; do
     run_id="$(find_release_run_id "${tag_name}" || true)"
     if [[ -n "${run_id}" ]]; then
+      now="$(date +%s)"
+      elapsed="$((now - start_secs))"
+      echo "Matched workflow run ${run_id} after ${elapsed}s."
       echo "${run_id}"
       return 0
     fi
     now="$(date +%s)"
     elapsed="$((now - start_secs))"
+    if (( elapsed - last_log_secs >= 15 )); then
+      echo "Still waiting for run on ${tag_name}... elapsed=${elapsed}s"
+      last_log_secs="${elapsed}"
+    fi
     if (( elapsed > timeout_secs )); then
       echo "Timed out waiting for custom-codex-release run for ${tag_name}" >&2
       return 1
@@ -74,14 +86,21 @@ wait_for_run_to_appear() {
 wait_for_run_completion() {
   local run_id="$1"
   local timeout_secs="$2"
-  local start_secs now elapsed status conclusion url
+  local start_secs now elapsed status conclusion url started_at last_log_secs
   start_secs="$(date +%s)"
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  last_log_secs=0
+  echo "Completion wait start (UTC): ${started_at} for run=${run_id}"
   while true; do
     status="$(gh run view "${run_id}" --json status --jq '.status')"
     conclusion="$(gh run view "${run_id}" --json conclusion --jq '.conclusion // ""')"
     url="$(gh run view "${run_id}" --json url --jq '.url')"
-    echo "run=${run_id} status=${status} conclusion=${conclusion} url=${url}"
-
+    now="$(date +%s)"
+    elapsed="$((now - start_secs))"
+    if (( elapsed - last_log_secs >= 20 || elapsed == 0 )); then
+      echo "run=${run_id} elapsed=${elapsed}s status=${status} conclusion=${conclusion} url=${url}"
+      last_log_secs="${elapsed}"
+    fi
     if [[ "${status}" == "completed" ]]; then
       if [[ "${conclusion}" != "success" ]]; then
         echo "Release workflow failed: ${url}" >&2
@@ -90,8 +109,6 @@ wait_for_run_completion() {
       return 0
     fi
 
-    now="$(date +%s)"
-    elapsed="$((now - start_secs))"
     if (( elapsed > timeout_secs )); then
       echo "Timed out waiting for run ${run_id} to complete (${url})" >&2
       return 1
