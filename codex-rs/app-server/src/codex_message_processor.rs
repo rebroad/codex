@@ -343,6 +343,7 @@ struct ThreadListFilters {
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+#[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -1152,7 +1153,18 @@ impl CodexMessageProcessor {
             });
         }
 
+        #[cfg(debug_assertions)]
         let mut opts = LoginServerOptions {
+            open_browser: false,
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.forced_chatgpt_workspace_id.clone(),
+                config.cli_auth_credentials_store_mode,
+            )
+        };
+        #[cfg(not(debug_assertions))]
+        let opts = LoginServerOptions {
             open_browser: false,
             ..LoginServerOptions::new(
                 config.codex_home.clone(),
