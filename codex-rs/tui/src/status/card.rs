@@ -46,6 +46,12 @@ use crate::terminal_palette::best_color;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusCardVariant {
+    Chat,
+    Cli,
+}
+
 const SEXTANT_BLOCKS: [&str; 64] = [
     "█", "🬻", "🬺", "🬹", "🬸", "🬷", "🬶", "🬵", "🬴", "🬳", "🬲", "🬱", "🬰", "🬯", "🬮", "🬭", "🬬", "🬫", "🬪",
     "🬩", "🬨", "▐", "🬧", "🬦", "🬥", "🬤", "🬣", "🬢", "🬡", "🬠", "🬟", "🬞", "🬝", "🬜", "🬛", "🬚", "🬙", "🬘",
@@ -84,6 +90,8 @@ struct StatusHistoryCell {
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
+    variant: StatusCardVariant,
+    limits_unavailable_reason: Option<String>,
 }
 
 #[cfg(test)]
@@ -140,7 +148,45 @@ pub(crate) fn new_status_output_with_rate_limits(
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
 ) -> CompositeHistoryCell {
-    let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
+    new_status_output_with_rate_limits_variant(
+        config,
+        auth_manager,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        account_usage,
+        rate_limits,
+        plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        StatusCardVariant::Chat,
+        /*limits_unavailable_reason*/ None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_rate_limits_variant(
+    config: &Config,
+    auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    variant: StatusCardVariant,
+    limits_unavailable_reason: Option<String>,
+) -> CompositeHistoryCell {
     let card = StatusHistoryCell::new(
         config,
         account_display,
@@ -156,9 +202,16 @@ pub(crate) fn new_status_output_with_rate_limits(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        variant,
+        limits_unavailable_reason,
     );
 
-    CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
+    if variant == StatusCardVariant::Chat {
+        let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
+        CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
+    } else {
+        CompositeHistoryCell::new(vec![Box::new(card)])
+    }
 }
 
 impl StatusHistoryCell {
@@ -178,6 +231,8 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
+        variant: StatusCardVariant,
+        limits_unavailable_reason: Option<String>,
     ) -> Self {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
@@ -284,6 +339,8 @@ impl StatusHistoryCell {
             forked_from,
             token_usage,
             rate_limits,
+            variant,
+            limits_unavailable_reason,
         }
     }
 
@@ -326,12 +383,15 @@ impl StatusHistoryCell {
         available_inner_width: usize,
         formatter: &FieldFormatter,
     ) -> Vec<Line<'static>> {
+        let unavailable = self
+            .limits_unavailable_reason
+            .as_deref()
+            .unwrap_or("data not available yet")
+            .to_string();
         match &self.rate_limits {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
-                    return vec![
-                        formatter.line("Limits", vec![Span::from("data not available yet").dim()]),
-                    ];
+                    return vec![formatter.line("Limits", vec![Span::from(unavailable).dim()])];
                 }
 
                 self.rate_limit_row_lines(rows_data, available_inner_width, formatter)
@@ -346,7 +406,7 @@ impl StatusHistoryCell {
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
+                vec![formatter.line("Limits", vec![Span::from(unavailable).dim()])]
             }
         }
     }
@@ -512,10 +572,12 @@ impl HistoryCell for StatusHistoryCell {
             spans
         });
 
-        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut labels: Vec<String> = vec!["Model".to_string()];
+        if self.variant == StatusCardVariant::Chat {
+            labels.push("Directory".to_string());
+            labels.push("Permissions".to_string());
+            labels.push("Agents.md".to_string());
+        }
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
 
@@ -547,22 +609,24 @@ impl HistoryCell for StatusHistoryCell {
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
 
-        let note_first_line = Line::from(vec![
-            Span::from("Visit ").cyan(),
-            "https://chatgpt.com/codex/settings/usage"
-                .cyan()
-                .underlined(),
-            Span::from(" for up-to-date").cyan(),
-        ]);
-        let note_second_line = Line::from(vec![
-            Span::from("information on rate limits and credits").cyan(),
-        ]);
-        let note_lines = adaptive_wrap_lines(
-            [note_first_line, note_second_line],
-            RtOptions::new(available_inner_width),
-        );
-        lines.extend(note_lines);
-        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        if self.variant == StatusCardVariant::Chat {
+            let note_first_line = Line::from(vec![
+                Span::from("Visit ").cyan(),
+                "https://chatgpt.com/codex/settings/usage"
+                    .cyan()
+                    .underlined(),
+                Span::from(" for up-to-date").cyan(),
+            ]);
+            let note_second_line = Line::from(vec![
+                Span::from("information on rate limits and credits").cyan(),
+            ]);
+            let note_lines = adaptive_wrap_lines(
+                [note_first_line, note_second_line],
+                RtOptions::new(available_inner_width),
+            );
+            lines.extend(note_lines);
+            lines.push(Line::from(Vec::<Span<'static>>::new()));
+        }
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {
@@ -571,15 +635,16 @@ impl HistoryCell for StatusHistoryCell {
             model_spans.push(Span::from(")").dim());
         }
 
-        let directory_value = format_directory_display(&self.directory, Some(value_width));
-
         lines.push(formatter.line("Model", model_spans));
         if let Some(model_provider) = self.model_provider.as_ref() {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
-        lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
-        lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
-        lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
+        if self.variant == StatusCardVariant::Chat {
+            let directory_value = format_directory_display(&self.directory, Some(value_width));
+            lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
+            lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
+            lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
+        }
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", account_value));
