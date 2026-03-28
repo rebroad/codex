@@ -148,6 +148,22 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+## Compaction mode
+
+By default, OpenAI-backed sessions use the remote compact endpoint
+(`responses/compact`) for context compaction.
+
+To force local compaction instead, set this feature flag in `config.toml`:
+
+```toml
+[features]
+local_compaction = true
+```
+
+When `local_compaction = true`, Codex uses the local compaction flow (the
+normal prompt + summary generation path) for both automatic compaction and
+manual `/compact`, even when the provider would otherwise use remote compact.
+
 ## Realtime start instructions
 
 `experimental_realtime_start_instructions` lets you replace the built-in

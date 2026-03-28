@@ -128,6 +128,8 @@ pub enum Feature {
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
+    /// Force compaction to use the local summary flow instead of the remote compact endpoint.
+    LocalCompaction,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Allow the model to request `detail: "original"` image outputs on supported models.
@@ -619,6 +621,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::MemoryTool,
         key: "memories",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::LocalCompaction,
+        key: "local_compaction",
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {
