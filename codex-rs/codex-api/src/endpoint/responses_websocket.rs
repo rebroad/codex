@@ -3,6 +3,7 @@ use crate::auth::add_auth_headers_to_header_map;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::common::TransportByteStats;
 use crate::error::ApiError;
 use crate::prompt_debug_http::prompt_capture_append_input;
 use crate::prompt_debug_http::prompt_capture_append_output;
@@ -561,6 +562,8 @@ async fn run_websocket_response_stream(
         }
     };
     trace!("websocket request: {request_text}");
+    let sent_bytes = request_text.len() as i64;
+    let mut recv_bytes = 0_i64;
     if let Some(capture_session) = capture.as_ref() {
         prompt_capture_append_input(capture_session, "responses_websocket", &request_text);
     }
@@ -606,6 +609,7 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
+                recv_bytes = recv_bytes.saturating_add(text.len() as i64);
                 if let Some(capture) = capture.as_ref() {
                     prompt_capture_append_output(capture, "responses_websocket", &text);
                 }
@@ -680,9 +684,17 @@ async fn run_websocket_response_stream(
                                 }
                             }
                             ResponseEvent::Completed { .. } => {
-                                if let ResponseEvent::Completed { capture_id: id, .. } = &mut event
+                                if let ResponseEvent::Completed {
+                                    capture_id: id,
+                                    transport_bytes,
+                                    ..
+                                } = &mut event
                                 {
                                     *id = capture_id.clone();
+                                    *transport_bytes = Some(TransportByteStats {
+                                        sent: sent_bytes.max(0),
+                                        recv: recv_bytes.max(0),
+                                    });
                                 }
                             }
                             ResponseEvent::Created

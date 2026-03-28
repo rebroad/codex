@@ -62,6 +62,13 @@ pub struct AccountUsageSnapshot {
     pub last_backend_seen_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AccountUsageEventMeta<'a> {
+    pub query_id: Option<&'a str>,
+    pub sent_bytes: Option<i64>,
+    pub recv_bytes: Option<i64>,
+}
+
 #[derive(Clone)]
 pub struct AccountUsageStore {
     sqlite_home: PathBuf,
@@ -359,7 +366,7 @@ WHERE account_id = ? AND provider = ?
         &self,
         account_id: &str,
         usage: &TokenUsage,
-        query_id: Option<&str>,
+        meta: AccountUsageEventMeta<'_>,
     ) -> anyhow::Result<()> {
         let normalized_usage = normalize_usage_for_accounting(usage);
         let context_total_tokens = usage.total_tokens.max(0);
@@ -429,15 +436,19 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .execute(self.pool.as_ref())
         .await?;
 
-        let query_id_suffix = query_id
+        let query_id_suffix = meta
+            .query_id
             .map(|value| format!(" query_id={value}"))
             .unwrap_or_default();
+        let sent = meta.sent_bytes.unwrap_or(0).max(0);
+        let recv = meta.recv_bytes.unwrap_or(0).max(0);
+        let sent_recv = sent.saturating_add(recv);
         self.log_usage_event(
             account_id,
             /*used_percent*/ None,
             /*previous_percent*/ None,
             format!(
-                "total={total_tokens}, input={input_tokens}, cached_input={cached_input_tokens}, output={output_tokens}, reasoning={reasoning_output_tokens}, context_total={context_total_tokens}{query_id_suffix}"
+                "total={total_tokens}, input={input_tokens}, cached_input={cached_input_tokens}, output={output_tokens}, reasoning={reasoning_output_tokens}, context_total={context_total_tokens}, sent={sent}, recv={recv}, sent_recv={sent_recv}{query_id_suffix}"
             ),
         )
         .await;
@@ -1803,7 +1814,7 @@ mod tests {
         };
 
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record");
 
@@ -1835,11 +1846,11 @@ mod tests {
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record account-1");
         runtime
-            .record_account_token_usage("account-2", &usage, None)
+            .record_account_token_usage("account-2", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record account-2");
 
@@ -1946,7 +1957,7 @@ WHERE account_id = ? AND provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
@@ -2067,7 +2078,7 @@ WHERE provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
@@ -2155,7 +2166,7 @@ WHERE account_id = ? AND provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
@@ -2184,7 +2195,7 @@ WHERE account_id = ? AND provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
@@ -2228,7 +2239,7 @@ WHERE account_id = ? AND provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
@@ -2306,7 +2317,7 @@ WHERE account_id = ? AND provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
@@ -2425,7 +2436,7 @@ WHERE account_id = ? AND provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
@@ -2454,7 +2465,7 @@ WHERE account_id = ? AND provider = ?
             reasoning_output_tokens: 0,
         };
         runtime
-            .record_account_token_usage("account-1", &usage, None)
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
             .await
             .expect("record usage");
 
