@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::history_cell::HistoryCell;
 use crate::insert_history::write_spans;
 use chrono::Local;
+use chrono::Utc;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
@@ -32,6 +33,8 @@ use codex_state::AccountUsageSnapshot;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
+use std::time::Duration;
+use tokio::time::timeout;
 
 #[cfg(test)]
 pub(crate) use card::new_status_output;
@@ -54,6 +57,18 @@ pub(crate) struct AccountUsageDisplay {
     pub sample_count: Option<i64>,
 }
 
+const CLI_RATE_LIMIT_REFRESH_TTL_SECS: i64 = 120;
+const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
+
+#[derive(Debug)]
+enum CliRateLimitFetchOutcome {
+    Skipped,
+    Success(Vec<RateLimitSnapshot>),
+    Timeout,
+    BackendUnavailable(String),
+    Other(String),
+}
+
 pub(crate) async fn render_status_lines_for_cli(
     config: &Config,
     auth_manager: Arc<AuthManager>,
@@ -66,15 +81,16 @@ pub(crate) async fn render_status_lines_for_cli(
         AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
             .await
             .ok();
-    let rate_limits = match auth.as_ref() {
-        Some(auth) => fetch_rate_limits(config.chatgpt_base_url.clone(), auth.clone()).await,
-        None => Vec::new(),
-    };
-    if let Some(auth) = auth.as_ref()
-        && let Some(account_id) = account_usage_key(
+    let account_id = auth.as_ref().and_then(|auth| {
+        account_usage_key(
             auth.get_account_id().as_deref(),
             auth.get_account_email().as_deref(),
         )
+    });
+
+    let mut usage_snapshot = None;
+    if let Some(auth) = auth.as_ref()
+        && let Some(account_id) = account_id.as_ref()
         && let Some(store) = account_usage_store.as_ref()
     {
         if let Some(account_display) = account_usage_display(auth.get_account_email().as_deref()) {
@@ -82,7 +98,80 @@ pub(crate) async fn render_status_lines_for_cli(
                 .cache_account_display(account_id.as_str(), account_display)
                 .await;
         }
-        for snapshot in &rate_limits {
+        usage_snapshot = store
+            .get_account_usage(account_id.as_str())
+            .await
+            .ok()
+            .flatten();
+    }
+
+    let cached_rate_limits = usage_snapshot
+        .as_ref()
+        .and_then(cached_rate_limit_snapshot_from_usage);
+    let should_refresh_rate_limits =
+        should_refresh_cli_rate_limits(usage_snapshot.as_ref(), Utc::now().timestamp());
+
+    let fetch_outcome = if let Some(auth) = auth.as_ref() {
+        if should_refresh_rate_limits {
+            fetch_rate_limits_for_cli(config.chatgpt_base_url.clone(), auth.clone()).await
+        } else {
+            CliRateLimitFetchOutcome::Skipped
+        }
+    } else {
+        CliRateLimitFetchOutcome::Skipped
+    };
+
+    let fetched_rate_limits = match &fetch_outcome {
+        CliRateLimitFetchOutcome::Success(snapshots) => snapshots.clone(),
+        CliRateLimitFetchOutcome::Skipped
+        | CliRateLimitFetchOutcome::Timeout
+        | CliRateLimitFetchOutcome::BackendUnavailable(_)
+        | CliRateLimitFetchOutcome::Other(_) => Vec::new(),
+    };
+
+    let mut rate_limits = if should_refresh_rate_limits {
+        if fetched_rate_limits.is_empty() {
+            cached_rate_limits.clone().into_iter().collect()
+        } else {
+            fetched_rate_limits.clone()
+        }
+    } else {
+        cached_rate_limits.clone().into_iter().collect()
+    };
+
+    if rate_limits.is_empty()
+        && let Some(cached) = cached_rate_limits.clone()
+    {
+        rate_limits.push(cached);
+    }
+
+    let limits_unavailable_reason = if rate_limits.is_empty() {
+        Some(
+            match (&auth, &fetch_outcome, cached_rate_limits.is_some()) {
+                (None, _, _) => "not available: not logged in".to_string(),
+                (_, CliRateLimitFetchOutcome::Timeout, _) => {
+                    format!(
+                        "not available: backend unavailable (timed out after {CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS}s)"
+                    )
+                }
+                (_, CliRateLimitFetchOutcome::BackendUnavailable(err), _) => {
+                    format!("not available: backend unavailable ({err})")
+                }
+                (_, CliRateLimitFetchOutcome::Other(err), _) => {
+                    format!("not available: other error ({err})")
+                }
+                (_, _, false) => "not available: no cached limits".to_string(),
+                (_, _, true) => "not available: other reason".to_string(),
+            },
+        )
+    } else {
+        None
+    };
+
+    if let Some(account_id) = account_id.as_ref()
+        && let Some(store) = account_usage_store.as_ref()
+    {
+        for snapshot in &fetched_rate_limits {
             let _ = store
                 .record_account_backend_rate_limit(account_id.as_str(), snapshot)
                 .await;
@@ -157,6 +246,7 @@ pub(crate) async fn render_status_lines_for_cli(
         /*collaboration_mode*/ None,
         reasoning_effort_override,
         card::StatusCardVariant::Cli,
+        limits_unavailable_reason,
     );
     output
         .display_lines(width)
@@ -169,6 +259,66 @@ pub(crate) async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<
     match BackendClient::from_auth(base_url, &auth) {
         Ok(client) => client.get_rate_limits_many().await.unwrap_or_default(),
         Err(_) => Vec::new(),
+    }
+}
+
+fn should_refresh_cli_rate_limits(usage: Option<&AccountUsageSnapshot>, now_ts: i64) -> bool {
+    let Some(usage) = usage else {
+        return true;
+    };
+    let Some(last_seen_at) = usage.last_backend_seen_at else {
+        return true;
+    };
+
+    if now_ts.saturating_sub(last_seen_at) >= CLI_RATE_LIMIT_REFRESH_TTL_SECS {
+        return true;
+    }
+
+    let last_snapshot_total = usage
+        .last_snapshot_total_tokens
+        .unwrap_or(usage.total_tokens);
+    usage.total_tokens > last_snapshot_total
+}
+
+fn cached_rate_limit_snapshot_from_usage(
+    usage: &AccountUsageSnapshot,
+) -> Option<RateLimitSnapshot> {
+    let used_percent = usage.last_backend_used_percent?;
+    let window = codex_protocol::protocol::RateLimitWindow {
+        used_percent,
+        window_minutes: usage.last_backend_window_minutes,
+        resets_at: usage.last_backend_resets_at,
+    };
+    Some(RateLimitSnapshot {
+        limit_id: usage
+            .last_backend_limit_id
+            .clone()
+            .or(Some("codex".to_string())),
+        limit_name: usage
+            .last_backend_limit_name
+            .clone()
+            .or(Some("codex".to_string())),
+        primary: None,
+        secondary: Some(window),
+        credits: None,
+        plan_type: None,
+    })
+}
+
+async fn fetch_rate_limits_for_cli(base_url: String, auth: CodexAuth) -> CliRateLimitFetchOutcome {
+    let client = match BackendClient::from_auth(base_url, &auth) {
+        Ok(client) => client,
+        Err(err) => return CliRateLimitFetchOutcome::Other(err.to_string()),
+    };
+    let result = timeout(
+        Duration::from_secs(CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS),
+        client.get_rate_limits_many(),
+    )
+    .await;
+    match result {
+        Ok(Ok(snapshots)) => CliRateLimitFetchOutcome::Success(snapshots),
+        Ok(Err(err)) => CliRateLimitFetchOutcome::BackendUnavailable(err.to_string()),
+        Err(_) => CliRateLimitFetchOutcome::Timeout,
     }
 }
 
