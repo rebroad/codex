@@ -37,7 +37,11 @@ is_only_cargo_lock_dirty() {
   if [[ -z "${status_lines}" ]]; then
     return 0
   fi
-  filtered_status="$(grep -Ev "^[ MARCUD?]{2} ${CARGO_LOCK_REL}$" <<<"${status_lines}" || true)"
+  filtered_status="$(
+    grep -Ev \
+      "^[ MARCUD?]{2} (${CARGO_LOCK_REL}|tmp(/.*)?|scripts/rebuild_codex\\.sh|scripts/ci_triage\\.sh)$" \
+      <<<"${status_lines}" || true
+  )"
   [[ -z "${filtered_status}" ]]
 }
 
@@ -45,7 +49,7 @@ assert_publish_worktree_state() {
   if is_only_cargo_lock_dirty; then
     return 0
   fi
-  echo "Working tree has changes beyond ${CARGO_LOCK_REL}; refusing to publish." >&2
+  echo "Working tree has changes beyond allowed local-only files (${CARGO_LOCK_REL}, tmp/, scripts/rebuild_codex.sh, scripts/ci_triage.sh); refusing to publish." >&2
   git -C "${REPO_DIR}" status --short >&2
   exit 1
 }
@@ -292,6 +296,7 @@ run_ci_preflight_checks() {
   echo "[preflight] Running cargo shear..."
   shear_log="${preflight_dir}/cargo-shear.log"
   shear_errors="${preflight_dir}/cargo-shear-errors.txt"
+  shear_fix_log="${preflight_dir}/cargo-shear-fix.log"
   set +e
   (
     cd "${RUST_WORKSPACE_DIR}"
@@ -326,7 +331,55 @@ run_ci_preflight_checks() {
   echo "[preflight] cargo-shear full log: ${shear_log}"
 
   if (( shear_status != 0 )); then
-    return "${shear_status}"
+    echo "[preflight] cargo-shear reported errors; attempting automatic fix with --fix..."
+    set +e
+    (
+      cd "${RUST_WORKSPACE_DIR}"
+      cargo +"${TOOLCHAIN}" shear --fix 2>&1
+    ) | tee "${shear_fix_log}"
+    local shear_fix_status=${PIPESTATUS[0]}
+    set -e
+    echo "[preflight] cargo-shear fix log: ${shear_fix_log}"
+    if (( shear_fix_status != 0 )); then
+      return "${shear_fix_status}"
+    fi
+
+    echo "[preflight] Re-running cargo shear after automatic fixes..."
+    set +e
+    (
+      cd "${RUST_WORKSPACE_DIR}"
+      cargo +"${TOOLCHAIN}" shear 2>&1
+    ) | tee "${shear_log}"
+    shear_status=${PIPESTATUS[0]}
+    set -e
+
+    awk '
+      /^shear\/[a-z0-9_]+/ {section=$0; mode=0}
+      /^[[:space:]]*× / {
+        print section
+        print $0
+        mode=1
+        next
+      }
+      mode==1 {
+        if ($0 ~ /^[[:space:]]*$/) {
+          print ""
+          mode=0
+        } else {
+          print $0
+        }
+      }
+    ' "${shear_log}" > "${shear_errors}"
+
+    if [[ -s "${shear_errors}" ]]; then
+      echo "[preflight] cargo-shear actionable errors remain: ${shear_errors}"
+    else
+      echo "[preflight] cargo-shear actionable errors resolved."
+    fi
+    echo "[preflight] cargo-shear full log: ${shear_log}"
+    if (( shear_status != 0 )); then
+      return "${shear_status}"
+    fi
   fi
 }
 
