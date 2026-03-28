@@ -3,6 +3,8 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 #[cfg(not(target_os = "windows"))]
+use std::path::Path;
+#[cfg(not(target_os = "windows"))]
 use std::path::PathBuf;
 
 #[test]
@@ -135,4 +137,21 @@ fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
             .expect("current exe")
             .into_os_string()
     );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn resolve_apply_patch_program_rejects_deleted_configured_path() {
+    let deleted = PathBuf::from("/tmp/codex (deleted)");
+    let resolved = ApplyPatchRuntime::resolve_apply_patch_program(Some(&deleted))
+        .expect("resolve live codex executable");
+    assert_ne!(resolved, deleted);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn is_usable_executable_rejects_deleted_suffix() {
+    assert!(!ApplyPatchRuntime::is_usable_executable(Path::new(
+        "/tmp/codex (deleted)"
+    )));
 }
