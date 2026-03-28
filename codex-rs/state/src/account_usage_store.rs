@@ -1654,7 +1654,6 @@ fn format_metric_values_si(
     .join("/")
 }
 
-
 fn format_metric_values(
     blended: Option<f64>,
     cached_input: Option<f64>,
@@ -2506,15 +2505,12 @@ WHERE account_id = ? AND provider = ?
         // estimated_limit=1000 -> avg_tokens_per_pct=10.
         // base_percent=95.2 and delta_tokens=1000 => +100 percentage points.
         let usage_pct = estimate_account_usage_percent_for_log(
-            /*total_tokens*/ 1_050,
-            /*backend_anchor_percent*/ 95.2,
-            /*backend_anchor_percent_int*/ 95,
-            /*backend_anchor_tokens*/ 50,
+            /*total_tokens*/ 1_050, /*backend_anchor_percent*/ 95.2,
+            /*backend_anchor_percent_int*/ 95, /*backend_anchor_tokens*/ 50,
             /*estimated_limit*/ 1_000.0,
         );
         assert_eq!(usage_pct, Some(195.2));
     }
-
 
     #[test]
     fn format_si_three_digits_uses_three_significant_digits() {
