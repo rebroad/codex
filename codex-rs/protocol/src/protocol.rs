@@ -1016,8 +1016,9 @@ impl SandboxPolicy {
                 // Start from explicitly configured writable roots.
                 let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
 
-                // Always include defaults: cwd, /tmp (if present on Unix), and
-                // on macOS, the per-user TMPDIR unless explicitly excluded.
+                // Always include defaults: cwd, /tmp and /var/tmp (if present
+                // on Unix), and on macOS, the per-user TMPDIR unless
+                // explicitly excluded.
                 // TODO(mbolin): cwd param should be AbsolutePathBuf.
                 let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd);
                 match cwd_absolute {
@@ -1032,13 +1033,16 @@ impl SandboxPolicy {
                     }
                 }
 
-                // Include /tmp on Unix unless explicitly excluded.
+                // Include /tmp and /var/tmp on Unix unless explicitly
+                // excluded.
                 if cfg!(unix) && !exclude_slash_tmp {
-                    #[allow(clippy::expect_used)]
-                    let slash_tmp =
-                        AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
-                    if slash_tmp.as_path().is_dir() {
-                        roots.push(slash_tmp);
+                    for path in ["/tmp", "/var/tmp"] {
+                        #[allow(clippy::expect_used)]
+                        let tmp_path =
+                            AbsolutePathBuf::from_absolute_path(path).expect("path is absolute");
+                        if tmp_path.as_path().is_dir() {
+                            roots.push(tmp_path);
+                        }
                     }
                 }
 
