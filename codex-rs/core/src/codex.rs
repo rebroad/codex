@@ -2147,14 +2147,16 @@ impl Session {
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
-        let text = if state.session_configuration.original_config_do_not_use.bare_prompt {
+        let text = if state
+            .session_configuration
+            .original_config_do_not_use
+            .bare_prompt
+        {
             String::new()
         } else {
             state.session_configuration.base_instructions.clone()
         };
-        BaseInstructions {
-            text,
-        }
+        BaseInstructions { text }
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
