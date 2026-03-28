@@ -42,13 +42,19 @@ assert_publish_worktree_state() {
 
 find_release_run_id() {
   local tag_name="$1"
+  local min_created_at="$2"
   gh run list \
     --workflow custom-codex-release.yml \
     --branch "${tag_name}" \
     --event push \
     --limit 50 \
     --json databaseId,createdAt \
-    --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty' \
+    | jq -r --arg min_created_at "${min_created_at}" '
+        map(select(.createdAt >= $min_created_at))
+        | sort_by(.createdAt)
+        | reverse
+        | .[0].databaseId // empty
+      ' \
     | head -n 1
 }
 
@@ -59,20 +65,20 @@ wait_for_run_to_appear() {
   start_secs="$(date +%s)"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   last_log_secs=0
-  echo "Wait start (UTC): ${started_at}. Polling for custom-codex-release run on tag branch ${tag_name}."
+  echo "Wait start (UTC): ${started_at}. Polling for custom-codex-release run on tag branch ${tag_name}." >&2
   while true; do
-    run_id="$(find_release_run_id "${tag_name}" || true)"
+    run_id="$(find_release_run_id "${tag_name}" "${started_at}" || true)"
     if [[ -n "${run_id}" ]]; then
       now="$(date +%s)"
       elapsed="$((now - start_secs))"
-      echo "Matched workflow run ${run_id} after ${elapsed}s."
+      echo "Matched workflow run ${run_id} after ${elapsed}s." >&2
       echo "${run_id}"
       return 0
     fi
     now="$(date +%s)"
     elapsed="$((now - start_secs))"
     if (( elapsed - last_log_secs >= 15 )); then
-      echo "Still waiting for run on ${tag_name}... elapsed=${elapsed}s"
+      echo "Still waiting for run on ${tag_name}... elapsed=${elapsed}s" >&2
       last_log_secs="${elapsed}"
     fi
     if (( elapsed > timeout_secs )); then
