@@ -1,8 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::CodexThread;
 use codex_core::config::Constrained;
+use codex_core::config::types::ExecPolicyRuleWriteScope;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::NetworkConstraints;
@@ -1913,26 +1915,35 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        // Keep this test isolated from project-local rule files.
+        config.exec_policy_rule_write_scope = ExecPolicyRuleWriteScope::Global;
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter(|layer| !matches!(&layer.name, ConfigLayerSource::Project { .. }))
+            .cloned()
+            .collect();
+        let requirements = config.config_layer_stack.requirements().clone();
+        let requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack without project layers");
     });
     let test = builder.build(&server).await?;
     let allow_prefix_path = test.cwd.path().join("allow-prefix.txt");
     let _ = fs::remove_file(&allow_prefix_path);
+    let allow_prefix_command = format!("touch {}", allow_prefix_path.display());
 
     let call_id_first = "allow-prefix-first";
-    let (first_event, expected_command) = ActionKind::RunCommand {
-        command: "touch allow-prefix.txt",
-    }
-    .prepare(
-        &test,
-        &server,
+    let first_event = shell_event(
         call_id_first,
+        &allow_prefix_command,
+        /*timeout_ms*/ 2_000,
         SandboxPermissions::UseDefault,
-    )
-    .await?;
-    let expected_command =
-        expected_command.expect("execpolicy amendment scenario should produce a shell command");
-    let expected_execpolicy_amendment =
-        ExecPolicyAmendment::new(vec!["touch".to_string(), "allow-prefix.txt".to_string()]);
+    )?;
 
     let _ = mount_sse_once(
         &server,
@@ -1960,7 +1971,11 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    let approval = expect_exec_approval(&test, allow_prefix_command.as_str()).await;
+    let expected_execpolicy_amendment = ExecPolicyAmendment::new(vec![
+        "touch".to_string(),
+        allow_prefix_path.display().to_string(),
+    ]);
     assert_eq!(
         approval.proposed_execpolicy_amendment,
         Some(expected_execpolicy_amendment.clone())
@@ -1980,18 +1995,24 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     let developer_messages = first_results
         .single_request()
         .message_input_texts("developer");
+    let expected_prefix_display = format!("[\"touch\", \"{}\"]", allow_prefix_path.display());
     assert!(
         developer_messages
             .iter()
-            .any(|message| message.contains(r#"["touch", "allow-prefix.txt"]"#)),
+            .any(|message| message.contains(&expected_prefix_display)),
         "expected developer message documenting saved rule, got: {developer_messages:?}"
     );
 
     let policy_path = test.home.path().join("rules").join("default.rules");
     let policy_contents = fs::read_to_string(&policy_path)?;
     assert!(
-        policy_contents
-            .contains(r#"prefix_rule(pattern=["touch", "allow-prefix.txt"], decision="allow")"#),
+        policy_contents.contains(
+            format!(
+                r#"prefix_rule(pattern=["touch", "{}"], decision="allow")"#,
+                allow_prefix_path.display()
+            )
+            .as_str()
+        ),
         "unexpected policy contents: {policy_contents}"
     );
 
@@ -2013,17 +2034,12 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     );
 
     let call_id_second = "allow-prefix-second";
-    let (second_event, second_command) = ActionKind::RunCommand {
-        command: "touch allow-prefix.txt",
-    }
-    .prepare(
-        &test,
-        &server,
+    let second_event = shell_event(
         call_id_second,
+        &allow_prefix_command,
+        /*timeout_ms*/ 2_000,
         SandboxPermissions::UseDefault,
-    )
-    .await?;
-    assert_eq!(second_command.as_deref(), Some(expected_command.as_str()));
+    )?;
 
     let _ = mount_sse_once(
         &server,
@@ -2345,15 +2361,35 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        // Keep this test isolated from project-local rule files.
+        config.exec_policy_rule_write_scope = ExecPolicyRuleWriteScope::Global;
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter(|layer| !matches!(&layer.name, ConfigLayerSource::Project { .. }))
+            .cloned()
+            .collect();
+        let requirements = config.config_layer_stack.requirements().clone();
+        let requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack without project layers");
     });
     let test = builder.build(&server).await?;
+    let fallback_rule_file = test.cwd.path().join("codex-fallback-rule-test.txt");
+    let command = format!(
+        "touch {} && echo hello > {}",
+        fallback_rule_file.display(),
+        fallback_rule_file.display()
+    );
 
     let call_id = "invalid-prefix-rule";
-    let command =
-        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
     let event = shell_event_with_prefix_rule(
         call_id,
-        command,
+        &command,
         /*timeout_ms*/ 1_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
@@ -2377,7 +2413,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, command).await;
+    let approval = expect_exec_approval(&test, &command).await;
     let amendment = approval
         .proposed_execpolicy_amendment
         .expect("should have a proposed execpolicy amendment");
@@ -2396,18 +2432,46 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config.exec_policy_rule_write_scope = ExecPolicyRuleWriteScope::Global;
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter(|layer| !matches!(&layer.name, ConfigLayerSource::Project { .. }))
+            .cloned()
+            .collect();
+        let requirements = config.config_layer_stack.requirements().clone();
+        let requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack without project layers");
     });
     let test = builder.build(&server).await?;
+    let helper_script = test.cwd.path().join("fallback-rule-helper.sh");
+    fs::write(&helper_script, "#!/bin/sh\n:\n")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&helper_script)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&helper_script, perms)?;
+    }
+    let fallback_rule_file = test.cwd.path().join("codex-fallback-rule-test.txt");
 
     let call_id = "invalid-prefix-rule";
-    let command =
-        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
+    let command = format!(
+        "{} && echo hello > {}",
+        helper_script.display(),
+        fallback_rule_file.display()
+    );
     let event = shell_event_with_prefix_rule(
         call_id,
-        command,
+        &command,
         /*timeout_ms*/ 1_000,
         SandboxPermissions::RequireEscalated,
-        Some(vec!["touch".to_string()]),
+        Some(vec![helper_script.display().to_string()]),
     )?;
 
     let _ = mount_sse_once(
@@ -2428,7 +2492,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, command).await;
+    let approval = expect_exec_approval(&test, &command).await;
     let approval_id = approval.effective_approval_id();
     let amendment = approval
         .proposed_execpolicy_amendment
@@ -2447,14 +2511,12 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     wait_for_completion(&test).await;
 
     let call_id = "invalid-prefix-rule-again";
-    let command =
-        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
     let event = shell_event_with_prefix_rule(
         call_id,
-        command,
+        &command,
         /*timeout_ms*/ 1_000,
         SandboxPermissions::RequireEscalated,
-        Some(vec!["touch".to_string()]),
+        Some(vec![helper_script.display().to_string()]),
     )?;
 
     let _ = mount_sse_once(

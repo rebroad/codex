@@ -1148,7 +1148,10 @@ async fn append_execpolicy_amendment_updates_policy_and_file() {
     let manager = ExecPolicyManager::default();
 
     manager
-        .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(prefix))
+        .append_amendment_and_update_at_path(
+            default_policy_path(codex_home.path()),
+            &ExecPolicyAmendment::from(prefix),
+        )
         .await
         .expect("update policy");
     let updated_policy = manager.current();
@@ -1180,7 +1183,10 @@ async fn append_execpolicy_amendment_rejects_empty_prefix() {
     let manager = ExecPolicyManager::default();
 
     let result = manager
-        .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(vec![]))
+        .append_amendment_and_update_at_path(
+            default_policy_path(codex_home.path()),
+            &ExecPolicyAmendment::from(vec![]),
+        )
         .await;
 
     assert!(matches!(
