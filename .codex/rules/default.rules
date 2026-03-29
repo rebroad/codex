@@ -1,0 +1,4 @@
+prefix_rule(pattern=["sudo", "apt-get", "update", "-y"], decision="allow")
+prefix_rule(pattern=["rustup", "target", "add"], decision="allow")
+prefix_rule(pattern=["git", "submodule", "update", "--init", "--recursive"], decision="allow")
+prefix_rule(pattern=["gh", "run", "view", "23718907893", "--repo", "rebroad/rusty_v8", "--json", "status,conclusion,jobs,url"], decision="allow")
