@@ -93,6 +93,30 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - if: ${{ matrix.target == 'armv7-unknown-linux-gnueabihf' }}
+        name: Configure armv7 rusty_v8 artifact overrides
+        env:
+          TARGET: ${{ matrix.target }}
+          RUSTY_V8_RELEASE_REPO: ${{ vars.RUSTY_V8_RELEASE_REPO || 'openai/codex' }}
+          RUSTY_V8_RELEASE_TAG: ${{ vars.RUSTY_V8_RELEASE_TAG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+          release_tag="${RUSTY_V8_RELEASE_TAG}"
+          if [[ -z "${release_tag}" ]]; then
+            release_tag="rusty-v8-v${version}"
+          fi
+          base_url="https://github.com/${RUSTY_V8_RELEASE_REPO}/releases/download/${release_tag}"
+          archive="${base_url}/librusty_v8_release_${TARGET}.a.gz"
+          binding_dir="${RUNNER_TEMP}/rusty_v8"
+          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
+          mkdir -p "${binding_dir}"
+          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
+          curl -fsSI "${archive}" > /dev/null
+          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
         name: Use hermetic Cargo home (musl)
         shell: bash
@@ -166,8 +190,6 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
-            export V8_FROM_SOURCE=1
-            export PYTHON=python3
             export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
             export PKG_CONFIG_ALLOW_CROSS=1
             export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/lib/arm-linux-gnueabihf/pkgconfig"
