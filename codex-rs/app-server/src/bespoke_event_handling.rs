@@ -1387,14 +1387,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 additional_details: None,
             };
             handle_error(conversation_id, turn_error.clone(), &thread_state).await;
-            outgoing
-                .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error.clone(),
-                    will_retry: false,
-                    thread_id: conversation_id.to_string(),
-                    turn_id: event_turn_id.clone(),
-                }))
-                .await;
+            if should_emit_turn_error_notification(&turn_error) {
+                outgoing
+                    .send_server_notification(ServerNotification::Error(ErrorNotification {
+                        error: turn_error.clone(),
+                        will_retry: false,
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id.clone(),
+                    }))
+                    .await;
+            }
         }
         EventMsg::StreamError(ev) => {
             // We don't need to update the turn summary store for stream errors as they are intermediate error states for retries,
