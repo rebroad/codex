@@ -1387,14 +1387,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 additional_details: None,
             };
             handle_error(conversation_id, turn_error.clone(), &thread_state).await;
-            outgoing
-                .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error.clone(),
-                    will_retry: false,
-                    thread_id: conversation_id.to_string(),
-                    turn_id: event_turn_id.clone(),
-                }))
-                .await;
+            if should_emit_turn_error_notification(&turn_error) {
+                outgoing
+                    .send_server_notification(ServerNotification::Error(ErrorNotification {
+                        error: turn_error.clone(),
+                        will_retry: false,
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id.clone(),
+                    }))
+                    .await;
+            }
         }
         EventMsg::StreamError(ev) => {
             // We don't need to update the turn summary store for stream errors as they are intermediate error states for retries,
@@ -2188,6 +2190,13 @@ async fn handle_error(
 ) {
     let mut state = thread_state.lock().await;
     state.turn_summary.last_error = Some(error);
+}
+
+fn should_emit_turn_error_notification(error: &TurnError) -> bool {
+    !matches!(
+        error.codex_error_info,
+        Some(V2CodexErrorInfo::UsageLimitExceeded)
+    )
 }
 
 async fn on_patch_approval_response(
@@ -3262,6 +3271,28 @@ mod tests {
             })
         );
         Ok(())
+    }
+
+    #[test]
+    fn usage_limit_error_does_not_emit_turn_error_notification() {
+        let error = TurnError {
+            message: "Usage limit reached".to_string(),
+            codex_error_info: Some(V2CodexErrorInfo::UsageLimitExceeded),
+            additional_details: None,
+        };
+
+        assert!(!should_emit_turn_error_notification(&error));
+    }
+
+    #[test]
+    fn non_usage_limit_error_emits_turn_error_notification() {
+        let error = TurnError {
+            message: "boom".to_string(),
+            codex_error_info: Some(V2CodexErrorInfo::BadRequest),
+            additional_details: None,
+        };
+
+        assert!(should_emit_turn_error_notification(&error));
     }
 
     #[tokio::test]
