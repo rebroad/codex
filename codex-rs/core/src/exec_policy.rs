@@ -309,13 +309,12 @@ impl ExecPolicyManager {
         }
     }
 
-    pub(crate) async fn append_amendment_and_update(
+    pub(crate) async fn append_amendment_and_update_at_path(
         &self,
-        codex_home: &Path,
+        policy_path: PathBuf,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let _update_guard = self.update_lock.lock().await;
-        let policy_path = default_policy_path(codex_home);
         spawn_blocking({
             let policy_path = policy_path.clone();
             let prefix = amendment.command.clone();
