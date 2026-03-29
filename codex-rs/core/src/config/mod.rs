@@ -5,6 +5,7 @@ use crate::config::types::AppServerLogConfig;
 use crate::config::types::AppServerLogToml;
 use crate::config::types::AppsConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
+use crate::config::types::ExecPolicyRuleWriteScope;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
@@ -254,6 +255,9 @@ pub struct Config {
 
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
+
+    /// Where to write newly approved exec-policy prefix rules.
+    pub exec_policy_rule_write_scope: ExecPolicyRuleWriteScope,
 
     /// Whether Linux sandbox debug logging is enabled (default true).
     pub sandbox_debug: bool,
@@ -1108,6 +1112,10 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
+
+    /// Where newly approved exec-policy prefix rules should be written.
+    /// Defaults to `project`.
+    pub exec_policy_rule_write_scope: Option<ExecPolicyRuleWriteScope>,
 
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
@@ -2614,6 +2622,7 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            exec_policy_rule_write_scope: cfg.exec_policy_rule_write_scope.unwrap_or_default(),
             sandbox_debug,
             approvals_reviewer,
             enforce_residency: enforce_residency.value,

@@ -24,6 +24,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
+use crate::config::types::ExecPolicyRuleWriteScope;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 #[cfg(test)]
@@ -58,6 +59,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
@@ -1209,6 +1211,31 @@ impl SessionConfiguration {
         }
         Ok(next_configuration)
     }
+}
+
+fn exec_policy_path_for_amendment(session_configuration: &SessionConfiguration) -> PathBuf {
+    let config = session_configuration.original_config_do_not_use.as_ref();
+    if matches!(
+        config.exec_policy_rule_write_scope,
+        ExecPolicyRuleWriteScope::Global
+    ) {
+        return config.codex_home.join("rules").join("default.rules");
+    }
+
+    for layer in config.config_layer_stack.get_layers(
+        codex_config::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        if matches!(&layer.name, ConfigLayerSource::Project { .. })
+            && let Some(config_folder) = layer.config_folder()
+            && let Ok(policy_dir) = config_folder.join("rules")
+            && let Ok(policy_path) = policy_dir.join("default.rules")
+        {
+            return policy_path.as_path().to_path_buf();
+        }
+    }
+
+    config.codex_home.join("rules").join("default.rules")
 }
 
 #[derive(Default, Clone)]
@@ -2815,21 +2842,15 @@ impl Session {
     pub(crate) async fn persist_execpolicy_amendment(
         &self,
         amendment: &ExecPolicyAmendment,
-    ) -> Result<(), ExecPolicyUpdateError> {
-        let codex_home = self
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .codex_home()
-            .clone();
-
+    ) -> Result<PathBuf, ExecPolicyUpdateError> {
+        let session_configuration = self.state.lock().await.session_configuration.clone();
+        let policy_path = exec_policy_path_for_amendment(&session_configuration);
         self.services
             .exec_policy
-            .append_amendment_and_update(&codex_home, amendment)
+            .append_amendment_and_update_at_path(policy_path.clone(), amendment)
             .await?;
 
-        Ok(())
+        Ok(policy_path)
     }
 
     pub(crate) async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
@@ -2855,12 +2876,16 @@ impl Session {
         &self,
         sub_id: &str,
         amendment: &ExecPolicyAmendment,
+        policy_path: &Path,
     ) {
         let Some(prefixes) = format_allow_prefixes(vec![amendment.command.clone()]) else {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let text = format!("Approved command prefix saved:\n{prefixes}");
+        let text = format!(
+            "Approved command prefix saved in `{}`:\n{prefixes}",
+            policy_path.display()
+        );
         let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
@@ -5071,10 +5096,11 @@ mod handlers {
                 .persist_execpolicy_amendment(proposed_execpolicy_amendment)
                 .await
             {
-                Ok(()) => {
+                Ok(policy_path) => {
                     sess.record_execpolicy_amendment_message(
                         &event_turn_id,
                         proposed_execpolicy_amendment,
+                        &policy_path,
                     )
                     .await;
                 }
