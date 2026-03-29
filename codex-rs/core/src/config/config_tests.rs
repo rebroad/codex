@@ -4,6 +4,7 @@ use crate::config::edit::apply_blocking;
 use crate::config::types::AppToolApproval;
 use crate::config::types::ApprovalsReviewer;
 use crate::config::types::BundledSkillsConfig;
+use crate::config::types::ExecPolicyRuleWriteScope;
 use crate::config::types::FeedbackConfigToml;
 use crate::config::types::HistoryPersistence;
 use crate::config::types::McpServerToolConfig;
@@ -248,6 +249,38 @@ capture_dir = "/tmp/prompt-debug-$$"
             capture_dir: Some(format!("/tmp/prompt-debug-{pid}").into()),
         }
     );
+
+    let exec_policy_project = r#"exec_policy_rule_write_scope = "project""#;
+    let exec_policy_project_cfg = toml::from_str::<ConfigToml>(exec_policy_project)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        exec_policy_project_cfg.exec_policy_rule_write_scope,
+        Some(ExecPolicyRuleWriteScope::Project)
+    );
+
+    let exec_policy_global = r#"exec_policy_rule_write_scope = "global""#;
+    let exec_policy_global_cfg = toml::from_str::<ConfigToml>(exec_policy_global)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        exec_policy_global_cfg.exec_policy_rule_write_scope,
+        Some(ExecPolicyRuleWriteScope::Global)
+    );
+}
+
+#[test]
+fn exec_policy_rule_write_scope_defaults_to_project() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.exec_policy_rule_write_scope,
+        ExecPolicyRuleWriteScope::Project
+    );
+    Ok(())
 }
 
 #[test]
@@ -4455,6 +4488,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_mode: None,
                 windows_sandbox_private_desktop: true,
             },
+            exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
@@ -4600,6 +4634,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
@@ -4743,6 +4778,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
@@ -4872,6 +4908,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
