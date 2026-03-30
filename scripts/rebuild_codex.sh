@@ -218,9 +218,20 @@ assert_npm_linux_tags() {
 
 run_release_build_with_locked_fallback() {
   local build_log
+  local -a cargo_env
+  cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
+  fi
+  if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
+    cargo_env+=(
+      CARGO_PROFILE_RELEASE_LTO=thin
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+    )
+  fi
   build_log="$(mktemp)"
   set +e
-  RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked 2>&1 | tee "${build_log}"
+  env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked 2>&1 | tee "${build_log}"
   local status=${PIPESTATUS[0]}
   set -e
 
@@ -232,7 +243,7 @@ run_release_build_with_locked_fallback() {
   if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build needs lockfile regeneration; retrying release build without --locked."
     rm -f "${build_log}"
-    RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1 cargo +"${TOOLCHAIN}" build -p codex-cli --release
+    env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli --release
     return 0
   fi
 
@@ -560,6 +571,8 @@ FORCE_TAG="true"
 AUTO_COMMIT_PREFLIGHT_FIXES="true"
 PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
 SHEAR_FIX_MODE="on_error"
+BUILD_JOBS=""
+FAST_RELEASE_BUILD="false"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
 TRIAGE_STATE_FILE="${REPO_DIR}/${TRIAGE_STATE_FILE_DEFAULT}"
 for arg in "$@"; do
@@ -604,6 +617,12 @@ for arg in "$@"; do
     --publish-timeout-minutes=*)
       PUBLISH_TIMEOUT_MINUTES="${arg#*=}"
       ;;
+    --jobs=*)
+      BUILD_JOBS="${arg#*=}"
+      ;;
+    --fast-release-build)
+      FAST_RELEASE_BUILD="true"
+      ;;
     --triage-state-file=*)
       TRIAGE_STATE_FILE="${arg#*=}"
       ;;
@@ -641,6 +660,10 @@ Options:
              Skip schema regeneration
   --publish-timeout-minutes=N
              Timeout in minutes for release workflow/npm verification (default: 45)
+  --jobs=N
+             Set Cargo build parallelism via CARGO_BUILD_JOBS
+  --fast-release-build
+             Faster release compile (LTO=thin, codegen-units=16) with potential runtime perf tradeoff
   --triage-state-file=<path>
              Local triage registry path keyed by content hash (default: tmp/ci-triaged-tags.json)
 EOF
@@ -653,6 +676,11 @@ EOF
       ;;
   esac
 done
+
+if [[ -n "${BUILD_JOBS}" ]] && ! [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --jobs value: ${BUILD_JOBS} (must be a positive integer)." >&2
+  exit 1
+fi
 
 cd "${REPO_DIR}"
 schema_should_run="false"
@@ -707,6 +735,12 @@ fi
 
 if [[ "${MODE}" == "release" ]]; then
   echo "[2/4] Building release codex..."
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    echo "Using Cargo build jobs: ${BUILD_JOBS}"
+  fi
+  if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
+    echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
+  fi
   run_release_build_with_locked_fallback
   echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
   install -D -m 755 "${RUST_WORKSPACE_DIR}/target/release/codex" "${INSTALL_BIN}"
@@ -714,7 +748,12 @@ else
   echo "[2/4] Building debug codex..."
   # Force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
   cargo +"${TOOLCHAIN}" clean -p codex-build-info
-  RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    echo "Using Cargo build jobs: ${BUILD_JOBS}"
+    RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo +"${TOOLCHAIN}" build -p codex-cli
+  else
+    RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli
+  fi
   echo "[3/4] Copying debug codex to ${INSTALL_BIN}..."
   install -D -m 755 "${RUST_WORKSPACE_DIR}/target/debug/codex" "${INSTALL_BIN}"
 fi
