@@ -330,8 +330,12 @@ run_ci_preflight_checks() {
   fi
   echo "[preflight] cargo-shear full log: ${shear_log}"
 
-  if (( shear_status != 0 )); then
-    echo "[preflight] cargo-shear reported errors; attempting automatic fix with --fix..."
+  if (( shear_status != 0 )) || [[ "${SHEAR_FIX_MODE}" == "always" ]]; then
+    if (( shear_status != 0 )); then
+      echo "[preflight] cargo-shear reported errors; attempting automatic fix with --fix..."
+    else
+      echo "[preflight] --fix enabled; running cargo shear --fix..."
+    fi
     set +e
     (
       cd "${RUST_WORKSPACE_DIR}"
@@ -381,6 +385,27 @@ run_ci_preflight_checks() {
       return "${shear_status}"
     fi
   fi
+}
+
+commit_preflight_changes_if_needed() {
+  local status_lines commit_message
+  status_lines="$(git -C "${REPO_DIR}" status --porcelain)"
+  if [[ -z "${status_lines}" ]]; then
+    return 0
+  fi
+  if is_only_cargo_lock_dirty; then
+    return 0
+  fi
+  if [[ "${AUTO_COMMIT_PREFLIGHT_FIXES}" != "true" ]]; then
+    return 1
+  fi
+  echo "Preflight introduced tracked changes; committing them before publish."
+  git -C "${REPO_DIR}" add -u
+  if git -C "${REPO_DIR}" diff --cached --quiet; then
+    return 0
+  fi
+  commit_message="chore: apply rebuild_codex preflight fixes for ${VERSION}"
+  git -C "${REPO_DIR}" commit -m "${commit_message}"
 }
 
 init_pnpm() {
@@ -532,7 +557,9 @@ PUBLISH="auto"
 REGEN_SCHEMA="auto"
 CI_PREFLIGHT="auto"
 FORCE_TAG="true"
+AUTO_COMMIT_PREFLIGHT_FIXES="true"
 PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
+SHEAR_FIX_MODE="on_error"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
 TRIAGE_STATE_FILE="${REPO_DIR}/${TRIAGE_STATE_FILE_DEFAULT}"
 for arg in "$@"; do
@@ -551,6 +578,16 @@ for arg in "$@"; do
       ;;
     --no-force-tag)
       FORCE_TAG="false"
+      ;;
+    --fix)
+      SHEAR_FIX_MODE="always"
+      CI_PREFLIGHT="true"
+      ;;
+    --auto-commit-fixes)
+      AUTO_COMMIT_PREFLIGHT_FIXES="true"
+      ;;
+    --no-auto-commit-fixes)
+      AUTO_COMMIT_PREFLIGHT_FIXES="false"
       ;;
     --regen-schema)
       REGEN_SCHEMA="true"
@@ -592,6 +629,12 @@ Options:
              Skip preflight checks even when publishing
   --no-force-tag
              Do not replace existing tags (default is to replace)
+  --fix
+             Force CI preflight and always run cargo shear --fix before publish checks
+  --auto-commit-fixes
+             Auto-commit tracked preflight-applied fixes before publishing (default)
+  --no-auto-commit-fixes
+             Do not auto-commit preflight fixes; fail if tracked changes remain
   --regen-schema
              Force schema regeneration
   --no-regen-schema
@@ -747,6 +790,9 @@ if [[ "${should_publish}" == "true" ]]; then
 
   timeout_secs="$((PUBLISH_TIMEOUT_MINUTES * 60))"
 
+  if ! commit_preflight_changes_if_needed; then
+    echo "Working tree has tracked changes after preflight and auto-commit is disabled." >&2
+  fi
   assert_publish_worktree_state
 
   current_branch="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD)"
