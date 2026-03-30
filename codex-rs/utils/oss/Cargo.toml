@@ -11,3 +11,6 @@ workspace = true
 codex-core = { workspace = true }
 codex-lmstudio = { workspace = true }
 codex-ollama = { workspace = true }
+
+[lib]
+doctest = false
