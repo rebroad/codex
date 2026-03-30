@@ -738,37 +738,6 @@ if ! rustup toolchain list | grep -q "^${TOOLCHAIN}-"; then
   rustup toolchain install "${TOOLCHAIN}" --component clippy rustfmt rust-src
 fi
 
-if [[ "${MODE}" == "release" ]]; then
-  echo "[2/4] Building release codex..."
-  if [[ -n "${BUILD_JOBS}" ]]; then
-    echo "Using Cargo build jobs: ${BUILD_JOBS}"
-  fi
-  if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
-    echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
-  fi
-  run_release_build_with_locked_fallback
-  echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${RUST_WORKSPACE_DIR}/target/release/codex" "${INSTALL_BIN}"
-else
-  echo "[2/4] Building debug codex..."
-  # Force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
-  cargo +"${TOOLCHAIN}" clean -p codex-build-info
-  if [[ -n "${BUILD_JOBS}" ]]; then
-    echo "Using Cargo build jobs: ${BUILD_JOBS}"
-    RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo +"${TOOLCHAIN}" build -p codex-cli
-  else
-    RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli
-  fi
-  echo "[3/4] Copying debug codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${RUST_WORKSPACE_DIR}/target/debug/codex" "${INSTALL_BIN}"
-fi
-
-echo "[4/4] Cleaning workspace codex binaries from target/..."
-rm -f "${RUST_WORKSPACE_DIR}/target/release/codex"
-
-echo "Final version:"
-echo "- Installed: $("${INSTALL_BIN}" --version)"
-
 should_publish="false"
 if [[ "${MODE}" == "release" && "${PUBLISH}" != "false" ]]; then
   should_publish="true"
@@ -819,9 +788,19 @@ if [[ "${run_ci_preflight}" == "true" ]]; then
   fi
   echo "${BOLD}=== CI PREFLIGHT PASSED ===${RESET}"
   echo "CI preflight checks completed."
-  if [[ -z "${VERSION}" ]]; then
+  if [[ "${should_publish}" == "true" ]]; then
+    if ! commit_preflight_changes_if_needed; then
+      echo "Working tree has tracked changes after preflight and auto-commit is disabled." >&2
+    fi
+    assert_publish_worktree_state
+
+    # Preflight may have committed tracked fixes; build/publish from that tree.
+    HEAD_COMMIT_SHA="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+    HEAD_TREE_HASH="$(git -C "${REPO_DIR}" rev-parse HEAD^{tree})"
     VERSION="$(resolve_publish_version)"
+    TAG="codex-v${VERSION}"
   fi
+
   if [[ -n "${VERSION}" ]]; then
     record_preflight_success_for_commit_and_tree "${HEAD_COMMIT_SHA}" "${HEAD_TREE_HASH}" "${VERSION}"
     echo "Recorded successful preflight for commit ${HEAD_COMMIT_SHA} and tree ${HEAD_TREE_HASH} (version ${VERSION}) in ${TRIAGE_STATE_FILE}."
@@ -830,13 +809,41 @@ if [[ "${run_ci_preflight}" == "true" ]]; then
   fi
 fi
 
+if [[ "${MODE}" == "release" ]]; then
+  echo "[2/4] Building release codex..."
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    echo "Using Cargo build jobs: ${BUILD_JOBS}"
+  fi
+  if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
+    echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
+  fi
+  run_release_build_with_locked_fallback
+  echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
+  install -D -m 755 "${RUST_WORKSPACE_DIR}/target/release/codex" "${INSTALL_BIN}"
+else
+  echo "[2/4] Building debug codex..."
+  # Force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
+  cargo +"${TOOLCHAIN}" clean -p codex-build-info
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    echo "Using Cargo build jobs: ${BUILD_JOBS}"
+    RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo +"${TOOLCHAIN}" build -p codex-cli
+  else
+    RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli
+  fi
+  echo "[3/4] Copying debug codex to ${INSTALL_BIN}..."
+  install -D -m 755 "${RUST_WORKSPACE_DIR}/target/debug/codex" "${INSTALL_BIN}"
+fi
+
+echo "[4/4] Cleaning workspace codex binaries from target/..."
+rm -f "${RUST_WORKSPACE_DIR}/target/release/codex"
+
+echo "Final version:"
+echo "- Installed: $("${INSTALL_BIN}" --version)"
+
 if [[ "${should_publish}" == "true" ]]; then
 
   timeout_secs="$((PUBLISH_TIMEOUT_MINUTES * 60))"
 
-  if ! commit_preflight_changes_if_needed; then
-    echo "Working tree has tracked changes after preflight and auto-commit is disabled." >&2
-  fi
   assert_publish_worktree_state
 
   current_branch="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD)"
