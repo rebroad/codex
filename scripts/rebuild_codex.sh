@@ -10,6 +10,9 @@ CARGO_LOCK_REL="codex-rs/Cargo.lock"
 PUBLISH_TIMEOUT_MINUTES_DEFAULT=45
 TRIAGE_STATE_FILE_DEFAULT="tmp/ci-triaged-tags.json"
 PNPM_VERSION_DEFAULT="10.29.3"
+NPM_VENDOR_DIR_DEFAULT="dist/npm-vendor"
+NPM_X64_TARGET="x86_64-unknown-linux-musl"
+NPM_ARMV7_TARGET="armv7-unknown-linux-gnueabihf"
 
 RED=$'\033[31m'
 BOLD=$'\033[1m'
@@ -254,6 +257,138 @@ run_release_build_with_locked_fallback() {
 
   rm -f "${build_log}"
   return "${status}"
+}
+
+run_target_build_with_locked_fallback() {
+  local target="$1"
+  local profile="$2"
+  local build_log
+  local -a cargo_env
+  cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
+  fi
+  if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
+    cargo_env+=(
+      CARGO_PROFILE_RELEASE_LTO=thin
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+    )
+  fi
+  build_log="$(mktemp)"
+  set +e
+  local -a cargo_cmd
+  cargo_cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli --target "${target}" --locked)
+  if [[ "${profile}" == "release" ]]; then
+    cargo_cmd+=(--release)
+  fi
+  env "${cargo_env[@]}" "${cargo_cmd[@]}" 2>&1 | tee "${build_log}"
+  local status=${PIPESTATUS[0]}
+  set -e
+
+  if (( status == 0 )); then
+    rm -f "${build_log}"
+    return 0
+  fi
+
+  if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
+    echo "Locked build for ${target} (${profile}) needs lockfile regeneration; retrying without --locked."
+    rm -f "${build_log}"
+    cargo_cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli --target "${target}")
+    if [[ "${profile}" == "release" ]]; then
+      cargo_cmd+=(--release)
+    fi
+    env "${cargo_env[@]}" "${cargo_cmd[@]}"
+    return 0
+  fi
+
+  rm -f "${build_log}"
+  return "${status}"
+}
+
+prepare_npm_vendor_rg_binary() {
+  local vendor_root="$1"
+  local target="$2"
+  local platform_key="$3"
+  REPO_DIR="${REPO_DIR}" RG_VENDOR_ROOT="${vendor_root}" RG_TARGET="${target}" RG_PLATFORM_KEY="${platform_key}" python3 - <<'PY'
+import json
+import os
+import shutil
+import tarfile
+import zipfile
+from pathlib import Path
+import urllib.request
+
+repo_root = Path(os.environ["REPO_DIR"])
+platform_key = os.environ["RG_PLATFORM_KEY"]
+vendor_root = Path(os.environ["RG_VENDOR_ROOT"])
+target = os.environ["RG_TARGET"]
+
+manifest_text = (repo_root / "codex-cli" / "bin" / "rg").read_text(encoding="utf-8")
+manifest = json.loads(manifest_text[manifest_text.index("{"):])
+platform = manifest["platforms"].get(platform_key)
+if platform is None:
+    raise RuntimeError(f"rg manifest missing platform key: {platform_key}")
+
+url = platform["providers"][0]["url"]
+member_path = platform["path"]
+archive_format = platform.get("format", "tar.gz")
+
+archive_path = vendor_root / "rg-archive"
+with urllib.request.urlopen(url) as response, open(archive_path, "wb") as out:
+    shutil.copyfileobj(response, out)
+
+dest_dir = vendor_root / target / "path"
+dest_dir.mkdir(parents=True, exist_ok=True)
+dest = dest_dir / "rg"
+
+if archive_format == "tar.gz":
+    with tarfile.open(archive_path, "r:gz") as tar:
+        member = tar.getmember(member_path)
+        with tar.extractfile(member) as src, open(dest, "wb") as out:
+            shutil.copyfileobj(src, out)
+elif archive_format == "zip":
+    with zipfile.ZipFile(archive_path) as zf:
+        with zf.open(member_path) as src, open(dest, "wb") as out:
+            shutil.copyfileobj(src, out)
+else:
+    raise RuntimeError(f"Unsupported rg archive format: {archive_format}")
+
+dest.chmod(0o755)
+PY
+}
+
+stage_npm_vendor_from_binaries() {
+  local version="$1"
+  local vendor_root="$2"
+  local profile="$3"
+  local x64_bin armv7_bin
+  x64_bin="${RUST_WORKSPACE_DIR}/target/${NPM_X64_TARGET}/${profile}/codex"
+  armv7_bin="${RUST_WORKSPACE_DIR}/target/${NPM_ARMV7_TARGET}/${profile}/codex"
+
+  if [[ ! -x "${x64_bin}" || ! -x "${armv7_bin}" ]]; then
+    echo "Missing required release binaries for npm vendor staging." >&2
+    if [[ ! -x "${x64_bin}" ]]; then
+      echo "- Missing ${x64_bin}" >&2
+    fi
+    if [[ ! -x "${armv7_bin}" ]]; then
+      echo "- Missing ${armv7_bin}" >&2
+    fi
+    echo "Build them with:" >&2
+    echo "  ./scripts/rebuild_codex.sh --release --build-npm-vendor" >&2
+    return 1
+  fi
+
+  mkdir -p "${vendor_root}/${NPM_X64_TARGET}/codex"
+  mkdir -p "${vendor_root}/${NPM_X64_TARGET}/path"
+  mkdir -p "${vendor_root}/${NPM_ARMV7_TARGET}/codex"
+
+  install -m 0755 "${x64_bin}" "${vendor_root}/${NPM_X64_TARGET}/codex/codex"
+  install -m 0755 "${armv7_bin}" "${vendor_root}/${NPM_ARMV7_TARGET}/codex/codex"
+
+  echo "Fetching rg payload for ${NPM_X64_TARGET}..."
+  prepare_npm_vendor_rg_binary "${vendor_root}" "${NPM_X64_TARGET}" "linux-x64"
+
+  echo "Prepared npm vendor root for ${version} (${profile}): ${vendor_root}"
 }
 
 run_ci_preflight_checks() {
@@ -570,6 +705,7 @@ record_preflight_success_for_commit_and_tree() {
 
 MODE="debug"
 PUBLISH="auto"
+PUBLISH_MODE="github"
 REGEN_SCHEMA="auto"
 CI_PREFLIGHT="auto"
 FORCE_TAG="true"
@@ -578,6 +714,11 @@ PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
 SHEAR_FIX_MODE="on_error"
 BUILD_JOBS=""
 FAST_RELEASE_BUILD="false"
+BUILD_NPM_VENDOR="false"
+NPM_VENDOR_DIR=""
+RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
+RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
+NPM_PUBLISH_DRY_RUN="false"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
 TRIAGE_STATE_FILE="${REPO_DIR}/${TRIAGE_STATE_FILE_DEFAULT}"
 for arg in "$@"; do
@@ -590,6 +731,10 @@ for arg in "$@"; do
       ;;
     --publish)
       PUBLISH="true"
+      ;;
+    --publish-npm)
+      PUBLISH="true"
+      PUBLISH_MODE="npm"
       ;;
     --no-publish)
       PUBLISH="false"
@@ -628,6 +773,27 @@ for arg in "$@"; do
     --fast-release-build)
       FAST_RELEASE_BUILD="true"
       ;;
+    --build-npm-vendor)
+      BUILD_NPM_VENDOR="true"
+      ;;
+    --build-npm-targets)
+      BUILD_NPM_VENDOR="true"
+      ;;
+    --prepare-npm-vendor)
+      BUILD_NPM_VENDOR="true"
+      ;;
+    --npm-vendor-dir=*)
+      NPM_VENDOR_DIR="${arg#*=}"
+      ;;
+    --rusty-v8-release-repo=*)
+      RUSTY_V8_RELEASE_REPO="${arg#*=}"
+      ;;
+    --rusty-v8-release-tag=*)
+      RUSTY_V8_RELEASE_TAG="${arg#*=}"
+      ;;
+    --npm-publish-dry-run)
+      NPM_PUBLISH_DRY_RUN="true"
+      ;;
     --triage-state-file=*)
       TRIAGE_STATE_FILE="${arg#*=}"
       ;;
@@ -645,6 +811,8 @@ Default behavior:
 Options:
   --release   Build/install release codex into ~/.cargo/bin/codex, then clean target binaries
   --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
+  --publish-npm
+             Publish directly to npm locally (no GitHub tag/workflow publish path)
   --no-publish
              Skip tag/push even in release mode
   --ci-preflight
@@ -669,6 +837,16 @@ Options:
              Set Cargo build parallelism via CARGO_BUILD_JOBS
   --fast-release-build
              Faster release compile (LTO=thin, codegen-units=16) with potential runtime perf tradeoff
+  --build-npm-vendor
+             Build + stage npm vendor payload for linux x64 + armv7 using current mode (--debug or --release)
+  --npm-vendor-dir=<path>
+             Override npm vendor output directory when using --build-npm-vendor
+  --rusty-v8-release-repo=<owner/repo>
+             rusty_v8 release repo for armv7 build (default: rebroad/rusty_v8)
+  --rusty-v8-release-tag=<tag>
+             rusty_v8 release tag for armv7 build (default: resolved from crate version)
+  --npm-publish-dry-run
+             With --publish-npm, run npm publish in --dry-run mode
   --triage-state-file=<path>
              Local triage registry path keyed by content hash (default: tmp/ci-triaged-tags.json)
 EOF
@@ -745,9 +923,30 @@ elif [[ "${PUBLISH}" == "true" ]]; then
   should_publish="true"
 fi
 
+publish_to_github="false"
+publish_to_npm="false"
 if [[ "${should_publish}" == "true" ]]; then
+  case "${PUBLISH_MODE}" in
+    github)
+      publish_to_github="true"
+      ;;
+    npm)
+      publish_to_npm="true"
+      BUILD_NPM_VENDOR="true"
+      MODE="release"
+      ;;
+    *)
+      echo "Unknown publish mode: ${PUBLISH_MODE}" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [[ "${publish_to_github}" == "true" ]]; then
   require_cmd gh
   require_cmd jq
+  require_cmd npm
+elif [[ "${publish_to_npm}" == "true" ]]; then
   require_cmd npm
 fi
 
@@ -761,7 +960,17 @@ if [[ "${should_publish}" == "true" ]]; then
     echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml or ${INSTALL_BIN} --version"
     exit 1
   fi
-  TAG="codex-v${VERSION}"
+  if [[ "${publish_to_github}" == "true" ]]; then
+    TAG="codex-v${VERSION}"
+  fi
+fi
+
+if [[ "${BUILD_NPM_VENDOR}" == "true" && -z "${VERSION}" ]]; then
+  VERSION="$(resolve_publish_version)"
+  if [[ -z "${VERSION}" ]]; then
+    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml or ${INSTALL_BIN} --version"
+    exit 1
+  fi
 fi
 
 run_ci_preflight="false"
@@ -834,13 +1043,41 @@ else
   install -D -m 755 "${RUST_WORKSPACE_DIR}/target/debug/codex" "${INSTALL_BIN}"
 fi
 
+if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
+  require_cmd python3
+  echo "Building npm vendor target ${NPM_X64_TARGET} (${MODE})..."
+  if ! rustup target list --toolchain "${TOOLCHAIN}" --installed | grep -Fxq "${NPM_X64_TARGET}"; then
+    rustup target add --toolchain "${TOOLCHAIN}" "${NPM_X64_TARGET}"
+  fi
+  run_target_build_with_locked_fallback "${NPM_X64_TARGET}" "${MODE}"
+
+  echo "Building npm vendor target ${NPM_ARMV7_TARGET} (${MODE})..."
+  armv7_cmd=(
+    "${REPO_DIR}/scripts/local_armv7_gate.sh"
+    "--${MODE}"
+    --allow-non-arm-host
+    "--rusty-v8-release-repo=${RUSTY_V8_RELEASE_REPO}"
+  )
+  if [[ -n "${RUSTY_V8_RELEASE_TAG}" ]]; then
+    armv7_cmd+=("--rusty-v8-release-tag=${RUSTY_V8_RELEASE_TAG}")
+  fi
+  "${armv7_cmd[@]}"
+  vendor_root="${NPM_VENDOR_DIR}"
+  if [[ -z "${vendor_root}" ]]; then
+    vendor_root="${REPO_DIR}/${NPM_VENDOR_DIR_DEFAULT}/${VERSION}"
+  elif [[ "${vendor_root}" != /* ]]; then
+    vendor_root="${REPO_DIR}/${vendor_root}"
+  fi
+  stage_npm_vendor_from_binaries "${VERSION}" "${vendor_root}" "${MODE}"
+fi
+
 echo "[4/4] Cleaning workspace codex binaries from target/..."
 rm -f "${RUST_WORKSPACE_DIR}/target/release/codex"
 
 echo "Final version:"
 echo "- Installed: $("${INSTALL_BIN}" --version)"
 
-if [[ "${should_publish}" == "true" ]]; then
+if [[ "${publish_to_github}" == "true" ]]; then
 
   timeout_secs="$((PUBLISH_TIMEOUT_MINUTES * 60))"
 
@@ -916,4 +1153,17 @@ if [[ "${should_publish}" == "true" ]]; then
   echo "Verifying npm linux tags..."
   assert_npm_linux_tags "${timeout_secs}"
   echo "Publish flow completed successfully for ${TAG}."
+fi
+
+if [[ "${publish_to_npm}" == "true" ]]; then
+  npm_publish_cmd=(
+    "${REPO_DIR}/scripts/publish_npm_local.sh"
+    --version "${VERSION}"
+    --publish
+  )
+  if [[ "${NPM_PUBLISH_DRY_RUN}" == "true" ]]; then
+    npm_publish_cmd+=(--dry-run)
+  fi
+  echo "Publishing npm packages locally for version ${VERSION}..."
+  "${npm_publish_cmd[@]}"
 fi
