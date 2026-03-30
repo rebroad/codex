@@ -28,3 +28,6 @@ walkdir = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[lib]
+doctest = false
