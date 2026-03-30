@@ -33,7 +33,12 @@ require_cmd() {
 
 is_only_cargo_lock_dirty() {
   local status_lines filtered_status
-  status_lines="$(git -C "${REPO_DIR}" status --porcelain)"
+  # Ignore untracked files for publish gating. We only enforce tracked-tree
+  # cleanliness here.
+  status_lines="$(
+    git -C "${REPO_DIR}" status --porcelain \
+      | grep -Ev '^\?\?' || true
+  )"
   if [[ -z "${status_lines}" ]]; then
     return 0
   fi
@@ -49,7 +54,7 @@ assert_publish_worktree_state() {
   if is_only_cargo_lock_dirty; then
     return 0
   fi
-  echo "Working tree has changes beyond allowed local-only files (${CARGO_LOCK_REL}, tmp/, scripts/rebuild_codex.sh, scripts/ci_triage.sh); refusing to publish." >&2
+  echo "Working tree has tracked changes beyond allowed local-only files (${CARGO_LOCK_REL}, tmp/, scripts/rebuild_codex.sh, scripts/ci_triage.sh); refusing to publish." >&2
   git -C "${REPO_DIR}" status --short >&2
   exit 1
 }
