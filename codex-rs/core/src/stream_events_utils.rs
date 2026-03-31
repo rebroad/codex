@@ -20,6 +20,7 @@ use crate::memories::citations::parse_memory_citation;
 use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::registry::TOOL_CALLS_BLOCKED_PENDING_STEER_RESPONSE;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -289,6 +290,53 @@ pub(crate) async fn handle_output_item_done(
         }
         // The tool request should be answered directly (or was denied); push that response into the transcript.
         Err(FunctionCallError::RespondToModel(message)) => {
+            if message == TOOL_CALLS_BLOCKED_PENDING_STEER_RESPONSE {
+                record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
+                    .await;
+                // Emit a direct assistant reply and suppress further tool follow-up loops.
+                if ctx
+                    .sess
+                    .mark_blocked_tool_guidance_emitted_if_first(&ctx.turn_context.sub_id)
+                    .await
+                {
+                    let guidance = "I can’t continue with tool actions because you rejected that approval. Share updated instructions and I’ll continue without new tool calls until you steer me otherwise.".to_string();
+                    let response_item = ResponseItem::Message {
+                        id: None,
+                        role: "assistant".to_string(),
+                        content: vec![codex_protocol::models::ContentItem::OutputText {
+                            text: guidance.clone(),
+                        }],
+                        end_turn: None,
+                        phase: None,
+                    };
+                    if let Some(turn_item) = handle_non_tool_response_item(
+                        ctx.sess.as_ref(),
+                        ctx.turn_context.as_ref(),
+                        &response_item,
+                        plan_mode,
+                    )
+                    .await
+                    {
+                        if previously_active_item.is_none() {
+                            ctx.sess
+                                .emit_turn_item_started(&ctx.turn_context, &turn_item)
+                                .await;
+                        }
+                        ctx.sess
+                            .emit_turn_item_completed(&ctx.turn_context, turn_item)
+                            .await;
+                    }
+                    ctx.sess
+                        .record_conversation_items(
+                            &ctx.turn_context,
+                            std::slice::from_ref(&response_item),
+                        )
+                        .await;
+                    output.last_agent_message = Some(guidance);
+                }
+                output.needs_follow_up = false;
+                return Ok(output);
+            }
             let response = ResponseInputItem::FunctionCallOutput {
                 call_id: String::new(),
                 output: FunctionCallOutputPayload {
