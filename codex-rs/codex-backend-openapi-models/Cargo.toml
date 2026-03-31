@@ -10,6 +10,9 @@ path = "src/lib.rs"
 test = false
 doctest = false
 
+[lints]
+workspace = true
+
 # Important: generated code often violates our workspace lints.
 # Allow unwrap/expect in this crate so the workspace builds cleanly
 # after models are regenerated.

@@ -13,6 +13,9 @@ name = "codex_file_search"
 path = "src/lib.rs"
 doctest = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
