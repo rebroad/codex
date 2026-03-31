@@ -10,6 +10,7 @@ CARGO_LOCK_PATH="${RUST_WORKSPACE_DIR}/Cargo.lock"
 TARGET_DEFAULT="armv7-unknown-linux-gnueabihf"
 PROFILE="release"
 TARGET="${TARGET_DEFAULT}"
+BUILD_ENV="${BUILD_ENV:-auto}"
 RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
 RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
@@ -21,7 +22,7 @@ GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
 
 usage() {
   cat <<'EOF'
-Usage: local_armv7_gate.sh [--release|--debug] [--target=<triple>] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|host|docker-buster>] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -31,6 +32,10 @@ Options:
   --release             Build release profile (default)
   --debug               Build debug profile
   --target=<triple>     Override target triple (default: armv7-unknown-linux-gnueabihf)
+  --build-env=<mode>    Build environment mode:
+                        auto (default): use docker-buster for armv7 unless host is buster
+                        host: always build on current host
+                        docker-buster: force Debian buster container build
   --allow-non-arm-host  Deprecated no-op (non-arm hosts are now supported by default)
   --rusty-v8-release-repo=<owner/repo>
                         GitHub repo hosting rusty_v8 release assets (default: rebroad/rusty_v8)
@@ -181,17 +186,140 @@ setup_armv7_pkg_config_env() {
 }
 
 resolve_codex_version() {
-  REPO_DIR="${REPO_DIR}" python3 - <<'PY'
-import os
-import tomllib
-from pathlib import Path
+  awk '
+    /^\[workspace\.package\]/ { in_ws=1; next }
+    /^\[/ { if (in_ws) exit }
+    in_ws && $1 == "version" {
+      gsub(/"/, "", $3)
+      print $3
+      exit
+    }
+  ' "${RUST_WORKSPACE_DIR}/Cargo.toml"
+}
 
-toml_path = Path(os.environ["REPO_DIR"]) / "codex-rs" / "Cargo.toml"
-data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
-version = data.get("workspace", {}).get("package", {}).get("version")
-if version:
-    print(version)
-PY
+host_version_codename() {
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    echo "${VERSION_CODENAME:-}"
+    return 0
+  fi
+  echo ""
+}
+
+should_use_docker_buster() {
+  if [[ "${TARGET}" != "armv7-unknown-linux-gnueabihf" ]]; then
+    return 1
+  fi
+  if [[ "${CODEX_ARMV7_IN_DOCKER:-}" == "1" ]]; then
+    return 1
+  fi
+  case "${BUILD_ENV}" in
+    host)
+      return 1
+      ;;
+    docker-buster)
+      return 0
+      ;;
+    auto)
+      if [[ "$(host_version_codename)" == "buster" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    *)
+      echo "Invalid --build-env value: ${BUILD_ENV} (expected auto|host|docker-buster)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+run_in_docker_buster() {
+  local script_in_container="/work/codex/scripts/build_armv7.sh"
+  local -a forwarded_args docker_cmd
+  local container_rusty_v8_path=""
+  local docker_home_dir="${ARMV7_CACHE_DIR}/docker-home"
+  local maybe_mount=()
+
+  require_cmd docker
+  mkdir -p "${docker_home_dir}"
+
+  forwarded_args=(
+    "--${PROFILE}"
+    "--target=${TARGET}"
+    "--build-env=host"
+    "--rusty-v8-release-repo=${RUSTY_V8_RELEASE_REPO}"
+  )
+  if [[ -n "${RUSTY_V8_RELEASE_TAG}" ]]; then
+    forwarded_args+=("--rusty-v8-release-tag=${RUSTY_V8_RELEASE_TAG}")
+  fi
+  if [[ "${PUBLISH_GITHUB}" == "true" ]]; then
+    forwarded_args+=("--publish-github")
+  else
+    forwarded_args+=("--no-publish-github")
+  fi
+  if [[ -n "${GITHUB_RELEASE_REPO}" ]]; then
+    forwarded_args+=("--github-release-repo=${GITHUB_RELEASE_REPO}")
+  fi
+  if [[ -n "${GITHUB_RELEASE_TAG}" ]]; then
+    forwarded_args+=("--github-release-tag=${GITHUB_RELEASE_TAG}")
+  fi
+
+  if [[ -d "${RUSTY_V8_LOCAL_PATH}/.git" ]]; then
+    container_rusty_v8_path="/work/rusty_v8"
+    maybe_mount=(-v "${RUSTY_V8_LOCAL_PATH}:${container_rusty_v8_path}:ro")
+    forwarded_args+=("--rusty-v8-local-path=${container_rusty_v8_path}")
+  else
+    forwarded_args+=("--rusty-v8-local-path=${RUSTY_V8_LOCAL_PATH}")
+  fi
+
+  echo "Building in Debian buster container for Pi-compatible glibc/OpenSSL ABI..."
+  docker_cmd=(
+    docker run --rm -t
+    --platform linux/amd64
+    -e DEBIAN_FRONTEND=noninteractive
+    -e CODEX_ARMV7_IN_DOCKER=1
+    -v "${docker_home_dir}:/root"
+    -v "${REPO_DIR}:/work/codex"
+    "${maybe_mount[@]}"
+    -w /work/codex
+    debian:buster
+    bash -lc
+    "set -euo pipefail; \
+      printf '%s\n' \
+        'deb http://archive.debian.org/debian buster main contrib non-free' \
+        'deb http://archive.debian.org/debian-security buster/updates main contrib non-free' \
+        > /etc/apt/sources.list; \
+      dpkg --add-architecture armhf; \
+      apt-get -o Acquire::Check-Valid-Until=false update -y; \
+      apt-get install -y ca-certificates curl git python3 file pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
+      if [[ ! -x /root/.cargo/bin/rustup ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
+      source /root/.cargo/env; \
+      ${script_in_container} ${forwarded_args[*]}"
+  )
+  "${docker_cmd[@]}"
+}
+
+validate_pi3_abi_compat() {
+  local bin_path="$1"
+  local glibc_versions max_glibc
+
+  require_cmd strings
+  glibc_versions="$(strings "${bin_path}" | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sed 's/GLIBC_//' | sort -Vu || true)"
+  if [[ -z "${glibc_versions}" ]]; then
+    return 0
+  fi
+  max_glibc="$(tail -n1 <<<"${glibc_versions}")"
+  if ! awk -v v="${max_glibc}" 'BEGIN { split(v, a, "."); exit !((a[1] < 2) || (a[1] == 2 && a[2] <= 28)) }'; then
+    echo "Built binary is not Pi OS Buster compatible (requires GLIBC_${max_glibc})." >&2
+    echo "Re-run with --build-env=docker-buster (or keep default --build-env=auto)." >&2
+    exit 1
+  fi
+  if strings "${bin_path}" | grep -q 'libssl\.so\.3'; then
+    echo "Built binary links against OpenSSL 3 (libssl.so.3), but Pi OS Buster provides OpenSSL 1.1." >&2
+    echo "Re-run with --build-env=docker-buster (or keep default --build-env=auto)." >&2
+    exit 1
+  fi
 }
 
 publish_local_artifacts() {
@@ -335,6 +463,9 @@ for arg in "$@"; do
     --target=*)
       TARGET="${arg#*=}"
       ;;
+    --build-env=*)
+      BUILD_ENV="${arg#*=}"
+      ;;
     --allow-non-arm-host)
       # Backward-compatible no-op.
       ;;
@@ -374,6 +505,11 @@ done
 host_arch="$(uname -m)"
 if [[ ! "${host_arch}" =~ ^(armv7|armv6|armhf|arm)$ ]]; then
   echo "Host architecture is ${host_arch}; using cross-compile mode for ${TARGET}."
+fi
+
+if should_use_docker_buster; then
+  run_in_docker_buster
+  exit 0
 fi
 
 require_cmd cargo
@@ -510,6 +646,9 @@ fi
 echo "Local armv7 gate passed."
 echo "Binary: ${bin_path}"
 echo "Description: ${bin_desc}"
+if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
+  validate_pi3_abi_compat "${bin_path}"
+fi
 
 version="$(resolve_codex_version)"
 if [[ -n "${version}" ]]; then

@@ -1053,7 +1053,7 @@ if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
 
   echo "Building npm vendor target ${NPM_ARMV7_TARGET} (${MODE})..."
   armv7_cmd=(
-    "${REPO_DIR}/scripts/local_armv7_gate.sh"
+    "${REPO_DIR}/scripts/build_armv7.sh"
     "--${MODE}"
     --allow-non-arm-host
     "--rusty-v8-release-repo=${RUSTY_V8_RELEASE_REPO}"
