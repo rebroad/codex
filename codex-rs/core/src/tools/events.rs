@@ -409,6 +409,10 @@ async fn emit_exec_stage(
 ) {
     match stage {
         ToolEventStage::Begin => {
+            if let Some(tracker) = ctx.turn_diff_tracker {
+                let mut guard = tracker.lock().await;
+                guard.on_command_begin(exec_input.command, exec_input.cwd);
+            }
             emit_exec_command_begin(
                 ctx,
                 exec_input.command,
