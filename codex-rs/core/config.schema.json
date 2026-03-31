@@ -440,6 +440,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "general_analytics": {
+              "type": "boolean"
+            },
             "guardian_approval": {
               "type": "boolean"
             },
@@ -2261,6 +2264,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "general_analytics": {
           "type": "boolean"
         },
         "guardian_approval": {
