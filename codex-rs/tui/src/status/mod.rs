@@ -12,14 +12,17 @@ mod format;
 mod helpers;
 mod rate_limits;
 
+use account::truncate_status_email_local_part;
 use crate::history_cell::HistoryCell;
 use crate::insert_history::write_spans;
 pub(crate) use account::StatusAccountDisplay;
 pub(crate) use card::StatusCardVariant;
-use account::truncate_status_email_local_part;
+pub(crate) use card::StatusHistoryHandle;
 #[cfg(test)]
 pub(crate) use card::new_status_output;
+#[cfg(test)]
 pub(crate) use card::new_status_output_with_rate_limits;
+pub(crate) use card::new_status_output_with_rate_limits_handle;
 use chrono::Local;
 use chrono::TimeZone;
 use chrono::Utc;
