@@ -913,7 +913,10 @@ fi
 
 if ! rustup toolchain list | grep -q "^${TOOLCHAIN}-"; then
   echo "Installing pinned Rust toolchain ${TOOLCHAIN}..."
-  rustup toolchain install "${TOOLCHAIN}" --component clippy rustfmt rust-src
+  rustup toolchain install "${TOOLCHAIN}" \
+    --component clippy \
+    --component rustfmt \
+    --component rust-src
 fi
 
 should_publish="false"

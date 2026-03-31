@@ -11,18 +11,20 @@ TARGET_DEFAULT="armv7-unknown-linux-gnueabihf"
 PROFILE="release"
 TARGET="${TARGET_DEFAULT}"
 BUILD_ENV="${BUILD_ENV:-auto}"
+EPHEMERAL="false"
 RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
 RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
 RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
 ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-${REPO_DIR}/tmp/armv7-cache}"
+DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:1}"
 PUBLISH_GITHUB="false"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|host|docker-buster>] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -36,6 +38,9 @@ Options:
                         auto (default): use docker-buster for armv7 unless host is buster
                         host: always build on current host
                         docker-buster: force Debian buster container build
+  --ephemeral           One-off Docker build: do not reuse cached image/toolchain/cargo.
+                        Also removes existing local armv7 Docker image/cache before running.
+  DOCKER_BUSTER_IMAGE   Optional env var to override cached builder image tag
   --allow-non-arm-host  Deprecated no-op (non-arm hosts are now supported by default)
   --rusty-v8-release-repo=<owner/repo>
                         GitHub repo hosting rusty_v8 release assets (default: rebroad/rusty_v8)
@@ -197,6 +202,37 @@ resolve_codex_version() {
   ' "${RUST_WORKSPACE_DIR}/Cargo.toml"
 }
 
+resolve_v8_crate_version() {
+  awk '
+    BEGIN { in_pkg=0; name=""; ver="" }
+    /^\[\[package\]\]/ {
+      if (in_pkg && name == "v8" && ver != "") {
+        print ver
+        exit
+      }
+      in_pkg=1
+      name=""
+      ver=""
+      next
+    }
+    in_pkg && /^name = / {
+      gsub(/"/, "", $3)
+      name=$3
+      next
+    }
+    in_pkg && /^version = / {
+      gsub(/"/, "", $3)
+      ver=$3
+      next
+    }
+    END {
+      if (in_pkg && name == "v8" && ver != "") {
+        print ver
+      }
+    }
+  ' "${CARGO_LOCK_PATH}"
+}
+
 host_version_codename() {
   if [[ -f /etc/os-release ]]; then
     # shellcheck disable=SC1091
@@ -234,15 +270,56 @@ should_use_docker_buster() {
   esac
 }
 
+ensure_docker_buster_image() {
+  if docker image inspect "${DOCKER_BUSTER_IMAGE}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Creating cached Docker builder image ${DOCKER_BUSTER_IMAGE} (one-time setup)..."
+  docker build -t "${DOCKER_BUSTER_IMAGE}" - <<'DOCKERFILE'
+FROM debian:buster
+ENV DEBIAN_FRONTEND=noninteractive
+RUN printf '%s\n' \
+    'deb http://archive.debian.org/debian buster main contrib non-free' \
+    'deb http://archive.debian.org/debian-security buster/updates main contrib non-free' \
+    > /etc/apt/sources.list \
+ && dpkg --add-architecture armhf \
+ && apt-get -o Acquire::Check-Valid-Until=false update -y \
+ && apt-get install -y --no-install-recommends \
+    ca-certificates curl git python3 file pkg-config \
+    gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+    libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf \
+ && rm -rf /var/lib/apt/lists/*
+DOCKERFILE
+}
+
 run_in_docker_buster() {
   local script_in_container="/work/codex/scripts/build_armv7.sh"
   local -a forwarded_args docker_cmd
+  local container_image="${DOCKER_BUSTER_IMAGE}"
   local container_rusty_v8_path=""
-  local docker_home_dir="${ARMV7_CACHE_DIR}/docker-home"
-  local maybe_mount=()
+  local docker_cargo_home="${ARMV7_CACHE_DIR}/docker-cargo-home"
+  local docker_rustup_home="${ARMV7_CACHE_DIR}/docker-rustup-home"
+  local -a maybe_mount maybe_cache_mount
+  maybe_mount=()
+  maybe_cache_mount=()
 
   require_cmd docker
-  mkdir -p "${docker_home_dir}"
+  if [[ "${EPHEMERAL}" == "true" ]]; then
+    echo "Running ephemeral docker-buster build (clearing cached image and Rust caches)..."
+    docker image rm -f "${DOCKER_BUSTER_IMAGE}" >/dev/null 2>&1 || true
+    rm -rf "${docker_cargo_home}" "${docker_rustup_home}"
+    container_image="debian:buster"
+  else
+    ensure_docker_buster_image
+    mkdir -p "${docker_cargo_home}" "${docker_rustup_home}"
+    maybe_cache_mount=(
+      -e CARGO_HOME=/cargo-home
+      -e RUSTUP_HOME=/rustup-home
+      -v "${docker_cargo_home}:/cargo-home"
+      -v "${docker_rustup_home}:/rustup-home"
+    )
+  fi
 
   forwarded_args=(
     "--${PROFILE}"
@@ -264,6 +341,9 @@ run_in_docker_buster() {
   if [[ -n "${GITHUB_RELEASE_TAG}" ]]; then
     forwarded_args+=("--github-release-tag=${GITHUB_RELEASE_TAG}")
   fi
+  if [[ "${EPHEMERAL}" == "true" ]]; then
+    forwarded_args+=("--ephemeral")
+  fi
 
   if [[ -d "${RUSTY_V8_LOCAL_PATH}/.git" ]]; then
     container_rusty_v8_path="/work/rusty_v8"
@@ -279,22 +359,24 @@ run_in_docker_buster() {
     --platform linux/amd64
     -e DEBIAN_FRONTEND=noninteractive
     -e CODEX_ARMV7_IN_DOCKER=1
-    -v "${docker_home_dir}:/root"
+    "${maybe_cache_mount[@]}"
     -v "${REPO_DIR}:/work/codex"
     "${maybe_mount[@]}"
     -w /work/codex
-    debian:buster
+    "${container_image}"
     bash -lc
     "set -euo pipefail; \
-      printf '%s\n' \
-        'deb http://archive.debian.org/debian buster main contrib non-free' \
-        'deb http://archive.debian.org/debian-security buster/updates main contrib non-free' \
-        > /etc/apt/sources.list; \
-      dpkg --add-architecture armhf; \
-      apt-get -o Acquire::Check-Valid-Until=false update -y; \
-      apt-get install -y ca-certificates curl git python3 file pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
-      if [[ ! -x /root/.cargo/bin/rustup ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
-      source /root/.cargo/env; \
+      if [[ \"${EPHEMERAL}\" == \"true\" ]]; then \
+        printf '%s\n' \
+          'deb http://archive.debian.org/debian buster main contrib non-free' \
+          'deb http://archive.debian.org/debian-security buster/updates main contrib non-free' \
+          > /etc/apt/sources.list; \
+        dpkg --add-architecture armhf; \
+        apt-get -o Acquire::Check-Valid-Until=false update -y; \
+        apt-get install -y ca-certificates curl git python3 file pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
+      fi; \
+      if [[ ! -x \"${CARGO_HOME:-/root/.cargo}/bin/rustup\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
+      source \"${CARGO_HOME:-/root/.cargo}/env\"; \
       ${script_in_container} ${forwarded_args[*]}"
   )
   "${docker_cmd[@]}"
@@ -466,6 +548,9 @@ for arg in "$@"; do
     --build-env=*)
       BUILD_ENV="${arg#*=}"
       ;;
+    --ephemeral)
+      EPHEMERAL="true"
+      ;;
     --allow-non-arm-host)
       # Backward-compatible no-op.
       ;;
@@ -542,7 +627,10 @@ fi
 
 if ! rustup toolchain list | grep -q "^${TOOLCHAIN}-"; then
   echo "Installing pinned Rust toolchain ${TOOLCHAIN}..."
-  rustup toolchain install "${TOOLCHAIN}" --component clippy rustfmt rust-src
+  rustup toolchain install "${TOOLCHAIN}" \
+    --component clippy \
+    --component rustfmt \
+    --component rust-src
 fi
 
 if ! rustup target list --toolchain "${TOOLCHAIN}" --installed | grep -Fxq "${TARGET}"; then
@@ -554,7 +642,11 @@ cd "${RUST_WORKSPACE_DIR}"
 
 export RUSTUP_DISABLE_SELF_UPDATE=1
 
-resolved_v8_version="$(python3 "${REPO_DIR}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+resolved_v8_version="$(resolve_v8_crate_version)"
+if [[ -z "${resolved_v8_version}" ]]; then
+  echo "Unable to resolve v8 crate version from ${CARGO_LOCK_PATH}" >&2
+  exit 1
+fi
 release_tag="${RUSTY_V8_RELEASE_TAG}"
 if [[ -z "${release_tag}" ]]; then
   release_tag="rusty-v8-v${resolved_v8_version}"
