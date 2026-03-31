@@ -4079,27 +4079,15 @@ impl Session {
             None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
-        let active_task_cancellation_token = active_turn
-            .tasks
-            .first()
-            .map(|(_, task)| task.cancellation_token.clone());
         let mut turn_state = active_turn.turn_state.lock().await;
         let was_blocked = turn_state.tool_calls_blocked_pending_steer();
         turn_state.unblock_tool_calls_after_steer();
-        if was_blocked {
-            turn_state.push_pending_input(ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: steer_applied_developer_message(),
-                }],
-            });
+        if was_blocked && turn_state.cancel_active_sampling_request() {
+            // Cancel only the in-flight sampling request so the loop can rebuild the prompt
+            // with steer-applied state, without cancelling the full turn lifecycle.
             turn_state.request_sampling_restart_after_steer();
         }
         turn_state.push_pending_input(input.into());
-        drop(turn_state);
-        if was_blocked && let Some(cancellation_token) = active_task_cancellation_token {
-            cancellation_token.cancel();
-        }
         Ok(active_turn_id.clone())
     }
 
@@ -4122,6 +4110,30 @@ impl Session {
                 ts.mark_blocked_tool_guidance_emitted_if_first()
             }
             _ => false,
+        }
+    }
+
+    pub(crate) async fn set_sampling_request_cancellation_token(
+        &self,
+        turn_id: &str,
+        token: CancellationToken,
+    ) {
+        let mut active = self.active_turn.lock().await;
+        if let Some(at) = active.as_mut()
+            && at.tasks.contains_key(turn_id)
+        {
+            let mut ts = at.turn_state.lock().await;
+            ts.set_sampling_request_cancellation_token(token);
+        }
+    }
+
+    pub(crate) async fn clear_sampling_request_cancellation_token(&self, turn_id: &str) {
+        let mut active = self.active_turn.lock().await;
+        if let Some(at) = active.as_mut()
+            && at.tasks.contains_key(turn_id)
+        {
+            let mut ts = at.turn_state.lock().await;
+            ts.clear_sampling_request_cancellation_token();
         }
     }
 
@@ -4457,10 +4469,6 @@ fn review_decision_blocks_tool_calls(decision: &ReviewDecision) -> bool {
 
 fn blocked_pending_steer_developer_message() -> String {
     "User rejected an approval request. Do not call tools until steer input arrives; ask for direction in plain text instead.".to_string()
-}
-
-fn steer_applied_developer_message() -> String {
-    "User steer input arrived. Tool usage is re-enabled for this turn; follow the latest user steer now.".to_string()
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
@@ -6078,7 +6086,13 @@ pub(crate) async fn run_turn(
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
-        match run_sampling_request(
+        let sampling_request_cancellation_token = cancellation_token.child_token();
+        sess.set_sampling_request_cancellation_token(
+            &turn_context.sub_id,
+            sampling_request_cancellation_token.clone(),
+        )
+        .await;
+        let sampling_result = run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
@@ -6088,10 +6102,12 @@ pub(crate) async fn run_turn(
             &explicitly_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
-            cancellation_token.child_token(),
+            sampling_request_cancellation_token,
         )
-        .await
-        {
+        .await;
+        sess.clear_sampling_request_cancellation_token(&turn_context.sub_id)
+            .await;
+        match sampling_result {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
                     needs_follow_up,
