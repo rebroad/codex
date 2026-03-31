@@ -3308,11 +3308,15 @@ impl Session {
     }
 
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        let should_block_tool_calls = review_decision_blocks_tool_calls(&decision);
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
+                    if should_block_tool_calls {
+                        ts.block_tool_calls_pending_steer();
+                    }
                     ts.remove_pending_approval(approval_id)
                 }
                 None => None,
@@ -4066,6 +4070,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.unblock_tool_calls_after_steer();
         turn_state.push_pending_input(input.into());
         Ok(active_turn_id.clone())
     }
@@ -4370,6 +4375,19 @@ impl Session {
             .lock()
             .await
             .cancel();
+    }
+}
+
+fn review_decision_blocks_tool_calls(decision: &ReviewDecision) -> bool {
+    match decision {
+        ReviewDecision::Denied => true,
+        ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => matches!(network_policy_amendment.action, NetworkPolicyRuleAction::Deny),
+        ReviewDecision::Approved
+        | ReviewDecision::ApprovedForSession
+        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+        | ReviewDecision::Abort => false,
     }
 }
 
