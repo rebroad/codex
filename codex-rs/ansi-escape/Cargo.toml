@@ -10,6 +10,9 @@ path = "src/lib.rs"
 test = false
 doctest = false
 
+[lints]
+workspace = true
+
 [dependencies]
 ansi-to-tui = { workspace = true }
 ratatui = { workspace = true, features = [
