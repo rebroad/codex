@@ -17,7 +17,7 @@ RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
 RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
 ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-${REPO_DIR}/tmp/armv7-cache}"
-DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:1}"
+DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:2}"
 PUBLISH_GITHUB="false"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
@@ -325,7 +325,7 @@ RUN printf '%s\n' \
  && dpkg --add-architecture armhf \
  && apt-get -o Acquire::Check-Valid-Until=false update -y \
  && apt-get install -y --no-install-recommends \
-    ca-certificates curl git python3 file pkg-config \
+    ca-certificates curl git python3 file pkg-config gcc g++ \
     gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
     libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf \
  && rm -rf /var/lib/apt/lists/*
@@ -412,7 +412,7 @@ run_in_docker_buster() {
           > /etc/apt/sources.list; \
         dpkg --add-architecture armhf; \
         apt-get -o Acquire::Check-Valid-Until=false update -y; \
-        apt-get install -y ca-certificates curl git python3 file pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
+        apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
       if [[ ! -x \"\${CARGO_HOME:-/root/.cargo}/bin/rustup\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
       source \"\${CARGO_HOME:-/root/.cargo}/env\"; \
