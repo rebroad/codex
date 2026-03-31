@@ -220,6 +220,7 @@ async fn schedule_startup_prewarm_inner(
         BaseInstructions {
             text: base_instructions,
         },
+        /*tool_calls_blocked_pending_steer*/ false,
     );
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state

@@ -83,6 +83,8 @@ pub(crate) struct TurnState {
     pending_input: Vec<ResponseInputItem>,
     granted_permissions: Option<PermissionProfile>,
     tool_calls_blocked_pending_steer: bool,
+    blocked_tool_guidance_emitted: bool,
+    restart_sampling_after_steer: bool,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
@@ -111,6 +113,8 @@ impl TurnState {
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
         self.tool_calls_blocked_pending_steer = false;
+        self.blocked_tool_guidance_emitted = false;
+        self.restart_sampling_after_steer = false;
     }
 
     pub(crate) fn insert_pending_request_permissions(
@@ -210,6 +214,7 @@ impl TurnState {
 
     pub(crate) fn unblock_tool_calls_after_steer(&mut self) {
         self.tool_calls_blocked_pending_steer = false;
+        self.blocked_tool_guidance_emitted = false;
     }
 
     pub(crate) fn tool_calls_blocked_pending_steer(&self) -> bool {
@@ -218,6 +223,23 @@ impl TurnState {
 
     pub(crate) fn increment_tool_calls(&mut self) {
         self.tool_calls = self.tool_calls.saturating_add(1);
+    }
+
+    pub(crate) fn mark_blocked_tool_guidance_emitted_if_first(&mut self) -> bool {
+        if self.blocked_tool_guidance_emitted {
+            false
+        } else {
+            self.blocked_tool_guidance_emitted = true;
+            true
+        }
+    }
+
+    pub(crate) fn request_sampling_restart_after_steer(&mut self) {
+        self.restart_sampling_after_steer = true;
+    }
+
+    pub(crate) fn take_sampling_restart_after_steer(&mut self) -> bool {
+        std::mem::take(&mut self.restart_sampling_after_steer)
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
@@ -266,5 +288,15 @@ mod tests {
 
         turn_state.clear_pending();
         assert!(!turn_state.tool_calls_blocked_pending_steer());
+    }
+
+    #[test]
+    fn sampling_restart_flag_is_one_shot() {
+        let mut turn_state = TurnState::default();
+        assert!(!turn_state.take_sampling_restart_after_steer());
+
+        turn_state.request_sampling_restart_after_steer();
+        assert!(turn_state.take_sampling_restart_after_steer());
+        assert!(!turn_state.take_sampling_restart_after_steer());
     }
 }

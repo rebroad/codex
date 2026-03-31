@@ -3309,13 +3309,23 @@ impl Session {
 
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let should_block_tool_calls = review_decision_blocks_tool_calls(&decision);
+        let blocked_pending_steer_message = blocked_pending_steer_developer_message();
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
                     if should_block_tool_calls {
+                        let was_blocked = ts.tool_calls_blocked_pending_steer();
                         ts.block_tool_calls_pending_steer();
+                        if !was_blocked {
+                            ts.push_pending_input(ResponseInputItem::Message {
+                                role: "developer".to_string(),
+                                content: vec![ContentItem::InputText {
+                                    text: blocked_pending_steer_message,
+                                }],
+                            });
+                        }
                     }
                     ts.remove_pending_approval(approval_id)
                 }
@@ -4069,10 +4079,61 @@ impl Session {
             None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
+        let active_task_cancellation_token = active_turn
+            .tasks
+            .first()
+            .map(|(_, task)| task.cancellation_token.clone());
         let mut turn_state = active_turn.turn_state.lock().await;
+        let was_blocked = turn_state.tool_calls_blocked_pending_steer();
         turn_state.unblock_tool_calls_after_steer();
+        if was_blocked {
+            turn_state.push_pending_input(ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: steer_applied_developer_message(),
+                }],
+            });
+            turn_state.request_sampling_restart_after_steer();
+        }
         turn_state.push_pending_input(input.into());
+        drop(turn_state);
+        if was_blocked && let Some(cancellation_token) = active_task_cancellation_token {
+            cancellation_token.cancel();
+        }
         Ok(active_turn_id.clone())
+    }
+
+    pub(crate) async fn tool_calls_blocked_pending_steer(&self, turn_id: &str) -> bool {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) if at.tasks.contains_key(turn_id) => {
+                let ts = at.turn_state.lock().await;
+                ts.tool_calls_blocked_pending_steer()
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) async fn mark_blocked_tool_guidance_emitted_if_first(&self, turn_id: &str) -> bool {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) if at.tasks.contains_key(turn_id) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.mark_blocked_tool_guidance_emitted_if_first()
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) async fn take_sampling_restart_after_steer(&self, turn_id: &str) -> bool {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) if at.tasks.contains_key(turn_id) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_sampling_restart_after_steer()
+            }
+            _ => false,
+        }
     }
 
     /// Returns the input if there was no task running to inject into.
@@ -4383,12 +4444,23 @@ fn review_decision_blocks_tool_calls(decision: &ReviewDecision) -> bool {
         ReviewDecision::Denied => true,
         ReviewDecision::NetworkPolicyAmendment {
             network_policy_amendment,
-        } => matches!(network_policy_amendment.action, NetworkPolicyRuleAction::Deny),
+        } => matches!(
+            network_policy_amendment.action,
+            NetworkPolicyRuleAction::Deny
+        ),
         ReviewDecision::Approved
         | ReviewDecision::ApprovedForSession
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::Abort => false,
     }
+}
+
+fn blocked_pending_steer_developer_message() -> String {
+    "User rejected an approval request. Do not call tools until steer input arrives; ask for direction in plain text instead.".to_string()
+}
+
+fn steer_applied_developer_message() -> String {
+    "User steer input arrived. Tool usage is re-enabled for this turn; follow the latest user steer now.".to_string()
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
@@ -6178,6 +6250,12 @@ pub(crate) async fn run_turn(
                 continue;
             }
             Err(CodexErr::TurnAborted) => {
+                if sess
+                    .take_sampling_restart_after_steer(&turn_context.sub_id)
+                    .await
+                {
+                    continue;
+                }
                 // Aborted turn is reported via a different event.
                 break;
             }
@@ -6466,8 +6544,9 @@ pub(crate) fn build_prompt(
     router: &ToolRouter,
     turn_context: &TurnContext,
     mut base_instructions: BaseInstructions,
+    tool_calls_blocked_pending_steer: bool,
 ) -> Prompt {
-    let tools = if turn_context.config.bare_prompt {
+    let tools = if turn_context.config.bare_prompt || tool_calls_blocked_pending_steer {
         Vec::new()
     } else {
         let deferred_dynamic_tools = turn_context
@@ -6486,8 +6565,9 @@ pub(crate) fn build_prompt(
                 .collect()
         }
     };
-    let parallel_tool_calls =
-        !turn_context.config.bare_prompt && turn_context.model_info.supports_parallel_tool_calls;
+    let parallel_tool_calls = !turn_context.config.bare_prompt
+        && !tool_calls_blocked_pending_steer
+        && turn_context.model_info.supports_parallel_tool_calls;
     if turn_context.config.bare_prompt {
         base_instructions.text.clear();
     }
@@ -6533,12 +6613,16 @@ async fn run_sampling_request(
     .await?;
 
     let base_instructions = sess.get_base_instructions().await;
+    let tool_calls_blocked_pending_steer = sess
+        .tool_calls_blocked_pending_steer(&turn_context.sub_id)
+        .await;
 
     let prompt = build_prompt(
         input,
         router.as_ref(),
         turn_context.as_ref(),
         base_instructions,
+        tool_calls_blocked_pending_steer,
     );
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
