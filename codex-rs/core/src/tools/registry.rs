@@ -29,6 +29,9 @@ use codex_utils_readiness::Readiness;
 use serde_json::Value;
 use tracing::warn;
 
+pub(crate) const TOOL_CALLS_BLOCKED_PENDING_STEER_RESPONSE: &str =
+    "tool calls are blocked after a rejected approval; wait for user steer input";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolKind {
     Function,
@@ -264,9 +267,7 @@ impl ToolRegistry {
             }
         };
         if tool_calls_blocked_pending_steer {
-            let message =
-                "tool calls are blocked after a rejected approval; wait for user steer input"
-                    .to_string();
+            let message = TOOL_CALLS_BLOCKED_PENDING_STEER_RESPONSE.to_string();
             otel.tool_result_with_tags(
                 tool_name.as_ref(),
                 &call_id_owned,
