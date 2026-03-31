@@ -14,6 +14,7 @@ RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
 RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
 RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
+ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-${REPO_DIR}/tmp/armv7-cache}"
 PUBLISH_GITHUB="false"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
@@ -58,8 +59,9 @@ prepare_patched_v8_source() {
   local source_repo="$1"
   local version="$2"
   local output_dir="$3"
-  local ref
+  local ref expected_commit meta_file
   ref="v${version}"
+  meta_file="${output_dir}/.codex-armv7-v8-patch.meta"
 
   require_cmd git
   require_cmd tar
@@ -72,7 +74,18 @@ prepare_patched_v8_source() {
     echo "Missing ${ref} in ${source_repo}; cannot prepare v8 ${version} patch source." >&2
     exit 1
   fi
+  expected_commit="$(git -C "${source_repo}" rev-parse "${ref}^{commit}")"
 
+  if [[ -f "${meta_file}" ]] \
+    && [[ -f "${output_dir}/Cargo.toml" ]] \
+    && grep -Fxq "source_repo=${source_repo}" "${meta_file}" \
+    && grep -Fxq "ref=${ref}" "${meta_file}" \
+    && grep -Fxq "commit=${expected_commit}" "${meta_file}" \
+    && grep -Fxq "patch=remove_typeid_alignment_assert_v1" "${meta_file}"; then
+    return 0
+  fi
+
+  rm -rf "${output_dir}"
   mkdir -p "${output_dir}"
   git -C "${source_repo}" archive --format=tar "${ref}" | tar -xf - -C "${output_dir}"
 
@@ -95,6 +108,13 @@ if needle not in text:
     sys.exit(1)
 path.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
 PY
+
+  cat > "${meta_file}" <<EOF
+source_repo=${source_repo}
+ref=${ref}
+commit=${expected_commit}
+patch=remove_typeid_alignment_assert_v1
+EOF
 }
 
 ensure_armv7_cross_packages() {
@@ -105,6 +125,7 @@ ensure_armv7_cross_packages() {
     libssl-dev:armhf
     libcap-dev:armhf
     zlib1g-dev:armhf
+    libbz2-dev:armhf
     pkg-config
   )
 
@@ -124,9 +145,10 @@ ensure_armv7_cross_packages() {
 }
 
 setup_armv7_pkg_config_env() {
-  local openssl_pc libcap_pc
+  local openssl_pc libcap_pc libbz2_so
   openssl_pc="/usr/lib/arm-linux-gnueabihf/pkgconfig/openssl.pc"
   libcap_pc="/usr/lib/arm-linux-gnueabihf/pkgconfig/libcap.pc"
+  libbz2_so="/usr/lib/arm-linux-gnueabihf/libbz2.so"
 
   require_cmd pkg-config
 
@@ -136,8 +158,15 @@ setup_armv7_pkg_config_env() {
   if [[ ! -f "${libcap_pc}" ]]; then
     ensure_armv7_cross_packages
   fi
+  if [[ ! -f "${libbz2_so}" ]]; then
+    ensure_armv7_cross_packages
+  fi
   if [[ ! -f "${openssl_pc}" || ! -f "${libcap_pc}" ]]; then
     echo "Missing required armv7 pkg-config metadata after package install." >&2
+    exit 1
+  fi
+  if [[ ! -f "${libbz2_so}" ]]; then
+    echo "Missing required armv7 bzip2 library after package install: ${libbz2_so}" >&2
     exit 1
   fi
 
@@ -409,9 +438,13 @@ trap cleanup EXIT INT TERM
 tmp_lock_backup="$(mktemp)"
 cp "${CARGO_LOCK_PATH}" "${tmp_lock_backup}"
 
-binding_path="${tmp_dir}/src_binding_release_${TARGET}.rs"
-echo "Fetching rusty_v8 binding: ${base_url}/src_binding_release_${TARGET}.rs"
-download_file "${base_url}/src_binding_release_${TARGET}.rs" "${binding_path}"
+mkdir -p "${ARMV7_CACHE_DIR}"
+
+binding_path="${ARMV7_CACHE_DIR}/src_binding_release_${release_tag}_${TARGET}.rs"
+if [[ ! -f "${binding_path}" ]]; then
+  echo "Fetching rusty_v8 binding: ${base_url}/src_binding_release_${TARGET}.rs"
+  download_file "${base_url}/src_binding_release_${TARGET}.rs" "${binding_path}"
+fi
 
 export RUSTY_V8_ARCHIVE="${archive_url}"
 export RUSTY_V8_SRC_BINDING_PATH="${binding_path}"
@@ -425,7 +458,7 @@ if [[ "${PROFILE}" == "release" ]]; then
 fi
 if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   # Codex pins v8 = <resolved_v8_version>; prepare a matching patched source.
-  patched_v8_dir="${tmp_dir}/v8-${resolved_v8_version}-armv7-patched"
+  patched_v8_dir="${ARMV7_CACHE_DIR}/v8-${resolved_v8_version}-armv7-patched"
   echo "Preparing patched v8 source from ${RUSTY_V8_LOCAL_PATH} (${resolved_v8_version})..."
   prepare_patched_v8_source "${RUSTY_V8_LOCAL_PATH}" "${resolved_v8_version}" "${patched_v8_dir}"
   cargo_args+=(
