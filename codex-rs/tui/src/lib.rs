@@ -2034,7 +2034,7 @@ mod tests {
             /*include_non_interactive*/ false,
         )
         .await?;
-        assert_eq!(interactive_only, None);
+        assert!(interactive_only.is_none());
 
         let include_non_interactive = lookup_session_target_by_name_with_app_server(
             &mut app_server,
