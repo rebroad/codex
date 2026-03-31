@@ -2160,7 +2160,7 @@ async fn handle_token_count_event(
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
-    if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
+    if let Some(token_usage) = info.as_ref().cloned().map(ThreadTokenUsage::from) {
         let notification = ThreadTokenUsageUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id,
@@ -2188,6 +2188,13 @@ async fn handle_error(
 ) {
     let mut state = thread_state.lock().await;
     state.turn_summary.last_error = Some(error);
+}
+
+fn should_emit_turn_error_notification(error: &TurnError) -> bool {
+    !matches!(
+        error.codex_error_info,
+        Some(V2CodexErrorInfo::UsageLimitExceeded)
+    )
 }
 
 async fn on_patch_approval_response(
@@ -3262,6 +3269,28 @@ mod tests {
             })
         );
         Ok(())
+    }
+
+    #[test]
+    fn usage_limit_error_does_not_emit_turn_error_notification() {
+        let error = TurnError {
+            message: "Usage limit reached".to_string(),
+            codex_error_info: Some(V2CodexErrorInfo::UsageLimitExceeded),
+            additional_details: None,
+        };
+
+        assert!(!should_emit_turn_error_notification(&error));
+    }
+
+    #[test]
+    fn non_usage_limit_error_emits_turn_error_notification() {
+        let error = TurnError {
+            message: "boom".to_string(),
+            codex_error_info: Some(V2CodexErrorInfo::BadRequest),
+            additional_details: None,
+        };
+
+        assert!(should_emit_turn_error_notification(&error));
     }
 
     #[tokio::test]
