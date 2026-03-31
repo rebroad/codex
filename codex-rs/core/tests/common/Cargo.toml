@@ -8,6 +8,9 @@ license.workspace = true
 path = "lib.rs"
 doctest = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 assert_cmd = { workspace = true }
