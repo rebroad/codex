@@ -301,11 +301,19 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     assert!(exit_code.is_none());
     assert!(aggregated_output.is_none());
 
-    timeout(
+    let completed_notif = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.thread_id, thread.id);
+    assert_eq!(completed.turn.id, turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Interrupted);
 
     Ok(())
 }

@@ -2676,8 +2676,10 @@ async fn on_command_execution_request_approval_response(
                         completion_status,
                     )
                 }
+                // Treat explicit declines the same as cancel so approval
+                // rejections consistently end the active turn.
                 CommandExecutionApprovalDecision::Decline => (
-                    ReviewDecision::Denied,
+                    ReviewDecision::Abort,
                     Some(CommandExecutionStatus::Declined),
                 ),
                 CommandExecutionApprovalDecision::Cancel => (
