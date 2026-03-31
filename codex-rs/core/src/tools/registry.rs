@@ -249,12 +249,36 @@ impl ToolRegistry {
         let mcp_server_ref = mcp_server.as_deref();
         let mcp_server_origin_ref = mcp_server_origin.as_deref();
 
-        {
+        let tool_calls_blocked_pending_steer = {
             let mut active = invocation.session.active_turn.lock().await;
             if let Some(active_turn) = active.as_mut() {
                 let mut turn_state = active_turn.turn_state.lock().await;
-                turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
+                if turn_state.tool_calls_blocked_pending_steer() {
+                    true
+                } else {
+                    turn_state.increment_tool_calls();
+                    false
+                }
+            } else {
+                false
             }
+        };
+        if tool_calls_blocked_pending_steer {
+            let message =
+                "tool calls are blocked after a rejected approval; wait for user steer input"
+                    .to_string();
+            otel.tool_result_with_tags(
+                tool_name.as_ref(),
+                &call_id_owned,
+                log_payload.as_ref(),
+                Duration::ZERO,
+                /*success*/ false,
+                &message,
+                &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
+            );
+            return Err(FunctionCallError::RespondToModel(message));
         }
 
         let handler = match self.handler(tool_name.as_ref(), tool_namespace.as_deref()) {

@@ -1317,7 +1317,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     )?;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.id, turn.id);
-    assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     Ok(())
 }
