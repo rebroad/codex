@@ -39,8 +39,8 @@ use crate::protocol::InitialHistory;
 use crate::protocol::NetworkApprovalProtocol;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
-use crate::protocol::ResumedHistory;
 use crate::protocol::ReviewDecision;
+use crate::protocol::ResumedHistory;
 use crate::protocol::RolloutItem;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
@@ -4708,7 +4708,7 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
-async fn steer_input_after_rejection_unblocks_tools_and_marks_sampling_restart() {
+async fn steer_input_after_rejection_cancels_active_sampling_request() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
@@ -4724,6 +4724,10 @@ async fn steer_input_after_rejection_unblocks_tools_and_marks_sampling_restart()
     )
     .await;
 
+    let sampling_token = CancellationToken::new();
+    sess.set_sampling_request_cancellation_token(&tc.sub_id, sampling_token.clone())
+        .await;
+
     sess.notify_approval("call-decline", ReviewDecision::Denied)
         .await;
     assert!(sess.tool_calls_blocked_pending_steer(&tc.sub_id).await);
@@ -4736,6 +4740,7 @@ async fn steer_input_after_rejection_unblocks_tools_and_marks_sampling_restart()
         .await
         .expect("steer should be accepted");
 
+    assert!(sampling_token.is_cancelled());
     assert!(!sess.tool_calls_blocked_pending_steer(&tc.sub_id).await);
     assert!(sess.take_sampling_restart_after_steer(&tc.sub_id).await);
     assert!(!sess.take_sampling_restart_after_steer(&tc.sub_id).await);

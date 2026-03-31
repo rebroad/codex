@@ -84,6 +84,7 @@ pub(crate) struct TurnState {
     granted_permissions: Option<PermissionProfile>,
     tool_calls_blocked_pending_steer: bool,
     blocked_tool_guidance_emitted: bool,
+    sampling_request_cancellation_token: Option<CancellationToken>,
     restart_sampling_after_steer: bool,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -114,6 +115,7 @@ impl TurnState {
         self.pending_input.clear();
         self.tool_calls_blocked_pending_steer = false;
         self.blocked_tool_guidance_emitted = false;
+        self.sampling_request_cancellation_token = None;
         self.restart_sampling_after_steer = false;
     }
 
@@ -234,6 +236,23 @@ impl TurnState {
         }
     }
 
+    pub(crate) fn set_sampling_request_cancellation_token(&mut self, token: CancellationToken) {
+        self.sampling_request_cancellation_token = Some(token);
+    }
+
+    pub(crate) fn clear_sampling_request_cancellation_token(&mut self) {
+        self.sampling_request_cancellation_token = None;
+    }
+
+    pub(crate) fn cancel_active_sampling_request(&mut self) -> bool {
+        if let Some(token) = self.sampling_request_cancellation_token.take() {
+            token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn request_sampling_restart_after_steer(&mut self) {
         self.restart_sampling_after_steer = true;
     }
@@ -263,6 +282,7 @@ impl ActiveTurn {
 #[cfg(test)]
 mod tests {
     use super::TurnState;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn tool_call_blocking_flag_defaults_to_unblocked() {
@@ -288,6 +308,17 @@ mod tests {
 
         turn_state.clear_pending();
         assert!(!turn_state.tool_calls_blocked_pending_steer());
+    }
+
+    #[test]
+    fn cancel_active_sampling_request_is_one_shot() {
+        let mut turn_state = TurnState::default();
+        let token = CancellationToken::new();
+        turn_state.set_sampling_request_cancellation_token(token.clone());
+
+        assert!(turn_state.cancel_active_sampling_request());
+        assert!(token.is_cancelled());
+        assert!(!turn_state.cancel_active_sampling_request());
     }
 
     #[test]
