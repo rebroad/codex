@@ -425,3 +425,32 @@ index {ZERO_OID}..{right_oid}
     };
     assert_eq!(combined, expected_combined);
 }
+
+#[test]
+fn command_begin_tracks_shell_script_paths_for_turn_diff() {
+    let dir = tempdir().unwrap();
+    let file_a = dir.path().join("a.txt");
+    let file_b = dir.path().join("b.txt");
+    fs::write(&file_a, "one\n").unwrap();
+    fs::write(&file_b, "two\n").unwrap();
+
+    let mut tracker = TurnDiffTracker::new();
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "perl -0pi -e 's/o/O/g' {} {}",
+            file_a.display(),
+            file_b.display()
+        ),
+    ];
+    tracker.on_command_begin(&command, dir.path());
+
+    fs::write(&file_a, "One\n").unwrap();
+    fs::write(&file_b, "twO\n").unwrap();
+
+    let diff = tracker.get_unified_diff().unwrap().unwrap();
+    let diff = normalize_diff_for_test(&diff, dir.path());
+    assert!(diff.contains("diff --git a/<TMP>/a.txt b/<TMP>/a.txt"));
+    assert!(diff.contains("diff --git a/<TMP>/b.txt b/<TMP>/b.txt"));
+}
