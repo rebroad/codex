@@ -53,45 +53,7 @@ impl TurnDiffTracker {
     /// - Also updates internal mappings for move/rename events.
     pub fn on_patch_begin(&mut self, changes: &HashMap<PathBuf, FileChange>) {
         for (path, change) in changes.iter() {
-            // Ensure a stable internal filename exists for this external path.
-            if !self.external_to_temp_name.contains_key(path) {
-                let internal = Uuid::new_v4().to_string();
-                self.external_to_temp_name
-                    .insert(path.clone(), internal.clone());
-                self.temp_name_to_current_path
-                    .insert(internal.clone(), path.clone());
-
-                // If the file exists on disk now, snapshot as baseline; else leave missing to represent /dev/null.
-                let baseline_file_info = if path.exists() {
-                    let mode = file_mode_for_path(path);
-                    let mode_val = mode.unwrap_or(FileMode::Regular);
-                    let content = blob_bytes(path, mode_val).unwrap_or_default();
-                    let oid = if mode == Some(FileMode::Symlink) {
-                        format!("{:x}", git_blob_sha1_hex_bytes(&content))
-                    } else {
-                        self.git_blob_oid_for_path(path)
-                            .unwrap_or_else(|| format!("{:x}", git_blob_sha1_hex_bytes(&content)))
-                    };
-                    Some(BaselineFileInfo {
-                        path: path.clone(),
-                        content,
-                        mode: mode_val,
-                        oid,
-                    })
-                } else {
-                    Some(BaselineFileInfo {
-                        path: path.clone(),
-                        content: vec![],
-                        mode: FileMode::Regular,
-                        oid: ZERO_OID.to_string(),
-                    })
-                };
-
-                if let Some(baseline_file_info) = baseline_file_info {
-                    self.baseline_file_info
-                        .insert(internal.clone(), baseline_file_info);
-                }
-            }
+            self.ensure_path_tracked(path);
 
             // Track rename/move in current mapping if provided in an Update.
             if let FileChange::Update {
@@ -125,6 +87,99 @@ impl TurnDiffTracker {
                     .insert(dest.clone(), uuid_filename);
             };
         }
+    }
+
+    /// Best-effort tracking for direct command edits (for example shell/perl/sed).
+    /// This snapshots file baselines up front so subsequent turn diffs can include
+    /// command-driven edits, not just apply_patch edits.
+    pub fn on_command_begin(&mut self, command: &[String], cwd: &Path) {
+        for path in self.infer_candidate_paths_from_command(command, cwd) {
+            self.ensure_path_tracked(&path);
+        }
+    }
+
+    fn ensure_path_tracked(&mut self, path: &Path) {
+        if self.external_to_temp_name.contains_key(path) {
+            return;
+        }
+
+        let path = path.to_path_buf();
+        let internal = Uuid::new_v4().to_string();
+        self.external_to_temp_name
+            .insert(path.clone(), internal.clone());
+        self.temp_name_to_current_path
+            .insert(internal.clone(), path.clone());
+
+        let baseline_file_info = if path.exists() {
+            let mode = file_mode_for_path(&path);
+            let mode_val = mode.unwrap_or(FileMode::Regular);
+            let content = blob_bytes(&path, mode_val).unwrap_or_default();
+            let oid = if mode == Some(FileMode::Symlink) {
+                format!("{:x}", git_blob_sha1_hex_bytes(&content))
+            } else {
+                self.git_blob_oid_for_path(&path)
+                    .unwrap_or_else(|| format!("{:x}", git_blob_sha1_hex_bytes(&content)))
+            };
+            BaselineFileInfo {
+                path: path.clone(),
+                content,
+                mode: mode_val,
+                oid,
+            }
+        } else {
+            BaselineFileInfo {
+                path: path.clone(),
+                content: vec![],
+                mode: FileMode::Regular,
+                oid: ZERO_OID.to_string(),
+            }
+        };
+
+        self.baseline_file_info.insert(internal, baseline_file_info);
+    }
+
+    fn infer_candidate_paths_from_command(&self, command: &[String], cwd: &Path) -> Vec<PathBuf> {
+        let mut tokens = Vec::new();
+        tokens.extend(command.iter().cloned());
+
+        if command.len() >= 3
+            && command
+                .get(1)
+                .is_some_and(|flag| flag == "-c" || flag == "-lc")
+            && let Some(script) = command.get(2)
+            && let Some(parts) = shlex::split(script)
+        {
+            tokens.extend(parts);
+        }
+
+        let mut out = Vec::new();
+        for token in tokens {
+            if token.is_empty()
+                || token.starts_with('-')
+                || token.contains('*')
+                || token.contains('?')
+                || token.contains('|')
+                || token.contains('&')
+                || token.contains(';')
+                || token.contains('>')
+                || token.contains('<')
+            {
+                continue;
+            }
+            let candidate = if Path::new(&token).is_absolute() {
+                PathBuf::from(&token)
+            } else {
+                cwd.join(&token)
+            };
+            if candidate.exists()
+                && let Ok(metadata) = fs::symlink_metadata(&candidate)
+                && (metadata.file_type().is_file() || metadata.file_type().is_symlink())
+                && !out.iter().any(|existing| existing == &candidate)
+            {
+                out.push(candidate);
+            }
+        }
+        out
     }
 
     fn get_path_for_internal(&self, internal: &str) -> Option<PathBuf> {
