@@ -127,6 +127,41 @@ patch=remove_typeid_alignment_assert_v1
 EOF
 }
 
+ensure_rusty_v8_source_repo_for_version() {
+  local requested_repo_path="$1"
+  local version="$2"
+  local ref cache_repo remote_url
+  ref="v${version}"
+
+  if [[ -d "${requested_repo_path}/.git" ]] \
+    && git -C "${requested_repo_path}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
+    echo "${requested_repo_path}"
+    return 0
+  fi
+
+  cache_repo="${ARMV7_CACHE_DIR}/rusty_v8-source-cache"
+  remote_url="https://github.com/${RUSTY_V8_RELEASE_REPO}.git"
+  mkdir -p "${ARMV7_CACHE_DIR}"
+
+  if [[ ! -d "${cache_repo}/.git" ]]; then
+    echo "Local rusty_v8 checkout lacks ${ref}; cloning ${remote_url} into cache..." >&2
+    git clone --filter=blob:none "${remote_url}" "${cache_repo}" >/dev/null
+  fi
+
+  if ! git -C "${cache_repo}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
+    echo "Fetching ${ref} in cached rusty_v8 source repo..." >&2
+    git -C "${cache_repo}" fetch --tags origin >/dev/null
+  fi
+
+  if ! git -C "${cache_repo}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
+    echo "Missing ${ref} in both ${requested_repo_path} and ${cache_repo}." >&2
+    echo "Tried remote: ${remote_url}" >&2
+    exit 1
+  fi
+
+  echo "${cache_repo}"
+}
+
 ensure_armv7_cross_packages() {
   local -a packages
   packages=(
@@ -204,10 +239,11 @@ resolve_codex_version() {
 
 resolve_v8_crate_version() {
   awk '
-    BEGIN { in_pkg=0; name=""; ver="" }
+    BEGIN { in_pkg=0; name=""; ver=""; found=0 }
     /^\[\[package\]\]/ {
       if (in_pkg && name == "v8" && ver != "") {
         print ver
+        found=1
         exit
       }
       in_pkg=1
@@ -226,6 +262,9 @@ resolve_v8_crate_version() {
       next
     }
     END {
+      if (found) {
+        exit
+      }
       if (in_pkg && name == "v8" && ver != "") {
         print ver
       }
@@ -375,8 +414,8 @@ run_in_docker_buster() {
         apt-get -o Acquire::Check-Valid-Until=false update -y; \
         apt-get install -y ca-certificates curl git python3 file pkg-config gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
-      if [[ ! -x \"${CARGO_HOME:-/root/.cargo}/bin/rustup\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
-      source \"${CARGO_HOME:-/root/.cargo}/env\"; \
+      if [[ ! -x \"\${CARGO_HOME:-/root/.cargo}/bin/rustup\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
+      source \"\${CARGO_HOME:-/root/.cargo}/env\"; \
       ${script_in_container} ${forwarded_args[*]}"
   )
   "${docker_cmd[@]}"
@@ -686,9 +725,10 @@ if [[ "${PROFILE}" == "release" ]]; then
 fi
 if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   # Codex pins v8 = <resolved_v8_version>; prepare a matching patched source.
+  effective_rusty_v8_source_repo="$(ensure_rusty_v8_source_repo_for_version "${RUSTY_V8_LOCAL_PATH}" "${resolved_v8_version}")"
   patched_v8_dir="${ARMV7_CACHE_DIR}/v8-${resolved_v8_version}-armv7-patched"
-  echo "Preparing patched v8 source from ${RUSTY_V8_LOCAL_PATH} (${resolved_v8_version})..."
-  prepare_patched_v8_source "${RUSTY_V8_LOCAL_PATH}" "${resolved_v8_version}" "${patched_v8_dir}"
+  echo "Preparing patched v8 source from ${effective_rusty_v8_source_repo} (${resolved_v8_version})..."
+  prepare_patched_v8_source "${effective_rusty_v8_source_repo}" "${resolved_v8_version}" "${patched_v8_dir}"
   cargo_args+=(
     --config
     "patch.crates-io.v8.path=\"${patched_v8_dir}\""
