@@ -14,6 +14,9 @@ mod rate_limits;
 
 pub(crate) use account::StatusAccountDisplay;
 pub(crate) use card::StatusCardVariant;
+#[cfg(test)]
+pub(crate) use card::new_status_output;
+pub(crate) use card::new_status_output_with_rate_limits;
 use crate::history_cell::HistoryCell;
 use crate::insert_history::write_spans;
 use chrono::Local;
@@ -32,8 +35,6 @@ use codex_state::AccountUsageSnapshot;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
-use std::time::Duration;
-use tokio::time::timeout;
 pub(crate) use helpers::format_directory_display;
 pub(crate) use helpers::format_tokens_compact;
 pub(crate) use helpers::plan_type_display_name;
