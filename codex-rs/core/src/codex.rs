@@ -997,7 +997,9 @@ impl TurnContext {
             config.builtin_enabled_tools.clone(),
             config.builtin_disabled_tools.clone(),
         )
-        .with_agent_roles(config.agent_roles.clone());
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+            &config.agent_roles,
+        ));
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -1482,7 +1484,7 @@ impl Session {
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
         .with_unified_exec_shell_mode_for_session(
-            user_shell,
+            crate::tools::spec::tool_user_shell_type(user_shell),
             shell_zsh_path,
             main_execve_wrapper_exe,
         )
@@ -1492,7 +1494,9 @@ impl Session {
             per_turn_config.builtin_enabled_tools.clone(),
             per_turn_config.builtin_disabled_tools.clone(),
         )
-        .with_agent_roles(per_turn_config.agent_roles.clone());
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+            &per_turn_config.agent_roles,
+        ));
 
         let cwd = session_configuration.cwd.clone();
 
@@ -5806,7 +5810,7 @@ async fn spawn_review_thread(
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
     .with_unified_exec_shell_mode_for_session(
-        sess.services.user_shell.as_ref(),
+        crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     )
@@ -5816,7 +5820,9 @@ async fn spawn_review_thread(
         config.builtin_enabled_tools.clone(),
         config.builtin_disabled_tools.clone(),
     )
-    .with_agent_roles(config.agent_roles.clone());
+    .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+        &config.agent_roles,
+    ));
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
