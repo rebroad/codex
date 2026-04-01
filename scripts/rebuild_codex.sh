@@ -305,6 +305,38 @@ run_target_build_with_locked_fallback() {
   return "${status}"
 }
 
+run_armv7_build() {
+  local mode="$1"
+  local -a armv7_cmd
+  armv7_cmd=(
+    "${REPO_DIR}/scripts/build_armv7.sh"
+    "--${mode}"
+    "--build-env=${ARMV7_BUILD_ENV}"
+    "--rusty-v8-release-repo=${RUSTY_V8_RELEASE_REPO}"
+  )
+  if [[ -n "${RUSTY_V8_RELEASE_TAG}" ]]; then
+    armv7_cmd+=("--rusty-v8-release-tag=${RUSTY_V8_RELEASE_TAG}")
+  fi
+  if [[ "${ARMV7_EPHEMERAL}" == "true" ]]; then
+    armv7_cmd+=(--ephemeral)
+  fi
+  if [[ -n "${ARMV7_TARGET}" ]]; then
+    armv7_cmd+=("--target=${ARMV7_TARGET}")
+  fi
+  if [[ "${ARMV7_PUBLISH_GITHUB}" == "true" ]]; then
+    armv7_cmd+=(--publish-github)
+  else
+    armv7_cmd+=(--no-publish-github)
+  fi
+  if [[ -n "${ARMV7_GITHUB_RELEASE_REPO}" ]]; then
+    armv7_cmd+=("--github-release-repo=${ARMV7_GITHUB_RELEASE_REPO}")
+  fi
+  if [[ -n "${ARMV7_GITHUB_RELEASE_TAG}" ]]; then
+    armv7_cmd+=("--github-release-tag=${ARMV7_GITHUB_RELEASE_TAG}")
+  fi
+  "${armv7_cmd[@]}"
+}
+
 prepare_npm_vendor_rg_binary() {
   local vendor_root="$1"
   local target="$2"
@@ -706,6 +738,14 @@ record_preflight_success_for_commit_and_tree() {
 MODE="debug"
 PUBLISH="auto"
 PUBLISH_MODE="github"
+PREFLIGHT_ONLY="false"
+ARMV7_ONLY="false"
+ARMV7_BUILD_ENV="auto"
+ARMV7_EPHEMERAL="false"
+ARMV7_TARGET=""
+ARMV7_PUBLISH_GITHUB="false"
+ARMV7_GITHUB_RELEASE_REPO=""
+ARMV7_GITHUB_RELEASE_TAG=""
 REGEN_SCHEMA="auto"
 CI_PREFLIGHT="auto"
 FORCE_TAG="true"
@@ -761,8 +801,36 @@ for arg in "$@"; do
     --ci-preflight)
       CI_PREFLIGHT="true"
       ;;
+    --preflight-only)
+      PREFLIGHT_ONLY="true"
+      CI_PREFLIGHT="true"
+      ;;
     --no-ci-preflight)
       CI_PREFLIGHT="false"
+      ;;
+    --armv7)
+      ARMV7_ONLY="true"
+      ;;
+    --armv7-build-env=*)
+      ARMV7_BUILD_ENV="${arg#*=}"
+      ;;
+    --armv7-ephemeral)
+      ARMV7_EPHEMERAL="true"
+      ;;
+    --armv7-target=*)
+      ARMV7_TARGET="${arg#*=}"
+      ;;
+    --armv7-publish-github)
+      ARMV7_PUBLISH_GITHUB="true"
+      ;;
+    --armv7-no-publish-github)
+      ARMV7_PUBLISH_GITHUB="false"
+      ;;
+    --armv7-github-release-repo=*)
+      ARMV7_GITHUB_RELEASE_REPO="${arg#*=}"
+      ;;
+    --armv7-github-release-tag=*)
+      ARMV7_GITHUB_RELEASE_TAG="${arg#*=}"
       ;;
     --publish-timeout-minutes=*)
       PUBLISH_TIMEOUT_MINUTES="${arg#*=}"
@@ -817,8 +885,26 @@ Options:
              Skip tag/push even in release mode
   --ci-preflight
              Run CI-like preflight checks (pnpm format, cargo fmt, argument-comment-lint, cargo shear)
+  --preflight-only
+             Run CI preflight checks and exit before schema/build/install/publish steps
   --no-ci-preflight
              Skip preflight checks even when publishing
+  --armv7
+             Build armv7 codex via scripts/build_armv7.sh and exit (reuses armv7 script behavior)
+  --armv7-build-env=<auto|host|docker-buster>
+             Forward armv7 build environment mode (default: auto)
+  --armv7-ephemeral
+             Forward ephemeral Docker mode to armv7 build
+  --armv7-target=<triple>
+             Forward target override to armv7 build
+  --armv7-publish-github
+             Forward GitHub artifact publish to armv7 build
+  --armv7-no-publish-github
+             Disable GitHub artifact publish for armv7 build (default)
+  --armv7-github-release-repo=<owner/repo>
+             Forward armv7 GitHub release repo
+  --armv7-github-release-tag=<tag>
+             Forward armv7 GitHub release tag
   --no-force-tag
              Do not replace existing tags (default is to replace)
   --fix
@@ -864,13 +950,25 @@ if [[ -n "${BUILD_JOBS}" ]] && ! [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --jobs value: ${BUILD_JOBS} (must be a positive integer)." >&2
   exit 1
 fi
+if [[ "${PREFLIGHT_ONLY}" == "true" && "${CI_PREFLIGHT}" == "false" ]]; then
+  echo "--preflight-only cannot be combined with --no-ci-preflight." >&2
+  exit 1
+fi
 
 cd "${REPO_DIR}"
+if [[ "${ARMV7_ONLY}" == "true" && "${PREFLIGHT_ONLY}" == "true" ]]; then
+  echo "--armv7 cannot be combined with --preflight-only." >&2
+  exit 1
+fi
+
 schema_should_run="false"
 if [[ "${REGEN_SCHEMA}" == "true" ]]; then
   schema_should_run="true"
 elif [[ "${REGEN_SCHEMA}" != "false" ]]; then
   schema_should_run="true"
+fi
+if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+  schema_should_run="false"
 fi
 
 if [[ "${schema_should_run}" == "true" ]]; then
@@ -943,6 +1041,10 @@ if [[ "${should_publish}" == "true" ]]; then
       exit 1
       ;;
   esac
+fi
+if [[ "${PREFLIGHT_ONLY}" == "true" && "${should_publish}" == "true" ]]; then
+  echo "--preflight-only cannot be combined with publish options." >&2
+  exit 1
 fi
 
 if [[ "${publish_to_github}" == "true" ]]; then
@@ -1021,6 +1123,17 @@ if [[ "${run_ci_preflight}" == "true" ]]; then
   fi
 fi
 
+if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+  echo "Preflight-only mode complete; skipping codex compile/install/publish."
+  exit 0
+fi
+
+if [[ "${ARMV7_ONLY}" == "true" ]]; then
+  echo "Running armv7 build via scripts/build_armv7.sh..."
+  run_armv7_build "${MODE}"
+  exit 0
+fi
+
 if [[ "${MODE}" == "release" ]]; then
   echo "[2/4] Building release codex..."
   if [[ -n "${BUILD_JOBS}" ]]; then
@@ -1055,16 +1168,7 @@ if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
   run_target_build_with_locked_fallback "${NPM_X64_TARGET}" "${MODE}"
 
   echo "Building npm vendor target ${NPM_ARMV7_TARGET} (${MODE})..."
-  armv7_cmd=(
-    "${REPO_DIR}/scripts/build_armv7.sh"
-    "--${MODE}"
-    --allow-non-arm-host
-    "--rusty-v8-release-repo=${RUSTY_V8_RELEASE_REPO}"
-  )
-  if [[ -n "${RUSTY_V8_RELEASE_TAG}" ]]; then
-    armv7_cmd+=("--rusty-v8-release-tag=${RUSTY_V8_RELEASE_TAG}")
-  fi
-  "${armv7_cmd[@]}"
+  run_armv7_build "${MODE}"
   vendor_root="${NPM_VENDOR_DIR}"
   if [[ -z "${vendor_root}" ]]; then
     vendor_root="${REPO_DIR}/${NPM_VENDOR_DIR_DEFAULT}/${VERSION}"
