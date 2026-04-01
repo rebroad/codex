@@ -40,6 +40,7 @@ _NIGHTLY_LIBRARY_PATTERN = re.compile(
 class ParsedWrapperArgs:
     lint_args: list[str]
     cargo_args: list[str]
+    file_paths: list[str]
     has_manifest_path: bool = False
     has_package_selection: bool = False
     has_no_deps: bool = False
@@ -53,7 +54,7 @@ def repo_root() -> Path:
 
 
 def parse_wrapper_args(argv: Sequence[str]) -> ParsedWrapperArgs:
-    parsed = ParsedWrapperArgs(lint_args=[], cargo_args=[])
+    parsed = ParsedWrapperArgs(lint_args=[], cargo_args=[], file_paths=[])
     after_separator = False
     expect_value: str | None = None
 
@@ -68,6 +69,16 @@ def parse_wrapper_args(argv: Sequence[str]) -> ParsedWrapperArgs:
 
         if arg == "--":
             after_separator = True
+            continue
+
+        path_candidate = Path(arg)
+        if (
+            not arg.startswith("-")
+            and expect_value is None
+            and path_candidate.exists()
+            and (path_candidate.is_file() or path_candidate.is_dir())
+        ):
+            parsed.file_paths.append(arg)
             continue
 
         parsed.lint_args.append(arg)
@@ -104,13 +115,70 @@ def parse_wrapper_args(argv: Sequence[str]) -> ParsedWrapperArgs:
     return parsed
 
 
+def _parse_package_name(cargo_toml_path: Path) -> str | None:
+    in_package = False
+    for line in cargo_toml_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_package = stripped == "[package]"
+            continue
+        if in_package:
+            match = re.match(r'^name\s*=\s*"([^"]+)"\s*$', stripped)
+            if match:
+                return match.group(1)
+    return None
+
+
+def _infer_packages_from_paths(path_args: Sequence[str], workspace_root: Path) -> list[str]:
+    packages: list[str] = []
+    seen: set[str] = set()
+    cwd = Path.cwd().resolve()
+    workspace_root = workspace_root.resolve()
+
+    for path_arg in path_args:
+        candidate = (cwd / path_arg).resolve()
+        if workspace_root not in candidate.parents and candidate != workspace_root:
+            die(
+                f"path {path_arg!r} is outside workspace root {workspace_root}; "
+                "cannot infer package for argument-comment lint"
+            )
+
+        current = candidate if candidate.is_dir() else candidate.parent
+        package_name: str | None = None
+        while True:
+            cargo_toml = current / "Cargo.toml"
+            if cargo_toml.is_file():
+                package_name = _parse_package_name(cargo_toml)
+                if package_name is not None:
+                    break
+            if current == workspace_root:
+                break
+            current = current.parent
+
+        if package_name is None:
+            die(
+                f"could not infer Cargo package for path {path_arg!r}; "
+                "pass --package explicitly if needed"
+            )
+
+        if package_name not in seen:
+            seen.add(package_name)
+            packages.append(package_name)
+
+    return packages
+
+
 def build_final_args(parsed: ParsedWrapperArgs, manifest_path: Path) -> list[str]:
     final_args: list[str] = []
     cargo_args = list(parsed.cargo_args)
+    path_packages = _infer_packages_from_paths(parsed.file_paths, manifest_path.parent)
 
     if not parsed.has_manifest_path:
         final_args.extend(["--manifest-path", str(manifest_path)])
-    if not parsed.has_package_selection and not parsed.has_manifest_path:
+    if not parsed.has_package_selection and path_packages:
+        for package in path_packages:
+            final_args.extend(["-p", package])
+    elif not parsed.has_package_selection and not parsed.has_manifest_path:
         final_args.append("--workspace")
     if not parsed.has_no_deps:
         final_args.append("--no-deps")
