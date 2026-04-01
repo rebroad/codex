@@ -149,7 +149,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 ) -> CompositeHistoryCell {
     new_status_output_with_rate_limits_variant(
         config,
-        auth_manager,
+        account_display,
         token_info,
         total_usage,
         session_id,
@@ -157,7 +157,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         forked_from,
         account_usage,
         rate_limits,
-        plan_type,
+        _plan_type,
         now,
         model_name,
         collaboration_mode,
@@ -169,7 +169,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits_variant(
     config: &Config,
-    auth_manager: &AuthManager,
+    account_display: Option<&StatusAccountDisplay>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -177,7 +177,7 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
     forked_from: Option<ThreadId>,
     account_usage: Option<&AccountUsageDisplay>,
     rate_limits: &[RateLimitSnapshotDisplay],
-    plan_type: Option<PlanType>,
+    _plan_type: Option<PlanType>,
     now: DateTime<Local>,
     model_name: &str,
     collaboration_mode: Option<&str>,
