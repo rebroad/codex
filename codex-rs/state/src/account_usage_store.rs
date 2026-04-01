@@ -28,6 +28,11 @@ pub(crate) static USAGE_MIGRATOR: Migrator = sqlx::migrate!("./usage_migrations"
 const USAGE_DB_FILENAME: &str = "usage";
 const USAGE_DB_VERSION: u32 = 1;
 const USED_PERCENT_REFUND_EPSILON: f64 = 0.0001;
+const SUSPICIOUS_PERCENT_JUMP_THRESHOLD: f64 = 2.0;
+const BACKEND_CHANGE_CONFIRMATIONS_REQUIRED: u8 = 2;
+const BACKEND_CHANGE_PENDING_TTL_SECS: i64 = 120;
+const PLAUSIBLE_JUMP_MIN_MATCH_RATIO: f64 = 0.75;
+const PLAUSIBLE_JUMP_ABS_SLACK_PERCENT: f64 = 0.5;
 const USAGE_LOG_DIRNAME: &str = "log";
 const USAGE_LOG_FILENAME_PREFIX: &str = "usage-";
 const USAGE_LOG_FILENAME_SUFFIX: &str = ".log";
@@ -74,18 +79,18 @@ pub struct AccountUsageStore {
     sqlite_home: PathBuf,
     default_provider: String,
     pool: Arc<SqlitePool>,
-    last_deltas: Arc<Mutex<std::collections::HashMap<(String, String), RecordedTokenUsage>>>,
+    pending_backend_updates:
+        Arc<Mutex<std::collections::HashMap<(String, String), PendingBackendRateLimitUpdate>>>,
     account_displays: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 #[derive(Debug, Clone)]
-struct RecordedTokenUsage {
-    usage: TokenUsage,
-    context_total_tokens: i64,
-    min_total_cached_output_tokens: i64,
-    sent_bytes: i64,
-    recv_bytes: i64,
-    sent_recv_bytes: i64,
+struct PendingBackendRateLimitUpdate {
+    used_percent: f64,
+    window_minutes: Option<i64>,
+    resets_at: Option<i64>,
+    confirmations: u8,
+    last_seen_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -124,7 +129,7 @@ impl AccountUsageStore {
             sqlite_home,
             default_provider,
             pool: Arc::new(pool),
-            last_deltas: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pending_backend_updates: Arc::new(Mutex::new(std::collections::HashMap::new())),
             account_displays: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }))
     }
@@ -159,11 +164,6 @@ WHERE account_id = ? AND provider = ?
         .rows_affected();
         tx.commit().await?;
 
-        let key = (account_id.to_string(), self.default_provider.clone());
-        {
-            let mut last_deltas = self.last_deltas.lock().await;
-            last_deltas.remove(&key);
-        }
         {
             let mut account_displays = self.account_displays.lock().await;
             account_displays.remove(account_id);
@@ -196,11 +196,6 @@ WHERE provider = ?
         .rows_affected();
         tx.commit().await?;
 
-        {
-            let provider = self.default_provider.as_str();
-            let mut last_deltas = self.last_deltas.lock().await;
-            last_deltas.retain(|(_, key_provider), _| key_provider.as_str() != provider);
-        }
         {
             let mut account_displays = self.account_displays.lock().await;
             account_displays.clear();
@@ -418,21 +413,6 @@ WHERE account_id = ? AND provider = ?
             return Ok(());
         }
 
-        {
-            let mut last_deltas = self.last_deltas.lock().await;
-            last_deltas.insert(
-                (account_id.to_string(), self.default_provider.clone()),
-                RecordedTokenUsage {
-                    usage: normalized_usage,
-                    context_total_tokens,
-                    min_total_cached_output_tokens,
-                    sent_bytes: sent,
-                    recv_bytes: recv,
-                    sent_recv_bytes: sent_recv,
-                },
-            );
-        }
-
         let updated_at = Utc::now().timestamp();
         sqlx::query(
             r#"
@@ -641,6 +621,141 @@ WHERE account_id = ? AND provider = ?
             .await;
         }
 
+        let total_tokens_now_for_jump = prior_usage
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("total_tokens").ok())
+            .unwrap_or(0);
+        let last_snapshot_total_tokens_for_jump = prior_usage
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("last_snapshot_total_tokens").ok())
+            .unwrap_or(total_tokens_now_for_jump);
+        let delta_tokens_since_snapshot =
+            (total_tokens_now_for_jump - last_snapshot_total_tokens_for_jump).max(0);
+        let delta_percent = previous_percent.map(|previous| used_percent - previous);
+        let large_jump =
+            delta_percent.is_some_and(|delta| delta.abs() > SUSPICIOUS_PERCENT_JUMP_THRESHOLD);
+        let negative_jump = delta_percent.is_some_and(|delta| delta < -USED_PERCENT_REFUND_EPSILON);
+        let large_positive_jump_plausible =
+            if let Some(delta) = delta_percent.filter(|delta| *delta > 0.0) {
+                if !large_jump {
+                    true
+                } else {
+                    let estimates = self
+                        .estimate_account_limit_tokens_multi(account_id)
+                        .await
+                        .unwrap_or(AccountLimitEstimates {
+                            blended_limit: None,
+                            cached_input_limit: None,
+                            output_limit: None,
+                            context_total_limit: None,
+                            min_total_cached_output_limit: None,
+                            min_input_cached_output_limit: None,
+                            sent_limit: None,
+                            recv_limit: None,
+                            sent_recv_limit: None,
+                            sample_count: 0,
+                        });
+                    let expected_from_growth = estimates.blended_limit.map(|limit| {
+                        if limit.is_finite() && limit > 0.0 {
+                            delta_tokens_since_snapshot as f64 * 100.0 / limit
+                        } else {
+                            0.0
+                        }
+                    });
+                    expected_from_growth.is_some_and(|expected| {
+                        expected + PLAUSIBLE_JUMP_ABS_SLACK_PERCENT
+                            >= delta * PLAUSIBLE_JUMP_MIN_MATCH_RATIO
+                    })
+                }
+            } else {
+                false
+            };
+        let suspicious_change = prior_usage.is_some()
+            && (window_changed
+                || reset_time_changed
+                || negative_jump
+                || (large_jump && !large_positive_jump_plausible));
+        if suspicious_change {
+            let key = (account_id.to_string(), self.default_provider.clone());
+            let seen_ts = seen_at.unwrap_or(now);
+            let mut pending_updates = self.pending_backend_updates.lock().await;
+            let mut should_remove_pending = false;
+            let confirmation_state = if let Some(pending) = pending_updates.get_mut(&key) {
+                let same_candidate = seen_ts.saturating_sub(pending.last_seen_at)
+                    <= BACKEND_CHANGE_PENDING_TTL_SECS
+                    && (pending.used_percent - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON
+                    && pending.window_minutes == window_minutes
+                    && pending.resets_at == resets_at;
+                if same_candidate {
+                    pending.confirmations = pending.confirmations.saturating_add(1);
+                    pending.last_seen_at = seen_ts;
+                    if pending.confirmations >= BACKEND_CHANGE_CONFIRMATIONS_REQUIRED {
+                        should_remove_pending = true;
+                        (true, BACKEND_CHANGE_CONFIRMATIONS_REQUIRED)
+                    } else {
+                        (false, pending.confirmations)
+                    }
+                } else {
+                    pending_updates.insert(
+                        key.clone(),
+                        PendingBackendRateLimitUpdate {
+                            used_percent,
+                            window_minutes,
+                            resets_at,
+                            confirmations: 1,
+                            last_seen_at: seen_ts,
+                        },
+                    );
+                    (false, 1)
+                }
+            } else {
+                pending_updates.insert(
+                    key.clone(),
+                    PendingBackendRateLimitUpdate {
+                        used_percent,
+                        window_minutes,
+                        resets_at,
+                        confirmations: 1,
+                        last_seen_at: seen_ts,
+                    },
+                );
+                (false, 1)
+            };
+            if should_remove_pending {
+                pending_updates.remove(&key);
+            }
+            drop(pending_updates);
+
+            let (confirmed, confirmations) = confirmation_state;
+            if !confirmed {
+                self.log_usage_event(
+                    account_id,
+                    Some(used_percent),
+                    previous_percent,
+                    format!(
+                        "backend_change_pending=1 confirmations={confirmations} delta_percent={}",
+                        delta_percent.unwrap_or(0.0)
+                    ),
+                )
+                .await;
+                return Ok(());
+            }
+            self.log_usage_event(
+                account_id,
+                Some(used_percent),
+                previous_percent,
+                format!(
+                    "backend_change_confirmed=1 confirmations={} delta_percent={}",
+                    BACKEND_CHANGE_CONFIRMATIONS_REQUIRED,
+                    delta_percent.unwrap_or(0.0)
+                ),
+            )
+            .await;
+        } else {
+            let mut pending_updates = self.pending_backend_updates.lock().await;
+            pending_updates.remove(&(account_id.to_string(), self.default_provider.clone()));
+        }
+
         let should_reset = prior_usage.as_ref().is_some_and(|row| {
             let previous_percent: Option<f64> = row.try_get("last_backend_used_percent").ok();
             let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
@@ -656,215 +771,17 @@ WHERE account_id = ? AND provider = ?
         });
 
         let current_percent_int = used_percent.floor().max(0.0) as i64;
-        let refund_detected = previous_percent.is_some_and(|previous| {
-            previous - used_percent > USED_PERCENT_REFUND_EPSILON && !should_reset
-        });
-        if refund_detected {
-            if let Some(row) = prior_usage.as_ref() {
-                let total_tokens_now: i64 = row.try_get("total_tokens")?;
-                let input_tokens_now: i64 = row.try_get("input_tokens")?;
-                let cached_input_tokens_now: i64 = row.try_get("cached_input_tokens")?;
-                let output_tokens_now: i64 = row.try_get("output_tokens")?;
-                let reasoning_output_tokens_now: i64 = row.try_get("reasoning_output_tokens")?;
-                let context_total_tokens_now: i64 = row.try_get("context_total_tokens")?;
-                let min_total_cached_output_tokens_now: i64 =
-                    row.try_get("min_total_cached_output_tokens")?;
-                let sent_bytes_now: i64 = row.try_get("sent_bytes").unwrap_or(0);
-                let recv_bytes_now: i64 = row.try_get("recv_bytes").unwrap_or(0);
-                let sent_recv_bytes_now: i64 = row.try_get("sent_recv_bytes").unwrap_or(0);
-                let window_start_percent: i64 = row.try_get("window_start_percent_int")?;
-                let window_start_tokens: i64 = row.try_get("window_start_total_tokens")?;
-                let window_start_input_tokens: i64 =
-                    row.try_get("window_start_input_tokens").unwrap_or(0);
-                let window_start_cached_input_tokens: i64 =
-                    row.try_get("window_start_cached_input_tokens").unwrap_or(0);
-                let window_start_output_tokens: i64 =
-                    row.try_get("window_start_output_tokens").unwrap_or(0);
-                let window_start_context_total_tokens: i64 = row
-                    .try_get("window_start_context_total_tokens")
-                    .unwrap_or(0);
-                let window_start_min_total_cached_output_tokens: i64 = row
-                    .try_get("window_start_min_total_cached_output_tokens")
-                    .unwrap_or(0);
-                let window_start_sent_bytes: i64 =
-                    row.try_get("window_start_sent_bytes").unwrap_or(0);
-                let window_start_recv_bytes: i64 =
-                    row.try_get("window_start_recv_bytes").unwrap_or(0);
-                let window_start_sent_recv_bytes: i64 =
-                    row.try_get("window_start_sent_recv_bytes").unwrap_or(0);
-
-                let last_delta = {
-                    let mut last_deltas = self.last_deltas.lock().await;
-                    last_deltas.remove(&(account_id.to_string(), self.default_provider.clone()))
-                };
-                let last_delta_total_tokens = last_delta
-                    .as_ref()
-                    .map(|record| record.usage.total_tokens.max(0))
-                    .unwrap_or(0);
-                let last_delta_input_tokens = last_delta
-                    .as_ref()
-                    .map(|record| record.usage.input_tokens.max(0))
-                    .unwrap_or(0);
-                let last_delta_cached_input_tokens = last_delta
-                    .as_ref()
-                    .map(|record| record.usage.cached_input_tokens.max(0))
-                    .unwrap_or(0);
-                let last_delta_output_tokens = last_delta
-                    .as_ref()
-                    .map(|record| record.usage.output_tokens.max(0))
-                    .unwrap_or(0);
-                let last_delta_reasoning_output_tokens = last_delta
-                    .as_ref()
-                    .map(|record| record.usage.reasoning_output_tokens.max(0))
-                    .unwrap_or(0);
-                let last_delta_context_total_tokens = last_delta
-                    .as_ref()
-                    .map(|record| record.context_total_tokens.max(0))
-                    .unwrap_or(0);
-                let last_delta_min_total_cached_output_tokens = last_delta
-                    .as_ref()
-                    .map(|record| record.min_total_cached_output_tokens.max(0))
-                    .unwrap_or(0);
-                let last_delta_sent_bytes = last_delta
-                    .as_ref()
-                    .map(|record| record.sent_bytes.max(0))
-                    .unwrap_or(0);
-                let last_delta_recv_bytes = last_delta
-                    .as_ref()
-                    .map(|record| record.recv_bytes.max(0))
-                    .unwrap_or(0);
-                let last_delta_sent_recv_bytes = last_delta
-                    .as_ref()
-                    .map(|record| record.sent_recv_bytes.max(0))
-                    .unwrap_or(0);
-
-                let new_total_tokens = (total_tokens_now - last_delta_total_tokens).max(0);
-                let new_input_tokens = (input_tokens_now - last_delta_input_tokens).max(0);
-                let new_cached_input_tokens =
-                    (cached_input_tokens_now - last_delta_cached_input_tokens).max(0);
-                let new_output_tokens = (output_tokens_now - last_delta_output_tokens).max(0);
-                let new_reasoning_output_tokens =
-                    (reasoning_output_tokens_now - last_delta_reasoning_output_tokens).max(0);
-                let new_context_total_tokens =
-                    (context_total_tokens_now - last_delta_context_total_tokens).max(0);
-                let new_min_total_cached_output_tokens = (min_total_cached_output_tokens_now
-                    - last_delta_min_total_cached_output_tokens)
-                    .max(0);
-                let new_sent_bytes = (sent_bytes_now - last_delta_sent_bytes).max(0);
-                let new_recv_bytes = (recv_bytes_now - last_delta_recv_bytes).max(0);
-                let new_sent_recv_bytes = (sent_recv_bytes_now - last_delta_sent_recv_bytes).max(0);
-
-                sqlx::query(
-                    r#"
-UPDATE account_usage
-SET
-    total_tokens = ?,
-    input_tokens = ?,
-    cached_input_tokens = ?,
-    output_tokens = ?,
-    reasoning_output_tokens = ?,
-    context_total_tokens = ?,
-    min_total_cached_output_tokens = ?,
-    sent_bytes = ?,
-    recv_bytes = ?,
-    sent_recv_bytes = ?,
-    updated_at = ?,
-    last_backend_limit_id = ?,
-    last_backend_limit_name = ?,
-    last_backend_used_percent = ?,
-    last_snapshot_total_tokens = ?,
-    last_snapshot_input_tokens = ?,
-    last_snapshot_cached_input_tokens = ?,
-    last_snapshot_output_tokens = ?,
-    last_snapshot_context_total_tokens = ?,
-    last_snapshot_min_total_cached_output_tokens = ?,
-    last_snapshot_sent_bytes = ?,
-    last_snapshot_recv_bytes = ?,
-    last_snapshot_sent_recv_bytes = ?,
-    last_snapshot_percent_int = ?,
-    window_start_percent_int = ?,
-    window_start_total_tokens = ?,
-    window_start_input_tokens = ?,
-    window_start_cached_input_tokens = ?,
-    window_start_output_tokens = ?,
-    window_start_context_total_tokens = ?,
-    window_start_min_total_cached_output_tokens = ?,
-    window_start_sent_bytes = ?,
-    window_start_recv_bytes = ?,
-    window_start_sent_recv_bytes = ?,
-    last_backend_resets_at = ?,
-    last_backend_window_minutes = ?,
-    last_backend_seen_at = ?
-WHERE account_id = ? AND provider = ?
-                    "#,
-                )
-                .bind(new_total_tokens)
-                .bind(new_input_tokens)
-                .bind(new_cached_input_tokens)
-                .bind(new_output_tokens)
-                .bind(new_reasoning_output_tokens)
-                .bind(new_context_total_tokens)
-                .bind(new_min_total_cached_output_tokens)
-                .bind(new_sent_bytes)
-                .bind(new_recv_bytes)
-                .bind(new_sent_recv_bytes)
-                .bind(now)
-                .bind(snapshot.limit_id.as_deref())
-                .bind(snapshot.limit_name.as_deref())
-                .bind(used_percent)
-                .bind(new_total_tokens)
-                .bind(new_input_tokens)
-                .bind(new_cached_input_tokens)
-                .bind(new_output_tokens)
-                .bind(new_context_total_tokens)
-                .bind(new_min_total_cached_output_tokens)
-                .bind(new_sent_bytes)
-                .bind(new_recv_bytes)
-                .bind(new_sent_recv_bytes)
-                .bind(current_percent_int)
-                .bind(window_start_percent)
-                .bind(window_start_tokens)
-                .bind(window_start_input_tokens.min(new_input_tokens))
-                .bind(window_start_cached_input_tokens.min(new_cached_input_tokens))
-                .bind(window_start_output_tokens.min(new_output_tokens))
-                .bind(window_start_context_total_tokens.min(new_context_total_tokens))
-                .bind(
-                    window_start_min_total_cached_output_tokens
-                        .min(new_min_total_cached_output_tokens),
-                )
-                .bind(window_start_sent_bytes.min(new_sent_bytes))
-                .bind(window_start_recv_bytes.min(new_recv_bytes))
-                .bind(window_start_sent_recv_bytes.min(new_sent_recv_bytes))
-                .bind(resets_at)
-                .bind(window_minutes)
-                .bind(seen_at)
-                .bind(account_id)
-                .bind(self.default_provider.as_str())
-                .execute(self.pool.as_ref())
-                .await?;
-
-                self.log_usage_event(
-                    account_id,
-                    Some(used_percent),
-                    previous_percent,
-                    format!(
-                        "refund=1 last_delta_total={last_delta_total_tokens} totals_before={total_tokens_now} totals_after={new_total_tokens}"
-                    ),
-                )
-                .await;
-
-                if last_delta_total_tokens == 0 {
-                    self.log_usage_event(
-                        account_id,
-                        Some(used_percent),
-                        previous_percent,
-                        "refund=1 reason=no_last_delta".to_string(),
-                    )
-                    .await;
-                }
-            }
-
-            return Ok(());
+        if negative_jump {
+            self.log_usage_event(
+                account_id,
+                Some(used_percent),
+                previous_percent,
+                format!(
+                    "refund_rewind_disabled=1 delta_percent={}",
+                    delta_percent.unwrap_or(0.0)
+                ),
+            )
+            .await;
         }
         let (
             total_tokens_now,
@@ -2672,7 +2589,7 @@ WHERE account_id = ? AND provider = ?
     }
 
     #[tokio::test]
-    async fn account_usage_refunds_on_used_percent_drop() {
+    async fn account_usage_gates_used_percent_drop_without_rewinding_totals() {
         let home = tempfile::tempdir().expect("tempdir");
         let runtime =
             AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
@@ -2733,6 +2650,26 @@ WHERE account_id = ? AND provider = ?
             .await
             .expect("record snapshot 2");
 
+        let row_before = sqlx::query(
+            r#"
+SELECT
+    total_tokens,
+    last_backend_used_percent
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("usage row before drop");
+        let total_tokens_before: i64 = row_before.try_get("total_tokens").expect("total_tokens");
+        let last_backend_used_percent_before: f64 = row_before
+            .try_get("last_backend_used_percent")
+            .expect("last_backend_used_percent");
+        assert_eq!(last_backend_used_percent_before, 2.0);
+
         let refund_snapshot = RateLimitSnapshot {
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 1.0,
@@ -2746,7 +2683,7 @@ WHERE account_id = ? AND provider = ?
             .await
             .expect("record refund snapshot");
 
-        let row = sqlx::query(
+        let row_after_first_drop = sqlx::query(
             r#"
 SELECT
     total_tokens,
@@ -2759,14 +2696,44 @@ WHERE account_id = ? AND provider = ?
         .bind("test-provider")
         .fetch_one(runtime.pool.as_ref())
         .await
-        .expect("usage row");
-        let total_tokens: i64 = row.try_get("total_tokens").expect("total_tokens");
-        let last_backend_used_percent: f64 = row
+        .expect("usage row after first drop");
+        let total_tokens_after_first_drop: i64 = row_after_first_drop
+            .try_get("total_tokens")
+            .expect("total_tokens");
+        let last_backend_used_percent_after_first_drop: f64 = row_after_first_drop
+            .try_get("last_backend_used_percent")
+            .expect("last_backend_used_percent");
+        assert_eq!(total_tokens_after_first_drop, total_tokens_before);
+        assert_eq!(last_backend_used_percent_after_first_drop, 2.0);
+
+        runtime
+            .record_account_backend_rate_limit("account-1", &refund_snapshot)
+            .await
+            .expect("confirm refund snapshot");
+
+        let row_after_confirmation = sqlx::query(
+            r#"
+SELECT
+    total_tokens,
+    last_backend_used_percent
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("usage row after confirmation");
+        let total_tokens_after_confirmation: i64 = row_after_confirmation
+            .try_get("total_tokens")
+            .expect("total_tokens");
+        let last_backend_used_percent_after_confirmation: f64 = row_after_confirmation
             .try_get("last_backend_used_percent")
             .expect("last_backend_used_percent");
 
-        assert_eq!(total_tokens, 100);
-        assert_eq!(last_backend_used_percent, 1.0);
+        assert_eq!(total_tokens_after_confirmation, total_tokens_before);
+        assert_eq!(last_backend_used_percent_after_confirmation, 1.0);
     }
 
     #[test]
