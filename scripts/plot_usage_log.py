@@ -263,6 +263,19 @@ def build_html(
       align-items: center;
       gap: 6px;
       color: #111827;
+      cursor: pointer;
+      user-select: none;
+      padding: 2px 6px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+    }}
+    .legend-item:hover {{
+      border-color: #d1d5db;
+      background: #f9fafb;
+    }}
+    .legend-item.off {{
+      opacity: 0.45;
+      text-decoration: line-through;
     }}
     .swatch {{
       width: 14px;
@@ -275,7 +288,7 @@ def build_html(
 <body>
   <div class="wrap">
     <h2>Usage Percentages</h2>
-    <div class="meta">Source: <code>{source_path}</code>. Y-axis: 0-100%. X-axis anchored to evenly spaced <code>percent=A->B</code> events.</div>
+    <div class="meta">Source: <code>{source_path}</code>. Y-axis: percentage values. X-axis anchored to evenly spaced <code>percent=A->B</code> events. Zoom (X+Y): left-click in plot area to zoom in 25%, right-click or shift+left-click to zoom out 25%. Pan when zoomed: left-drag in plot area, or use mouse wheel/trackpad scroll.</div>
     <canvas id="plot"></canvas>
     <div class="legend" id="legend"></div>
   </div>
@@ -284,16 +297,53 @@ def build_html(
     const canvas = document.getElementById("plot");
     const legend = document.getElementById("legend");
     const ctx = canvas.getContext("2d");
+    const margin = {{ left: 64, right: 16, top: 16, bottom: 52 }};
 
     const dpr = window.devicePixelRatio || 1;
     const rect = () => canvas.getBoundingClientRect();
+    const allXs = [];
+    const allYs = [];
+    allXs.push(...data.points.map((p) => p.x));
+    allXs.push(...data.anchors.map((a) => a.x));
+    allXs.push(...data.baseline.map((b) => b.x));
+    allYs.push(...data.baseline.map((b) => b.value));
+    for (const point of data.points) {{
+      for (const metric of data.metrics) {{
+        if (Object.prototype.hasOwnProperty.call(point.metrics, metric)) {{
+          allYs.push(point.metrics[metric]);
+        }}
+      }}
+    }}
+    if (!allXs.length) allXs.push(0, 1);
+    if (!allYs.length) allYs.push(0, 100);
+
+    const globalXMin = Math.min(...allXs);
+    const globalXMax = Math.max(...allXs);
+    const globalYMin = Math.min(0, ...allYs);
+    const globalYMax = Math.max(100, ...allYs);
+    const globalSpan = Math.max(globalXMax - globalXMin, 1e-9);
+    const globalYSpan = Math.max(globalYMax - globalYMin, 1e-9);
+    const minViewSpan = Math.max(globalSpan * 0.01, 1e-6);
+    const minViewYSpan = Math.max(globalYSpan * 0.01, 1e-6);
+
+    let viewXMin = globalXMin;
+    let viewXMax = globalXMax;
+    let viewYMin = globalYMin;
+    let viewYMax = globalYMax;
+    let lastPlotRect = null;
+    let dragState = null;
+    const seriesVisible = {{ baseline: true }};
+    for (const metric of data.metrics) {{
+      seriesVisible[metric] = true;
+    }}
 
     function valueToX(v, xmin, xmax, left, width) {{
       if (xmax === xmin) return left + width / 2;
       return left + ((v - xmin) / (xmax - xmin)) * width;
     }}
-    function valueToY(v, top, height) {{
-      return top + (1 - (v / 100)) * height;
+    function valueToY(v, ymin, ymax, top, height) {{
+      if (ymax === ymin) return top + height / 2;
+      return top + (1 - ((v - ymin) / (ymax - ymin))) * height;
     }}
 
     function draw() {{
@@ -303,28 +353,40 @@ def build_html(
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, r.width, r.height);
 
-      const margin = {{ left: 64, right: 16, top: 16, bottom: 52 }};
       const w = r.width - margin.left - margin.right;
       const h = r.height - margin.top - margin.bottom;
+      lastPlotRect = {{ left: margin.left, top: margin.top, width: w, height: h }};
 
-      const xs = data.points.map((p) => p.x);
-      if (data.anchors.length) xs.push(...data.anchors.map((a) => a.x));
-      if (data.baseline.length) xs.push(...data.baseline.map((b) => b.x));
-      const xmin = xs.length ? Math.min(...xs) : 0;
-      const xmax = xs.length ? Math.max(...xs) : 1;
+      const xmin = viewXMin;
+      const xmax = viewXMax;
+      const ymin = viewYMin;
+      const ymax = viewYMax;
 
       ctx.strokeStyle = "#e5e7eb";
       ctx.fillStyle = "#6b7280";
       ctx.lineWidth = 1;
       ctx.font = "12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
 
-      for (let y = 0; y <= 100; y += 10) {{
-        const py = valueToY(y, margin.top, h);
+      const ySpan = Math.max(ymax - ymin, 1e-9);
+      let yStep = 10;
+      if (ySpan > 0) {{
+        const rawStep = ySpan / 8;
+        const power = Math.pow(10, Math.floor(Math.log10(rawStep)));
+        const scaled = rawStep / power;
+        if (scaled <= 1) yStep = 1 * power;
+        else if (scaled <= 2) yStep = 2 * power;
+        else if (scaled <= 5) yStep = 5 * power;
+        else yStep = 10 * power;
+      }}
+      const yStart = Math.ceil(ymin / yStep) * yStep;
+      for (let y = yStart; y <= ymax + yStep * 0.5; y += yStep) {{
+        const py = valueToY(y, ymin, ymax, margin.top, h);
         ctx.beginPath();
         ctx.moveTo(margin.left, py);
         ctx.lineTo(margin.left + w, py);
         ctx.stroke();
-        ctx.fillText(String(y), 8, py + 4);
+        const label = Number.isInteger(y) ? String(y) : y.toFixed(2).replace(/\\.?0+$/, "");
+        ctx.fillText(label, 8, py + 4);
       }}
 
       ctx.strokeStyle = "#f3f4f6";
@@ -348,19 +410,19 @@ def build_html(
         ctx.fillText(anchor.label, px - 16, margin.top + h + 16);
       }}
 
-      if (data.baseline.length) {{
+      if (seriesVisible.baseline && data.baseline.length) {{
         const baseline = [...data.baseline].sort((a, b) => a.x - b.x);
         ctx.strokeStyle = "#9ca3af";
         ctx.lineWidth = 2;
         ctx.beginPath();
         const first = baseline[0];
         let prevX = valueToX(first.x, xmin, xmax, margin.left, w);
-        let prevY = valueToY(first.value, margin.top, h);
+        let prevY = valueToY(first.value, ymin, ymax, margin.top, h);
         ctx.moveTo(prevX, prevY);
         for (let i = 1; i < baseline.length; i += 1) {{
           const next = baseline[i];
           const nextX = valueToX(next.x, xmin, xmax, margin.left, w);
-          const nextY = valueToY(next.value, margin.top, h);
+          const nextY = valueToY(next.value, ymin, ymax, margin.top, h);
           ctx.lineTo(nextX, prevY);
           ctx.lineTo(nextX, nextY);
           prevX = nextX;
@@ -370,6 +432,7 @@ def build_html(
       }}
 
       for (const metric of data.metrics) {{
+        if (!seriesVisible[metric]) continue;
         const points = data.points.filter((p) => Object.prototype.hasOwnProperty.call(p.metrics, metric));
         if (!points.length) continue;
         ctx.strokeStyle = data.colors[metric];
@@ -377,7 +440,7 @@ def build_html(
         ctx.beginPath();
         points.forEach((p, i) => {{
           const px = valueToX(p.x, xmin, xmax, margin.left, w);
-          const py = valueToY(p.metrics[metric], margin.top, h);
+          const py = valueToY(p.metrics[metric], ymin, ymax, margin.top, h);
           if (i === 0) ctx.moveTo(px, py);
           else ctx.lineTo(px, py);
         }});
@@ -385,26 +448,203 @@ def build_html(
       }}
     }}
 
+    function setAxisView(anchor, anchorRatio, nextSpan, globalMin, globalMax, minSpan) {{
+      const axisSpan = Math.max(globalMax - globalMin, 1e-9);
+      const clampedSpan = Math.min(axisSpan, Math.max(minSpan, nextSpan));
+      const safeRatio = Math.min(1, Math.max(0, anchorRatio));
+      let nextMin = anchor - safeRatio * clampedSpan;
+      let nextMax = nextMin + clampedSpan;
+      if (nextMin < globalMin) {{
+        nextMax += globalMin - nextMin;
+        nextMin = globalMin;
+      }}
+      if (nextMax > globalMax) {{
+        nextMin -= nextMax - globalMax;
+        nextMax = globalMax;
+      }}
+      if (nextMin < globalMin) nextMin = globalMin;
+      if (nextMax > globalMax) nextMax = globalMax;
+      return [nextMin, nextMax];
+    }}
+
+    function setViewFromAnchor(anchorX, anchorRatioX, nextXSpan, anchorY, anchorRatioY, nextYSpan) {{
+      const [nextXMin, nextXMax] = setAxisView(
+        anchorX,
+        anchorRatioX,
+        nextXSpan,
+        globalXMin,
+        globalXMax,
+        minViewSpan
+      );
+      const [nextYMin, nextYMax] = setAxisView(
+        anchorY,
+        anchorRatioY,
+        nextYSpan,
+        globalYMin,
+        globalYMax,
+        minViewYSpan
+      );
+      viewXMin = nextXMin;
+      viewXMax = nextXMax;
+      viewYMin = nextYMin;
+      viewYMax = nextYMax;
+    }}
+
+    function setCenteredView(centerX, nextXSpan, centerY, nextYSpan) {{
+      setViewFromAnchor(centerX, 0.5, nextXSpan, centerY, 0.5, nextYSpan);
+    }}
+
+    function shiftView(deltaX, deltaY) {{
+      const xSpan = Math.max(viewXMax - viewXMin, minViewSpan);
+      const ySpan = Math.max(viewYMax - viewYMin, minViewYSpan);
+      const xCenter = (viewXMin + viewXMax) / 2 + deltaX;
+      const yCenter = (viewYMin + viewYMax) / 2 + deltaY;
+      setCenteredView(xCenter, xSpan, yCenter, ySpan);
+    }}
+
+    function zoomAtPixel(px, py, zoomFactor) {{
+      if (!lastPlotRect || globalSpan <= 1e-9 || globalYSpan <= 1e-9) return;
+      if (px < lastPlotRect.left || px > lastPlotRect.left + lastPlotRect.width) return;
+      if (py < lastPlotRect.top || py > lastPlotRect.top + lastPlotRect.height) return;
+
+      const currentXSpan = Math.max(viewXMax - viewXMin, minViewSpan);
+      const currentYSpan = Math.max(viewYMax - viewYMin, minViewYSpan);
+      const relativeX = (px - lastPlotRect.left) / Math.max(lastPlotRect.width, 1);
+      const relativeY = (py - lastPlotRect.top) / Math.max(lastPlotRect.height, 1);
+      const anchorX = viewXMin + relativeX * currentXSpan;
+      const anchorY = viewYMin + (1 - relativeY) * currentYSpan;
+      const nextXSpan = currentXSpan * zoomFactor;
+      const nextYSpan = currentYSpan * zoomFactor;
+      setViewFromAnchor(anchorX, relativeX, nextXSpan, anchorY, 1 - relativeY, nextYSpan);
+      draw();
+    }}
+
+    canvas.addEventListener("contextmenu", (event) => {{
+      event.preventDefault();
+    }});
+
+    canvas.addEventListener("mouseleave", () => {{
+      dragState = null;
+      canvas.style.cursor = "";
+    }});
+
+    canvas.addEventListener("mousedown", (event) => {{
+      if (!lastPlotRect) return;
+      const inPlot =
+        event.offsetX >= lastPlotRect.left &&
+        event.offsetX <= lastPlotRect.left + lastPlotRect.width &&
+        event.offsetY >= lastPlotRect.top &&
+        event.offsetY <= lastPlotRect.top + lastPlotRect.height;
+      if (!inPlot) return;
+
+      if (event.button === 2) {{
+        zoomAtPixel(event.offsetX, event.offsetY, 1.25);
+        return;
+      }}
+      if (event.button !== 0) return;
+
+      dragState = {{
+        startX: event.offsetX,
+        startY: event.offsetY,
+        lastX: event.offsetX,
+        lastY: event.offsetY,
+        moved: false,
+        shiftKey: event.shiftKey,
+      }};
+      canvas.style.cursor = "grabbing";
+    }});
+
+    canvas.addEventListener("mousemove", (event) => {{
+      if (!dragState || !lastPlotRect) return;
+      const dxPx = event.offsetX - dragState.lastX;
+      const dyPx = event.offsetY - dragState.lastY;
+      dragState.lastX = event.offsetX;
+      dragState.lastY = event.offsetY;
+      const movedX = Math.abs(event.offsetX - dragState.startX);
+      const movedY = Math.abs(event.offsetY - dragState.startY);
+      if (movedX > 3 || movedY > 3) {{
+        dragState.moved = true;
+      }}
+      if (!dragState.moved) return;
+
+      const xSpan = Math.max(viewXMax - viewXMin, minViewSpan);
+      const ySpan = Math.max(viewYMax - viewYMin, minViewYSpan);
+      const deltaX = -(dxPx / Math.max(lastPlotRect.width, 1)) * xSpan;
+      const deltaY = (dyPx / Math.max(lastPlotRect.height, 1)) * ySpan;
+      shiftView(deltaX, deltaY);
+      draw();
+    }});
+
+    addEventListener("mouseup", (event) => {{
+      if (!dragState) return;
+      const clickState = dragState;
+      dragState = null;
+      canvas.style.cursor = "";
+      if (event.button !== 0) return;
+      if (!clickState.moved) {{
+        const factor = clickState.shiftKey ? 1.25 : 0.75;
+        zoomAtPixel(clickState.startX, clickState.startY, factor);
+      }}
+    }});
+
+    canvas.addEventListener("wheel", (event) => {{
+      if (!lastPlotRect) return;
+      const inPlot =
+        event.offsetX >= lastPlotRect.left &&
+        event.offsetX <= lastPlotRect.left + lastPlotRect.width &&
+        event.offsetY >= lastPlotRect.top &&
+        event.offsetY <= lastPlotRect.top + lastPlotRect.height;
+      if (!inPlot) return;
+      event.preventDefault();
+
+      const xSpan = Math.max(viewXMax - viewXMin, minViewSpan);
+      const ySpan = Math.max(viewYMax - viewYMin, minViewYSpan);
+      const horizontalPixels = event.deltaX + (event.shiftKey ? event.deltaY : 0);
+      const verticalPixels = event.shiftKey ? 0 : event.deltaY;
+      const deltaX = (horizontalPixels / Math.max(lastPlotRect.width, 1)) * xSpan;
+      const deltaY = -(verticalPixels / Math.max(lastPlotRect.height, 1)) * ySpan;
+      shiftView(deltaX, deltaY);
+      draw();
+    }}, {{ passive: false }});
+
+    canvas.addEventListener("mouseenter", () => {{
+      if (!dragState) {{
+        canvas.style.cursor = "grab";
+      }}
+    }});
+
     function buildLegend() {{
       legend.innerHTML = "";
       const baselineItem = document.createElement("span");
       baselineItem.className = "legend-item";
+      if (!seriesVisible.baseline) baselineItem.classList.add("off");
       const baselineSwatch = document.createElement("span");
       baselineSwatch.className = "swatch";
       baselineSwatch.style.backgroundColor = "#9ca3af";
       const baselineLabel = document.createElement("span");
       baselineLabel.textContent = "baseline";
       baselineItem.append(baselineSwatch, baselineLabel);
+      baselineItem.addEventListener("click", () => {{
+        seriesVisible.baseline = !seriesVisible.baseline;
+        buildLegend();
+        draw();
+      }});
       legend.appendChild(baselineItem);
       for (const metric of data.metrics) {{
         const item = document.createElement("span");
         item.className = "legend-item";
+        if (!seriesVisible[metric]) item.classList.add("off");
         const swatch = document.createElement("span");
         swatch.className = "swatch";
         swatch.style.backgroundColor = data.colors[metric];
         const label = document.createElement("span");
         label.textContent = metric;
         item.append(swatch, label);
+        item.addEventListener("click", () => {{
+          seriesVisible[metric] = !seriesVisible[metric];
+          buildLegend();
+          draw();
+        }});
         legend.appendChild(item);
       }}
     }}
@@ -452,7 +692,13 @@ def main() -> int:
         )
     )
     parser.add_argument(
+        "positional_email",
+        nargs="?",
+        help="Account email (positional shorthand for --email).",
+    )
+    parser.add_argument(
         "--email",
+        dest="option_email",
         help="Account email to load from usage-<email>.log in CODEX_HOME/log or ~/.codex/log.",
     )
     parser.add_argument(
@@ -471,12 +717,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    email = args.option_email or args.positional_email
     if args.input:
         input_path = Path(args.input).expanduser()
-    elif args.email:
-        input_path = resolve_usage_log_path(args.email)
+    elif email:
+        input_path = resolve_usage_log_path(email)
     else:
-        print("error: pass either --input or --email", file=sys.stderr)
+        print("error: pass either --input, --email, or positional email", file=sys.stderr)
         return 1
     output_path = Path(args.output).expanduser()
 
