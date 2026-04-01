@@ -2,6 +2,7 @@ use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
+use codex_protocol::config_types::Personality;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
@@ -108,9 +109,50 @@ pub struct Cli {
     #[arg(long = "bare-prompt", default_value_t = false, global = true)]
     pub bare_prompt: bool,
 
-    /// Override developer/system instructions for this run.
-    #[arg(long = "system", value_name = "SYSTEM_PROMPT", global = true)]
-    pub system_prompt: Option<String>,
+    /// Override developer instructions for this run using a file.
+    /// Alias: `--system` (legacy naming).
+    #[arg(
+        long = "developer-instructions-file",
+        alias = "system",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub developer_instructions_file: Option<PathBuf>,
+
+    /// Override base instructions for this run using a file.
+    #[arg(
+        long = "base-instructions-file",
+        alias = "base-instructions",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub base_instructions_file: Option<PathBuf>,
+
+    /// Override model personality for this run.
+    #[arg(long = "personality", value_enum, global = true)]
+    pub personality: Option<PersonalityCliArg>,
+
+    /// Override compaction prompt instructions for this run using a file.
+    #[arg(
+        long = "compact-prompt-file",
+        alias = "compact-prompt",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub compact_prompt_file: Option<PathBuf>,
+
+    /// Override post-compaction summary preamble text for this run using a
+    /// file.
+    #[arg(
+        long = "compact-summary-preamble-file",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub compact_summary_preamble_file: Option<PathBuf>,
 
     /// Force-enable backend capture for this run (`capture_dir` + query-id files).
     #[arg(long = "debug", default_value_t = false, global = true)]
@@ -276,6 +318,26 @@ pub enum Color {
     Auto,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lowercase")]
+pub enum PersonalityCliArg {
+    None,
+    Friendly,
+    Pragmatic,
+    Comedic,
+}
+
+impl From<PersonalityCliArg> for Personality {
+    fn from(value: PersonalityCliArg) -> Self {
+        match value {
+            PersonalityCliArg::None => Personality::None,
+            PersonalityCliArg::Friendly => Personality::Friendly,
+            PersonalityCliArg::Pragmatic => Personality::Pragmatic,
+            PersonalityCliArg::Comedic => Personality::Comedic,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +394,41 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn parses_instruction_and_personality_overrides() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "--base-instructions-file",
+            "/tmp/base.md",
+            "--developer-instructions-file",
+            "/tmp/dev.md",
+            "--compact-prompt-file",
+            "/tmp/compact.md",
+            "--compact-summary-preamble-file",
+            "/tmp/compact-after.md",
+            "--personality",
+            "pragmatic",
+            "hello",
+        ]);
+
+        assert_eq!(
+            cli.base_instructions_file,
+            Some(PathBuf::from("/tmp/base.md"))
+        );
+        assert_eq!(
+            cli.developer_instructions_file,
+            Some(PathBuf::from("/tmp/dev.md"))
+        );
+        assert_eq!(
+            cli.compact_prompt_file,
+            Some(PathBuf::from("/tmp/compact.md"))
+        );
+        assert_eq!(
+            cli.compact_summary_preamble_file,
+            Some(PathBuf::from("/tmp/compact-after.md"))
+        );
+        assert_eq!(cli.personality, Some(PersonalityCliArg::Pragmatic));
     }
 }
