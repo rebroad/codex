@@ -366,8 +366,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     )?;
     let developer_instructions_cli_override = developer_instructions_override_from_file.is_some()
         || cli_kv_overrides
-        .iter()
-        .any(|(key, _)| key == "developer_instructions");
+            .iter()
+            .any(|(key, _)| key == "developer_instructions");
 
     let resolved_cwd = cwd.clone();
     let config_cwd = match resolved_cwd.as_deref() {
@@ -705,13 +705,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
     let bare_prompt_developer_instructions = if bare_prompt
-            && (developer_instructions_override_from_file.is_some()
-                || developer_instructions_cli_override)
-        {
-            config.developer_instructions.clone()
-        } else {
-            None
-        };
+        && (developer_instructions_override_from_file.is_some()
+            || developer_instructions_cli_override)
+    {
+        config.developer_instructions.clone()
+    } else {
+        None
+    };
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
