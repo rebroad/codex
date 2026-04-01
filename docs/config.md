@@ -135,6 +135,37 @@ bare_prompt = true
 You can also enable this for a single `codex exec` invocation with
 `--bare-prompt`.
 
+## Prompt layers and one-off overrides (`codex exec`)
+
+Canonical terms used by Codex:
+
+- `base instructions`: the core model instructions (from built-ins, optionally overridden by `model_instructions_file` or `instructions`).
+- `developer instructions`: additional higher-priority guidance layered as a `developer` message.
+- `personality`: a style preset (`none|friendly|pragmatic|comedic`) applied by supported models.
+
+`system` in `codex exec` is a legacy alias for `developer instructions`.
+
+`~/.codex/config.toml` keys for these layers:
+
+- `model_instructions_file = "/abs/path/file.md"`: file-based base-instructions override.
+- `instructions = "..."`: inline base-instructions override.
+- `developer_instructions = "..."`: inline developer-instructions override.
+- `personality = "pragmatic"` (or `none|friendly|comedic`).
+
+For per-run overrides without editing `~/.codex/config.toml`, `codex exec` accepts
+file-path based flags (files contain the text):
+
+- `--developer-instructions-file FILE` (alias: `--system`)
+- `--base-instructions-file FILE` (alias: `--base-instructions`)
+- `--personality none|friendly|pragmatic|comedic`
+- `--compact-prompt-file FILE` (alias: `--compact-prompt`)
+- `--compact-summary-preamble-file FILE`
+
+Compaction has two conceptual phases:
+
+- `before compaction` prompt (departing context window): configurable via `compact_prompt` / `--compact-prompt-file`.
+- `after compaction` summary preamble (arriving context window): configurable via `compact_summary_preamble` / `--compact-summary-preamble-file`.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

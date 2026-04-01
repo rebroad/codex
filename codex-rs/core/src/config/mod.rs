@@ -296,6 +296,10 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
+    /// Optional text inserted after the compaction summary marker and before
+    /// the generated compacted summary body.
+    pub compact_summary_preamble: Option<String>,
+
     /// When true, send only user prompt text without base/developer/contextual
     /// prompt scaffolding.
     pub bare_prompt: bool,
@@ -1173,6 +1177,10 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
+    /// Optional text inserted after the compaction summary marker and before
+    /// the generated compacted summary body.
+    pub compact_summary_preamble: Option<String>,
+
     /// When set to `true`, disable built-in/system and contextual prompt
     /// scaffolding so only user text is sent.
     pub bare_prompt: Option<bool>,
@@ -1846,6 +1854,7 @@ pub struct ConfigOverrides {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
+    pub compact_summary_preamble: Option<String>,
     pub bare_prompt: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
@@ -2058,6 +2067,7 @@ impl Config {
             developer_instructions,
             personality,
             compact_prompt,
+            compact_summary_preamble,
             bare_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
@@ -2445,6 +2455,16 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
+        let compact_summary_preamble = compact_summary_preamble
+            .or(cfg.compact_summary_preamble)
+            .and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
 
         let commit_attribution = cfg.commit_attribution;
 
@@ -2632,6 +2652,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            compact_summary_preamble,
             bare_prompt,
             commit_attribution,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
