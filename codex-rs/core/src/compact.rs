@@ -198,7 +198,11 @@ async fn run_compact_task_inner(
     let history_snapshot = sess.clone_history().await;
     let history_items = history_snapshot.raw_items();
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
-    let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
+    let summary_text = if let Some(preamble) = turn_context.compact_summary_preamble() {
+        format!("{SUMMARY_PREFIX}\n{preamble}\n{summary_suffix}")
+    } else {
+        format!("{SUMMARY_PREFIX}\n{summary_suffix}")
+    };
     let _ =
         maybe_capture_compaction_payload(sess.as_ref(), "local_compaction_summary", &summary_text);
     let user_messages = collect_user_messages(history_items);
