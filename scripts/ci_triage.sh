@@ -11,11 +11,17 @@ require_cmd() {
   fi
 }
 
+progress() {
+  local message="$1"
+  echo "[ci_triage] ${message}"
+}
+
 slugify() {
   tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
 }
 
-BRANCH="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD)"
+CURRENT_BRANCH="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD)"
+BRANCH=""
 WORKFLOW=""
 RUN_ID=""
 LIMIT=20
@@ -64,8 +70,8 @@ Usage: ci_triage.sh [--branch=<name>] [--workflow=<name>] [--run-id=<id>] [--lim
 Downloads failed-job logs from a GitHub Actions run and writes a summary file.
 
 Defaults:
-- branch: current git branch
-- run: latest completed run on that branch
+- branch: all branches (set --branch to scope)
+- run: latest failed completed run
 - output: tmp/ci-failures
 - triage-state-file: tmp/ci-triaged-tags.json
 
@@ -91,6 +97,35 @@ done
 
 require_cmd gh
 require_cmd jq
+
+fetch_job_log() {
+  local run_id="$1"
+  local job_id="$2"
+  local job_name="$3"
+  local log_file="$4"
+  local stderr_file="${log_file}.stderr"
+
+  if gh run view "${run_id}" --job "${job_id}" --log-failed >"${log_file}" 2>"${stderr_file}"; then
+    rm -f "${stderr_file}"
+    return 0
+  fi
+
+  if grep -qi "log not found" "${stderr_file}"; then
+    progress "Falling back to full log for job_id=${job_id} (${job_name})..."
+    if gh run view "${run_id}" --job "${job_id}" --log >"${log_file}" 2>"${stderr_file}"; then
+      rm -f "${stderr_file}"
+      return 0
+    fi
+  fi
+
+  {
+    echo "Failed to fetch logs for job ${job_id} (${job_name})."
+    echo
+    cat "${stderr_file}"
+  } > "${log_file}"
+  rm -f "${stderr_file}"
+  return 1
+}
 
 ensure_triage_state_file() {
   mkdir -p "$(dirname "${TRIAGE_STATE_FILE}")"
@@ -170,12 +205,19 @@ fi
 mkdir -p "${OUTPUT_ROOT}"
 
 if [[ -z "${RUN_ID}" ]]; then
+  if [[ -n "${BRANCH}" ]]; then
+    progress "Finding latest failed completed run (branch=${BRANCH}, limit=${LIMIT})..."
+  else
+    progress "Finding latest failed completed run (all branches, limit=${LIMIT})..."
+  fi
   run_list_args=(
     run list
-    --branch "${BRANCH}"
     --limit "${LIMIT}"
     --json databaseId,status,conclusion,workflowName,headBranch,headSha,event,createdAt,updatedAt,url,displayTitle
   )
+  if [[ -n "${BRANCH}" ]]; then
+    run_list_args+=(--branch "${BRANCH}")
+  fi
   if [[ -n "${WORKFLOW}" ]]; then
     run_list_args+=(--workflow "${WORKFLOW}")
   fi
@@ -183,17 +225,22 @@ if [[ -z "${RUN_ID}" ]]; then
   run_list_json="$(gh "${run_list_args[@]}")"
   RUN_ID="$(
     jq -r '
-      map(select(.status == "completed"))
+      map(select(.status == "completed" and .conclusion == "failure"))
       | .[0].databaseId // empty
     ' <<<"${run_list_json}"
   )"
 fi
 
 if [[ -z "${RUN_ID}" ]]; then
-  echo "No completed run found for branch '${BRANCH}'." >&2
+  if [[ -n "${BRANCH}" ]]; then
+    echo "No failed completed run found for branch '${BRANCH}'." >&2
+  else
+    echo "No failed completed run found." >&2
+  fi
   exit 1
 fi
 
+progress "Loading run details for run_id=${RUN_ID}..."
 run_json="$(gh run view "${RUN_ID}" --json databaseId,name,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,updatedAt,url,jobs)"
 head_sha="$(jq -r '.headSha // "unknown"' <<<"${run_json}")"
 sha_short="${head_sha:0:12}"
@@ -203,28 +250,26 @@ logs_dir="${run_dir}/logs"
 summary_file="${run_dir}/summary.md"
 mkdir -p "${logs_dir}"
 
+failed_count="$(jq '[.jobs[] | select(.conclusion == "failure")] | length' <<<"${run_json}")"
+progress "Downloading logs for ${failed_count} failed job(s)..."
+
+job_index=0
+
 jq -r '
   .jobs[]
   | select(.conclusion == "failure")
   | @base64
 ' <<<"${run_json}" | while IFS= read -r row; do
   [[ -z "${row}" ]] && continue
+  job_index=$((job_index + 1))
   job_json="$(base64 -d <<<"${row}")"
   job_id="$(jq -r '.databaseId' <<<"${job_json}")"
   job_name="$(jq -r '.name' <<<"${job_json}")"
   job_slug="$(slugify "${job_name}")"
   log_file="${logs_dir}/${job_id}-${job_slug}.log"
+  progress "Fetching failed log ${job_index}/${failed_count}: ${job_name} (job_id=${job_id})"
 
-  if gh run view "${RUN_ID}" --job "${job_id}" --log-failed >"${log_file}" 2>"${log_file}.stderr"; then
-    rm -f "${log_file}.stderr"
-  else
-    {
-      echo "Failed to fetch logs for job ${job_id} (${job_name})."
-      echo
-      cat "${log_file}.stderr"
-    } > "${log_file}"
-    rm -f "${log_file}.stderr"
-  fi
+  fetch_job_log "${RUN_ID}" "${job_id}" "${job_name}" "${log_file}" || true
 done
 
 {
@@ -243,7 +288,6 @@ done
   echo "- url: $(jq -r '.url' <<<"${run_json}")"
   echo
   echo "## Failed Jobs"
-  failed_count="$(jq '[.jobs[] | select(.conclusion == "failure")] | length' <<<"${run_json}")"
   if [[ "${failed_count}" == "0" ]]; then
     echo
     echo "No failed jobs in this run."
@@ -266,6 +310,10 @@ done
 
 echo "Wrote CI summary: ${summary_file}"
 echo "Wrote failed logs dir: ${logs_dir}"
+if [[ -n "${head_sha}" && "${head_sha}" != "unknown" ]]; then
+  echo "Failed run head_sha (not checked out): ${head_sha}"
+  echo "Current branch/commit unchanged: ${CURRENT_BRANCH}"
+fi
 
 if [[ -n "${MARK_COMMIT}" ]]; then
   commit_to_mark="${MARK_COMMIT}"
