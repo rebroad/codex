@@ -467,14 +467,17 @@ run_ci_preflight_checks() {
   fi
 
   echo "[preflight] Running argument comment lint..."
-  (
+  if ! (
     cd "${REPO_DIR}"
     if [[ "${ARGUMENT_COMMENT_LINT_LOCAL}" == "true" ]]; then
       just argument-comment-lint-local
     else
       just argument-comment-lint
     fi
-  )
+  ); then
+    echo "[preflight] argument-comment-lint failed."
+    return 1
+  fi
 
   if ! command -v cargo-shear >/dev/null 2>&1; then
     echo "[preflight] Installing cargo-shear..."
