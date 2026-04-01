@@ -1004,9 +1004,12 @@ impl PickerState {
 
         let thread_id = match row.thread_id {
             Some(thread_id) => Some(thread_id),
-            None => {
-                crate::resolve_session_thread_id(row.path.as_path(), /*id_str_if_uuid*/ None).await
-            }
+            None => match row.path.as_ref() {
+                Some(path) => {
+                    crate::resolve_session_thread_id(path.as_path(), /*id_str_if_uuid*/ None).await
+                }
+                None => None,
+            },
         };
         let Some(thread_id) = thread_id else {
             self.inline_error =
@@ -1179,10 +1182,13 @@ impl PickerState {
             if row.prompt_count.is_some() {
                 continue;
             }
-            if self.prompt_count_cache.contains_key(&row.path) {
+            let Some(path) = row.path.as_ref() else {
+                continue;
+            };
+            if self.prompt_count_cache.contains_key(path) {
                 continue;
             }
-            missing_paths.push(row.path.clone());
+            missing_paths.push(path.clone());
         }
 
         for path in missing_paths {
@@ -1192,7 +1198,10 @@ impl PickerState {
 
         let mut updated = false;
         for row in self.all_rows.iter_mut() {
-            let cached = self.prompt_count_cache.get(&row.path).copied().flatten();
+            let cached = row
+                .path
+                .as_ref()
+                .and_then(|path| self.prompt_count_cache.get(path).copied().flatten());
             if row.prompt_count == cached {
                 continue;
             }
@@ -1215,10 +1224,13 @@ impl PickerState {
             if row.context_used_percent.is_some() {
                 continue;
             }
-            if self.context_used_percent_cache.contains_key(&row.path) {
+            let Some(path) = row.path.as_ref() else {
+                continue;
+            };
+            if self.context_used_percent_cache.contains_key(path) {
                 continue;
             }
-            missing_paths.push(row.path.clone());
+            missing_paths.push(path.clone());
         }
 
         for path in missing_paths {
@@ -1250,11 +1262,10 @@ impl PickerState {
 
         let mut updated = false;
         for row in self.all_rows.iter_mut() {
-            let cached = self
-                .context_used_percent_cache
-                .get(&row.path)
-                .copied()
-                .flatten();
+            let cached = row
+                .path
+                .as_ref()
+                .and_then(|path| self.context_used_percent_cache.get(path).copied().flatten());
             if row.context_used_percent == cached {
                 continue;
             }
@@ -1535,6 +1546,8 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         cwd: Some(thread.cwd),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
+        prompt_count: None,
+        context_used_percent: None,
     })
 }
 

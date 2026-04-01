@@ -583,6 +583,8 @@ fn latest_session_lookup_params(
         },
         search_term: None,
     }
+}
+
 pub async fn render_status_for_cli(
     config: &Config,
     auth: Option<CodexAuth>,
