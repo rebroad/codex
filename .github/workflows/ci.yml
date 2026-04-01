@@ -36,8 +36,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Use a rust-release version that includes all native binaries.
-          CODEX_VERSION=0.115.0
+          # Use the latest successful rust-release branch available in GitHub Actions.
+          release_branch="$(
+            gh run list \
+              --workflow .github/workflows/rust-release.yml \
+              --limit 100 \
+              --json headBranch,status,conclusion \
+              --jq '.[] | select(.status=="completed" and .conclusion=="success" and (.headBranch | startswith("rust-v"))) | .headBranch' \
+              | head -n1
+          )"
+          if [[ -z "${release_branch}" ]]; then
+            echo "Unable to find a successful rust-release workflow run."
+            exit 1
+          fi
+          CODEX_VERSION="${release_branch#rust-v}"
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
