@@ -919,8 +919,10 @@ WHERE account_id = ? AND provider = ?
                     .unwrap_or(0),
                 row.try_get::<i64, _>("last_snapshot_min_total_cached_output_tokens")
                     .unwrap_or(0),
-                row.try_get::<i64, _>("last_snapshot_sent_bytes").unwrap_or(0),
-                row.try_get::<i64, _>("last_snapshot_recv_bytes").unwrap_or(0),
+                row.try_get::<i64, _>("last_snapshot_sent_bytes")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("last_snapshot_recv_bytes")
+                    .unwrap_or(0),
                 row.try_get::<i64, _>("last_snapshot_sent_recv_bytes")
                     .unwrap_or(0),
                 row.try_get::<i64, _>("last_snapshot_percent_int")
@@ -939,8 +941,10 @@ WHERE account_id = ? AND provider = ?
                     .unwrap_or(0),
                 row.try_get::<i64, _>("window_start_min_total_cached_output_tokens")
                     .unwrap_or(0),
-                row.try_get::<i64, _>("window_start_sent_bytes").unwrap_or(0),
-                row.try_get::<i64, _>("window_start_recv_bytes").unwrap_or(0),
+                row.try_get::<i64, _>("window_start_sent_bytes")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("window_start_recv_bytes")
+                    .unwrap_or(0),
                 row.try_get::<i64, _>("window_start_sent_recv_bytes")
                     .unwrap_or(0),
             )
@@ -2099,10 +2103,10 @@ mod tests {
             runtime.pool.as_ref(),
             "account-1",
             "test-provider",
-            1,
-            0,
-            1,
-            1,
+            /*observed_at*/ 1,
+            /*start_percent_int*/ 0,
+            /*end_percent_int*/ 1,
+            /*delta_percent_int*/ 1,
             &SampleTokenDeltas {
                 blended_tokens: 100,
                 input_tokens: 80,
@@ -2123,10 +2127,10 @@ mod tests {
             runtime.pool.as_ref(),
             "account-2",
             "test-provider",
-            1,
-            0,
-            1,
-            1,
+            /*observed_at*/ 1,
+            /*start_percent_int*/ 0,
+            /*end_percent_int*/ 1,
+            /*delta_percent_int*/ 1,
             &SampleTokenDeltas {
                 blended_tokens: 100,
                 input_tokens: 80,
@@ -2779,9 +2783,9 @@ WHERE account_id = ? AND provider = ?
 
     #[test]
     fn format_si_three_digits_uses_three_significant_digits() {
-        assert_eq!(format_si_three_digits(2_646_777.0), "2.65M");
-        assert_eq!(format_si_three_digits(35_705_600.0), "35.7M");
-        assert_eq!(format_si_three_digits(24_813.0), "24.8K");
+        assert_eq!(format_si_three_digits(/*value*/ 2_646_777.0), "2.65M");
+        assert_eq!(format_si_three_digits(/*value*/ 35_705_600.0), "35.7M");
+        assert_eq!(format_si_three_digits(/*value*/ 24_813.0), "24.8K");
     }
     #[test]
     fn normalize_usage_for_accounting_uses_non_cached_input() {
