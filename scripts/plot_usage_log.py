@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot ~/.codex/usage.log usage_pct metrics as a browser-viewable graph.
+"""Plot Codex per-account usage log usage_pct metrics as a browser-viewable graph.
 
 X-axis behavior:
 - `percent=A->B` lines are treated as evenly spaced anchor points.
@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -425,22 +426,43 @@ def open_with_viewimg(output_path: Path) -> None:
     subprocess.run([viewimg, str(output_path)], check=False)
 
 
+def resolve_usage_log_path(email: str) -> Path:
+    filename = f"usage-{email}.log"
+    env_codex_home = os.environ.get("CODEX_HOME")
+    codex_home = (
+        Path(env_codex_home).expanduser()
+        if env_codex_home
+        else Path.home() / ".codex"
+    )
+    candidates = [
+        codex_home / "log" / filename,
+        Path.home() / ".codex" / "log" / filename,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Plot usage_pct metrics from Codex usage.log. "
+            "Plot usage_pct metrics from a Codex per-account usage log. "
             "Baseline `percent=A->B` events are evenly spaced on X."
         )
     )
     parser.add_argument(
+        "--email",
+        help="Account email to load from usage-<email>.log in CODEX_HOME/log or ~/.codex/log.",
+    )
+    parser.add_argument(
         "--input",
-        default="~/.codex/usage.log",
-        help="Path to usage.log (default: ~/.codex/usage.log).",
+        help="Path to usage log. Overrides --email-based lookup.",
     )
     parser.add_argument(
         "--output",
-        default="/tmp/codex_usage_graph.html",
-        help="Output HTML file path (default: /tmp/codex_usage_graph.html).",
+        default="/var/tmp/codex_usage_graph.html",
+        help="Output HTML file path (default: /var/tmp/codex_usage_graph.html).",
     )
     parser.add_argument(
         "--no-open",
@@ -449,7 +471,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    input_path = Path(args.input).expanduser()
+    if args.input:
+        input_path = Path(args.input).expanduser()
+    elif args.email:
+        input_path = resolve_usage_log_path(args.email)
+    else:
+        print("error: pass either --input or --email", file=sys.stderr)
+        return 1
     output_path = Path(args.output).expanduser()
 
     if not input_path.exists():
