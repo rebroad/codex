@@ -98,6 +98,7 @@ impl StatusHistoryHandle {
         } else {
             compose_rate_limit_data_many(rate_limits, now)
         };
+        #[expect(clippy::expect_used)]
         let mut state = self
             .rate_limit_state
             .write()
@@ -715,6 +716,7 @@ impl HistoryCell for StatusHistoryCell {
         }
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
+        #[expect(clippy::expect_used)]
         let rate_limit_state = self
             .rate_limit_state
             .read()
