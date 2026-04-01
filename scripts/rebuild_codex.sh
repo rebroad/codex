@@ -13,6 +13,7 @@ PNPM_VERSION_DEFAULT="10.29.3"
 NPM_VENDOR_DIR_DEFAULT="dist/npm-vendor"
 NPM_X64_TARGET="x86_64-unknown-linux-musl"
 NPM_ARMV7_TARGET="armv7-unknown-linux-gnueabihf"
+ARGUMENT_COMMENT_LINT_LOCAL="false"
 
 RED=$'\033[31m'
 BOLD=$'\033[1m'
@@ -468,7 +469,11 @@ run_ci_preflight_checks() {
   echo "[preflight] Running argument comment lint..."
   (
     cd "${REPO_DIR}"
-    just argument-comment-lint
+    if [[ "${ARGUMENT_COMMENT_LINT_LOCAL}" == "true" ]]; then
+      just argument-comment-lint-local
+    else
+      just argument-comment-lint
+    fi
   )
 
   if ! command -v cargo-shear >/dev/null 2>&1; then
@@ -801,6 +806,13 @@ for arg in "$@"; do
     --preflight|--ci-preflight)
       CI_PREFLIGHT="true"
       ;;
+    --preflight-remote-exec)
+      # `just argument-comment-lint` is remote by default; keep this flag as a
+      # backward-compatible no-op.
+      ;;
+    --preflight-local-exec)
+      ARGUMENT_COMMENT_LINT_LOCAL="true"
+      ;;
     --preflight-only)
       PREFLIGHT_ONLY="true"
       CI_PREFLIGHT="true"
@@ -885,6 +897,10 @@ Options:
              Skip tag/push even in release mode
   --preflight, --ci-preflight
              Run CI-like preflight checks (pnpm format, cargo fmt, argument-comment-lint, cargo shear)
+  --preflight-remote-exec
+             Backward-compatible no-op (argument-comment-lint uses remote execution by default)
+  --preflight-local-exec
+             Force local execution for argument-comment-lint during preflight (`just argument-comment-lint-local`)
   --preflight-only
              Run CI preflight checks and exit before schema/build/install/publish steps
   --no-ci-preflight
