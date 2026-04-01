@@ -257,7 +257,7 @@ struct ExecRunArgs {
     output_schema_path: Option<PathBuf>,
     prompt: Option<String>,
     skip_git_repo_check: bool,
-    system_prompt: Option<String>,
+    developer_instructions_override_from_file: Option<String>,
     stderr_with_ansi: bool,
 }
 
@@ -298,7 +298,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         prompt,
         output_schema: output_schema_path,
         config_overrides,
-        system_prompt,
+        developer_instructions_file,
+        base_instructions_file,
+        personality,
+        compact_prompt_file,
+        compact_summary_preamble_file,
         debug,
     } = cli;
 
@@ -348,7 +352,20 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
-    let developer_instructions_cli_override = cli_kv_overrides
+    let developer_instructions_override_from_file = read_override_text_file(
+        developer_instructions_file.as_deref(),
+        "developer instructions",
+    )?;
+    let base_instructions_override_from_file =
+        read_override_text_file(base_instructions_file.as_deref(), "base instructions")?;
+    let compact_prompt_override_from_file =
+        read_override_text_file(compact_prompt_file.as_deref(), "compact prompt")?;
+    let compact_summary_preamble_override_from_file = read_override_text_file(
+        compact_summary_preamble_file.as_deref(),
+        "compact summary preamble",
+    )?;
+    let developer_instructions_cli_override = developer_instructions_override_from_file.is_some()
+        || cli_kv_overrides
         .iter()
         .any(|(key, _)| key == "developer_instructions");
 
@@ -457,10 +474,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         js_repl_node_path: None,
         js_repl_node_module_dirs: None,
         zsh_path: None,
-        base_instructions: None,
-        developer_instructions: system_prompt.clone(),
-        personality: None,
-        compact_prompt: None,
+        base_instructions: base_instructions_override_from_file,
+        developer_instructions: developer_instructions_override_from_file.clone(),
+        personality: personality.map(Into::into),
+        compact_prompt: compact_prompt_override_from_file,
+        compact_summary_preamble: compact_summary_preamble_override_from_file,
         bare_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
@@ -548,7 +566,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             prompt_text,
             &config,
             bare_prompt,
-            system_prompt,
+            developer_instructions_override_from_file.clone(),
             developer_instructions_cli_override,
         )
         .await;
@@ -629,7 +647,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema_path,
         prompt,
         skip_git_repo_check,
-        system_prompt,
+        developer_instructions_override_from_file,
         stderr_with_ansi,
     })
     .instrument(exec_span)
@@ -653,7 +671,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         output_schema_path,
         prompt,
         skip_git_repo_check,
-        system_prompt,
+        developer_instructions_override_from_file,
         stderr_with_ansi,
     } = args;
 
@@ -686,8 +704,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
-    let bare_prompt_developer_instructions =
-        if bare_prompt && (system_prompt.is_some() || developer_instructions_cli_override) {
+    let bare_prompt_developer_instructions = if bare_prompt
+            && (developer_instructions_override_from_file.is_some()
+                || developer_instructions_cli_override)
+        {
             config.developer_instructions.clone()
         } else {
             None
@@ -1055,6 +1075,7 @@ fn thread_start_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
+        personality: config.personality,
         base_instructions: bare_prompt.then(String::new),
         developer_instructions: if bare_prompt {
             Some(bare_prompt_developer_instructions.unwrap_or_default())
@@ -1080,6 +1101,7 @@ fn thread_resume_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config, bare_prompt),
+        personality: config.personality,
         base_instructions: bare_prompt.then(String::new),
         developer_instructions: if bare_prompt {
             Some(bare_prompt_developer_instructions.unwrap_or_default())
@@ -1854,11 +1876,22 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
     }
 }
 
+fn read_override_text_file(path: Option<&Path>, label: &str) -> anyhow::Result<Option<String>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let text = std::fs::read_to_string(path).map_err(|err| {
+        anyhow::anyhow!("failed to read {label} file at {}: {err}", path.display())
+    })?;
+    Ok(Some(text))
+}
+
 async fn run_direct_request(
     prompt_text: String,
     config: &Config,
     bare_prompt: bool,
-    system_prompt: Option<String>,
+    developer_instructions_override: Option<String>,
     developer_instructions_cli_override: bool,
 ) -> anyhow::Result<()> {
     let auth_manager = AuthManager::shared(
@@ -1908,7 +1941,7 @@ async fn run_direct_request(
     eprintln!("reasoning effort: {effective_reasoning_effort}");
 
     let effective_system_prompt = if bare_prompt {
-        system_prompt.or_else(|| {
+        developer_instructions_override.or_else(|| {
             if developer_instructions_cli_override {
                 config.developer_instructions.clone()
             } else {
@@ -1916,13 +1949,14 @@ async fn run_direct_request(
             }
         })
     } else {
-        system_prompt
+        developer_instructions_override
             .or_else(|| config.developer_instructions.clone())
             .or_else(|| Some(DEFAULT_DIRECT_SYSTEM_PROMPT.to_string()))
     };
 
     let mut prompt = Prompt::default();
     prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
+    prompt.personality = config.personality;
     if bare_prompt {
         prompt.base_instructions.text = String::new();
     } else if let Some(base_instructions) = &config.base_instructions {
@@ -2189,6 +2223,7 @@ mod tests {
     use super::*;
     use codex_otel::set_parent_from_w3c_trace_context;
     use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::config_types::Personality;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
     use opentelemetry::trace::TracerProvider as _;
@@ -2545,6 +2580,35 @@ mod tests {
             params.approvals_reviewer,
             Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
         );
+    }
+
+    #[tokio::test]
+    async fn thread_start_and_resume_params_include_personality_override() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                personality: Some(Personality::Pragmatic),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build config with personality");
+
+        let start_params = thread_start_params_from_config(
+            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
+        );
+        assert_eq!(start_params.personality, Some(Personality::Pragmatic));
+
+        let resume_params = thread_resume_params_from_config(
+            &config,
+            "thread-id".to_string(),
+            /*bare_prompt*/ false,
+            /*bare_prompt_developer_instructions*/ None,
+        );
+        assert_eq!(resume_params.personality, Some(Personality::Pragmatic));
     }
 
     #[test]
