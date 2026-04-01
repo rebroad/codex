@@ -651,6 +651,7 @@ struct PickerState {
     thread_name_cache: HashMap<ThreadId, Option<String>>,
     prompt_count_cache: HashMap<PathBuf, Option<usize>>,
     context_used_percent_cache: HashMap<PathBuf, Option<i64>>,
+    rollout_query_match_cache: HashMap<PathBuf, bool>,
     inline_error: Option<String>,
     input_mode: InputMode,
     rename_draft: String,
@@ -774,7 +775,7 @@ impl Row {
         self.thread_name.as_deref().unwrap_or(&self.preview)
     }
 
-    fn matches_query(&self, query: &str) -> bool {
+    fn matches_query_preview_or_name(&self, query: &str) -> bool {
         if self.preview.to_lowercase().contains(query) {
             return true;
         }
@@ -825,6 +826,7 @@ impl PickerState {
             thread_name_cache: HashMap::new(),
             prompt_count_cache: HashMap::new(),
             context_used_percent_cache: HashMap::new(),
+            rollout_query_match_cache: HashMap::new(),
             inline_error: None,
             input_mode: InputMode::Navigation,
             rename_draft: String::new(),
@@ -839,7 +841,14 @@ impl PickerState {
         self.inline_error = None;
         if self.input_mode == InputMode::Search {
             match key.code {
-                KeyCode::Esc | KeyCode::Enter => {
+                KeyCode::Esc => {
+                    self.input_mode = InputMode::Navigation;
+                    self.request_frame();
+                    return Ok(None);
+                }
+                KeyCode::Enter => {
+                    // Leave search mode and fall through so Enter selects
+                    // the currently highlighted row.
                     self.input_mode = InputMode::Navigation;
                     self.request_frame();
                 }
@@ -847,6 +856,9 @@ impl PickerState {
                     let mut new_query = self.query.clone();
                     new_query.pop();
                     self.set_query(new_query);
+                    self.update_rollout_query_match_cache().await;
+                    self.apply_filter();
+                    return Ok(None);
                 }
                 KeyCode::Char(c) => {
                     if !key
@@ -857,11 +869,14 @@ impl PickerState {
                         let mut new_query = self.query.clone();
                         new_query.push(c);
                         self.set_query(new_query);
+                        self.update_rollout_query_match_cache().await;
+                        self.apply_filter();
                     }
+                    return Ok(None);
                 }
-                _ => {}
+                KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {}
+                _ => return Ok(None),
             }
-            return Ok(None);
         }
         if self.input_mode == InputMode::Rename {
             match key.code {
@@ -1086,6 +1101,8 @@ impl PickerState {
                 self.update_thread_names().await;
                 self.update_prompt_counts().await;
                 self.update_context_used_percent().await;
+                self.update_rollout_query_match_cache().await;
+                self.apply_filter();
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
@@ -1287,7 +1304,10 @@ impl PickerState {
             self.filtered_rows = base_iter.cloned().collect();
         } else {
             let q = self.query.to_lowercase();
-            self.filtered_rows = base_iter.filter(|r| r.matches_query(&q)).cloned().collect();
+            self.filtered_rows = base_iter
+                .filter(|row| self.row_matches_query(row, q.as_str()))
+                .cloned()
+                .collect();
         }
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
@@ -1316,6 +1336,7 @@ impl PickerState {
         if self.query == new_query {
             return;
         }
+        self.rollout_query_match_cache.clear();
         self.query = new_query;
         self.selected = 0;
         self.apply_filter();
@@ -1334,6 +1355,43 @@ impl PickerState {
         let token = self.allocate_search_token();
         self.search_state = SearchState::Active { token };
         self.load_more_if_needed(LoadTrigger::Search { token });
+    }
+
+    fn row_matches_query(&self, row: &Row, query: &str) -> bool {
+        if row.matches_query_preview_or_name(query) {
+            return true;
+        }
+        row.path
+            .as_ref()
+            .and_then(|path| self.rollout_query_match_cache.get(path))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    async fn update_rollout_query_match_cache(&mut self) {
+        if self.query.is_empty() {
+            return;
+        }
+
+        let query = self.query.to_lowercase();
+        let mut missing_paths = Vec::new();
+        for row in &self.all_rows {
+            let Some(path) = row.path.as_ref() else {
+                continue;
+            };
+            if self.rollout_query_match_cache.contains_key(path) {
+                continue;
+            }
+            missing_paths.push(path.clone());
+        }
+
+        for path in missing_paths {
+            let matches = tokio::fs::read_to_string(path.as_path())
+                .await
+                .map(|content| content.to_lowercase().contains(query.as_str()))
+                .unwrap_or(false);
+            self.rollout_query_match_cache.insert(path, matches);
+        }
     }
 
     fn continue_search_if_needed(&mut self) {
@@ -3183,6 +3241,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_mode_allows_arrow_navigation_without_enter() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let mut items = Vec::new();
+        for idx in 0..3 {
+            let ts = format!("2025-01-{:02}T00:00:00Z", idx + 1);
+            let preview = format!("item-{idx}");
+            let path = format!("/tmp/item-{idx}.jsonl");
+            items.push(make_item(&path, &ts, &preview));
+        }
+        state.reset_pagination();
+        state.ingest_page(page(
+            items, /*next_cursor*/ None, /*num_scanned_files*/ 3,
+            /*reached_scan_cap*/ false,
+        ));
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(state.input_mode, InputMode::Search);
+        assert_eq!(state.selected, 0);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(state.input_mode, InputMode::Search);
+        assert_eq!(state.selected, 1);
+    }
+
+    #[tokio::test]
+    async fn search_mode_enter_selects_highlighted_row() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        let thread_id = ThreadId::new();
+        let row = Row {
+            path: None,
+            preview: String::from("search result"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+            prompt_count: None,
+            context_used_percent: None,
+        };
+        state.all_rows = vec![row.clone()];
+        state.filtered_rows = vec![row];
+        state.input_mode = InputMode::Search;
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("enter should not abort the picker");
+
+        assert_eq!(state.input_mode, InputMode::Navigation);
+        match selection {
+            Some(SessionSelection::Resume(SessionTarget {
+                path: None,
+                thread_id: selected_thread_id,
+            })) => assert_eq!(selected_thread_id, thread_id),
+            other => panic!("unexpected selection: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn enter_on_row_without_resolvable_thread_id_shows_inline_error() {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
@@ -3464,5 +3608,45 @@ mod tests {
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
+    }
+
+    #[tokio::test]
+    async fn set_query_matches_rollout_content_when_preview_misses_term() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let rollout_path = tempdir.path().join("rollout.jsonl");
+        std::fs::write(
+            rollout_path.as_path(),
+            r#"{"payload":{"output":"includes zbarsky in command output"}}"#,
+        )
+        .expect("write rollout");
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            tempdir.path().to_path_buf(),
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![make_item(
+                rollout_path.to_string_lossy().as_ref(),
+                "2025-01-01T00:00:00Z",
+                "alpha preview",
+            )],
+            /*next_cursor*/ None,
+            /*num_scanned_files*/ 1,
+            /*reached_scan_cap*/ false,
+        ));
+        state.set_query("zbarsky".to_string());
+        assert!(state.filtered_rows.is_empty());
+
+        state.update_rollout_query_match_cache().await;
+        state.apply_filter();
+        assert_eq!(state.filtered_rows.len(), 1);
     }
 }
