@@ -631,6 +631,7 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
+            compact_summary_preamble: config.compact_summary_preamble.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -871,6 +872,7 @@ pub(crate) struct TurnContext {
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
+    pub(crate) compact_summary_preamble: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
@@ -979,6 +981,7 @@ impl TurnContext {
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
+            compact_summary_preamble: self.compact_summary_preamble.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
             personality: self.personality,
@@ -1015,6 +1018,10 @@ impl TurnContext {
         self.compact_prompt
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
+
+    pub(crate) fn compact_summary_preamble(&self) -> Option<&str> {
+        self.compact_summary_preamble.as_deref()
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
@@ -1095,6 +1102,9 @@ pub(crate) struct SessionConfiguration {
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
+    /// Optional text inserted between the compaction summary marker and
+    /// generated summary body.
+    compact_summary_preamble: Option<String>,
 
     /// When to escalate for approval for execution
     approval_policy: Constrained<AskForApproval>,
@@ -1470,6 +1480,7 @@ impl Session {
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
+            compact_summary_preamble: session_configuration.compact_summary_preamble.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
@@ -5770,6 +5781,7 @@ async fn spawn_review_thread(
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
+        compact_summary_preamble: parent_turn_context.compact_summary_preamble.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
