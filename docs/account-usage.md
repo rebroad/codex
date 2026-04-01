@@ -46,14 +46,23 @@ Fields:
 - `cached_input_tokens`
 - `output_tokens`
 - `reasoning_output_tokens`
+- `sent_bytes`
+- `recv_bytes`
+- `sent_recv_bytes`
 - `updated_at`
 - `last_backend_limit_id`
 - `last_backend_limit_name`
 - `last_backend_used_percent`
 - `last_snapshot_total_tokens` (local total captured at snapshot time)
+- `last_snapshot_sent_bytes`
+- `last_snapshot_recv_bytes`
+- `last_snapshot_sent_recv_bytes`
 - `last_snapshot_percent_int`
 - `window_start_percent_int` (latest backend integer anchor used for prediction)
 - `window_start_total_tokens` (local token total at latest backend anchor)
+- `window_start_sent_bytes`
+- `window_start_recv_bytes`
+- `window_start_sent_recv_bytes`
 - `last_backend_resets_at`
 - `last_backend_window_minutes`
 - `last_backend_seen_at`
@@ -75,6 +84,9 @@ Fields:
 - `end_percent_int`
 - `delta_percent_int`
 - `delta_tokens`
+- `delta_sent_bytes`
+- `delta_recv_bytes`
+- `delta_sent_recv_bytes`
 - `window_minutes`
 - `resets_at`
 
