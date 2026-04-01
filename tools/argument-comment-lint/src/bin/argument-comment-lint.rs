@@ -295,7 +295,7 @@ mod tests {
     fn strict_rustflags_promotes_both_enforced_lints() {
         assert_eq!(
             strict_rustflags(),
-            "-D argument-comment-mismatch -D uncommented-anonymous-literal-argument -A unknown_lints"
+            "-A unknown_lints -D argument-comment-mismatch -D uncommented-anonymous-literal-argument"
         );
     }
 }
