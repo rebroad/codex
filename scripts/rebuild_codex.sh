@@ -798,7 +798,7 @@ for arg in "$@"; do
     --no-regen-schema)
       REGEN_SCHEMA="false"
       ;;
-    --ci-preflight)
+    --preflight|--ci-preflight)
       CI_PREFLIGHT="true"
       ;;
     --preflight-only)
@@ -883,7 +883,7 @@ Options:
              Publish directly to npm locally (no GitHub tag/workflow publish path)
   --no-publish
              Skip tag/push even in release mode
-  --ci-preflight
+  --preflight, --ci-preflight
              Run CI-like preflight checks (pnpm format, cargo fmt, argument-comment-lint, cargo shear)
   --preflight-only
              Run CI preflight checks and exit before schema/build/install/publish steps
