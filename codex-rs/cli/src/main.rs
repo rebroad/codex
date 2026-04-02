@@ -50,11 +50,9 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
-use codex_core::AuthManager;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
-use codex_core::auth::RefreshTokenError;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -68,6 +66,8 @@ use codex_core::prompt_preview_line;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
+use codex_login::AuthManager;
+use codex_login::RefreshTokenError;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
