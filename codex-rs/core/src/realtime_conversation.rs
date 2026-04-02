@@ -1,9 +1,7 @@
-use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
 use crate::codex::Session;
 use crate::config::RealtimeWsMode;
 use crate::config::RealtimeWsVersion;
-use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::realtime_context::build_realtime_startup_context;
@@ -21,6 +19,9 @@ use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
+use codex_login::AuthMode;
+use codex_login::CodexAuth;
+use codex_login::default_client::default_headers;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -517,7 +518,7 @@ async fn prepare_realtime_start(
         /*auth_token*/ None,
     )?;
     let fallback_api_key_start = if let Some(api_key) = realtime_api_key(auth.as_ref(), &provider) {
-        let mut fallback_api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
+        let mut fallback_api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
         if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
             fallback_api_provider.base_url = realtime_ws_base_url.clone();
         }
