@@ -49,15 +49,12 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
-use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::ModelClient;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseStream;
-use codex_core::auth::AuthConfig;
-use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -76,6 +73,12 @@ use codex_core::path_utils;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
+use codex_login::AuthConfig;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::default_client::set_default_client_residency_requirement;
+use codex_login::default_client::set_default_originator;
+use codex_login::enforce_login_restrictions;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::set_parent_from_context;
@@ -130,8 +133,6 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use codex_core::default_client::set_default_client_residency_requirement;
-use codex_core::default_client::set_default_originator;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
@@ -1922,10 +1923,10 @@ async fn run_direct_request(
         model_info.slug.as_str(),
         auth_snapshot
             .as_ref()
-            .and_then(codex_core::CodexAuth::get_account_id),
+            .and_then(CodexAuth::get_account_id),
         auth_snapshot
             .as_ref()
-            .and_then(codex_core::CodexAuth::get_account_email),
+            .and_then(CodexAuth::get_account_email),
         telemetry_auth_mode,
         "codex exec --direct".to_string(),
         config.otel.log_user_prompt,
