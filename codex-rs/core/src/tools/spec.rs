@@ -26,9 +26,6 @@ use codex_tools::dynamic_tool_to_responses_api_tool;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[cfg(test)]
-pub(crate) use codex_tools::mcp_call_tool_result_output_schema;
-
 pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
     match user_shell.shell_type {
         ShellType::Zsh => ToolUserShellType::Zsh,
@@ -118,23 +115,6 @@ fn apply_builtin_tool_policy(builder: &mut ToolRegistryBuilder, config: &ToolsCo
         };
         builtin_tool_allowed(config, canonical_name)
     });
-}
-
-/// Builds the tool registry builder while collecting tool specs for later serialization.
-#[cfg(test)]
-pub(crate) fn build_specs(
-    config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
-    app_tools: Option<HashMap<String, ToolInfo>>,
-    dynamic_tools: &[DynamicToolSpec],
-) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_tools(
-        config,
-        mcp_tools,
-        app_tools,
-        /*discoverable_tools*/ None,
-        dynamic_tools,
-    )
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(
