@@ -6037,7 +6037,6 @@ name = "mcp_test_support"
 version = "0.119.0-alpha.1"
 dependencies = [
  "anyhow",
- "codex-core",
  "codex-login",
  "codex-mcp-server",
  "codex-terminal-detection",
