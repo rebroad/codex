@@ -273,10 +273,6 @@ impl TurnState {
         std::mem::take(&mut self.restart_sampling_after_steer)
     }
 
-    pub(crate) fn defer_mailbox_delivery_to_next_turn(&mut self) {
-        self.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
-    }
-
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
         self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
