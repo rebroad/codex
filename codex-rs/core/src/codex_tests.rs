@@ -3122,7 +3122,6 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         captured_trace: Arc<std::sync::Mutex<Option<W3cTraceContext>>>,
     }
 
-    #[async_trait::async_trait]
     impl SessionTask for TraceCaptureTask {
         fn kind(&self) -> TaskKind {
             TaskKind::Regular
@@ -4380,7 +4379,6 @@ struct NeverEndingTask {
     listen_to_cancellation_token: bool,
 }
 
-#[async_trait::async_trait]
 impl SessionTask for NeverEndingTask {
     fn kind(&self) -> TaskKind {
         self.kind
