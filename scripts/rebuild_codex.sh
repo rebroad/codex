@@ -23,6 +23,20 @@ log_error() {
   echo "${BOLD}${RED}ERROR:${RESET} $*" >&2
 }
 
+resolve_main_worktree_dir() {
+  local main_worktree
+  main_worktree="$(
+    git -C "${REPO_DIR}" worktree list --porcelain 2>/dev/null \
+      | sed -n 's/^worktree //p' \
+      | head -n 1
+  )"
+  if [[ -n "${main_worktree}" ]]; then
+    echo "${main_worktree}"
+  else
+    echo "${REPO_DIR}"
+  fi
+}
+
 restore_cargo_lock_if_needed() {
   git -C "${REPO_DIR}" checkout -- "./${CARGO_LOCK_REL}" >/dev/null 2>&1 || true
 }
@@ -427,7 +441,7 @@ stage_npm_vendor_from_binaries() {
 run_ci_preflight_checks() {
   local preflight_ts preflight_dir shear_log shear_errors
   preflight_ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  preflight_dir="${REPO_DIR}/tmp/preflight/${preflight_ts}"
+  preflight_dir="${SHARED_TMP_DIR}/preflight/${preflight_ts}"
   mkdir -p "${preflight_dir}"
   echo "[preflight] Artifacts directory: ${preflight_dir}"
 
@@ -768,7 +782,9 @@ RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
 RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 NPM_PUBLISH_DRY_RUN="false"
 SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
-TRIAGE_STATE_FILE="${REPO_DIR}/${TRIAGE_STATE_FILE_DEFAULT}"
+MAIN_WORKTREE_DIR="$(resolve_main_worktree_dir)"
+SHARED_TMP_DIR="${MAIN_WORKTREE_DIR}/tmp"
+TRIAGE_STATE_FILE="${MAIN_WORKTREE_DIR}/${TRIAGE_STATE_FILE_DEFAULT}"
 for arg in "$@"; do
   case "${arg}" in
     --debug)
