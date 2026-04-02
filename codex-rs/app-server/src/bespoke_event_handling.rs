@@ -2889,7 +2889,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;
-    use serde_json::json;
     use std::time::Duration;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
