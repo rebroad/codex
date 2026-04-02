@@ -1407,6 +1407,7 @@ dependencies = [
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-requirements",
+ "codex-config",
  "codex-core",
  "codex-exec-server",
  "codex-features",
@@ -2215,6 +2216,7 @@ version = "0.119.0-alpha.1"
 dependencies = [
  "cc",
  "clap",
+ "codex-config",
  "codex-core",
  "codex-protocol",
  "codex-sandboxing",
@@ -2318,6 +2320,7 @@ version = "0.119.0-alpha.1"
 dependencies = [
  "anyhow",
  "codex-arg0",
+ "codex-config",
  "codex-core",
  "codex-exec-server",
  "codex-features",
@@ -2712,6 +2715,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cli",
  "codex-cloud-requirements",
+ "codex-config",
  "codex-core",
  "codex-features",
  "codex-feedback",
