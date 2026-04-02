@@ -4,7 +4,7 @@ use anyhow::Result;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::CodexThread;
 use codex_core::config::Constrained;
-use codex_core::config::types::ExecPolicyRuleWriteScope;
+use codex_config::types::ExecPolicyRuleWriteScope;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::NetworkConstraints;
