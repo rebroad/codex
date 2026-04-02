@@ -7,18 +7,18 @@
 //! into a one-shot CLI command while still producing a durable `codex-login.log` artifact that
 //! support can request from users.
 
-use codex_core::CodexAuth;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthMode;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
-use codex_core::auth::logout;
 use codex_core::config::Config;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthMode;
+use codex_login::CLIENT_ID;
+use codex_login::CodexAuth;
 use codex_login::ServerOptions;
 use codex_login::auth_file_path;
 use codex_login::build_authorize_url;
 use codex_login::complete_device_code_login;
 use codex_login::complete_oauth_login_with_callback_url;
+use codex_login::login_with_api_key;
+use codex_login::logout;
 use codex_login::generate_oauth_state;
 use codex_login::generate_pkce;
 use codex_login::request_device_code;
