@@ -15,8 +15,10 @@ use codex_login::CodexAuth;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
-use crate::api_bridge::CoreAuthProvider;
-use codex_login::AuthMode;
+use codex_api::api_bridge::CoreAuthProvider;
+use codex_app_server_protocol::AuthMode;
+use codex_model_provider_info::WireApi;
+use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
@@ -29,10 +31,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
-    let provider = crate::model_provider_info::create_oss_provider_with_base_url(
-        "https://example.com/v1",
-        crate::model_provider_info::WireApi::Responses,
-    );
+    let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     ModelClient::new(
         /*auth_manager*/ None,
         ThreadId::new(),
