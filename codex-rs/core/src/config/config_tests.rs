@@ -23,6 +23,8 @@ use codex_config::types::PromptDebugHttpToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_model_provider_info::WireApi;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -1995,10 +1997,7 @@ fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> 
             codex_home.path().to_path_buf(),
         )?;
 
-        assert_eq!(
-            config.model_provider.wire_api,
-            crate::model_provider_info::WireApi::Responses
-        );
+        assert_eq!(config.model_provider.wire_api, WireApi::Responses);
     }
 
     Ok(())
@@ -4459,7 +4458,7 @@ fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io::Resul
 fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let catalog_path = codex_home.path().join("catalog.json");
-    let mut catalog = codex_models_manager::bundled_models_response()
+    let mut catalog = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     catalog.models = catalog.models.into_iter().take(1).collect();
     std::fs::write(
@@ -4574,7 +4573,7 @@ model_verbosity = "high"
         name: "OpenAI custom".to_string(),
         base_url: Some("https://api.openai.com/v1".to_string()),
         env_key: Some("OPENAI_API_KEY".to_string()),
-        wire_api: crate::WireApi::Responses,
+        wire_api: WireApi::Responses,
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
