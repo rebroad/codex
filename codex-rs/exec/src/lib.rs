@@ -1926,7 +1926,10 @@ async fn run_direct_request(
     let model = models_manager
         .get_default_model(&config.model, RefreshStrategy::OnlineIfUncached)
         .await;
-    let model_info: ModelInfo = models_manager.get_model_info(&model, config).await;
+    let models_manager_config = config.to_models_manager_config();
+    let model_info: ModelInfo = models_manager
+        .get_model_info(&model, &models_manager_config)
+        .await;
     let telemetry_auth_mode = auth_snapshot
         .as_ref()
         .map(|auth| TelemetryAuthMode::from(auth.auth_mode()));
