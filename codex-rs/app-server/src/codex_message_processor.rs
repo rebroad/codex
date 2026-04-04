@@ -737,6 +737,7 @@ impl CodexMessageProcessor {
         connection_id: ConnectionId,
         request: ClientRequest,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
         request_context: RequestContext,
     ) {
         let to_connection_request_id = |request_id| ConnectionRequestId {
@@ -753,6 +754,8 @@ impl CodexMessageProcessor {
                 self.thread_start(
                     to_connection_request_id(request_id),
                     params,
+                    app_server_client_name.clone(),
+                    app_server_client_version.clone(),
                     request_context,
                 )
                 .await;
@@ -857,6 +860,7 @@ impl CodexMessageProcessor {
                     to_connection_request_id(request_id),
                     params,
                     app_server_client_name.clone(),
+                    app_server_client_version.clone(),
                 )
                 .await;
             }
@@ -2111,6 +2115,8 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
         request_context: RequestContext,
     ) {
         let ThreadStartParams {
@@ -2166,6 +2172,8 @@ impl CodexMessageProcessor {
                 runtime_feature_enablement,
                 cloud_requirements,
                 request_id,
+                app_server_client_name,
+                app_server_client_version,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -2239,6 +2247,8 @@ impl CodexMessageProcessor {
         runtime_feature_enablement: BTreeMap<String, bool>,
         cloud_requirements: CloudRequirementsLoader,
         request_id: ConnectionRequestId,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
@@ -2385,6 +2395,19 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
+                if let Err(error) = Self::set_app_server_client_info(
+                    thread.as_ref(),
+                    app_server_client_name,
+                    app_server_client_version,
+                )
+                .await
+                {
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
                 let config_snapshot = thread
                     .config_snapshot()
                     .instrument(tracing::info_span!(
@@ -6528,6 +6551,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         mut params: TurnStartParams,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
     ) {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.outgoing.send_error(request_id, error).await;
@@ -6553,8 +6577,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        if let Err(error) =
-            Self::set_app_server_client_name(thread.as_ref(), app_server_client_name).await
+        if let Err(error) = Self::set_app_server_client_info(
+            thread.as_ref(),
+            app_server_client_name,
+            app_server_client_version,
+        )
+        .await
         {
             self.outgoing.send_error(request_id, error).await;
             return;
@@ -6651,16 +6679,17 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn set_app_server_client_name(
+    async fn set_app_server_client_info(
         thread: &CodexThread,
         app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
     ) -> Result<(), JSONRPCErrorError> {
         thread
-            .set_app_server_client_name(app_server_client_name)
+            .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
-                message: format!("failed to set app server client name: {err}"),
+                message: format!("failed to set app server client info: {err}"),
                 data: None,
             })
     }
