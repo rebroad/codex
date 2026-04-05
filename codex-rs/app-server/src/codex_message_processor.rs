@@ -1621,11 +1621,7 @@ impl CodexMessageProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
-            let auth = if do_refresh {
-                self.auth_manager.auth_cached()
-            } else {
-                self.auth_manager.auth().await
-            };
+            let auth = self.auth_manager.auth_cached();
             match auth {
                 Some(auth) => {
                     let permanent_refresh_failure =
