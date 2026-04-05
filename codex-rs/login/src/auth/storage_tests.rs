@@ -4,10 +4,26 @@ use anyhow::Context;
 use base64::Engine;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 use codex_keyring_store::tests::MockKeyringStore;
 use keyring::Error as KeyringError;
+
+#[test]
+fn expand_home_tilde_expands_home_prefix() {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let expanded = expand_home_tilde(PathBuf::from("~/.codex/auth.json"));
+    assert_eq!(expanded, PathBuf::from(home).join(".codex/auth.json"));
+}
+
+#[test]
+fn expand_home_tilde_keeps_non_tilde_paths_unchanged() {
+    let path = PathBuf::from("/tmp/auth.json");
+    assert_eq!(expand_home_tilde(path.clone()), path);
+}
 
 #[tokio::test]
 async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
