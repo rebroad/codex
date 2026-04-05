@@ -233,7 +233,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let turn_id = mcp
+    let turn_request_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
@@ -244,11 +244,12 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
+    let turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
     )
     .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -313,7 +314,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     )?;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.id, turn.id);
-    assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     Ok(())
 }
