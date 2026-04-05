@@ -496,9 +496,26 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         let account_value = self.account.as_ref().map(|account| match account {
-            StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
-                (Some(email), Some(plan)) => format!("{email} ({plan})"),
-                (Some(email), None) => email.clone(),
+            StatusAccountDisplay::ChatGpt {
+                email_prefix_emoji,
+                email,
+                plan,
+            } => match (email, plan) {
+                (Some(email), Some(plan)) => {
+                    let decorated_email = if let Some(emoji) = email_prefix_emoji {
+                        format!("{emoji} {email}")
+                    } else {
+                        email.clone()
+                    };
+                    format!("{decorated_email} ({plan})")
+                }
+                (Some(email), None) => {
+                    if let Some(emoji) = email_prefix_emoji {
+                        format!("{emoji} {email}")
+                    } else {
+                        email.clone()
+                    }
+                }
                 (None, Some(plan)) => plan.clone(),
                 (None, None) => "ChatGPT".to_string(),
             },

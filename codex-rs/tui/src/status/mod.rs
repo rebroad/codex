@@ -25,6 +25,7 @@ use codex_backend_client::Client as BackendClient;
 use codex_core::CodexAuth;
 use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_login::token_data::parse_jwt_expiration;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -155,7 +156,11 @@ pub(crate) async fn render_status_lines_for_cli(
     if let Some(rate_limit_plan) = rate_limits.iter().find_map(|snapshot| snapshot.plan_type) {
         plan_type = Some(rate_limit_plan);
     }
-    let account_display = status_account_display_for_cli(auth.as_ref(), plan_type.clone());
+    let account_display = status_account_display_for_cli(
+        auth.as_ref(),
+        plan_type.clone(),
+        cli_status_email_prefix_emoji(auth.as_ref(), &fetch_outcome).map(str::to_string),
+    );
     let mut credits_by_limit_id = std::collections::BTreeMap::<String, CreditsSnapshot>::new();
     let mut rate_limit_displays = Vec::with_capacity(rate_limits.len());
     for mut snapshot in rate_limits {
@@ -233,14 +238,90 @@ fn default_reasoning_effort_from_catalog(
 fn status_account_display_for_cli(
     auth: Option<&CodexAuth>,
     plan_type: Option<PlanType>,
+    email_prefix_emoji: Option<String>,
 ) -> Option<StatusAccountDisplay> {
     match auth {
         Some(auth) if auth.is_api_key_auth() => Some(StatusAccountDisplay::ApiKey),
         Some(auth) => Some(StatusAccountDisplay::ChatGpt {
+            email_prefix_emoji,
             email: auth.get_account_email(),
             plan: plan_type.map(plan_type_display_name),
         }),
         None => None,
+    }
+}
+
+fn cli_status_email_prefix_emoji(
+    auth: Option<&CodexAuth>,
+    fetch_outcome: &CliRateLimitFetchOutcome,
+) -> Option<&'static str> {
+    let auth = auth?;
+    if auth.is_api_key_auth() {
+        return None;
+    }
+
+    match classify_cli_auth_health(auth, fetch_outcome) {
+        CliAuthHealth::Healthy => Some("✅"),
+        CliAuthHealth::AccessTokenExpired => Some("⏰"),
+        CliAuthHealth::RefreshTokenReused => Some("🔁"),
+        CliAuthHealth::UnauthorizedUnknown => Some("🚫"),
+        CliAuthHealth::UnknownLocalTokenState => Some("❔"),
+    }
+}
+
+enum CliAuthHealth {
+    Healthy,
+    AccessTokenExpired,
+    RefreshTokenReused,
+    UnauthorizedUnknown,
+    UnknownLocalTokenState,
+}
+
+fn classify_cli_auth_health(auth: &CodexAuth, fetch_outcome: &CliRateLimitFetchOutcome) -> CliAuthHealth {
+    if let Some(result) = classify_from_fetch_outcome(fetch_outcome) {
+        return result;
+    }
+
+    match auth_access_token_state(auth) {
+        AuthAccessTokenState::Expired => CliAuthHealth::AccessTokenExpired,
+        AuthAccessTokenState::Unknown => CliAuthHealth::UnknownLocalTokenState,
+        AuthAccessTokenState::Healthy => CliAuthHealth::Healthy,
+    }
+}
+
+fn classify_from_fetch_outcome(fetch_outcome: &CliRateLimitFetchOutcome) -> Option<CliAuthHealth> {
+    let err = match fetch_outcome {
+        CliRateLimitFetchOutcome::BackendUnavailable(err) | CliRateLimitFetchOutcome::Other(err) => err,
+        _ => return None,
+    };
+    let err = err.to_ascii_lowercase();
+    if err.contains("refresh token was already used") {
+        return Some(CliAuthHealth::RefreshTokenReused);
+    }
+    if err.contains("token_expired") {
+        return Some(CliAuthHealth::AccessTokenExpired);
+    }
+    if err.contains("unauthorized") {
+        return Some(CliAuthHealth::UnauthorizedUnknown);
+    }
+    None
+}
+
+enum AuthAccessTokenState {
+    Healthy,
+    Expired,
+    Unknown,
+}
+
+fn auth_access_token_state(auth: &CodexAuth) -> AuthAccessTokenState {
+    let token_data = match auth.get_token_data() {
+        Ok(token_data) => token_data,
+        Err(_) => return AuthAccessTokenState::Unknown,
+    };
+    match parse_jwt_expiration(&token_data.access_token) {
+        Ok(Some(exp)) if exp <= Utc::now() => AuthAccessTokenState::Expired,
+        Ok(Some(_)) => AuthAccessTokenState::Healthy,
+        Ok(None) | Err(_) => AuthAccessTokenState::Unknown,
     }
 }
 

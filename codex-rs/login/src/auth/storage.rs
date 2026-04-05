@@ -82,7 +82,11 @@ pub fn set_auth_file_override(path: Option<PathBuf>) {
 }
 
 fn auth_file_override_from_cli() -> Option<PathBuf> {
-    AUTH_FILE_OVERRIDE.lock().ok().and_then(|path| path.clone())
+    AUTH_FILE_OVERRIDE
+        .lock()
+        .ok()
+        .and_then(|path| path.clone())
+        .map(expand_home_tilde)
 }
 
 fn auth_file_override_from_env() -> Option<PathBuf> {
@@ -91,8 +95,29 @@ fn auth_file_override_from_env() -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         None
     } else {
-        Some(path)
+        Some(expand_home_tilde(path))
     }
+}
+
+fn expand_home_tilde(path: PathBuf) -> PathBuf {
+    let Some(raw) = path.to_str() else {
+        return path;
+    };
+    let suffix = if raw == "~" {
+        ""
+    } else if let Some(stripped) = raw.strip_prefix("~/") {
+        stripped
+    } else {
+        return path;
+    };
+    let Some(home) = std::env::var_os("HOME") else {
+        return path;
+    };
+    let mut expanded = PathBuf::from(home);
+    if !suffix.is_empty() {
+        expanded.push(suffix);
+    }
+    expanded
 }
 
 fn is_auth_file_overridden() -> bool {
