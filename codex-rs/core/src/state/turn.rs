@@ -82,6 +82,10 @@ pub(crate) struct TurnState {
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
     granted_permissions: Option<PermissionProfile>,
+    tool_calls_blocked_pending_steer: bool,
+    blocked_tool_guidance_emitted: bool,
+    sampling_request_cancellation_token: Option<CancellationToken>,
+    restart_sampling_after_steer: bool,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
@@ -109,6 +113,10 @@ impl TurnState {
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+        self.tool_calls_blocked_pending_steer = false;
+        self.blocked_tool_guidance_emitted = false;
+        self.sampling_request_cancellation_token = None;
+        self.restart_sampling_after_steer = false;
     }
 
     pub(crate) fn insert_pending_request_permissions(
@@ -202,6 +210,57 @@ impl TurnState {
         !self.pending_input.is_empty()
     }
 
+    pub(crate) fn block_tool_calls_pending_steer(&mut self) {
+        self.tool_calls_blocked_pending_steer = true;
+    }
+
+    pub(crate) fn unblock_tool_calls_after_steer(&mut self) {
+        self.tool_calls_blocked_pending_steer = false;
+        self.blocked_tool_guidance_emitted = false;
+    }
+
+    pub(crate) fn tool_calls_blocked_pending_steer(&self) -> bool {
+        self.tool_calls_blocked_pending_steer
+    }
+
+    pub(crate) fn increment_tool_calls(&mut self) {
+        self.tool_calls = self.tool_calls.saturating_add(1);
+    }
+
+    pub(crate) fn mark_blocked_tool_guidance_emitted_if_first(&mut self) -> bool {
+        if self.blocked_tool_guidance_emitted {
+            false
+        } else {
+            self.blocked_tool_guidance_emitted = true;
+            true
+        }
+    }
+
+    pub(crate) fn set_sampling_request_cancellation_token(&mut self, token: CancellationToken) {
+        self.sampling_request_cancellation_token = Some(token);
+    }
+
+    pub(crate) fn clear_sampling_request_cancellation_token(&mut self) {
+        self.sampling_request_cancellation_token = None;
+    }
+
+    pub(crate) fn cancel_active_sampling_request(&mut self) -> bool {
+        if let Some(token) = self.sampling_request_cancellation_token.take() {
+            token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn request_sampling_restart_after_steer(&mut self) {
+        self.restart_sampling_after_steer = true;
+    }
+
+    pub(crate) fn take_sampling_restart_after_steer(&mut self) -> bool {
+        std::mem::take(&mut self.restart_sampling_after_steer)
+    }
+
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
         self.granted_permissions =
             merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
@@ -217,5 +276,58 @@ impl ActiveTurn {
     pub(crate) async fn clear_pending(&self) {
         let mut ts = self.turn_state.lock().await;
         ts.clear_pending();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TurnState;
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn tool_call_blocking_flag_defaults_to_unblocked() {
+        let turn_state = TurnState::default();
+        assert!(!turn_state.tool_calls_blocked_pending_steer());
+    }
+
+    #[test]
+    fn tool_call_blocking_flag_can_be_blocked_and_unblocked() {
+        let mut turn_state = TurnState::default();
+        turn_state.block_tool_calls_pending_steer();
+        assert!(turn_state.tool_calls_blocked_pending_steer());
+
+        turn_state.unblock_tool_calls_after_steer();
+        assert!(!turn_state.tool_calls_blocked_pending_steer());
+    }
+
+    #[test]
+    fn clearing_pending_state_unblocks_tool_calls() {
+        let mut turn_state = TurnState::default();
+        turn_state.block_tool_calls_pending_steer();
+        assert!(turn_state.tool_calls_blocked_pending_steer());
+
+        turn_state.clear_pending();
+        assert!(!turn_state.tool_calls_blocked_pending_steer());
+    }
+
+    #[test]
+    fn cancel_active_sampling_request_is_one_shot() {
+        let mut turn_state = TurnState::default();
+        let token = CancellationToken::new();
+        turn_state.set_sampling_request_cancellation_token(token.clone());
+
+        assert!(turn_state.cancel_active_sampling_request());
+        assert!(token.is_cancelled());
+        assert!(!turn_state.cancel_active_sampling_request());
+    }
+
+    #[test]
+    fn sampling_restart_flag_is_one_shot() {
+        let mut turn_state = TurnState::default();
+        assert!(!turn_state.take_sampling_restart_after_steer());
+
+        turn_state.request_sampling_restart_after_steer();
+        assert!(turn_state.take_sampling_restart_after_steer());
+        assert!(!turn_state.take_sampling_restart_after_steer());
     }
 }
