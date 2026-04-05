@@ -40,6 +40,7 @@ use crate::protocol::NetworkApprovalProtocol;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::ResumedHistory;
+use crate::protocol::ReviewDecision;
 use crate::protocol::RolloutItem;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
@@ -4704,6 +4705,73 @@ async fn steer_input_returns_active_turn_id() {
 
     assert_eq!(turn_id, tc.sub_id);
     assert!(sess.has_pending_input().await);
+}
+
+#[tokio::test]
+async fn steer_input_after_rejection_cancels_active_sampling_request() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let sampling_token = CancellationToken::new();
+    sess.set_sampling_request_cancellation_token(&tc.sub_id, sampling_token.clone())
+        .await;
+
+    sess.notify_approval("call-decline", ReviewDecision::Denied)
+        .await;
+    assert!(sess.tool_calls_blocked_pending_steer(&tc.sub_id).await);
+
+    let steer_input = vec![UserInput::Text {
+        text: "steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.steer_input(steer_input, Some(&tc.sub_id))
+        .await
+        .expect("steer should be accepted");
+
+    assert!(sampling_token.is_cancelled());
+    assert!(!sess.tool_calls_blocked_pending_steer(&tc.sub_id).await);
+    assert!(sess.take_sampling_restart_after_steer(&tc.sub_id).await);
+    assert!(!sess.take_sampling_restart_after_steer(&tc.sub_id).await);
+}
+
+#[tokio::test]
+async fn steer_input_without_rejection_does_not_mark_sampling_restart() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let steer_input = vec![UserInput::Text {
+        text: "steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.steer_input(steer_input, Some(&tc.sub_id))
+        .await
+        .expect("steer should be accepted");
+
+    assert!(!sess.take_sampling_restart_after_steer(&tc.sub_id).await);
 }
 
 #[tokio::test]
