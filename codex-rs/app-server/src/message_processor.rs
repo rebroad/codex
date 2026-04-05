@@ -498,6 +498,10 @@ impl MessageProcessor {
         self.codex_message_processor.shutdown_threads().await;
     }
 
+    pub(crate) async fn wait_for_auth_refresh_persistence(&self, timeout: std::time::Duration) {
+        self.auth_manager.wait_for_refresh_persistence(timeout).await;
+    }
+
     pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
         self.outgoing.connection_closed(connection_id).await;
         self.fs_watch_manager.connection_closed(connection_id).await;

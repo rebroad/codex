@@ -15,6 +15,7 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
@@ -825,6 +826,9 @@ pub async fn run_main_with_transport(
                 }
             }
 
+            processor
+                .wait_for_auth_refresh_persistence(Duration::from_secs(2))
+                .await;
             if !shutdown_state.forced() {
                 processor.drain_background_tasks().await;
                 processor.shutdown_threads().await;
