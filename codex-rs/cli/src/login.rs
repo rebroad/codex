@@ -15,16 +15,20 @@ use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
 use codex_core::config::Config;
 use codex_login::ServerOptions;
+use codex_login::auth_file_path;
 use codex_login::complete_device_code_login;
 use codex_login::request_device_code;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_login::token_data::parse_jwt_expiration;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tracing_appender::non_blocking;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
@@ -38,6 +42,12 @@ const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
 const TELEGRAM_LOGIN_PENDING_DIR: &str = "telegram-login";
+
+enum LocalAuthHealth {
+    Healthy,
+    Expired,
+    Unknown,
+}
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -332,6 +342,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
+                let health = local_auth_health(&auth);
                 let mut details = Vec::new();
 
                 if let Some(email) = auth.get_account_email() {
@@ -344,22 +355,81 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                     details.push(format!("plan={}", plan_type.as_wire_name()));
                 }
 
-                if details.is_empty() {
-                    eprintln!("Logged in using ChatGPT");
+                let detail_suffix = if details.is_empty() {
+                    String::new()
                 } else {
-                    eprintln!("Logged in using ChatGPT ({})", details.join(", "));
+                    format!(" ({})", details.join(", "))
+                };
+                match health {
+                    LocalAuthHealth::Healthy => {
+                        eprintln!("Logged in using ChatGPT{detail_suffix}");
+                        std::process::exit(0);
+                    }
+                    LocalAuthHealth::Expired => {
+                        eprintln!(
+                            "Stored ChatGPT credentials are expired{detail_suffix}",
+                        );
+                        eprintln!("Local auth health: expired access token (re-login may be required)");
+                        std::process::exit(1);
+                    }
+                    LocalAuthHealth::Unknown => {
+                        eprintln!("Stored ChatGPT credentials are incomplete/invalid{detail_suffix}");
+                        eprintln!(
+                            "Local auth health: unknown (missing/invalid token claims in local auth file)"
+                        );
+                        std::process::exit(1);
+                    }
                 }
-                std::process::exit(0);
             }
         },
         Ok(None) => {
-            eprintln!("Not logged in");
+            let auth_file = auth_file_path(&config.codex_home);
+            let auth_file_exists = auth_file.exists();
+            eprintln!(
+                "Not logged in (checked auth file: {}, exists={auth_file_exists})",
+                auth_file.display()
+            );
+            if !auth_file_exists {
+                eprintln!(
+                    "No local credentials were found at that path, so status cannot show token/account details."
+                );
+                if auth_file
+                    .to_str()
+                    .is_some_and(|path| path.starts_with('~'))
+                {
+                    eprintln!(
+                        "Hint: '~' is not expanded in '--auth-file=...'; use '$HOME/...', an absolute path, or '--auth-file ~/.codex/...'."
+                    );
+                }
+            }
             std::process::exit(1);
         }
         Err(e) => {
             eprintln!("Error checking login status: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+fn local_auth_health(auth: &CodexAuth) -> LocalAuthHealth {
+    if auth.is_api_key_auth() {
+        return LocalAuthHealth::Healthy;
+    }
+    let token_data = match auth.get_token_data() {
+        Ok(token_data) => token_data,
+        Err(_) => return LocalAuthHealth::Unknown,
+    };
+    match parse_jwt_expiration(&token_data.access_token) {
+        Ok(Some(exp)) if exp.timestamp() <= now_epoch_secs() => LocalAuthHealth::Expired,
+        Ok(Some(_)) => LocalAuthHealth::Healthy,
+        Ok(None) | Err(_) => LocalAuthHealth::Unknown,
+    }
+}
+
+fn now_epoch_secs() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs() as i64,
+        Err(_) => 0,
     }
 }
 
