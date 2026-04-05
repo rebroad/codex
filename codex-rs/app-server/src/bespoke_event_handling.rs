@@ -2192,6 +2192,13 @@ async fn handle_error(
     state.turn_summary.last_error = Some(error);
 }
 
+fn should_emit_turn_error_notification(error: &TurnError) -> bool {
+    !matches!(
+        error.codex_error_info,
+        Some(V2CodexErrorInfo::UsageLimitExceeded)
+    )
+}
+
 async fn on_patch_approval_response(
     call_id: String,
     receiver: oneshot::Receiver<ClientRequestResult>,
