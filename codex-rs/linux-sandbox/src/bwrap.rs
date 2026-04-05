@@ -211,13 +211,24 @@ fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> Result<BwrapArgs> {
-    // Bubblewrap requires bind mount targets to exist. Skip missing writable
-    // roots so mixed-platform configs can keep harmless paths for other
-    // environments without breaking Linux command startup.
+    // Bubblewrap requires bind mount targets to exist. If a writable root is
+    // explicitly approved but missing, create it so write operations like
+    // apply_patch can add files beneath newly approved directories.
+    // If creation fails (for example, mixed-platform placeholder paths),
+    // preserve previous behavior by skipping that root.
     let writable_roots = file_system_sandbox_policy
         .get_writable_roots_with_cwd(cwd)
         .into_iter()
-        .filter(|writable_root| writable_root.root.as_path().exists())
+        .filter_map(|writable_root| {
+            let root = writable_root.root.as_path();
+            if root.exists() {
+                return Some(writable_root);
+            }
+            if std::fs::create_dir_all(root).is_ok() {
+                return Some(writable_root);
+            }
+            None
+        })
         .collect::<Vec<_>>();
     let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
 
@@ -757,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_missing_writable_roots() {
+    fn creates_missing_writable_roots() {
         let temp_dir = TempDir::new().expect("temp dir");
         let existing_root = temp_dir.path().join("existing");
         let missing_root = temp_dir.path().join("missing");
@@ -786,9 +797,12 @@ mod tests {
             "existing writable root should be rebound writable",
         );
         assert!(
-            !args.args.iter().any(|arg| arg == &missing_root),
-            "missing writable root should be skipped",
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--bind", missing_root.as_str(), missing_root.as_str()] }),
+            "missing writable root should be created and rebound writable",
         );
+        assert!(Path::new(&missing_root).exists());
     }
 
     #[test]
