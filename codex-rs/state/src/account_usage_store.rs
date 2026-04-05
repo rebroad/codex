@@ -549,9 +549,14 @@ WHERE account_id = ? AND provider = ?
         .fetch_optional(self.pool.as_ref())
         .await?;
 
-        let previous_percent = prior_usage
+        let previous_backend_percent = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+        let previous_snapshot_percent = prior_usage
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("last_snapshot_percent_int").ok())
+            .map(|percent| percent as f64);
+        let previous_percent_for_jump = previous_snapshot_percent.or(previous_backend_percent);
         let (window_changed, reset_time_changed) = prior_usage
             .as_ref()
             .map(|row| {
@@ -615,7 +620,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent,
+                previous_backend_percent,
                 format!("{window_log}{sep}{reset_log}"),
             )
             .await;
@@ -631,7 +636,7 @@ WHERE account_id = ? AND provider = ?
             .unwrap_or(total_tokens_now_for_jump);
         let delta_tokens_since_snapshot =
             (total_tokens_now_for_jump - last_snapshot_total_tokens_for_jump).max(0);
-        let delta_percent = previous_percent.map(|previous| used_percent - previous);
+        let delta_percent = previous_percent_for_jump.map(|previous| used_percent - previous);
         let large_jump =
             delta_percent.is_some_and(|delta| delta.abs() > SUSPICIOUS_PERCENT_JUMP_THRESHOLD);
         let negative_jump = delta_percent.is_some_and(|delta| delta < -USED_PERCENT_REFUND_EPSILON);
@@ -676,11 +681,27 @@ WHERE account_id = ? AND provider = ?
                 || negative_jump
                 || (large_jump && !large_positive_jump_plausible));
         if suspicious_change {
+            let backend_candidate_confirmed_from_db = prior_usage.as_ref().is_some_and(|row| {
+                let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
+                let previous_resets_at: Option<i64> = row.try_get("last_backend_resets_at").ok();
+                let previous_window: Option<i64> = row.try_get("last_backend_window_minutes").ok();
+                previous_seen_at.zip(seen_at).is_some_and(|(previous, current)| {
+                    current.saturating_sub(previous) <= BACKEND_CHANGE_PENDING_TTL_SECS
+                }) && previous_window == window_minutes
+                    && previous_resets_at == resets_at
+                    && previous_backend_percent
+                        .is_some_and(|previous| {
+                            (previous - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON
+                        })
+            });
             let key = (account_id.to_string(), self.default_provider.clone());
             let seen_ts = seen_at.unwrap_or(now);
             let mut pending_updates = self.pending_backend_updates.lock().await;
             let mut should_remove_pending = false;
-            let confirmation_state = if let Some(pending) = pending_updates.get_mut(&key) {
+            let confirmation_state = if backend_candidate_confirmed_from_db {
+                should_remove_pending = true;
+                (true, BACKEND_CHANGE_CONFIRMATIONS_REQUIRED)
+            } else if let Some(pending) = pending_updates.get_mut(&key) {
                 let same_candidate = seen_ts.saturating_sub(pending.last_seen_at)
                     <= BACKEND_CHANGE_PENDING_TTL_SECS
                     && (pending.used_percent - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON
@@ -728,10 +749,31 @@ WHERE account_id = ? AND provider = ?
 
             let (confirmed, confirmations) = confirmation_state;
             if !confirmed {
+                sqlx::query(
+                    r#"
+UPDATE account_usage
+SET
+    updated_at = ?,
+    last_backend_used_percent = ?,
+    last_backend_resets_at = ?,
+    last_backend_window_minutes = ?,
+    last_backend_seen_at = ?
+WHERE account_id = ? AND provider = ?
+                    "#,
+                )
+                .bind(now)
+                .bind(used_percent)
+                .bind(resets_at)
+                .bind(window_minutes)
+                .bind(seen_at)
+                .bind(account_id)
+                .bind(self.default_provider.as_str())
+                .execute(self.pool.as_ref())
+                .await?;
                 self.log_usage_event(
                     account_id,
                     Some(used_percent),
-                    previous_percent,
+                    previous_backend_percent,
                     format!(
                         "backend_change_pending=1 confirmations={confirmations} delta_percent={}",
                         delta_percent.unwrap_or(0.0)
@@ -743,7 +785,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent,
+                previous_backend_percent,
                 format!(
                     "backend_change_confirmed=1 confirmations={} delta_percent={}",
                     BACKEND_CHANGE_CONFIRMATIONS_REQUIRED,
@@ -775,7 +817,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent,
+                previous_backend_percent,
                 format!(
                     "refund_rewind_disabled=1 delta_percent={}",
                     delta_percent.unwrap_or(0.0)
@@ -976,7 +1018,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent,
+                previous_backend_percent,
                 format!(
                     "reset=1 reached_full_window={} samples_cleared={cleared_samples}",
                     if reached_full_window { 1 } else { 0 }
@@ -1037,7 +1079,7 @@ WHERE account_id = ? AND provider = ?
             .and_then(|row| row.try_get::<i64, _>("last_snapshot_percent_int").ok())
             .unwrap_or(current_percent_int);
 
-        let last_sample_percent = if previous_percent.is_none() {
+        let last_sample_percent = if previous_backend_percent.is_none() {
             0
         } else {
             last_sample_percent
@@ -1106,7 +1148,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent,
+                previous_backend_percent,
                 log_message,
             )
             .await;
@@ -2734,6 +2776,116 @@ WHERE account_id = ? AND provider = ?
 
         assert_eq!(total_tokens_after_confirmation, total_tokens_before);
         assert_eq!(last_backend_used_percent_after_confirmation, 1.0);
+    }
+
+    #[tokio::test]
+    async fn account_usage_confirms_pending_backend_change_across_store_reinit() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 100,
+            input_tokens: 80,
+            cached_input_tokens: 0,
+            output_tokens: 20,
+            reasoning_output_tokens: 0,
+        };
+        runtime
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
+            .await
+            .expect("record usage");
+
+        let baseline_snapshot = RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: Some("Weekly".to_string()),
+            primary: None,
+            secondary: Some(codex_protocol::protocol::RateLimitWindow {
+                used_percent: 50.0,
+                window_minutes: Some(10080),
+                resets_at: Some(12345),
+            }),
+            credits: None,
+            plan_type: None,
+        };
+        runtime
+            .record_account_backend_rate_limit("account-1", &baseline_snapshot)
+            .await
+            .expect("record baseline snapshot pending");
+        runtime
+            .record_account_backend_rate_limit("account-1", &baseline_snapshot)
+            .await
+            .expect("confirm baseline snapshot");
+
+        let suspicious_snapshot = RateLimitSnapshot {
+            secondary: Some(codex_protocol::protocol::RateLimitWindow {
+                used_percent: 59.0,
+                window_minutes: Some(10080),
+                resets_at: Some(12345),
+            }),
+            ..baseline_snapshot.clone()
+        };
+        runtime
+            .record_account_backend_rate_limit("account-1", &suspicious_snapshot)
+            .await
+            .expect("record suspicious snapshot");
+
+        let row_after_pending = sqlx::query(
+            r#"
+SELECT
+    last_backend_used_percent,
+    last_snapshot_percent_int
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("usage row after pending");
+        let last_backend_used_percent_after_pending: f64 = row_after_pending
+            .try_get("last_backend_used_percent")
+            .expect("last_backend_used_percent");
+        let last_snapshot_percent_after_pending: i64 = row_after_pending
+            .try_get("last_snapshot_percent_int")
+            .expect("last_snapshot_percent_int");
+        assert_eq!(last_backend_used_percent_after_pending, 59.0);
+        assert_eq!(last_snapshot_percent_after_pending, 50);
+
+        let runtime_reinit =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("reinit");
+        runtime_reinit
+            .record_account_backend_rate_limit("account-1", &suspicious_snapshot)
+            .await
+            .expect("confirm suspicious snapshot after reinit");
+
+        let row_after_confirm = sqlx::query(
+            r#"
+SELECT
+    last_backend_used_percent,
+    last_snapshot_percent_int
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime_reinit.pool.as_ref())
+        .await
+        .expect("usage row after confirm");
+        let last_backend_used_percent_after_confirm: f64 = row_after_confirm
+            .try_get("last_backend_used_percent")
+            .expect("last_backend_used_percent");
+        let last_snapshot_percent_after_confirm: i64 = row_after_confirm
+            .try_get("last_snapshot_percent_int")
+            .expect("last_snapshot_percent_int");
+        assert_eq!(last_backend_used_percent_after_confirm, 59.0);
+        assert_eq!(last_snapshot_percent_after_confirm, 59);
     }
 
     #[test]
