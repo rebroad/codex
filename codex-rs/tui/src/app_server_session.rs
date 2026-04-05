@@ -228,6 +228,7 @@ impl AppServerSession {
                     Some(email.clone()),
                     Some(TelemetryAuthMode::Chatgpt),
                     Some(StatusAccountDisplay::ChatGpt {
+                        email_prefix_emoji: None,
                         email: Some(email),
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
@@ -742,6 +743,7 @@ pub(crate) fn status_account_display_from_auth_mode(
         Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey),
         Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens) => {
             Some(StatusAccountDisplay::ChatGpt {
+                email_prefix_emoji: None,
                 email: None,
                 plan: plan_type.map(plan_type_display_name),
             })
@@ -1262,6 +1264,7 @@ mod tests {
         assert!(matches!(
             business,
             Some(StatusAccountDisplay::ChatGpt {
+                email_prefix_emoji: None,
                 email: None,
                 plan: Some(ref plan),
             }) if plan == "Enterprise"
@@ -1274,6 +1277,7 @@ mod tests {
         assert!(matches!(
             team,
             Some(StatusAccountDisplay::ChatGpt {
+                email_prefix_emoji: None,
                 email: None,
                 plan: Some(ref plan),
             }) if plan == "Business"
