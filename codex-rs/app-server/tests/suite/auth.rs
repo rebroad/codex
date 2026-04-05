@@ -334,7 +334,7 @@ async fn get_auth_status_omits_token_after_permanent_refresh_failure() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result<()> {
+async fn get_auth_status_does_not_refresh_when_refresh_not_requested() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
     write_chatgpt_auth(
@@ -356,7 +356,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
                 "code": "refresh_token_reused"
             }
         })))
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -391,7 +391,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
         status,
         GetAuthStatusResponse {
             auth_method: Some(AuthMode::Chatgpt),
-            auth_token: None,
+            auth_token: Some("stale-access-token".to_string()),
             requires_openai_auth: Some(true),
         }
     );
