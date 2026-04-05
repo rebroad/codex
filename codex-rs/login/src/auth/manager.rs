@@ -9,10 +9,14 @@ use std::env;
 use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::time::Instant;
+use tokio::time::sleep;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -24,6 +28,7 @@ use crate::auth::error::RefreshTokenFailedReason;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::auth_file_path;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::create_client;
@@ -73,8 +78,6 @@ impl PartialEq for CodexAuth {
     }
 }
 
-const TOKEN_REFRESH_INTERVAL: i64 = 8;
-
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
 const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
@@ -83,6 +86,13 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+const REFRESH_MARKER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+#[derive(Serialize, Deserialize)]
+struct RefreshInProgressMarker {
+    started_at: chrono::DateTime<Utc>,
+    pid: u32,
+}
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -1121,6 +1131,7 @@ pub struct AuthManager {
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
     refresh_lock: AsyncMutex<()>,
     external_auth: RwLock<Option<ExternalAuth>>,
+    interrupted_refresh_recovery_attempted: AtomicBool,
 }
 
 impl AuthManager {
@@ -1151,6 +1162,7 @@ impl AuthManager {
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
+            interrupted_refresh_recovery_attempted: AtomicBool::new(false),
         }
     }
 
@@ -1169,6 +1181,7 @@ impl AuthManager {
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
+            interrupted_refresh_recovery_attempted: AtomicBool::new(false),
         })
     }
 
@@ -1186,6 +1199,7 @@ impl AuthManager {
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
+            interrupted_refresh_recovery_attempted: AtomicBool::new(false),
         })
     }
 
@@ -1201,6 +1215,7 @@ impl AuthManager {
             forced_chatgpt_workspace_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(Some(ExternalAuth::Bearer(ExternalBearerAuth::new(config)))),
+            interrupted_refresh_recovery_attempted: AtomicBool::new(false),
         })
     }
 
@@ -1220,21 +1235,40 @@ impl AuthManager {
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
-    /// For stale managed ChatGPT auth, first performs a guarded reload and then
-    /// refreshes only if the on-disk auth is unchanged.
+    /// Avoids proactive refresh; recovery happens only on explicit refresh paths
+    /// (e.g. unauthorized handling) plus one-time interrupted-refresh recovery.
     pub async fn auth(&self) -> Option<CodexAuth> {
         if let Some(auth) = self.resolve_external_bearer_auth().await {
             return Some(auth);
         }
 
         let auth = self.auth_cached()?;
-        if Self::is_stale_for_proactive_refresh(&auth)
-            && let Err(err) = self.refresh_token().await
-        {
-            tracing::error!("Failed to refresh token: {}", err);
-            return Some(auth);
-        }
+        self.maybe_recover_interrupted_refresh_once(&auth).await;
         self.auth_cached()
+    }
+
+    async fn maybe_recover_interrupted_refresh_once(&self, auth: &CodexAuth) {
+        if self
+            .interrupted_refresh_recovery_attempted
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+
+        if !auth.is_chatgpt_auth()
+            || !Self::is_access_token_expired(auth)
+            || !self.refresh_marker_exists()
+        {
+            return;
+        }
+
+        tracing::warn!(
+            "Detected interrupted token refresh marker with expired token; attempting one-time recovery",
+        );
+        self.reload();
+        if let Err(err) = self.refresh_token().await {
+            tracing::warn!("Interrupted refresh recovery failed: {err}");
+        }
     }
 
     /// Force a reload of the auth information from auth.json. Returns
@@ -1337,6 +1371,8 @@ impl AuthManager {
                 !Self::auths_equal_for_refresh(previous, new_auth.as_ref());
             if auth_changed_for_refresh {
                 guard.permanent_refresh_failure = None;
+                self.interrupted_refresh_recovery_attempted
+                    .store(false, Ordering::Release);
             }
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
@@ -1511,8 +1547,15 @@ impl AuthManager {
                         "Token data is not available.",
                     ))
                 })?;
-                self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
-                    .await
+                self.write_refresh_in_progress_marker()
+                    .map_err(RefreshTokenError::Transient)?;
+                let result = self
+                    .refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
+                    .await;
+                if let Err(err) = self.clear_refresh_in_progress_marker() {
+                    tracing::warn!("Failed to clear refresh marker: {err}");
+                }
+                result
             }
             CodexAuth::ApiKey(_) => Ok(()),
         };
@@ -1528,6 +1571,9 @@ impl AuthManager {
     /// unauthenticated state.
     pub fn logout(&self) -> std::io::Result<bool> {
         let removed = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        if let Err(err) = self.clear_refresh_in_progress_marker() {
+            tracing::warn!("Failed to clear refresh marker during logout: {err}");
+        }
         // Always reload to clear any cached auth (even if file absent).
         self.reload();
         Ok(removed)
@@ -1547,7 +1593,7 @@ impl AuthManager {
         self.auth_cached().as_ref().map(CodexAuth::auth_mode)
     }
 
-    fn is_stale_for_proactive_refresh(auth: &CodexAuth) -> bool {
+    fn is_access_token_expired(auth: &CodexAuth) -> bool {
         let chatgpt_auth = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
             _ => return false,
@@ -1562,11 +1608,46 @@ impl AuthManager {
         {
             return expires_at <= Utc::now();
         }
-        let last_refresh = match auth_dot_json.last_refresh {
-            Some(last_refresh) => last_refresh,
-            None => return false,
+        false
+    }
+
+    fn refresh_marker_path(&self) -> PathBuf {
+        let auth_file = auth_file_path(&self.codex_home);
+        let mut marker_path = auth_file.into_os_string();
+        marker_path.push(".refreshing");
+        PathBuf::from(marker_path)
+    }
+
+    fn refresh_marker_exists(&self) -> bool {
+        self.refresh_marker_path().exists()
+    }
+
+    fn write_refresh_in_progress_marker(&self) -> std::io::Result<()> {
+        let marker_path = self.refresh_marker_path();
+        if let Some(parent) = marker_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let marker = RefreshInProgressMarker {
+            started_at: Utc::now(),
+            pid: std::process::id(),
         };
-        last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL)
+        let marker_json = serde_json::to_string(&marker)?;
+        std::fs::write(marker_path, marker_json)
+    }
+
+    fn clear_refresh_in_progress_marker(&self) -> std::io::Result<()> {
+        match std::fs::remove_file(self.refresh_marker_path()) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn wait_for_refresh_persistence(&self, timeout: std::time::Duration) {
+        let deadline = Instant::now() + timeout;
+        while self.refresh_marker_exists() && Instant::now() < deadline {
+            sleep(REFRESH_MARKER_POLL_INTERVAL).await;
+        }
     }
 
     async fn refresh_external_auth(
