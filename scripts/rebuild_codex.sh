@@ -49,6 +49,24 @@ require_cmd() {
   fi
 }
 
+resolve_cargo_target_dir() {
+  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    echo "${CARGO_TARGET_DIR}"
+    return
+  fi
+
+  local target_dir
+  target_dir="$(
+    RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" metadata --no-deps --format-version=1 2>/dev/null \
+      | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' \
+      | head -n 1
+  )"
+  if [[ -z "${target_dir}" ]]; then
+    target_dir="${RUST_WORKSPACE_DIR}/target"
+  fi
+  echo "${target_dir}"
+}
+
 is_only_cargo_lock_dirty() {
   local status_lines filtered_status
   # Ignore untracked files for publish gating. We only enforce tracked-tree
@@ -1178,8 +1196,9 @@ if [[ "${MODE}" == "release" ]]; then
     echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
   fi
   run_release_build_with_locked_fallback
+  CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${RUST_WORKSPACE_DIR}/target/release/codex" "${INSTALL_BIN}"
+  install -D -m 755 "${CARGO_TARGET_DIR_RESOLVED}/release/codex" "${INSTALL_BIN}"
 else
   echo "[2/4] Building debug codex..."
   # Force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
@@ -1190,8 +1209,9 @@ else
   else
     RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli
   fi
+  CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   echo "[3/4] Copying debug codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${RUST_WORKSPACE_DIR}/target/debug/codex" "${INSTALL_BIN}"
+  install -D -m 755 "${CARGO_TARGET_DIR_RESOLVED}/debug/codex" "${INSTALL_BIN}"
 fi
 
 if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
