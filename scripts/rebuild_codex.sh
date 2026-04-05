@@ -690,6 +690,43 @@ resolve_publish_version() {
   echo "${version}"
 }
 
+patch_installed_binary_version_timestamp() {
+  local bin_path="$1"
+  local base_version now_ts
+  if [[ ! -f "${bin_path}" ]]; then
+    echo "Skipping embedded version timestamp patch; binary not found at ${bin_path}."
+    return 0
+  fi
+  base_version="$(resolve_publish_version)"
+  if [[ -z "${base_version}" ]]; then
+    echo "Skipping embedded version timestamp patch; unable to resolve workspace version."
+    return 0
+  fi
+  now_ts="$(date +%Y%m%d%H%M)"
+  if ! python3 - "${bin_path}" "${base_version}" "${now_ts}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+bin_path = Path(sys.argv[1])
+base_version = sys.argv[2].encode("utf-8")
+timestamp = sys.argv[3].encode("utf-8")
+pattern = re.compile(re.escape(base_version) + rb"-\d{12}")
+replacement = base_version + b"-" + timestamp
+
+blob = bin_path.read_bytes()
+patched, count = pattern.subn(replacement, blob)
+if count == 0:
+    print(f"No embedded version string found in {bin_path}", file=sys.stderr)
+    sys.exit(2)
+bin_path.write_bytes(patched)
+print(f"Patched {count} embedded version string(s) in {bin_path} to timestamp {timestamp.decode()}")
+PY
+  then
+    echo "Warning: failed to patch embedded version timestamp in ${bin_path}."
+  fi
+}
+
 is_commit_preflight_passed() {
   local commit_sha="$1"
   local version="$2"
@@ -794,6 +831,7 @@ PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
 SHEAR_FIX_MODE="on_error"
 BUILD_JOBS=""
 FAST_RELEASE_BUILD="false"
+REFRESH_BUILD_INFO="false"
 BUILD_NPM_VENDOR="false"
 NPM_VENDOR_DIR=""
 RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
@@ -890,6 +928,9 @@ for arg in "$@"; do
     --fast-release-build)
       FAST_RELEASE_BUILD="true"
       ;;
+    --refresh-build-info)
+      REFRESH_BUILD_INFO="true"
+      ;;
     --build-npm-vendor)
       BUILD_NPM_VENDOR="true"
       ;;
@@ -921,7 +962,7 @@ Usage: rebuild_codex.sh [--release] [--publish|--no-publish] [--publish-timeout-
 Default behavior:
 - Regenerate app-server schema (just write-app-server-schema)
 - Build debug codex, copy it to ~/.cargo/bin/codex
-- Remove workspace codex build artifacts under target/
+- Keep existing target artifacts for fast incremental rebuilds
 - Skip CI preflight checks unless publishing
 - Record successful preflight checks by content hash (git tree hash) for future publish skip decisions
 
@@ -976,6 +1017,8 @@ Options:
              Set Cargo build parallelism via CARGO_BUILD_JOBS
   --fast-release-build
              Faster release compile (LTO=thin, codegen-units=16) with potential runtime perf tradeoff
+  --refresh-build-info
+             Force `cargo clean -p codex-build-info` before debug build to refresh embedded timestamp
   --build-npm-vendor
              Build + stage npm vendor payload for linux x64 + armv7 using current mode (--debug or --release)
   --npm-vendor-dir=<path>
@@ -1197,12 +1240,17 @@ if [[ "${MODE}" == "release" ]]; then
   fi
   run_release_build_with_locked_fallback
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
+  release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex"
+  patch_installed_binary_version_timestamp "${release_bin}"
   echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${CARGO_TARGET_DIR_RESOLVED}/release/codex" "${INSTALL_BIN}"
+  install -D -m 755 "${release_bin}" "${INSTALL_BIN}"
+  patch_installed_binary_version_timestamp "${INSTALL_BIN}"
 else
   echo "[2/4] Building debug codex..."
-  # Force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
-  cargo +"${TOOLCHAIN}" clean -p codex-build-info
+  # Optional: force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
+  if [[ "${REFRESH_BUILD_INFO}" == "true" ]]; then
+    cargo +"${TOOLCHAIN}" clean -p codex-build-info
+  fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     echo "Using Cargo build jobs: ${BUILD_JOBS}"
     RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo +"${TOOLCHAIN}" build -p codex-cli
@@ -1210,8 +1258,11 @@ else
     RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli
   fi
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
+  debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
+  patch_installed_binary_version_timestamp "${debug_bin}"
   echo "[3/4] Copying debug codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${CARGO_TARGET_DIR_RESOLVED}/debug/codex" "${INSTALL_BIN}"
+  install -D -m 755 "${debug_bin}" "${INSTALL_BIN}"
+  patch_installed_binary_version_timestamp "${INSTALL_BIN}"
 fi
 
 if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
