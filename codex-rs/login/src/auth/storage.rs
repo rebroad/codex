@@ -61,6 +61,10 @@ pub struct AuthDotJson {
     pub last_refresh: Option<DateTime<Utc>>,
 }
 
+pub fn auth_file_path(codex_home: &Path) -> PathBuf {
+    get_auth_file(codex_home)
+}
+
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
     if let Some(path) = auth_file_override_from_cli() {
         return path;
@@ -128,15 +132,24 @@ fn write_auth_json_file(path: &Path, auth_dot_json: &AuthDotJson) -> std::io::Re
         std::fs::create_dir_all(parent)?;
     }
     let json_data = serde_json::to_string_pretty(auth_dot_json)?;
+    let temp_path = {
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(".tmp");
+        PathBuf::from(candidate)
+    };
     let mut options = OpenOptions::new();
     options.truncate(true).write(true).create(true);
     #[cfg(unix)]
     {
         options.mode(0o600);
     }
-    let mut file = options.open(path)?;
+    let mut file = options.open(&temp_path)?;
     file.write_all(json_data.as_bytes())?;
-    file.flush()?;
+    file.sync_all()?;
+    std::fs::rename(&temp_path, path)?;
+    if let Some(parent) = path.parent() && let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 
