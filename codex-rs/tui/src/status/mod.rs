@@ -13,12 +13,14 @@ mod helpers;
 mod rate_limits;
 
 pub(crate) use account::StatusAccountDisplay;
+use account::truncate_status_email_local_part;
 #[cfg(test)]
 pub(crate) use card::new_status_output;
 pub(crate) use card::new_status_output_with_rate_limits;
 use crate::history_cell::HistoryCell;
 use crate::insert_history::write_spans;
 use chrono::Local;
+use chrono::TimeZone;
 use chrono::Utc;
 use codex_backend_client::Client as BackendClient;
 use codex_core::CodexAuth;
@@ -245,6 +247,105 @@ pub(crate) async fn render_status_lines_for_cli(
         .collect()
 }
 
+pub(crate) async fn render_compact_status_for_cli(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    use_utc: bool,
+) -> String {
+    let compact_usage = compact_status_usage(config, auth).await;
+    let timestamp_with_timezone =
+        compact_status_timestamp_with_timezone(compact_usage.reset_at_unix, use_utc);
+    let email = truncate_status_email_local_part(auth.and_then(CodexAuth::get_account_email))
+        .unwrap_or_else(|| "-".to_string());
+    format!(
+        "{timestamp_with_timezone} {email} {}%",
+        compact_usage.percent_left
+    )
+}
+
+fn compact_status_timestamp_with_timezone(reset_at_unix: Option<i64>, use_utc: bool) -> String {
+    let utc_dt = reset_at_unix
+        .and_then(|ts| Utc.timestamp_opt(ts, 0).single())
+        .unwrap_or_else(Utc::now);
+    if use_utc {
+        return utc_dt.format("%Y%m%d%H%M").to_string();
+    }
+
+    let local_dt = utc_dt.with_timezone(&Local);
+    let offset_seconds = local_dt.offset().local_minus_utc();
+    let timezone_suffix = if offset_seconds == 0 {
+        String::new()
+    } else if offset_seconds % 3600 == 0 {
+        let hours = offset_seconds / 3600;
+        if hours > 0 {
+            format!("+{hours}")
+        } else {
+            hours.to_string()
+        }
+    } else {
+        let sign = if offset_seconds.is_negative() { '-' } else { '+' };
+        let total_minutes = offset_seconds.unsigned_abs() / 60;
+        let hours = total_minutes / 60;
+        let minutes = total_minutes % 60;
+        format!("{sign}{hours:02}{minutes:02}")
+    };
+    format!("{}{timezone_suffix}", local_dt.format("%Y%m%d%H%M"))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompactStatusUsage {
+    percent_left: i64,
+    reset_at_unix: Option<i64>,
+}
+
+async fn compact_status_usage(config: &Config, auth: Option<&CodexAuth>) -> CompactStatusUsage {
+    let Some(auth) = auth else {
+        return CompactStatusUsage {
+            percent_left: 0,
+            reset_at_unix: None,
+        };
+    };
+    let Some(account_id) = account_usage_key(
+        auth.get_account_id().as_deref(),
+        auth.get_account_email().as_deref(),
+    ) else {
+        return CompactStatusUsage {
+            percent_left: 0,
+            reset_at_unix: None,
+        };
+    };
+
+    let account_usage_store =
+        AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+            .await
+            .ok();
+    let Some(account_usage_store) = account_usage_store else {
+        return CompactStatusUsage {
+            percent_left: 0,
+            reset_at_unix: None,
+        };
+    };
+    if let Some(account_display) = account_usage_display(auth.get_account_email().as_deref()) {
+        account_usage_store
+            .cache_account_display(account_id.as_str(), account_display)
+            .await;
+    }
+    let usage = account_usage_store
+        .get_account_usage(account_id.as_str())
+        .await
+        .ok()
+        .flatten();
+    CompactStatusUsage {
+        percent_left: usage
+            .as_ref()
+            .and_then(|u| u.last_backend_used_percent)
+            .map(|used_percent| (100.0 - used_percent).round() as i64)
+            .map(|percent_left| percent_left.clamp(0, 100))
+            .unwrap_or(0),
+        reset_at_unix: usage.and_then(|u| u.last_backend_resets_at),
+    }
+}
+
 fn default_reasoning_effort_from_catalog(
     config: &Config,
     model_name: &str,
@@ -267,7 +368,7 @@ fn status_account_display_for_cli(
         Some(auth) if auth.is_api_key_auth() => Some(StatusAccountDisplay::ApiKey),
         Some(auth) => Some(StatusAccountDisplay::ChatGpt {
             email_prefix_emoji,
-            email: auth.get_account_email(),
+            email: truncate_status_email_local_part(auth.get_account_email()),
             plan: plan_type.map(plan_type_display_name),
         }),
         None => None,
