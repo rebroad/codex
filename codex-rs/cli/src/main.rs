@@ -134,7 +134,7 @@ enum Subcommand {
     McpServer,
 
     /// Show local session configuration status and exit.
-    Status,
+    Status(StatusCommand),
 
     /// Manage local account usage tracking data.
     Usage(UsageCommand),
@@ -183,6 +183,13 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+}
+
+#[derive(Debug, Parser)]
+struct StatusCommand {
+    /// Extra arguments accepted after `--` for machine-readable output mode.
+    #[arg(last = true, allow_hyphen_values = true, value_name = "ARG")]
+    trailing_args: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -707,6 +714,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    let raw_argv: Vec<String> = std::env::args().collect();
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -728,7 +736,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         None => {
             if let Some(prompt) = interactive.prompt.as_deref() {
                 if is_status_shortcut_prompt(prompt) && interactive.images.is_empty() {
-                    run_status_command(&root_config_overrides, &interactive).await?;
+                    run_status_command(
+                        &root_config_overrides,
+                        &interactive,
+                        StatusOutputMode::default(),
+                    )
+                    .await?;
                     return Ok(());
                 }
                 let candidate = prompt.trim();
@@ -842,8 +855,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
-        Some(Subcommand::Status) => {
-            run_status_command(&root_config_overrides, &interactive).await?;
+        Some(Subcommand::Status(status_command)) => {
+            let status_options =
+                parse_status_invocation_options(&raw_argv, &status_command.trailing_args)?;
+            if let Some(auth_file_override) = status_options.auth_file_override {
+                codex_login::set_auth_file_override(Some(auth_file_override));
+            }
+            run_status_command(&root_config_overrides, &interactive, status_options.output_mode)
+                .await?;
         }
         Some(Subcommand::Usage(usage_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1636,9 +1655,78 @@ async fn print_resume_sessions_non_interactive(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct StatusOutputMode {
+    compact: bool,
+    utc: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StatusInvocationOptions {
+    output_mode: StatusOutputMode,
+    auth_file_override: Option<PathBuf>,
+}
+
+fn parse_status_invocation_options(
+    raw_argv: &[String],
+    trailing_args: &[String],
+) -> anyhow::Result<StatusInvocationOptions> {
+    let Some(status_index) = raw_argv.iter().position(|arg| arg == "status") else {
+        if trailing_args.is_empty() {
+            return Ok(StatusInvocationOptions::default());
+        }
+        anyhow::bail!("Unknown arguments for `codex status`.");
+    };
+    let has_double_dash = raw_argv[status_index + 1..]
+        .iter()
+        .any(|arg| arg == "--");
+    if !has_double_dash {
+        if trailing_args.is_empty() {
+            return Ok(StatusInvocationOptions::default());
+        }
+        let provided = trailing_args.join(" ");
+        anyhow::bail!(
+            "Unknown arguments for `codex status`: {provided}. Use `codex status` or `codex status -- [--utc]`."
+        );
+    }
+
+    let mut options = StatusInvocationOptions {
+        output_mode: StatusOutputMode {
+            compact: true,
+            utc: false,
+        },
+        auth_file_override: None,
+    };
+    let mut i = 0usize;
+    while i < trailing_args.len() {
+        match trailing_args[i].as_str() {
+            "--utc" => {
+                options.output_mode.utc = true;
+            }
+            flag if flag.starts_with("--auth-file=") => {
+                let value = flag.trim_start_matches("--auth-file=");
+                if !value.is_empty() {
+                    options.auth_file_override = Some(PathBuf::from(value));
+                }
+            }
+            "--auth-file" => {
+                if let Some(value) = trailing_args.get(i + 1) {
+                    options.auth_file_override = Some(PathBuf::from(value));
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    Ok(options)
+}
+
 async fn run_status_command(
     root_config_overrides: &CliConfigOverrides,
     interactive: &TuiCli,
+    status_output_mode: StatusOutputMode,
 ) -> anyhow::Result<()> {
     let mut cli_kv_overrides = root_config_overrides
         .parse_overrides()
@@ -1662,6 +1750,14 @@ async fn run_status_command(
         config.cli_auth_credentials_store_mode,
     ));
     let auth = auth_manager.auth().await;
+    if status_output_mode.compact {
+        let compact_line =
+            codex_tui::render_compact_status_for_cli(&config, auth.as_ref(), status_output_mode.utc)
+                .await;
+        println!("{compact_line}");
+        return Ok(());
+    }
+
     let model_name = config.model.as_deref().unwrap_or("<unknown>");
     let lines = codex_tui::render_status_for_cli(&config, auth, model_name, /*width*/ 80).await;
     for line in lines {
@@ -2047,6 +2143,108 @@ mod tests {
         assert_eq!(is_status_shortcut_prompt("/status now"), false);
         assert_eq!(is_status_shortcut_prompt("status please"), false);
         assert_eq!(is_status_shortcut_prompt("/model"), false);
+    }
+
+    #[test]
+    fn status_output_mode_defaults_without_double_dash() {
+        let options = parse_status_invocation_options(
+            &["codex".to_string(), "status".to_string()],
+            &[],
+        )
+        .expect("status mode");
+        assert_eq!(options.output_mode, StatusOutputMode::default());
+        assert_eq!(options.auth_file_override, None);
+    }
+
+    #[test]
+    fn status_output_mode_compact_with_double_dash() {
+        let options = parse_status_invocation_options(
+            &["codex".to_string(), "status".to_string(), "--".to_string()],
+            &[],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.output_mode,
+            StatusOutputMode {
+                compact: true,
+                utc: false
+            }
+        );
+        assert_eq!(options.auth_file_override, None);
+    }
+
+    #[test]
+    fn status_output_mode_compact_with_utc() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--utc".to_string(),
+            ],
+            &["--utc".to_string()],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.output_mode,
+            StatusOutputMode {
+                compact: true,
+                utc: true
+            }
+        );
+        assert_eq!(options.auth_file_override, None);
+    }
+
+    #[test]
+    fn status_output_mode_compact_ignores_other_trailing_args() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--auth-file=roger@gmail.com".to_string(),
+                "--utc".to_string(),
+            ],
+            &[
+                "--auth-file=roger@gmail.com".to_string(),
+                "--utc".to_string(),
+            ],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.output_mode,
+            StatusOutputMode {
+                compact: true,
+                utc: true
+            }
+        );
+    }
+
+    #[test]
+    fn status_output_mode_compact_parses_auth_file() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--auth-file=/tmp/alt-auth.json".to_string(),
+            ],
+            &["--auth-file=/tmp/alt-auth.json".to_string()],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.auth_file_override,
+            Some(std::path::PathBuf::from("/tmp/alt-auth.json"))
+        );
+    }
+
+    #[test]
+    fn status_subcommand_accepts_trailing_args_after_double_dash() {
+        let cli = MultitoolCli::try_parse_from(["codex", "status", "--", "--utc"]).expect("parse");
+        let Some(Subcommand::Status(StatusCommand { trailing_args })) = cli.subcommand else {
+            panic!("expected status subcommand");
+        };
+        assert_eq!(trailing_args, vec!["--utc".to_string()]);
     }
 
     #[test]
