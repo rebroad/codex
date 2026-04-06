@@ -261,6 +261,9 @@ run_release_build_with_locked_fallback() {
   local build_log
   local -a cargo_env
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  if [[ "${BISECT_MODE}" == "true" ]]; then
+    cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+  fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
   fi
@@ -298,6 +301,9 @@ run_target_build_with_locked_fallback() {
   local build_log
   local -a cargo_env
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  if [[ "${BISECT_MODE}" == "true" ]]; then
+    cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+  fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
   fi
@@ -830,6 +836,7 @@ AUTO_COMMIT_PREFLIGHT_FIXES="true"
 PUBLISH_TIMEOUT_MINUTES="${PUBLISH_TIMEOUT_MINUTES_DEFAULT}"
 SHEAR_FIX_MODE="on_error"
 BUILD_JOBS=""
+BISECT_MODE="false"
 FAST_RELEASE_BUILD="false"
 REFRESH_BUILD_INFO="false"
 BUILD_NPM_VENDOR="false"
@@ -925,6 +932,9 @@ for arg in "$@"; do
     --jobs=*)
       BUILD_JOBS="${arg#*=}"
       ;;
+    --bisect)
+      BISECT_MODE="true"
+      ;;
     --fast-release-build)
       FAST_RELEASE_BUILD="true"
       ;;
@@ -1015,6 +1025,8 @@ Options:
              Timeout in minutes for release workflow/npm verification (default: 45)
   --jobs=N
              Set Cargo build parallelism via CARGO_BUILD_JOBS
+  --bisect
+             Build in bisect mode: force CARGO_INCREMENTAL=0 and RUSTC_WRAPPER=sccache
   --fast-release-build
              Faster release compile (LTO=thin, codegen-units=16) with potential runtime perf tradeoff
   --refresh-build-info
@@ -1253,12 +1265,18 @@ else
   if [[ "${REFRESH_BUILD_INFO}" == "true" ]]; then
     cargo +"${TOOLCHAIN}" clean -p codex-build-info
   fi
+  declare -a debug_cargo_env
+  debug_cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  if [[ "${BISECT_MODE}" == "true" ]]; then
+    debug_cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+  fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     echo "Using Cargo build jobs: ${BUILD_JOBS}"
-    RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo +"${TOOLCHAIN}" build -p codex-cli
+    debug_cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
   else
-    RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" build -p codex-cli
+    :
   fi
+  env "${debug_cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
   patch_installed_binary_version_timestamp "${debug_bin}"
