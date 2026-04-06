@@ -22,6 +22,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -198,6 +199,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let retry_reason = ctx.retry_reason.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
+        let grant_root = patch_grant_root(req);
         Box::pin(async move {
             if req.permissions_preapproved && retry_reason.is_none() {
                 return ReviewDecision::Approved;
@@ -213,7 +215,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         call_id,
                         changes.clone(),
                         Some(reason),
-                        /*grant_root*/ None,
+                        grant_root.clone(),
                     )
                     .await;
                 return rx_approve.await.unwrap_or_default();
@@ -226,7 +228,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 || async move {
                     let rx_approve = session
                         .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
+                            turn, call_id, changes, /*reason*/ None, grant_root,
                         )
                         .await;
                     rx_approve.await.unwrap_or_default()
@@ -258,6 +260,19 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     }
 }
 
+fn file_system_write_roots(file_system: &FileSystemPermissions) -> Vec<PathBuf> {
+    file_system
+        .write
+        .as_ref()
+        .map(|roots| {
+            roots
+                .iter()
+                .map(|path| path.as_path().to_path_buf())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     async fn run(
         &mut self,
@@ -286,3 +301,14 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
 #[cfg(test)]
 #[path = "apply_patch_tests.rs"]
 mod tests;
+fn patch_grant_root(req: &ApplyPatchRequest) -> Option<PathBuf> {
+    let file_system = req
+        .additional_permissions
+        .as_ref()
+        .and_then(|permissions| permissions.file_system.as_ref())?;
+    let write_roots = file_system_write_roots(file_system);
+    if write_roots.len() == 1 {
+        return write_roots.into_iter().next();
+    }
+    None
+}
