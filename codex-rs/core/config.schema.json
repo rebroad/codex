@@ -488,6 +488,9 @@
             "realtime_conversation": {
               "type": "boolean"
             },
+            "remote_control": {
+              "type": "boolean"
+            },
             "remote_models": {
               "type": "boolean"
             },
@@ -2295,6 +2298,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "remote_control": {
           "type": "boolean"
         },
         "remote_models": {
