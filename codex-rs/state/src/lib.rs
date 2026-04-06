@@ -66,6 +66,7 @@ pub use model_pricing::model_pricing_path;
 pub use model_pricing::write_model_pricing;
 pub use rollout_snapshot::RolloutThreadSnapshot;
 pub use rollout_snapshot::read_rollout_thread_snapshot;
+pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
 pub use runtime::state_db_filename;
