@@ -182,26 +182,10 @@ fn install_network_seccomp_filter_on_current_thread(
 
     match mode {
         NetworkSeccompMode::Restricted => {
-            deny_syscall(&mut rules, i64::from(libc::SYS_connect));
-            deny_syscall(&mut rules, i64::from(libc::SYS_accept));
-            deny_syscall(&mut rules, i64::from(libc::SYS_accept4));
-            deny_syscall(&mut rules, i64::from(libc::SYS_bind));
-            deny_syscall(&mut rules, i64::from(libc::SYS_listen));
-            deny_syscall(&mut rules, i64::from(libc::SYS_getpeername));
-            deny_syscall(&mut rules, i64::from(libc::SYS_getsockname));
-            deny_syscall(&mut rules, i64::from(libc::SYS_shutdown));
-            deny_syscall(&mut rules, i64::from(libc::SYS_sendto));
-            deny_syscall(&mut rules, i64::from(libc::SYS_sendmmsg));
-            // NOTE: allowing recvfrom allows some tools like: `cargo clippy`
-            // to run with their socketpair + child processes for sub-proc
-            // management.
-            // deny_syscall(&mut rules, libc::SYS_recvfrom);
-            deny_syscall(&mut rules, i64::from(libc::SYS_recvmmsg));
-            deny_syscall(&mut rules, i64::from(libc::SYS_getsockopt));
-            deny_syscall(&mut rules, i64::from(libc::SYS_setsockopt));
-
-            // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny
-            // everything else.
+            // Restricted mode should permit sandbox-local Unix socket IPC
+            // (for example, sccache client/server communication) while still
+            // denying IP networking. We do this by allowing socket syscalls
+            // but restricting socket families to AF_UNIX.
             let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
                 0, // first argument (domain)
                 SeccompCmpArgLen::Dword,

@@ -455,6 +455,58 @@ async fn sandbox_blocks_nc() {
 }
 
 #[tokio::test]
+async fn sandbox_allows_unix_socket_ipc() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let socket_path = tmpdir.path().join("sandbox-ipc.sock");
+    let script = format!(
+        r#"
+import socket
+import threading
+from pathlib import Path
+
+sock_path = Path({socket_path:?})
+
+def server():
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(sock_path))
+    listener.listen(1)
+    conn, _ = listener.accept()
+    payload = conn.recv(16)
+    conn.sendall(payload.upper())
+    conn.close()
+    listener.close()
+
+thread = threading.Thread(target=server)
+thread.start()
+
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+client.connect(str(sock_path))
+client.sendall(b"ping")
+response = client.recv(16)
+client.close()
+
+thread.join()
+sock_path.unlink()
+print(response.decode())
+"#
+    );
+
+    let output = run_cmd_output(
+        &["python3", "-c", &script],
+        &[tmpdir.path().to_path_buf()],
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+    assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr.text);
+    assert_eq!(output.stdout.text.trim(), "PING");
+}
+
+#[tokio::test]
 async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");

@@ -16,6 +16,10 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use codex_core::error::Result;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
@@ -157,7 +161,11 @@ fn create_bwrap_flags(
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
-    } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd)?;
+    } = create_filesystem_args(
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+        options.network_mode.should_unshare_network(),
+    )?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
@@ -210,6 +218,7 @@ fn create_bwrap_flags(
 fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
+    isolate_host_tmp_dirs: bool,
 ) -> Result<BwrapArgs> {
     // Bubblewrap requires bind mount targets to exist. If a writable root is
     // explicitly approved but missing, create it so write operations like
@@ -219,6 +228,9 @@ fn create_filesystem_args(
     let writable_roots = file_system_sandbox_policy
         .get_writable_roots_with_cwd(cwd)
         .into_iter()
+        .filter(|writable_root| {
+            !isolate_host_tmp_dirs || !is_under_host_tmp(writable_root.root.as_path())
+        })
         .filter_map(|writable_root| {
             let root = writable_root.root.as_path();
             if root.exists() {
@@ -293,6 +305,17 @@ fn create_filesystem_args(
 
         args
     };
+
+    if isolate_host_tmp_dirs {
+        let private_tmp = create_private_host_tmp_subdir(Path::new("/tmp"), "tmp")?;
+        let private_var_tmp = create_private_host_tmp_subdir(Path::new("/var/tmp"), "var-tmp")?;
+        args.push("--bind".to_string());
+        args.push(path_to_string(private_tmp.as_path()));
+        args.push("/tmp".to_string());
+        args.push("--bind".to_string());
+        args.push(path_to_string(private_var_tmp.as_path()));
+        args.push("/var/tmp".to_string());
+    }
     let mut preserved_files = Vec::new();
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
@@ -411,6 +434,43 @@ fn create_filesystem_args(
         args,
         preserved_files,
     })
+}
+
+fn is_under_host_tmp(path: &Path) -> bool {
+    path == Path::new("/tmp")
+        || path.starts_with("/tmp/")
+        || path == Path::new("/var/tmp")
+        || path.starts_with("/var/tmp/")
+}
+
+fn create_private_host_tmp_subdir(base: &Path, label: &str) -> Result<PathBuf> {
+    static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for _ in 0..8 {
+        let nonce = UNIQUE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = base.join(format!(
+            "codex-linux-sandbox-{label}-{pid}-{now_ns}-{nonce}"
+        ));
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "failed to allocate unique private temp dir under {}",
+            base.display()
+        ),
+    )
+    .into())
 }
 
 fn symlink_target(root: &Path) -> Option<PathBuf> {
@@ -768,6 +828,70 @@ mod tests {
     }
 
     #[test]
+    fn isolated_network_uses_private_tmp_bind_mounts() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &FileSystemSandboxPolicy::from(&policy),
+            temp_dir.path(),
+            temp_dir.path(),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::Isolated,
+            },
+        )
+        .expect("create bwrap args");
+
+        let tmp_bind_source = args
+            .args
+            .windows(3)
+            .find_map(|window| {
+                if window[0] == "--bind" && window[2] == "/tmp" {
+                    Some(window[1].clone())
+                } else {
+                    None
+                }
+            })
+            .expect("expected private /tmp bind");
+        let var_tmp_bind_source = args
+            .args
+            .windows(3)
+            .find_map(|window| {
+                if window[0] == "--bind" && window[2] == "/var/tmp" {
+                    Some(window[1].clone())
+                } else {
+                    None
+                }
+            })
+            .expect("expected private /var/tmp bind");
+
+        assert!(tmp_bind_source.starts_with("/tmp/codex-linux-sandbox-tmp-"));
+        assert!(var_tmp_bind_source.starts_with("/var/tmp/codex-linux-sandbox-var-tmp-"));
+        assert!(
+            !args
+                .args
+                .windows(3)
+                .any(|window| window == ["--bind", "/tmp", "/tmp"]),
+            "host /tmp should not be bound directly in isolated mode"
+        );
+        assert!(
+            !args
+                .args
+                .windows(3)
+                .any(|window| window == ["--bind", "/var/tmp", "/var/tmp"]),
+            "host /var/tmp should not be bound directly in isolated mode"
+        );
+    }
+
+    #[test]
     fn creates_missing_writable_roots() {
         let temp_dir = TempDir::new().expect("temp dir");
         let existing_root = temp_dir.path().join("existing");
@@ -785,8 +909,12 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
-            .expect("filesystem args");
+        let args = create_filesystem_args(
+            &FileSystemSandboxPolicy::from(&policy),
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
         let existing_root = path_to_string(&existing_root);
         let missing_root = path_to_string(&missing_root);
 
@@ -797,9 +925,9 @@ mod tests {
             "existing writable root should be rebound writable",
         );
         assert!(
-            args.args
-                .windows(3)
-                .any(|window| { window == ["--bind", missing_root.as_str(), missing_root.as_str()] }),
+            args.args.windows(3).any(|window| {
+                window == ["--bind", missing_root.as_str(), missing_root.as_str()]
+            }),
             "missing writable root should be created and rebound writable",
         );
         assert!(Path::new(&missing_root).exists());
@@ -818,6 +946,7 @@ mod tests {
         let args = create_filesystem_args(
             &FileSystemSandboxPolicy::from(&sandbox_policy),
             Path::new("/"),
+            /*isolate_host_tmp_dirs*/ false,
         )
         .expect("bwrap fs args");
 
@@ -866,8 +995,12 @@ mod tests {
             network_access: false,
         };
 
-        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
-            .expect("filesystem args");
+        let args = create_filesystem_args(
+            &FileSystemSandboxPolicy::from(&policy),
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
 
         assert_eq!(args.args[0..4], ["--tmpfs", "/", "--dev", "/dev"]);
 
@@ -896,8 +1029,12 @@ mod tests {
         // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
         // root. Using `"/"` here would intentionally collapse to broad read
         // access, so use a non-root cwd to exercise the restricted path.
-        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
-            .expect("filesystem args");
+        let args = create_filesystem_args(
+            &FileSystemSandboxPolicy::from(&policy),
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
 
         assert!(
             args.args
@@ -937,7 +1074,12 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window
@@ -1014,7 +1156,12 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
         let docs_str = path_to_string(docs.as_path());
         let docs_public_str = path_to_string(docs_public.as_path());
         let docs_ro_index = args
@@ -1066,7 +1213,12 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
         let allowed_str = path_to_string(allowed.as_path());
         let blocked_none_index = args
@@ -1133,7 +1285,12 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
         let allowed_dir_str = path_to_string(allowed_dir.as_path());
         let allowed_file_str = path_to_string(allowed_file.as_path());
@@ -1208,7 +1365,12 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
         let blocked_none_index = args
             .args
             .windows(4)
@@ -1253,7 +1415,12 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
 
         assert!(
@@ -1295,7 +1462,12 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            /*isolate_host_tmp_dirs*/ false,
+        )
+        .expect("filesystem args");
         let blocked_file_str = path_to_string(blocked_file.as_path());
 
         assert_eq!(args.preserved_files.len(), 1);
