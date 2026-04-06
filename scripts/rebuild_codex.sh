@@ -838,6 +838,7 @@ SHEAR_FIX_MODE="on_error"
 BUILD_JOBS=""
 BISECT_MODE="false"
 FAST_RELEASE_BUILD="false"
+FAST_GATE="false"
 REFRESH_BUILD_INFO="false"
 BUILD_NPM_VENDOR="false"
 NPM_VENDOR_DIR=""
@@ -938,6 +939,13 @@ for arg in "$@"; do
     --fast-release-build)
       FAST_RELEASE_BUILD="true"
       ;;
+    --fast-gate)
+      FAST_GATE="true"
+      MODE="debug"
+      PUBLISH="false"
+      CI_PREFLIGHT="false"
+      REGEN_SCHEMA="false"
+      ;;
     --refresh-build-info)
       REFRESH_BUILD_INFO="true"
       ;;
@@ -1029,6 +1037,8 @@ Options:
              Build in bisect mode: force CARGO_INCREMENTAL=0 and RUSTC_WRAPPER=sccache
   --fast-release-build
              Faster release compile (LTO=thin, codegen-units=16) with potential runtime perf tradeoff
+  --fast-gate
+             Fast local gate mode: debug build only, skip schema/preflight/publish, use cargo --locked offline
   --refresh-build-info
              Force `cargo clean -p codex-build-info` before debug build to refresh embedded timestamp
   --build-npm-vendor
@@ -1060,6 +1070,10 @@ if [[ -n "${BUILD_JOBS}" ]] && ! [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ "${PREFLIGHT_ONLY}" == "true" && "${CI_PREFLIGHT}" == "false" ]]; then
   echo "--preflight-only cannot be combined with --no-ci-preflight." >&2
+  exit 1
+fi
+if [[ "${FAST_GATE}" == "true" && "${MODE}" == "release" ]]; then
+  echo "--fast-gate cannot be combined with --release." >&2
   exit 1
 fi
 
@@ -1265,18 +1279,33 @@ else
   if [[ "${REFRESH_BUILD_INFO}" == "true" ]]; then
     cargo +"${TOOLCHAIN}" clean -p codex-build-info
   fi
-  declare -a debug_cargo_env
-  debug_cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  if [[ "${FAST_GATE}" == "true" ]]; then
+    echo "[fast-gate] using offline locked debug build"
+  fi
+  cargo_flags=(build -p codex-cli)
+  cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1)
   if [[ "${BISECT_MODE}" == "true" ]]; then
-    debug_cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+    cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+  fi
+  if [[ "${FAST_GATE}" == "true" ]]; then
+    cargo_env+=(CARGO_NET_OFFLINE=true)
+    cargo_flags=(build --locked -p codex-cli)
   fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     echo "Using Cargo build jobs: ${BUILD_JOBS}"
-    debug_cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
+    cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
   else
     :
   fi
-  env "${debug_cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli
+  if ! env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" "${cargo_flags[@]}"; then
+    if [[ "${FAST_GATE}" == "true" ]]; then
+      echo "[fast-gate] --locked failed; retrying offline without --locked"
+      env RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_NET_OFFLINE=true \
+        cargo +"${TOOLCHAIN}" build -p codex-cli
+    else
+      exit 1
+    fi
+  fi
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
   patch_installed_binary_version_timestamp "${debug_bin}"
