@@ -16,11 +16,10 @@ use codex_login::ServerOptions;
 use codex_login::login_with_api_key;
 use codex_login::logout;
 use codex_login::auth_file_path;
-use codex_login::complete_device_code_login;
-use codex_login::request_device_code;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_login::token_data::parse_jwt_expiration;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
@@ -351,7 +350,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                     details.push(format!("account_id={account_id}"));
                 }
                 if let Some(plan_type) = auth.account_plan_type() {
-                    details.push(format!("plan={}", plan_type.as_wire_name()));
+                    details.push(format!("plan={}", plan_type_wire_name(plan_type)));
                 }
 
                 let detail_suffix = if details.is_empty() {
@@ -429,6 +428,22 @@ fn now_epoch_secs() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_secs() as i64,
         Err(_) => 0,
+    }
+}
+
+fn plan_type_wire_name(plan_type: PlanType) -> &'static str {
+    match plan_type {
+        PlanType::Free => "free",
+        PlanType::Go => "go",
+        PlanType::Plus => "plus",
+        PlanType::Pro => "pro",
+        PlanType::Team => "team",
+        PlanType::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
+        PlanType::Business => "business",
+        PlanType::EnterpriseCbpUsageBased => "enterprise_cbp_usage_based",
+        PlanType::Enterprise => "enterprise",
+        PlanType::Edu => "edu",
+        PlanType::Unknown => "unknown",
     }
 }
 
