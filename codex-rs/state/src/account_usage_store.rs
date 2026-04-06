@@ -62,6 +62,9 @@ pub struct AccountUsageSnapshot {
     pub last_snapshot_percent_int: Option<i64>,
     pub window_start_percent_int: Option<i64>,
     pub window_start_total_tokens: Option<i64>,
+    pub window_start_input_tokens: Option<i64>,
+    pub window_start_cached_input_tokens: Option<i64>,
+    pub window_start_output_tokens: Option<i64>,
     pub last_backend_resets_at: Option<i64>,
     pub last_backend_window_minutes: Option<i64>,
     pub last_backend_seen_at: Option<i64>,
@@ -95,6 +98,7 @@ struct PendingBackendRateLimitUpdate {
 
 #[derive(Debug, Clone)]
 struct AccountLimitEstimates {
+    composite_q_limit: Option<f64>,
     blended_limit: Option<f64>,
     cached_input_limit: Option<f64>,
     output_limit: Option<f64>,
@@ -119,6 +123,10 @@ struct SampleTokenDeltas {
     recv_bytes: i64,
     sent_recv_bytes: i64,
 }
+
+// Composite usage model calibrated from local/backend usage logs.
+const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
+const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
 
 impl AccountUsageStore {
     pub async fn init(sqlite_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
@@ -258,6 +266,9 @@ WHERE account_id = ? AND provider = ?
             last_snapshot_percent_int: row.try_get("last_snapshot_percent_int")?,
             window_start_percent_int: row.try_get("window_start_percent_int")?,
             window_start_total_tokens: row.try_get("window_start_total_tokens")?,
+            window_start_input_tokens: row.try_get("window_start_input_tokens")?,
+            window_start_cached_input_tokens: row.try_get("window_start_cached_input_tokens")?,
+            window_start_output_tokens: row.try_get("window_start_output_tokens")?,
             last_backend_resets_at: row.try_get("last_backend_resets_at")?,
             last_backend_window_minutes: row.try_get("last_backend_window_minutes")?,
             last_backend_seen_at: row.try_get("last_backend_seen_at")?,
@@ -272,6 +283,14 @@ WHERE account_id = ? AND provider = ?
         Ok((estimates.blended_limit, estimates.sample_count))
     }
 
+    pub async fn estimate_account_limit_tokens_q(
+        &self,
+        account_id: &str,
+    ) -> anyhow::Result<(Option<f64>, i64)> {
+        let estimates = self.estimate_account_limit_tokens_multi(account_id).await?;
+        Ok((estimates.composite_q_limit, estimates.sample_count))
+    }
+
     async fn estimate_account_limit_tokens_multi(
         &self,
         account_id: &str,
@@ -280,6 +299,7 @@ WHERE account_id = ? AND provider = ?
             r#"
 SELECT
     SUM(delta_tokens) AS blended_tokens,
+    SUM(delta_input_tokens) AS input_tokens,
     SUM(delta_cached_input_tokens) AS cached_input_tokens,
     SUM(delta_output_tokens) AS output_tokens,
     SUM(delta_context_total_tokens) AS context_total_tokens,
@@ -302,6 +322,10 @@ WHERE account_id = ? AND provider = ?
 
         let blended_tokens = row
             .try_get::<Option<i64>, _>("blended_tokens")
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
+        let input_tokens = row
+            .try_get::<Option<i64>, _>("input_tokens")
             .unwrap_or(Some(0))
             .unwrap_or(0);
         let cached_input_tokens = row
@@ -347,6 +371,7 @@ WHERE account_id = ? AND provider = ?
 
         if total_percent <= 0 || sample_count <= 0 {
             return Ok(AccountLimitEstimates {
+                composite_q_limit: None,
                 blended_limit: None,
                 cached_input_limit: None,
                 output_limit: None,
@@ -361,11 +386,11 @@ WHERE account_id = ? AND provider = ?
         }
 
         let percent = total_percent as f64 / 100.0;
-        let estimate = |tokens: i64| {
-            if tokens <= 0 {
+        let estimate = |tokens: f64| {
+            if tokens <= 0.0 || !tokens.is_finite() {
                 return None;
             }
-            let estimated_limit = (tokens as f64) / percent;
+            let estimated_limit = tokens / percent;
             if !estimated_limit.is_finite() || estimated_limit <= 0.0 {
                 None
             } else {
@@ -374,15 +399,20 @@ WHERE account_id = ? AND provider = ?
         };
 
         Ok(AccountLimitEstimates {
-            blended_limit: estimate(blended_tokens),
-            cached_input_limit: estimate(cached_input_tokens),
-            output_limit: estimate(output_tokens),
-            context_total_limit: estimate(context_total_tokens),
-            min_total_cached_output_limit: estimate(min_total_cached_output_tokens),
-            min_input_cached_output_limit: estimate(min_input_cached_output_tokens),
-            sent_limit: estimate(sent_bytes),
-            recv_limit: estimate(recv_bytes),
-            sent_recv_limit: estimate(sent_recv_bytes),
+            composite_q_limit: estimate(composite_q_tokens(
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+            )),
+            blended_limit: estimate(blended_tokens as f64),
+            cached_input_limit: estimate(cached_input_tokens as f64),
+            output_limit: estimate(output_tokens as f64),
+            context_total_limit: estimate(context_total_tokens as f64),
+            min_total_cached_output_limit: estimate(min_total_cached_output_tokens as f64),
+            min_input_cached_output_limit: estimate(min_input_cached_output_tokens as f64),
+            sent_limit: estimate(sent_bytes as f64),
+            recv_limit: estimate(recv_bytes as f64),
+            sent_recv_limit: estimate(sent_recv_bytes as f64),
             sample_count,
         })
     }
@@ -649,6 +679,7 @@ WHERE account_id = ? AND provider = ?
                         .estimate_account_limit_tokens_multi(account_id)
                         .await
                         .unwrap_or(AccountLimitEstimates {
+                            composite_q_limit: None,
                             blended_limit: None,
                             cached_input_limit: None,
                             output_limit: None,
@@ -1135,6 +1166,7 @@ WHERE account_id = ? AND provider = ?
                 .estimate_account_limit_tokens_multi(account_id)
                 .await
                 .unwrap_or(AccountLimitEstimates {
+                    composite_q_limit: None,
                     blended_limit: None,
                     cached_input_limit: None,
                     output_limit: None,
@@ -1600,6 +1632,7 @@ WHERE account_id = ? AND provider = ?
                     .estimate_account_limit_tokens_multi(account_id)
                     .await
                     .unwrap_or(AccountLimitEstimates {
+                        composite_q_limit: None,
                         blended_limit: None,
                         cached_input_limit: None,
                         output_limit: None,
@@ -1613,6 +1646,23 @@ WHERE account_id = ? AND provider = ?
                     });
                 let usage_pct_values = format_metric_values(
                     [
+                        estimates.composite_q_limit.and_then(|allowance| {
+                            estimate_account_usage_percent_for_log_f64(
+                                composite_q_tokens(
+                                    input_tokens_now,
+                                    cached_input_tokens_now,
+                                    output_tokens_now,
+                                ),
+                                backend_anchor_percent,
+                                window_start_percent,
+                                composite_q_tokens(
+                                    window_start_input_tokens,
+                                    window_start_cached_input_tokens,
+                                    window_start_output_tokens,
+                                ),
+                                allowance,
+                            )
+                        }),
                         estimates.blended_limit.and_then(|allowance| {
                             estimate_account_usage_percent_for_log(
                                 total_tokens_now,
@@ -1709,7 +1759,7 @@ WHERE account_id = ? AND provider = ?
                     ],
                     /*precision*/ 2,
                 );
-                format!(" usage_pct[b/c/o/x/m/n/s/r/z]={usage_pct_values}%")
+                format!(" usage_pct[q/b/c/o/x/m/n/s/r/z]={usage_pct_values}%")
             } else {
                 String::new()
             }
@@ -1812,6 +1862,22 @@ fn estimate_account_usage_percent_for_log(
     backend_anchor_tokens: i64,
     estimated_limit: f64,
 ) -> Option<f64> {
+    estimate_account_usage_percent_for_log_f64(
+        total_tokens as f64,
+        backend_anchor_percent,
+        backend_anchor_percent_int,
+        backend_anchor_tokens as f64,
+        estimated_limit,
+    )
+}
+
+fn estimate_account_usage_percent_for_log_f64(
+    total_tokens: f64,
+    backend_anchor_percent: f64,
+    backend_anchor_percent_int: i64,
+    backend_anchor_tokens: f64,
+    estimated_limit: f64,
+) -> Option<f64> {
     if estimated_limit <= 0.0 || !estimated_limit.is_finite() {
         return None;
     }
@@ -1820,7 +1886,7 @@ fn estimate_account_usage_percent_for_log(
     } else {
         backend_anchor_percent_int.max(0) as f64
     };
-    let delta_tokens = (total_tokens - backend_anchor_tokens).max(0) as f64;
+    let delta_tokens = (total_tokens - backend_anchor_tokens).max(0.0);
     let avg_tokens_per_pct = estimated_limit / 100.0;
     if avg_tokens_per_pct <= 0.0 || !avg_tokens_per_pct.is_finite() {
         return None;
@@ -1850,8 +1916,15 @@ fn min_input_cached_output_tokens(
     input_tokens.min(cached_input_tokens).max(0) + output_tokens.max(0)
 }
 
+fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> f64 {
+    output_tokens.max(0) as f64
+        + COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
+        + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
+}
+
 fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
     let avg = format_metric_values_si([
+        estimates.composite_q_limit.map(|value| value / 100.0),
         estimates.blended_limit.map(|value| value / 100.0),
         estimates.cached_input_limit.map(|value| value / 100.0),
         estimates.output_limit.map(|value| value / 100.0),
@@ -1867,6 +1940,7 @@ fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
         estimates.sent_recv_limit.map(|value| value / 100.0),
     ]);
     let allowance = format_metric_values_si([
+        estimates.composite_q_limit,
         estimates.blended_limit,
         estimates.cached_input_limit,
         estimates.output_limit,
@@ -1880,7 +1954,7 @@ fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
     format!("avg_tpp={avg} est_allow={allowance}")
 }
 
-fn format_metric_values_si(values: [Option<f64>; 9]) -> String {
+fn format_metric_values_si(values: [Option<f64>; 10]) -> String {
     let value = |entry: Option<f64>| match entry {
         Some(number) if number.is_finite() && number >= 0.0 => format_si_three_digits(number),
         _ => "-".to_string(),
@@ -1888,7 +1962,7 @@ fn format_metric_values_si(values: [Option<f64>; 9]) -> String {
     values.into_iter().map(value).collect::<Vec<_>>().join("/")
 }
 
-fn format_metric_values(values: [Option<f64>; 9], precision: usize) -> String {
+fn format_metric_values(values: [Option<f64>; 10], precision: usize) -> String {
     let value = |entry: Option<f64>| match entry {
         Some(number) if number.is_finite() && number >= 0.0 => format!("{number:.precision$}"),
         _ => "-".to_string(),

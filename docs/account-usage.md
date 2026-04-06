@@ -107,6 +107,19 @@ estimated_percent = backend_anchor_percent + ((local_total_tokens - anchor_total
 
 This estimate is displayed in `/status` when the correlation is available.
 
+Current `usage_pct` log order is:
+
+- `q`: composite calibrated metric (`output + 0.006*input + 0.003*cached_input`)
+- `b`: blended total tokens
+- `c`: cached input
+- `o`: output
+- `x`: context total
+- `m`: `min(total, cached_input + output)`
+- `n`: `min(input, cached_input) + output`
+- `s`: sent bytes
+- `r`: recv bytes
+- `z`: sent+recv bytes
+
 ## Reset Behavior
 
 A reset is recorded when:
