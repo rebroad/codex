@@ -60,6 +60,8 @@ pub(crate) struct AccountUsageDisplay {
 
 const CLI_RATE_LIMIT_REFRESH_TTL_SECS: i64 = 120;
 const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
+const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
+const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
 
 #[derive(Debug)]
 enum CliRateLimitFetchOutcome {
@@ -537,7 +539,7 @@ async fn fetch_account_usage_display(
     };
 
     let estimated_limit = store
-        .estimate_account_limit_tokens(account_id.as_str())
+        .estimate_account_limit_tokens_q(account_id.as_str())
         .await
         .ok()
         .unwrap_or((None, 0));
@@ -566,15 +568,29 @@ fn estimate_account_usage_percent(
         return None;
     }
     let base_percent = usage.window_start_percent_int.unwrap_or(0) as f64;
-    let window_start_total_tokens = usage.window_start_total_tokens.unwrap_or(0).max(0) as f64;
-    let total_tokens = usage.total_tokens.max(0) as f64;
-    let delta_tokens = (total_tokens - window_start_total_tokens).max(0.0);
+    let window_start_q_tokens = composite_q_tokens(
+        usage.window_start_input_tokens.unwrap_or(0),
+        usage.window_start_cached_input_tokens.unwrap_or(0),
+        usage.window_start_output_tokens.unwrap_or(0),
+    );
+    let q_tokens = composite_q_tokens(
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+    );
+    let delta_tokens = (q_tokens - window_start_q_tokens).max(0.0);
     let avg_tokens_per_pct = estimated_limit / 100.0;
     if avg_tokens_per_pct <= 0.0 || !avg_tokens_per_pct.is_finite() {
         return None;
     }
     let percent = delta_tokens / avg_tokens_per_pct;
     Some(base_percent + percent)
+}
+
+fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> f64 {
+    output_tokens.max(0) as f64
+        + COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
+        + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
 }
 
 fn line_to_ansi(line: &ratatui::text::Line<'_>) -> String {
