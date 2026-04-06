@@ -69,8 +69,8 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
 }
 
 #[test]
-fn file_storage_save_with_email_creates_profile_file_and_keeps_auth_contents_in_sync(
-) -> anyhow::Result<()> {
+fn file_storage_save_with_email_creates_profile_file_and_keeps_auth_contents_in_sync()
+-> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
     let auth_dot_json = AuthDotJson {
@@ -145,7 +145,9 @@ fn editing_profile_file_does_not_change_auth_json() -> anyhow::Result<()> {
 
     let after = std::fs::read_to_string(&auth_file)?;
     assert_eq!(before, after);
-    let loaded = storage.load()?.context("auth should still load from auth.json")?;
+    let loaded = storage
+        .load()?
+        .context("auth should still load from auth.json")?;
     assert_eq!(loaded, initial_auth);
     Ok(())
 }
