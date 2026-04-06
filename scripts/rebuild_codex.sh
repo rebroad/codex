@@ -1243,8 +1243,10 @@ if [[ "${MODE}" == "release" ]]; then
   release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex"
   patch_installed_binary_version_timestamp "${release_bin}"
   echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${release_bin}" "${INSTALL_BIN}"
-  patch_installed_binary_version_timestamp "${INSTALL_BIN}"
+  install_tmp="${INSTALL_BIN}.new.$$"
+  install -D -m 755 "${release_bin}" "${install_tmp}"
+  rm -f "${INSTALL_BIN}"
+  mv -f "${install_tmp}" "${INSTALL_BIN}"
 else
   echo "[2/4] Building debug codex..."
   # Optional: force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
@@ -1261,8 +1263,10 @@ else
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
   patch_installed_binary_version_timestamp "${debug_bin}"
   echo "[3/4] Copying debug codex to ${INSTALL_BIN}..."
-  install -D -m 755 "${debug_bin}" "${INSTALL_BIN}"
-  patch_installed_binary_version_timestamp "${INSTALL_BIN}"
+  install_tmp="${INSTALL_BIN}.new.$$"
+  install -D -m 755 "${debug_bin}" "${install_tmp}"
+  rm -f "${INSTALL_BIN}"
+  mv -f "${install_tmp}" "${INSTALL_BIN}"
 fi
 
 if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
