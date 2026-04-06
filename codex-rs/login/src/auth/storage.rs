@@ -172,7 +172,9 @@ fn write_auth_json_file(path: &Path, auth_dot_json: &AuthDotJson) -> std::io::Re
     file.write_all(json_data.as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&temp_path, path)?;
-    if let Some(parent) = path.parent() && let Ok(dir) = File::open(parent) {
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = File::open(parent)
+    {
         let _ = dir.sync_all();
     }
     Ok(())
