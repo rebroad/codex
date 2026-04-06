@@ -594,6 +594,14 @@ pub async fn render_status_for_cli(
     status::render_status_lines_for_cli(config, auth, model_name, width).await
 }
 
+pub async fn render_compact_status_for_cli(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    use_utc: bool,
+) -> String {
+    status::render_compact_status_for_cli(config, auth, use_utc).await
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
