@@ -487,7 +487,9 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn wait_for_auth_refresh_persistence(&self, timeout: std::time::Duration) {
-        self.auth_manager.wait_for_refresh_persistence(timeout).await;
+        self.auth_manager
+            .wait_for_refresh_persistence(timeout)
+            .await;
     }
 
     pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
