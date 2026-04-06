@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rollout Inspector</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Rollout Inspector</h1>
+      <p>Render Codex rollout <code>.jsonl</code> files and flag large/redundant payloads.</p>
+    </header>
+
+    <section class="panel controls">
+      <div class="row">
+        <label for="filePath">Rollout file</label>
+        <input id="filePath" type="text" placeholder="/home/you/.codex/sessions/.../rollout-*.jsonl" />
+      </div>
+      <div class="row options">
+        <label><input id="includeTools" type="checkbox" checked /> include tool calls</label>
+        <label><input id="includeReasoning" type="checkbox" /> include reasoning payloads</label>
+        <label><input id="includeSystemMessages" type="checkbox" /> include system/developer messages</label>
+      </div>
+      <div class="row actions">
+        <button id="loadThreadBtn">Load Thread View</button>
+        <button id="analyzeBtn">Analyze Payloads</button>
+        <button id="refreshFilesBtn">Recent Files</button>
+      </div>
+      <div class="row">
+        <label for="rootPath">Root for recent files (optional)</label>
+        <input id="rootPath" type="text" placeholder="defaults to ~/.codex" />
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel file-list">
+        <h2>Recent Files</h2>
+        <ul id="files"></ul>
+      </aside>
+      <main class="main-column">
+        <section class="panel">
+          <h2>Thread View</h2>
+          <div id="threadMeta" class="meta"></div>
+          <div id="threadView" class="thread">(load a rollout file)</div>
+        </section>
+        <section class="panel">
+          <h2>Payload Analysis</h2>
+          <div id="analysisMeta" class="meta"></div>
+          <div id="analysis"></div>
+        </section>
+      </main>
+    </section>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
+
