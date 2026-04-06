@@ -366,14 +366,16 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                         std::process::exit(0);
                     }
                     LocalAuthHealth::Expired => {
+                        eprintln!("Stored ChatGPT credentials are expired{detail_suffix}",);
                         eprintln!(
-                            "Stored ChatGPT credentials are expired{detail_suffix}",
+                            "Local auth health: expired access token (re-login may be required)"
                         );
-                        eprintln!("Local auth health: expired access token (re-login may be required)");
                         std::process::exit(1);
                     }
                     LocalAuthHealth::Unknown => {
-                        eprintln!("Stored ChatGPT credentials are incomplete/invalid{detail_suffix}");
+                        eprintln!(
+                            "Stored ChatGPT credentials are incomplete/invalid{detail_suffix}"
+                        );
                         eprintln!(
                             "Local auth health: unknown (missing/invalid token claims in local auth file)"
                         );
@@ -393,10 +395,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 eprintln!(
                     "No local credentials were found at that path, so status cannot show token/account details."
                 );
-                if auth_file
-                    .to_str()
-                    .is_some_and(|path| path.starts_with('~'))
-                {
+                if auth_file.to_str().is_some_and(|path| path.starts_with('~')) {
                     eprintln!(
                         "Hint: '~' is not expanded in '--auth-file=...'; use '$HOME/...', an absolute path, or '--auth-file ~/.codex/...'."
                     );
