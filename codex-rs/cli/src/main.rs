@@ -849,8 +849,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             if let Some(auth_file_override) = status_options.auth_file_override {
                 codex_login::set_auth_file_override(Some(auth_file_override));
             }
-            run_status_command(&root_config_overrides, &interactive, status_options.output_mode)
-                .await?;
+            run_status_command(
+                &root_config_overrides,
+                &interactive,
+                status_options.output_mode,
+            )
+            .await?;
         }
         Some(Subcommand::Usage(usage_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1660,9 +1664,7 @@ fn parse_status_invocation_options(
         }
         anyhow::bail!("Unknown arguments for `codex status`.");
     };
-    let has_double_dash = raw_argv[status_index + 1..]
-        .iter()
-        .any(|arg| arg == "--");
+    let has_double_dash = raw_argv[status_index + 1..].iter().any(|arg| arg == "--");
     if !has_double_dash {
         if trailing_args.is_empty() {
             return Ok(StatusInvocationOptions::default());
@@ -1734,9 +1736,12 @@ async fn run_status_command(
     ));
     let auth = auth_manager.auth().await;
     if status_output_mode.compact {
-        let compact_line =
-            codex_tui::render_compact_status_for_cli(&config, auth.as_ref(), status_output_mode.utc)
-                .await;
+        let compact_line = codex_tui::render_compact_status_for_cli(
+            &config,
+            auth.as_ref(),
+            status_output_mode.utc,
+        )
+        .await;
         println!("{compact_line}");
         return Ok(());
     }
@@ -2118,11 +2123,9 @@ mod tests {
 
     #[test]
     fn status_output_mode_defaults_without_double_dash() {
-        let options = parse_status_invocation_options(
-            &["codex".to_string(), "status".to_string()],
-            &[],
-        )
-        .expect("status mode");
+        let options =
+            parse_status_invocation_options(&["codex".to_string(), "status".to_string()], &[])
+                .expect("status mode");
         assert_eq!(options.output_mode, StatusOutputMode::default());
         assert_eq!(options.auth_file_override, None);
     }
