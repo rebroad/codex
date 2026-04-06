@@ -685,14 +685,16 @@ WHERE account_id = ? AND provider = ?
                 let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
                 let previous_resets_at: Option<i64> = row.try_get("last_backend_resets_at").ok();
                 let previous_window: Option<i64> = row.try_get("last_backend_window_minutes").ok();
-                previous_seen_at.zip(seen_at).is_some_and(|(previous, current)| {
-                    current.saturating_sub(previous) <= BACKEND_CHANGE_PENDING_TTL_SECS
-                }) && previous_window == window_minutes
+                previous_seen_at
+                    .zip(seen_at)
+                    .is_some_and(|(previous, current)| {
+                        current.saturating_sub(previous) <= BACKEND_CHANGE_PENDING_TTL_SECS
+                    })
+                    && previous_window == window_minutes
                     && previous_resets_at == resets_at
-                    && previous_backend_percent
-                        .is_some_and(|previous| {
-                            (previous - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON
-                        })
+                    && previous_backend_percent.is_some_and(|previous| {
+                        (previous - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON
+                    })
             });
             let key = (account_id.to_string(), self.default_provider.clone());
             let seen_ts = seen_at.unwrap_or(now);
