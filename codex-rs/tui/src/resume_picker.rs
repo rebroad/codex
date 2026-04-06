@@ -648,8 +648,8 @@ enum SortColumn {
 impl SortColumn {
     fn label(self) -> &'static str {
         match self {
-            SortColumn::CreatedAt => "Created at",
-            SortColumn::UpdatedAt => "Updated at",
+            SortColumn::CreatedAt => "Created",
+            SortColumn::UpdatedAt => "Updated",
             SortColumn::Branch => "Branch",
             SortColumn::Prompts => "Prompts",
             SortColumn::Cwd => "CWD",
@@ -659,6 +659,9 @@ impl SortColumn {
         }
     }
 }
+
+const CREATED_COLUMN_LABEL: &str = "Created";
+const UPDATED_COLUMN_LABEL: &str = "Updated";
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
 struct AltScreenGuard<'a> {
@@ -681,6 +684,7 @@ impl Drop for AltScreenGuard<'_> {
 struct PickerState {
     codex_home: PathBuf,
     requester: FrameRequester,
+    relative_time_reference: Option<DateTime<Utc>>,
     pagination: PaginationState,
     all_rows: Vec<Row>,
     filtered_rows: Vec<Row>,
@@ -925,6 +929,7 @@ impl PickerState {
         Self {
             codex_home,
             requester,
+            relative_time_reference: None,
             pagination: PaginationState {
                 next_cursor: None,
                 num_scanned_files: 0,
@@ -1497,6 +1502,7 @@ impl PickerState {
     }
 
     fn start_initial_load(&mut self) {
+        self.relative_time_reference = Some(Utc::now());
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
@@ -2288,6 +2294,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         let metrics = calculate_column_metrics(
             &state.filtered_rows,
             state.show_all && state.column_config.cwd,
+            state.relative_time_reference.unwrap_or_else(Utc::now),
             state.action,
             state.column_config.size,
             &state.size_bytes_cache,
@@ -2720,9 +2727,8 @@ fn effective_timestamp_sort_key(primary: SortColumn, fallback: ThreadSortKey) ->
     }
 }
 
-fn human_time_ago(ts: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let delta = now - ts;
+fn human_time_ago(ts: DateTime<Utc>, reference_now: DateTime<Utc>) -> String {
+    let delta = reference_now - ts;
     let secs = delta.num_seconds();
     if secs < 60 {
         let n = secs.max(0);
@@ -2755,17 +2761,17 @@ fn human_time_ago(ts: DateTime<Utc>) -> String {
     }
 }
 
-fn format_updated_label(row: &Row) -> String {
+fn format_updated_label_at(row: &Row, reference_now: DateTime<Utc>) -> String {
     match (row.updated_at, row.created_at) {
-        (Some(updated), _) => human_time_ago(updated),
-        (None, Some(created)) => human_time_ago(created),
+        (Some(updated), _) => human_time_ago(updated, reference_now),
+        (None, Some(created)) => human_time_ago(created, reference_now),
         (None, None) => "-".to_string(),
     }
 }
 
-fn format_created_label(row: &Row) -> String {
+fn format_created_label_at(row: &Row, reference_now: DateTime<Utc>) -> String {
     match row.created_at {
-        Some(created) => human_time_ago(created),
+        Some(created) => human_time_ago(created, reference_now),
         None => "-".to_string(),
     }
 }
@@ -2788,7 +2794,7 @@ fn render_column_headers(
     if visibility.show_created {
         let label = format!(
             "{text:<width$}",
-            text = "Created at",
+            text = CREATED_COLUMN_LABEL,
             width = metrics.max_created_width
         );
         let span = if selected_sort_column == SortColumn::CreatedAt {
@@ -2802,7 +2808,7 @@ fn render_column_headers(
     if visibility.show_updated {
         let label = format!(
             "{text:<width$}",
-            text = "Updated at",
+            text = UPDATED_COLUMN_LABEL,
             width = metrics.max_updated_width
         );
         let span = if selected_sort_column == SortColumn::UpdatedAt {
@@ -2960,6 +2966,7 @@ struct ColumnVisibility {
 fn calculate_column_metrics(
     rows: &[Row],
     include_cwd: bool,
+    reference_now: DateTime<Utc>,
     action: SessionPickerAction,
     show_size: bool,
     size_bytes_cache: &HashMap<SeenRowKey, Option<u64>>,
@@ -2985,8 +2992,8 @@ fn calculate_column_metrics(
 
     let mut labels: Vec<(String, String, String, String, String, String, String)> =
         Vec::with_capacity(rows.len());
-    let mut max_created_width = UnicodeWidthStr::width("Created at");
-    let mut max_updated_width = UnicodeWidthStr::width("Updated at");
+    let mut max_created_width = UnicodeWidthStr::width(CREATED_COLUMN_LABEL);
+    let mut max_updated_width = UnicodeWidthStr::width(UPDATED_COLUMN_LABEL);
     let mut max_branch_width = if matches!(action, SessionPickerAction::Resume) {
         UnicodeWidthStr::width("Branch")
     } else {
@@ -3014,8 +3021,8 @@ fn calculate_column_metrics(
     };
 
     for row in rows {
-        let created = format_created_label(row);
-        let updated = format_updated_label(row);
+        let created = format_created_label_at(row, reference_now);
+        let updated = format_updated_label_at(row, reference_now);
         let branch = if matches!(action, SessionPickerAction::Resume) {
             let branch_raw = row.git_branch.clone().unwrap_or_default();
             right_elide(&branch_raw, /*max*/ 24)
@@ -3560,9 +3567,11 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(/*rows*/ 3);
 
+        state.relative_time_reference = Some(now);
         let metrics = calculate_column_metrics(
             &state.filtered_rows,
             state.show_all && state.column_config.cwd,
+            now,
             state.action,
             state.column_config.size,
             &state.size_bytes_cache,
@@ -3884,9 +3893,11 @@ mod tests {
 
         state.update_thread_names().await;
 
+        state.relative_time_reference = Some(now);
         let metrics = calculate_column_metrics(
             &state.filtered_rows,
             state.show_all && state.column_config.cwd,
+            now,
             state.action,
             state.column_config.size,
             &state.size_bytes_cache,
