@@ -12,13 +12,13 @@ mod format;
 mod helpers;
 mod rate_limits;
 
+use crate::history_cell::HistoryCell;
+use crate::insert_history::write_spans;
 pub(crate) use account::StatusAccountDisplay;
 use account::truncate_status_email_local_part;
 #[cfg(test)]
 pub(crate) use card::new_status_output;
 pub(crate) use card::new_status_output_with_rate_limits;
-use crate::history_cell::HistoryCell;
-use crate::insert_history::write_spans;
 use chrono::Local;
 use chrono::TimeZone;
 use chrono::Utc;
@@ -211,13 +211,12 @@ pub(crate) async fn render_status_lines_for_cli(
         ));
     }
 
-    let reasoning_effort_override = (config.model_provider.wire_api == WireApi::Responses).then(
-        || {
+    let reasoning_effort_override =
+        (config.model_provider.wire_api == WireApi::Responses).then(|| {
             config
                 .model_reasoning_effort
                 .or_else(|| default_reasoning_effort_from_catalog(config, model_name))
-        },
-    );
+        });
 
     let total_usage = TokenUsage::default();
     let account_usage =
@@ -283,7 +282,11 @@ fn compact_status_timestamp_with_timezone(reset_at_unix: Option<i64>, use_utc: b
             hours.to_string()
         }
     } else {
-        let sign = if offset_seconds.is_negative() { '-' } else { '+' };
+        let sign = if offset_seconds.is_negative() {
+            '-'
+        } else {
+            '+'
+        };
         let total_minutes = offset_seconds.unsigned_abs() / 60;
         let hours = total_minutes / 60;
         let minutes = total_minutes % 60;
@@ -401,7 +404,10 @@ enum CliAuthHealth {
     UnknownLocalTokenState,
 }
 
-fn classify_cli_auth_health(auth: &CodexAuth, fetch_outcome: &CliRateLimitFetchOutcome) -> CliAuthHealth {
+fn classify_cli_auth_health(
+    auth: &CodexAuth,
+    fetch_outcome: &CliRateLimitFetchOutcome,
+) -> CliAuthHealth {
     if let Some(result) = classify_from_fetch_outcome(fetch_outcome) {
         return result;
     }
@@ -415,7 +421,8 @@ fn classify_cli_auth_health(auth: &CodexAuth, fetch_outcome: &CliRateLimitFetchO
 
 fn classify_from_fetch_outcome(fetch_outcome: &CliRateLimitFetchOutcome) -> Option<CliAuthHealth> {
     let err = match fetch_outcome {
-        CliRateLimitFetchOutcome::BackendUnavailable(err) | CliRateLimitFetchOutcome::Other(err) => err,
+        CliRateLimitFetchOutcome::BackendUnavailable(err)
+        | CliRateLimitFetchOutcome::Other(err) => err,
         _ => return None,
     };
     let err = err.to_ascii_lowercase();
