@@ -21,6 +21,25 @@ API endpoints:
 - `GET /api/thread?file=/abs/path/rollout.jsonl` returns a simplified thread view
 - `GET /api/analyze?file=/abs/path/rollout.jsonl&top=20&largeKb=256` returns large/redundant payload analysis
 
+## 1b) One-shot CLI: open a specific rollout file in browser
+
+```bash
+node tools/rollout-inspector/view-rollout.js ~/.codex/sessions/2026/03/08/rollout-....jsonl
+```
+
+Useful options:
+
+- `--no-open`: print URL only (do not launch browser)
+- `--no-analyze`: load thread view only
+- `--port <n>`: choose a specific local port
+- `--codex-home <path>`: root used for "Recent Files"
+
+If you already have a path from `grep`/`find`, pass it directly:
+
+```bash
+node tools/rollout-inspector/view-rollout.js "$(find ~/.codex/sessions -name 'rollout-*.jsonl' | head -n1)"
+```
+
 ## 2) Run CLI analysis
 
 ```bash
@@ -43,4 +62,3 @@ The analyzer reports:
 - Direct prune candidates (very large `function_call_output` lines)
 
 This is designed to identify likely pruning opportunities without mutating the source files.
-

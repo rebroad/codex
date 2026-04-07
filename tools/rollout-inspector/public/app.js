@@ -175,6 +175,31 @@ async function loadRecentFiles() {
   }
 }
 
+function applyUrlState() {
+  const params = new URLSearchParams(window.location.search);
+  const file = params.get("file");
+  const root = params.get("root");
+  const includeTools = params.get("includeTools");
+  const includeReasoning = params.get("includeReasoning");
+  const includeSystemMessages = params.get("includeSystemMessages");
+
+  if (file) {
+    $("filePath").value = file;
+  }
+  if (root) {
+    $("rootPath").value = root;
+  }
+  if (includeTools !== null) {
+    $("includeTools").checked = includeTools !== "0";
+  }
+  if (includeReasoning !== null) {
+    $("includeReasoning").checked = includeReasoning === "1";
+  }
+  if (includeSystemMessages !== null) {
+    $("includeSystemMessages").checked = includeSystemMessages === "1";
+  }
+}
+
 async function loadThread() {
   const filePath = $("filePath").value.trim();
   if (!filePath) {
@@ -222,7 +247,27 @@ function attachHandlers() {
 }
 
 attachHandlers();
-loadRecentFiles().catch(() => {
-  // Ignore at load time; user can retry manually.
-});
+applyUrlState();
 
+async function bootstrap() {
+  await loadRecentFiles().catch(() => {
+    // Ignore at load time; user can retry manually.
+  });
+
+  const params = new URLSearchParams(window.location.search);
+  const autoload = params.get("autoload") === "1";
+  const analyze = params.get("analyze") !== "0";
+  const hasFile = Boolean($("filePath").value.trim());
+  if (!autoload || !hasFile) {
+    return;
+  }
+
+  await loadThread();
+  if (analyze) {
+    await runAnalysis();
+  }
+}
+
+bootstrap().catch((err) => {
+  alert(err.message);
+});
