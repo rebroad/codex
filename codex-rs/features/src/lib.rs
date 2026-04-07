@@ -140,6 +140,8 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
+    /// Hide spawn_agent agent/model override fields from the model-visible tool schema.
+    DebugHideSpawnAgentMetadata,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -711,6 +713,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MultiAgentV2,
         key: "multi_agent_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DebugHideSpawnAgentMetadata,
+        key: "debug_hide_spawn_agent_metadata",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
