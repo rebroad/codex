@@ -24,7 +24,6 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
-pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::auth_file_path;
@@ -35,6 +34,7 @@ use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
 use codex_client::CodexHttpClient;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
