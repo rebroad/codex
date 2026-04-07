@@ -58,7 +58,6 @@ pub(crate) struct AccountUsageDisplay {
     pub sample_count: Option<i64>,
 }
 
-const CLI_RATE_LIMIT_REFRESH_TTL_SECS: i64 = 120;
 const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
 const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
 const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
@@ -110,8 +109,7 @@ pub(crate) async fn render_status_lines_for_cli(
     let cached_rate_limits = usage_snapshot
         .as_ref()
         .and_then(cached_rate_limit_snapshot_from_usage);
-    let should_refresh_rate_limits =
-        should_refresh_cli_rate_limits(usage_snapshot.as_ref(), Utc::now().timestamp());
+    let should_refresh_rate_limits = should_refresh_cli_rate_limits(usage_snapshot.as_ref());
 
     let fetch_outcome = if let Some(auth) = auth.as_ref() {
         if should_refresh_rate_limits {
@@ -458,7 +456,7 @@ fn auth_access_token_state(auth: &CodexAuth) -> AuthAccessTokenState {
     }
 }
 
-fn should_refresh_cli_rate_limits(usage: Option<&AccountUsageSnapshot>, now_ts: i64) -> bool {
+fn should_refresh_cli_rate_limits(usage: Option<&AccountUsageSnapshot>) -> bool {
     let Some(usage) = usage else {
         return true;
     };
@@ -466,14 +464,9 @@ fn should_refresh_cli_rate_limits(usage: Option<&AccountUsageSnapshot>, now_ts: 
         return true;
     };
 
-    if now_ts.saturating_sub(last_seen_at) >= CLI_RATE_LIMIT_REFRESH_TTL_SECS {
-        return true;
-    }
-
-    let last_snapshot_total = usage
-        .last_snapshot_total_tokens
-        .unwrap_or(usage.total_tokens);
-    usage.total_tokens > last_snapshot_total
+    let usage_changed_since_last_backend_snapshot = usage.updated_at > last_seen_at;
+    let last_snapshot_total = usage.last_snapshot_total_tokens.unwrap_or(usage.total_tokens);
+    usage_changed_since_last_backend_snapshot || usage.total_tokens > last_snapshot_total
 }
 
 fn cached_rate_limit_snapshot_from_usage(
