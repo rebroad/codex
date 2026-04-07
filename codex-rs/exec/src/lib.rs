@@ -65,6 +65,7 @@ use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
+use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
@@ -2037,9 +2038,11 @@ async fn run_direct_request(
     } else if let Some(base_instructions) = &config.base_instructions {
         prompt.base_instructions.text = base_instructions.clone();
     }
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
     let mut client_session = ModelClient::new(
         Some(auth_manager),
         conversation_id,
+        installation_id,
         provider,
         SessionSource::Exec,
         config.model_verbosity,
