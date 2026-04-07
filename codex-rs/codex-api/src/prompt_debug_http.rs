@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -56,10 +59,22 @@ impl PromptCaptureSession {
 
 static PROMPT_DEBUG_HTTP_CONFIG: OnceLock<RwLock<PromptDebugHttpConfig>> = OnceLock::new();
 static PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static PROMPT_DEBUG_HTTP_TOOL_USAGE: OnceLock<Mutex<HashMap<PathBuf, ToolUsageStats>>> =
+    OnceLock::new();
 static CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Default)]
+struct ToolUsageStats {
+    counts: BTreeMap<String, u64>,
+    seen_call_ids: HashSet<String>,
+}
 
 fn config_lock() -> &'static RwLock<PromptDebugHttpConfig> {
     PROMPT_DEBUG_HTTP_CONFIG.get_or_init(|| RwLock::new(PromptDebugHttpConfig::default()))
+}
+
+fn tool_usage_lock() -> &'static Mutex<HashMap<PathBuf, ToolUsageStats>> {
+    PROMPT_DEBUG_HTTP_TOOL_USAGE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub fn configure_prompt_debug_http(config: PromptDebugHttpConfig) {
@@ -144,6 +159,121 @@ fn append_json_line(path: &Path, value: &serde_json::Value) {
     append_line(path, &value.to_string());
 }
 
+fn collect_function_calls(value: &serde_json::Value, out: &mut Vec<(String, Option<String>)>) {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_function_calls(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let is_function_call =
+                map.get("type").and_then(serde_json::Value::as_str) == Some("function_call");
+            if is_function_call {
+                let name = map
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        map.get("function")
+                            .and_then(serde_json::Value::as_object)
+                            .and_then(|function| {
+                                function.get("name").and_then(serde_json::Value::as_str)
+                            })
+                    })
+                    .map(str::to_owned);
+                let call_id = map
+                    .get("call_id")
+                    .or_else(|| map.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                if let Some(tool_name) = name {
+                    out.push((tool_name, call_id));
+                }
+            }
+
+            for child in map.values() {
+                collect_function_calls(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn stats_path_for_session(session: &PromptCaptureSession) -> Option<PathBuf> {
+    session
+        .output_path()
+        .parent()
+        .map(|parent| parent.join("tool_usage_stats.json"))
+}
+
+fn write_tool_usage_stats_file(stats_path: &Path, stats: &ToolUsageStats) {
+    let updated_unix_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+
+    let payload = serde_json::json!({
+        "updated_unix_seconds": updated_unix_seconds,
+        "total_calls": stats.counts.values().copied().sum::<u64>(),
+        "distinct_tools": stats.counts.len(),
+        "tool_counts": stats.counts,
+        "dedupe": "call_id per process runtime",
+    });
+
+    let Ok(serialized) = serde_json::to_string_pretty(&payload) else {
+        return;
+    };
+
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(stats_path)
+    {
+        let _ = writeln!(file, "{serialized}");
+    }
+}
+
+fn record_tool_usage(session: &PromptCaptureSession, payload: &serde_json::Value) {
+    let Some(stats_path) = stats_path_for_session(session) else {
+        return;
+    };
+
+    let mut calls = Vec::new();
+    collect_function_calls(payload, &mut calls);
+    if calls.is_empty() {
+        return;
+    }
+
+    let write_lock = PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
+    let Ok(_write_guard) = write_lock.lock() else {
+        return;
+    };
+
+    let Ok(mut usage_guard) = tool_usage_lock().lock() else {
+        return;
+    };
+
+    let stats = usage_guard
+        .entry(stats_path.clone())
+        .or_insert_with(ToolUsageStats::default);
+    let mut changed = false;
+
+    for (tool_name, call_id) in calls {
+        if let Some(call_id) = call_id
+            && !stats.seen_call_ids.insert(call_id)
+        {
+            continue;
+        }
+        *stats.counts.entry(tool_name).or_insert(0) += 1;
+        changed = true;
+    }
+
+    if changed {
+        write_tool_usage_stats_file(stats_path.as_path(), stats);
+    }
+}
+
 pub fn prompt_debug_http_enabled() -> bool {
     active_prompt_debug_http_config().enabled
 }
@@ -163,6 +293,20 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
     let input_path = dir.join(format!("{id}_input.ndjson"));
     let output_path = dir.join(format!("{id}_output.ndjson"));
     let reasoning_path = dir.join(format!("{id}_reasoning.ndjson"));
+
+    // Ensure a stats file exists for this capture directory even before first tool call.
+    let stats_path = dir.join("tool_usage_stats.json");
+    {
+        let write_lock = PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
+        if let Ok(_write_guard) = write_lock.lock()
+            && let Ok(mut usage_guard) = tool_usage_lock().lock()
+        {
+            let stats = usage_guard
+                .entry(stats_path.clone())
+                .or_insert_with(ToolUsageStats::default);
+            write_tool_usage_stats_file(stats_path.as_path(), stats);
+        }
+    }
 
     if config.capture_input
         && let Some(payload) = input
@@ -219,6 +363,10 @@ pub fn prompt_capture_append_output(
             "payload": payload,
         }),
     );
+
+    if let Ok(json_payload) = serde_json::from_str::<serde_json::Value>(payload) {
+        record_tool_usage(session, &json_payload);
+    }
 }
 
 pub fn prompt_capture_append_reasoning(
@@ -260,6 +408,8 @@ pub fn prompt_capture_write_output_json(
             "payload": json,
         }),
     );
+
+    record_tool_usage(session, json);
 }
 
 pub fn capture_output_enabled() -> bool {
