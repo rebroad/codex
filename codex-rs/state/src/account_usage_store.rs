@@ -645,13 +645,33 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
             .query_id
             .map(|value| format!(" query_id={value}"))
             .unwrap_or_default();
+        let mut usage_fields = Vec::with_capacity(10);
+        for (name, value) in [
+            ("total", total_tokens),
+            ("input", input_tokens),
+            ("cached_input", cached_input_tokens),
+            ("output", output_tokens),
+            ("reasoning", reasoning_output_tokens),
+            ("context_total", context_total_tokens),
+            ("sent", sent),
+            ("recv", recv),
+            ("prewarm_sent", prewarm_sent),
+            ("prewarm_recv", prewarm_recv),
+        ] {
+            if value != 0 {
+                usage_fields.push(format!("{name}={value}"));
+            }
+        }
+        let usage_message = if usage_fields.is_empty() {
+            query_id_suffix.trim_start().to_string()
+        } else {
+            format!("{}{}", usage_fields.join(", "), query_id_suffix)
+        };
         self.log_usage_event(
             account_id,
             /*used_percent*/ None,
             /*previous_percent*/ None,
-            format!(
-                "total={total_tokens}, input={input_tokens}, cached_input={cached_input_tokens}, output={output_tokens}, reasoning={reasoning_output_tokens}, context_total={context_total_tokens}, sent={sent}, recv={recv}, sent_recv={sent_recv}, prewarm_sent={prewarm_sent}, prewarm_recv={prewarm_recv}, prewarm_sent_recv={prewarm_sent_recv}{query_id_suffix}"
-            ),
+            usage_message,
         )
         .await;
 
