@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -584,9 +585,17 @@ impl DeveloperInstructions {
             return DeveloperInstructions::new("");
         }
 
+        let mut seen_roots = HashSet::new();
         let roots_list: Vec<String> = roots
             .iter()
-            .map(|r| format!("`{}`", r.root.to_string_lossy()))
+            .filter_map(|root| {
+                let root_path = root.root.to_path_buf();
+                if seen_roots.insert(root_path.clone()) {
+                    Some(format!("`{}`", root_path.to_string_lossy()))
+                } else {
+                    None
+                }
+            })
             .collect();
         let text = if roots_list.len() == 1 {
             format!(" The writable root is {}.", roots_list[0])
@@ -1730,6 +1739,56 @@ mod tests {
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
         assert!(text.contains("`approval_policy` is `unless-trusted`"));
+    }
+
+    #[test]
+    fn writable_roots_text_deduplicates_paths() {
+        let root_path = if cfg!(windows) { r"C:\tmp" } else { "/tmp" };
+        let root = AbsolutePathBuf::from_absolute_path(root_path).expect("absolute path");
+        let instructions = DeveloperInstructions::from_writable_roots(Some(vec![
+            WritableRoot {
+                root: root.clone(),
+                read_only_subpaths: vec![],
+            },
+            WritableRoot {
+                root: root,
+                read_only_subpaths: vec![],
+            },
+        ]));
+
+        assert_eq!(
+            instructions.into_text(),
+            format!(" The writable root is `{root_path}`.")
+        );
+    }
+
+    #[test]
+    fn permissions_text_includes_explicit_workspace_writable_roots() {
+        let cwd_dir = tempdir().expect("tempdir");
+        let extra_dir = tempdir().expect("tempdir");
+        let extra_root =
+            AbsolutePathBuf::from_absolute_path(extra_dir.path()).expect("absolute path");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![extra_root.clone()],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let instructions = DeveloperInstructions::from_policy(
+            &policy,
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            cwd_dir.path(),
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
+        )
+        .into_text();
+
+        assert!(instructions.contains(&format!("`{}`", cwd_dir.path().display())));
+        assert!(instructions.contains(&format!("`{}`", extra_root.as_path().display())));
     }
 
     #[test]
