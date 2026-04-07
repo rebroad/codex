@@ -64,6 +64,7 @@ use codex_api::requests::responses::Compression;
 use codex_api::response_create_client_metadata;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::protocol::TokenUsage;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -211,6 +212,13 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrewarmCompletionStats {
+    pub token_usage: Option<TokenUsage>,
+    pub capture_id: Option<String>,
+    pub transport_bytes: Option<codex_api::common::TransportByteStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -1257,12 +1265,12 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<PrewarmCompletionStats>> {
         if !self.client.responses_websocket_enabled() {
-            return Ok(());
+            return Ok(None);
         }
         if self.websocket_session.last_request.is_some() {
-            return Ok(());
+            return Ok(None);
         }
 
         match self
@@ -1283,16 +1291,27 @@ impl ModelClientSession {
                 // Wait for the v2 warmup request to complete before sending the first turn request.
                 while let Some(event) = stream.next().await {
                     match event {
-                        Ok(ResponseEvent::Completed { .. }) => break,
+                        Ok(ResponseEvent::Completed {
+                            token_usage,
+                            capture_id,
+                            transport_bytes,
+                            ..
+                        }) => {
+                            return Ok(Some(PrewarmCompletionStats {
+                                token_usage,
+                                capture_id,
+                                transport_bytes,
+                            }));
+                        }
                         Err(err) => return Err(err),
                         _ => {}
                     }
                 }
-                Ok(())
+                Ok(None)
             }
             Ok(WebsocketStreamOutcome::FallbackToHttp) => {
                 self.try_switch_fallback_transport(session_telemetry, model_info);
-                Ok(())
+                Ok(None)
             }
             Err(err) => Err(err),
         }
