@@ -2532,8 +2532,8 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        base_instructions: Option<String>,
-        developer_instructions: Option<String>,
+        base_instructions: Option<Option<String>>,
+        developer_instructions: Option<Option<String>>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
         ConfigOverrides {
@@ -2548,11 +2548,22 @@ impl CodexMessageProcessor {
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-            base_instructions,
-            developer_instructions,
+            // Legacy app-server clients send explicit `null` here as their default.
+            // Treat that as "no override" so provider requests still receive the
+            // configured/model default instructions.
+            base_instructions: Self::normalize_thread_instruction_override(base_instructions),
+            developer_instructions: Self::normalize_thread_instruction_override(
+                developer_instructions,
+            ),
             personality,
             ..Default::default()
         }
+    }
+
+    fn normalize_thread_instruction_override(
+        instruction_override: Option<Option<String>>,
+    ) -> Option<Option<String>> {
+        instruction_override.flatten().map(Some)
     }
 
     async fn thread_archive(
@@ -4422,6 +4433,13 @@ impl CodexMessageProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        if typesafe_overrides.base_instructions.is_none()
+            && let Ok(history) = RolloutRecorder::get_rollout_history(&rollout_path).await
+            && let Some(base_instructions) = history.get_base_instructions()
+        {
+            typesafe_overrides.base_instructions =
+                Some(base_instructions.map(|base_instructions| base_instructions.text));
+        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
@@ -9467,6 +9485,24 @@ mod tests {
         assert_eq!(typesafe_overrides.model, None);
         assert_eq!(request_overrides, None);
         Ok(())
+    }
+
+    #[test]
+    fn normalize_thread_instruction_override_treats_explicit_null_as_no_override() {
+        assert_eq!(
+            CodexMessageProcessor::normalize_thread_instruction_override(Some(None)),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_thread_instruction_override_preserves_explicit_text() {
+        assert_eq!(
+            CodexMessageProcessor::normalize_thread_instruction_override(Some(Some(
+                "custom instructions".to_string()
+            ))),
+            Some(Some("custom instructions".to_string()))
+        );
     }
 
     #[test]

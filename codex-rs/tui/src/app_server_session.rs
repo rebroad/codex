@@ -869,6 +869,8 @@ fn thread_start_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(config),
+        base_instructions: config.base_instructions.clone().flatten().map(Some),
+        developer_instructions: config.developer_instructions.clone().map(Some),
         ephemeral: Some(config.ephemeral),
         persist_extended_history: true,
         ..ThreadStartParams::default()
@@ -890,6 +892,8 @@ fn thread_resume_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
+        base_instructions: config.base_instructions.clone().flatten().map(Some),
+        developer_instructions: config.developer_instructions.clone().map(Some),
         persist_extended_history: true,
         ..ThreadResumeParams::default()
     }
@@ -910,6 +914,8 @@ fn thread_fork_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
+        base_instructions: config.base_instructions.clone().flatten().map(Some),
+        developer_instructions: config.developer_instructions.clone().map(Some),
         ephemeral: config.ephemeral,
         persist_extended_history: true,
         ..ThreadForkParams::default()
@@ -1215,6 +1221,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bare_prompt_thread_params_do_not_emit_null_base_instructions() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.bare_prompt = true;
+        config.base_instructions = Some(None);
+        let thread_id = ThreadId::new();
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        assert_eq!(start.base_instructions, None);
+        assert_eq!(resume.base_instructions, None);
+        assert_eq!(fork.base_instructions, None);
+    }
+
+    #[tokio::test]
     async fn thread_lifecycle_params_forward_explicit_remote_cwd_override_for_remote_sessions() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
@@ -1245,6 +1282,63 @@ mod tests {
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
+    }
+
+    #[tokio::test]
+    async fn bare_prompt_thread_lifecycle_params_preserve_instructions() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.bare_prompt = true;
+        config.developer_instructions = Some("custom developer".to_string());
+        let thread_id = ThreadId::new();
+        let expected_base_instructions = config.base_instructions.clone();
+        let expected_developer_instructions = config.developer_instructions.clone().map(Some);
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        assert_eq!(start.base_instructions, expected_base_instructions);
+        assert_eq!(start.developer_instructions, expected_developer_instructions);
+        assert_eq!(
+            start.config
+                .as_ref()
+                .and_then(|overrides| overrides.get("bare_prompt")),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        assert_eq!(resume.base_instructions, expected_base_instructions);
+        assert_eq!(resume.developer_instructions, expected_developer_instructions);
+        assert_eq!(
+            resume
+                .config
+                .as_ref()
+                .and_then(|overrides| overrides.get("bare_prompt")),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        assert_eq!(fork.base_instructions, expected_base_instructions);
+        assert_eq!(fork.developer_instructions, expected_developer_instructions);
+        assert_eq!(
+            fork.config
+                .as_ref()
+                .and_then(|overrides| overrides.get("bare_prompt")),
+            Some(&serde_json::Value::Bool(true))
+        );
     }
 
     #[tokio::test]

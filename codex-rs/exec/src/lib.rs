@@ -78,6 +78,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
+use codex_protocol::models::BaseInstructions;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
@@ -476,8 +477,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         js_repl_node_path: None,
         js_repl_node_module_dirs: None,
         zsh_path: None,
-        base_instructions: base_instructions_override_from_file,
-        developer_instructions: developer_instructions_override_from_file.clone(),
+        base_instructions: base_instructions_override_from_file.map(Some),
+        developer_instructions: developer_instructions_override_from_file.clone().map(Some),
         personality: personality.map(Into::into),
         compact_prompt: compact_prompt_override_from_file,
         compact_summary_preamble: compact_summary_preamble_override_from_file,
@@ -659,7 +660,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let ExecRunArgs {
         bare_prompt,
-        developer_instructions_cli_override,
+        developer_instructions_cli_override: _developer_instructions_cli_override,
         in_process_start_args,
         command,
         config,
@@ -673,7 +674,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         output_schema_path,
         prompt,
         skip_git_repo_check,
-        developer_instructions_override_from_file,
+        developer_instructions_override_from_file: _developer_instructions_override_from_file,
         stderr_with_ansi,
     } = args;
 
@@ -706,14 +707,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
-    let bare_prompt_developer_instructions = if bare_prompt
-        && (developer_instructions_override_from_file.is_some()
-            || developer_instructions_cli_override)
-    {
-        config.developer_instructions.clone()
-    } else {
-        None
-    };
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
@@ -806,7 +799,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                             &config,
                             thread_id,
                             bare_prompt,
-                            bare_prompt_developer_instructions.clone(),
                         ),
                     },
                     "thread/resume",
@@ -824,7 +816,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         params: thread_start_params_from_config(
                             &config,
                             bare_prompt,
-                            bare_prompt_developer_instructions.clone(),
                         ),
                     },
                     "thread/start",
@@ -843,7 +834,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: thread_start_params_from_config(
                         &config,
                         bare_prompt,
-                        bare_prompt_developer_instructions,
                     ),
                 },
                 "thread/start",
@@ -1074,7 +1064,6 @@ fn sandbox_mode_from_policy(
 fn thread_start_params_from_config(
     config: &Config,
     bare_prompt: bool,
-    bare_prompt_developer_instructions: Option<String>,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
@@ -1086,16 +1075,8 @@ fn thread_start_params_from_config(
         config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
         personality: config.personality,
-        base_instructions: if bare_prompt {
-            Some(String::new())
-        } else {
-            config.base_instructions.clone()
-        },
-        developer_instructions: if bare_prompt {
-            Some(bare_prompt_developer_instructions.unwrap_or_default())
-        } else {
-            None
-        },
+        base_instructions: config.base_instructions.clone().flatten().map(Some),
+        developer_instructions: config.developer_instructions.clone().map(Some),
         ..ThreadStartParams::default()
     }
 }
@@ -1104,7 +1085,6 @@ fn thread_resume_params_from_config(
     config: &Config,
     thread_id: String,
     bare_prompt: bool,
-    bare_prompt_developer_instructions: Option<String>,
 ) -> ThreadResumeParams {
     ThreadResumeParams {
         thread_id,
@@ -1116,16 +1096,8 @@ fn thread_resume_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config, bare_prompt),
         personality: config.personality,
-        base_instructions: if bare_prompt {
-            Some(String::new())
-        } else {
-            config.base_instructions.clone()
-        },
-        developer_instructions: if bare_prompt {
-            Some(bare_prompt_developer_instructions.unwrap_or_default())
-        } else {
-            None
-        },
+        base_instructions: config.base_instructions.clone().flatten().map(Some),
+        developer_instructions: config.developer_instructions.clone().map(Some),
         ..ThreadResumeParams::default()
     }
 }
@@ -1998,11 +1970,14 @@ async fn run_direct_request(
     let mut prompt = Prompt::default();
     prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
     prompt.personality = config.personality;
-    if bare_prompt {
-        prompt.base_instructions.text = String::new();
-    } else if let Some(base_instructions) = &config.base_instructions {
-        prompt.base_instructions.text = base_instructions.clone();
-    }
+    let base_instructions = config
+        .base_instructions
+        .clone()
+        .flatten()
+        .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+    prompt.base_instructions = Some(BaseInstructions {
+        text: base_instructions,
+    });
     let mut client_session = ModelClient::new(
         Some(auth_manager),
         conversation_id,
@@ -2613,9 +2588,7 @@ mod tests {
             .await
             .expect("build config with manual-only review policy");
 
-        let params = thread_start_params_from_config(
-            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
-        );
+        let params = thread_start_params_from_config(&config, /*bare_prompt*/ false);
 
         assert_eq!(
             params.approvals_reviewer,
@@ -2638,9 +2611,7 @@ mod tests {
             .await
             .expect("build config with guardian review policy");
 
-        let params = thread_start_params_from_config(
-            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
-        );
+        let params = thread_start_params_from_config(&config, /*bare_prompt*/ false);
 
         assert_eq!(
             params.approvals_reviewer,
@@ -2655,7 +2626,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
-                base_instructions: Some("shared base".to_string()),
+                base_instructions: Some(Some("shared base".to_string())),
                 personality: Some(Personality::Pragmatic),
                 ..Default::default()
             })
@@ -2664,20 +2635,50 @@ mod tests {
             .await
             .expect("build config with personality");
 
-        let start_params = thread_start_params_from_config(
-            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
+        let start_params = thread_start_params_from_config(&config, /*bare_prompt*/ false);
+        assert_eq!(
+            start_params
+                .base_instructions
+                .as_ref()
+                .and_then(Option::as_deref),
+            Some("shared base")
         );
-        assert_eq!(start_params.base_instructions.as_deref(), Some("shared base"));
         assert_eq!(start_params.personality, Some(Personality::Pragmatic));
 
-        let resume_params = thread_resume_params_from_config(
-            &config,
-            "thread-id".to_string(),
-            /*bare_prompt*/ false,
-            /*bare_prompt_developer_instructions*/ None,
+        let resume_params =
+            thread_resume_params_from_config(&config, "thread-id".to_string(), /*bare_prompt*/ false);
+        assert_eq!(
+            resume_params
+                .base_instructions
+                .as_ref()
+                .and_then(Option::as_deref),
+            Some("shared base")
         );
-        assert_eq!(resume_params.base_instructions.as_deref(), Some("shared base"));
         assert_eq!(resume_params.personality, Some(Personality::Pragmatic));
+    }
+
+    #[tokio::test]
+    async fn bare_prompt_thread_params_do_not_emit_null_base_instructions() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                base_instructions: Some(None),
+                bare_prompt: Some(true),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build config with bare prompt");
+
+        let start_params = thread_start_params_from_config(&config, /*bare_prompt*/ true);
+        assert_eq!(start_params.base_instructions, None);
+
+        let resume_params =
+            thread_resume_params_from_config(&config, "thread-id".to_string(), /*bare_prompt*/ true);
+        assert_eq!(resume_params.base_instructions, None);
     }
 
     #[test]
