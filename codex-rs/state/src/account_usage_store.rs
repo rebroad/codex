@@ -54,6 +54,12 @@ pub struct AccountUsageSnapshot {
     pub cached_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
+    pub sent_bytes: i64,
+    pub recv_bytes: i64,
+    pub sent_recv_bytes: i64,
+    pub prewarm_sent_bytes: i64,
+    pub prewarm_recv_bytes: i64,
+    pub prewarm_sent_recv_bytes: i64,
     pub updated_at: i64,
     pub last_backend_limit_id: Option<String>,
     pub last_backend_limit_name: Option<String>,
@@ -65,6 +71,12 @@ pub struct AccountUsageSnapshot {
     pub window_start_input_tokens: Option<i64>,
     pub window_start_cached_input_tokens: Option<i64>,
     pub window_start_output_tokens: Option<i64>,
+    pub window_start_sent_bytes: Option<i64>,
+    pub window_start_recv_bytes: Option<i64>,
+    pub window_start_sent_recv_bytes: Option<i64>,
+    pub window_start_prewarm_sent_bytes: Option<i64>,
+    pub window_start_prewarm_recv_bytes: Option<i64>,
+    pub window_start_prewarm_sent_recv_bytes: Option<i64>,
     pub last_backend_resets_at: Option<i64>,
     pub last_backend_window_minutes: Option<i64>,
     pub last_backend_seen_at: Option<i64>,
@@ -75,6 +87,7 @@ pub struct AccountUsageEventMeta<'a> {
     pub query_id: Option<&'a str>,
     pub sent_bytes: Option<i64>,
     pub recv_bytes: Option<i64>,
+    pub is_prewarm: bool,
 }
 
 #[derive(Clone)]
@@ -99,6 +112,8 @@ struct PendingBackendRateLimitUpdate {
 #[derive(Debug, Clone)]
 struct AccountLimitEstimates {
     composite_q_limit: Option<f64>,
+    composite_q_bytes_limit: Option<f64>,
+    composite_q_bytes_no_prewarm_limit: Option<f64>,
     blended_limit: Option<f64>,
     cached_input_limit: Option<f64>,
     output_limit: Option<f64>,
@@ -122,11 +137,16 @@ struct SampleTokenDeltas {
     sent_bytes: i64,
     recv_bytes: i64,
     sent_recv_bytes: i64,
+    prewarm_sent_bytes: i64,
+    prewarm_recv_bytes: i64,
+    prewarm_sent_recv_bytes: i64,
 }
 
 // Composite usage model calibrated from local/backend usage logs.
 const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
 const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
+const COMPOSITE_Q_SENT_BYTES_WEIGHT: f64 = 0.15;
+const COMPOSITE_Q_RECV_BYTES_WEIGHT: f64 = 0.85;
 
 impl AccountUsageStore {
     pub async fn init(sqlite_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
@@ -224,6 +244,15 @@ SELECT
     cached_input_tokens,
     output_tokens,
     reasoning_output_tokens,
+    sent_bytes,
+    recv_bytes,
+    sent_recv_bytes,
+    prewarm_sent_bytes,
+    prewarm_recv_bytes,
+    prewarm_sent_recv_bytes,
+    prewarm_sent_bytes,
+    prewarm_recv_bytes,
+    prewarm_sent_recv_bytes,
     updated_at,
     last_backend_limit_id,
     last_backend_limit_name,
@@ -235,6 +264,12 @@ SELECT
     window_start_input_tokens,
     window_start_cached_input_tokens,
     window_start_output_tokens,
+    window_start_sent_bytes,
+    window_start_recv_bytes,
+    window_start_sent_recv_bytes,
+    window_start_prewarm_sent_bytes,
+    window_start_prewarm_recv_bytes,
+    window_start_prewarm_sent_recv_bytes,
     window_start_context_total_tokens,
     window_start_min_total_cached_output_tokens,
     last_backend_resets_at,
@@ -258,6 +293,12 @@ WHERE account_id = ? AND provider = ?
             cached_input_tokens: row.try_get("cached_input_tokens")?,
             output_tokens: row.try_get("output_tokens")?,
             reasoning_output_tokens: row.try_get("reasoning_output_tokens")?,
+            sent_bytes: row.try_get("sent_bytes")?,
+            recv_bytes: row.try_get("recv_bytes")?,
+            sent_recv_bytes: row.try_get("sent_recv_bytes")?,
+            prewarm_sent_bytes: row.try_get("prewarm_sent_bytes")?,
+            prewarm_recv_bytes: row.try_get("prewarm_recv_bytes")?,
+            prewarm_sent_recv_bytes: row.try_get("prewarm_sent_recv_bytes")?,
             updated_at: row.try_get("updated_at")?,
             last_backend_limit_id: row.try_get("last_backend_limit_id")?,
             last_backend_limit_name: row.try_get("last_backend_limit_name")?,
@@ -269,6 +310,13 @@ WHERE account_id = ? AND provider = ?
             window_start_input_tokens: row.try_get("window_start_input_tokens")?,
             window_start_cached_input_tokens: row.try_get("window_start_cached_input_tokens")?,
             window_start_output_tokens: row.try_get("window_start_output_tokens")?,
+            window_start_sent_bytes: row.try_get("window_start_sent_bytes")?,
+            window_start_recv_bytes: row.try_get("window_start_recv_bytes")?,
+            window_start_sent_recv_bytes: row.try_get("window_start_sent_recv_bytes")?,
+            window_start_prewarm_sent_bytes: row.try_get("window_start_prewarm_sent_bytes")?,
+            window_start_prewarm_recv_bytes: row.try_get("window_start_prewarm_recv_bytes")?,
+            window_start_prewarm_sent_recv_bytes: row
+                .try_get("window_start_prewarm_sent_recv_bytes")?,
             last_backend_resets_at: row.try_get("last_backend_resets_at")?,
             last_backend_window_minutes: row.try_get("last_backend_window_minutes")?,
             last_backend_seen_at: row.try_get("last_backend_seen_at")?,
@@ -291,6 +339,25 @@ WHERE account_id = ? AND provider = ?
         Ok((estimates.composite_q_limit, estimates.sample_count))
     }
 
+    pub async fn estimate_account_limit_bytes_q(
+        &self,
+        account_id: &str,
+    ) -> anyhow::Result<(Option<f64>, i64)> {
+        let estimates = self.estimate_account_limit_tokens_multi(account_id).await?;
+        Ok((estimates.composite_q_bytes_limit, estimates.sample_count))
+    }
+
+    pub async fn estimate_account_limit_bytes_q_no_prewarm(
+        &self,
+        account_id: &str,
+    ) -> anyhow::Result<(Option<f64>, i64)> {
+        let estimates = self.estimate_account_limit_tokens_multi(account_id).await?;
+        Ok((
+            estimates.composite_q_bytes_no_prewarm_limit,
+            estimates.sample_count,
+        ))
+    }
+
     async fn estimate_account_limit_tokens_multi(
         &self,
         account_id: &str,
@@ -308,6 +375,9 @@ SELECT
     SUM(delta_sent_bytes) AS sent_bytes,
     SUM(delta_recv_bytes) AS recv_bytes,
     SUM(delta_sent_recv_bytes) AS sent_recv_bytes,
+    SUM(delta_prewarm_sent_bytes) AS prewarm_sent_bytes,
+    SUM(delta_prewarm_recv_bytes) AS prewarm_recv_bytes,
+    SUM(delta_prewarm_sent_recv_bytes) AS prewarm_sent_recv_bytes,
     SUM(delta_percent_int) AS total_percent,
     COUNT(*) AS sample_count
 FROM account_usage_samples
@@ -360,6 +430,18 @@ WHERE account_id = ? AND provider = ?
             .try_get::<Option<i64>, _>("sent_recv_bytes")
             .unwrap_or(Some(0))
             .unwrap_or(0);
+        let prewarm_sent_bytes = row
+            .try_get::<Option<i64>, _>("prewarm_sent_bytes")
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
+        let prewarm_recv_bytes = row
+            .try_get::<Option<i64>, _>("prewarm_recv_bytes")
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
+        let _prewarm_sent_recv_bytes = row
+            .try_get::<Option<i64>, _>("prewarm_sent_recv_bytes")
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
         let total_percent: i64 = row
             .try_get::<Option<i64>, _>("total_percent")
             .unwrap_or(Some(0))
@@ -372,6 +454,8 @@ WHERE account_id = ? AND provider = ?
         if total_percent <= 0 || sample_count <= 0 {
             return Ok(AccountLimitEstimates {
                 composite_q_limit: None,
+                composite_q_bytes_limit: None,
+                composite_q_bytes_no_prewarm_limit: None,
                 blended_limit: None,
                 cached_input_limit: None,
                 output_limit: None,
@@ -404,6 +488,11 @@ WHERE account_id = ? AND provider = ?
                 cached_input_tokens,
                 output_tokens,
             )),
+            composite_q_bytes_limit: estimate(composite_q_bytes(sent_bytes, recv_bytes)),
+            composite_q_bytes_no_prewarm_limit: estimate(composite_q_bytes(
+                sent_bytes - prewarm_sent_bytes,
+                recv_bytes - prewarm_recv_bytes,
+            )),
             blended_limit: estimate(blended_tokens as f64),
             cached_input_limit: estimate(cached_input_tokens as f64),
             output_limit: estimate(output_tokens as f64),
@@ -434,11 +523,16 @@ WHERE account_id = ? AND provider = ?
         let sent = meta.sent_bytes.unwrap_or(0).max(0);
         let recv = meta.recv_bytes.unwrap_or(0).max(0);
         let sent_recv = sent.saturating_add(recv);
+        let prewarm_sent = if meta.is_prewarm { sent } else { 0 };
+        let prewarm_recv = if meta.is_prewarm { recv } else { 0 };
+        let prewarm_sent_recv = prewarm_sent.saturating_add(prewarm_recv);
         if total_tokens == 0
             && input_tokens == 0
             && cached_input_tokens == 0
             && output_tokens == 0
             && reasoning_output_tokens == 0
+            && sent == 0
+            && recv == 0
         {
             return Ok(());
         }
@@ -459,8 +553,11 @@ INSERT INTO account_usage (
     sent_bytes,
     recv_bytes,
     sent_recv_bytes,
+    prewarm_sent_bytes,
+    prewarm_recv_bytes,
+    prewarm_sent_recv_bytes,
     updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id, provider) DO UPDATE SET
     total_tokens = total_tokens + excluded.total_tokens,
     input_tokens = input_tokens + excluded.input_tokens,
@@ -472,6 +569,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
     sent_bytes = sent_bytes + excluded.sent_bytes,
     recv_bytes = recv_bytes + excluded.recv_bytes,
     sent_recv_bytes = sent_recv_bytes + excluded.sent_recv_bytes,
+    prewarm_sent_bytes = prewarm_sent_bytes + excluded.prewarm_sent_bytes,
+    prewarm_recv_bytes = prewarm_recv_bytes + excluded.prewarm_recv_bytes,
+    prewarm_sent_recv_bytes = prewarm_sent_recv_bytes + excluded.prewarm_sent_recv_bytes,
     updated_at = excluded.updated_at
             "#,
         )
@@ -487,6 +587,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(sent)
         .bind(recv)
         .bind(sent_recv)
+        .bind(prewarm_sent)
+        .bind(prewarm_recv)
+        .bind(prewarm_sent_recv)
         .bind(updated_at)
         .execute(self.pool.as_ref())
         .await?;
@@ -500,7 +603,7 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
             /*used_percent*/ None,
             /*previous_percent*/ None,
             format!(
-                "total={total_tokens}, input={input_tokens}, cached_input={cached_input_tokens}, output={output_tokens}, reasoning={reasoning_output_tokens}, context_total={context_total_tokens}, sent={sent}, recv={recv}, sent_recv={sent_recv}{query_id_suffix}"
+                "total={total_tokens}, input={input_tokens}, cached_input={cached_input_tokens}, output={output_tokens}, reasoning={reasoning_output_tokens}, context_total={context_total_tokens}, sent={sent}, recv={recv}, sent_recv={sent_recv}, prewarm_sent={prewarm_sent}, prewarm_recv={prewarm_recv}, prewarm_sent_recv={prewarm_sent_recv}{query_id_suffix}"
             ),
         )
         .await;
@@ -556,6 +659,9 @@ SELECT
     last_snapshot_sent_bytes,
     last_snapshot_recv_bytes,
     last_snapshot_sent_recv_bytes,
+    last_snapshot_prewarm_sent_bytes,
+    last_snapshot_prewarm_recv_bytes,
+    last_snapshot_prewarm_sent_recv_bytes,
     last_snapshot_percent_int,
     window_start_percent_int,
     window_start_total_tokens,
@@ -567,6 +673,9 @@ SELECT
     window_start_sent_bytes,
     window_start_recv_bytes,
     window_start_sent_recv_bytes,
+    window_start_prewarm_sent_bytes,
+    window_start_prewarm_recv_bytes,
+    window_start_prewarm_sent_recv_bytes,
     last_backend_resets_at,
     last_backend_window_minutes,
     last_backend_seen_at
@@ -680,6 +789,8 @@ WHERE account_id = ? AND provider = ?
                         .await
                         .unwrap_or(AccountLimitEstimates {
                             composite_q_limit: None,
+                            composite_q_bytes_limit: None,
+                            composite_q_bytes_no_prewarm_limit: None,
                             blended_limit: None,
                             cached_input_limit: None,
                             output_limit: None,
@@ -868,6 +979,9 @@ WHERE account_id = ? AND provider = ?
             sent_bytes_now,
             recv_bytes_now,
             sent_recv_bytes_now,
+            prewarm_sent_bytes_now,
+            prewarm_recv_bytes_now,
+            prewarm_sent_recv_bytes_now,
             last_sample_tokens,
             last_sample_input_tokens,
             last_sample_cached_input_tokens,
@@ -877,6 +991,9 @@ WHERE account_id = ? AND provider = ?
             last_sample_sent_bytes,
             last_sample_recv_bytes,
             last_sample_sent_recv_bytes,
+            last_sample_prewarm_sent_bytes,
+            last_sample_prewarm_recv_bytes,
+            last_sample_prewarm_sent_recv_bytes,
             last_sample_percent,
             window_start_percent,
             window_start_tokens,
@@ -888,6 +1005,9 @@ WHERE account_id = ? AND provider = ?
             window_start_sent_bytes,
             window_start_recv_bytes,
             window_start_sent_recv_bytes,
+            window_start_prewarm_sent_bytes,
+            window_start_prewarm_recv_bytes,
+            window_start_prewarm_sent_recv_bytes,
         ) = if let Some(row) = prior_usage.as_ref() {
             (
                 row.try_get("total_tokens")?,
@@ -899,6 +1019,10 @@ WHERE account_id = ? AND provider = ?
                 row.try_get::<i64, _>("sent_bytes").unwrap_or(0),
                 row.try_get::<i64, _>("recv_bytes").unwrap_or(0),
                 row.try_get::<i64, _>("sent_recv_bytes").unwrap_or(0),
+                row.try_get::<i64, _>("prewarm_sent_bytes").unwrap_or(0),
+                row.try_get::<i64, _>("prewarm_recv_bytes").unwrap_or(0),
+                row.try_get::<i64, _>("prewarm_sent_recv_bytes")
+                    .unwrap_or(0),
                 row.try_get::<i64, _>("last_snapshot_total_tokens")
                     .unwrap_or(0),
                 row.try_get::<i64, _>("last_snapshot_input_tokens")
@@ -916,6 +1040,12 @@ WHERE account_id = ? AND provider = ?
                 row.try_get::<i64, _>("last_snapshot_recv_bytes")
                     .unwrap_or(0),
                 row.try_get::<i64, _>("last_snapshot_sent_recv_bytes")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("last_snapshot_prewarm_sent_bytes")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("last_snapshot_prewarm_recv_bytes")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("last_snapshot_prewarm_sent_recv_bytes")
                     .unwrap_or(0),
                 row.try_get::<i64, _>("last_snapshot_percent_int")
                     .unwrap_or(0),
@@ -939,12 +1069,19 @@ WHERE account_id = ? AND provider = ?
                     .unwrap_or(0),
                 row.try_get::<i64, _>("window_start_sent_recv_bytes")
                     .unwrap_or(0),
+                row.try_get::<i64, _>("window_start_prewarm_sent_bytes")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("window_start_prewarm_recv_bytes")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("window_start_prewarm_sent_recv_bytes")
+                    .unwrap_or(0),
             )
         } else {
             (
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
-                0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
+                0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
+                0_i64, 0_i64,
             )
         };
 
@@ -986,6 +1123,9 @@ SET
     sent_bytes = 0,
     recv_bytes = 0,
     sent_recv_bytes = 0,
+    prewarm_sent_bytes = 0,
+    prewarm_recv_bytes = 0,
+    prewarm_sent_recv_bytes = 0,
     updated_at = ?,
     last_backend_limit_id = ?,
     last_backend_limit_name = ?,
@@ -999,6 +1139,9 @@ SET
     last_snapshot_sent_bytes = ?,
     last_snapshot_recv_bytes = ?,
     last_snapshot_sent_recv_bytes = ?,
+    last_snapshot_prewarm_sent_bytes = ?,
+    last_snapshot_prewarm_recv_bytes = ?,
+    last_snapshot_prewarm_sent_recv_bytes = ?,
     last_snapshot_percent_int = ?,
     window_start_percent_int = ?,
     window_start_total_tokens = ?,
@@ -1010,6 +1153,9 @@ SET
     window_start_sent_bytes = ?,
     window_start_recv_bytes = ?,
     window_start_sent_recv_bytes = ?,
+    window_start_prewarm_sent_bytes = ?,
+    window_start_prewarm_recv_bytes = ?,
+    window_start_prewarm_sent_recv_bytes = ?,
     last_backend_resets_at = ?,
     last_backend_window_minutes = ?,
     last_backend_seen_at = ?
@@ -1020,6 +1166,15 @@ WHERE account_id = ? AND provider = ?
             .bind(snapshot.limit_id.as_deref())
             .bind(snapshot.limit_name.as_deref())
             .bind(used_percent)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(0_i64)
+            .bind(0_i64)
             .bind(0_i64)
             .bind(0_i64)
             .bind(0_i64)
@@ -1107,6 +1262,27 @@ WHERE account_id = ? AND provider = ?
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("last_snapshot_sent_recv_bytes").ok())
             .unwrap_or(0);
+        let mut snapshot_prewarm_sent_bytes = prior_usage
+            .as_ref()
+            .and_then(|row| {
+                row.try_get::<i64, _>("last_snapshot_prewarm_sent_bytes")
+                    .ok()
+            })
+            .unwrap_or(0);
+        let mut snapshot_prewarm_recv_bytes = prior_usage
+            .as_ref()
+            .and_then(|row| {
+                row.try_get::<i64, _>("last_snapshot_prewarm_recv_bytes")
+                    .ok()
+            })
+            .unwrap_or(0);
+        let mut snapshot_prewarm_sent_recv_bytes = prior_usage
+            .as_ref()
+            .and_then(|row| {
+                row.try_get::<i64, _>("last_snapshot_prewarm_sent_recv_bytes")
+                    .ok()
+            })
+            .unwrap_or(0);
         let mut snapshot_percent_int = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("last_snapshot_percent_int").ok())
@@ -1134,6 +1310,13 @@ WHERE account_id = ? AND provider = ?
                 sent_bytes: (sent_bytes_now - last_sample_sent_bytes).max(0),
                 recv_bytes: (recv_bytes_now - last_sample_recv_bytes).max(0),
                 sent_recv_bytes: (sent_recv_bytes_now - last_sample_sent_recv_bytes).max(0),
+                prewarm_sent_bytes: (prewarm_sent_bytes_now - last_sample_prewarm_sent_bytes)
+                    .max(0),
+                prewarm_recv_bytes: (prewarm_recv_bytes_now - last_sample_prewarm_recv_bytes)
+                    .max(0),
+                prewarm_sent_recv_bytes: (prewarm_sent_recv_bytes_now
+                    - last_sample_prewarm_sent_recv_bytes)
+                    .max(0),
             };
             if delta_percent > 0 && total_tokens_now > 0 {
                 insert_account_usage_sample(
@@ -1162,11 +1345,16 @@ WHERE account_id = ? AND provider = ?
             let updated_window_start_sent_bytes = window_start_sent_bytes;
             let updated_window_start_recv_bytes = window_start_recv_bytes;
             let updated_window_start_sent_recv_bytes = window_start_sent_recv_bytes;
+            let updated_window_start_prewarm_sent_bytes = window_start_prewarm_sent_bytes;
+            let updated_window_start_prewarm_recv_bytes = window_start_prewarm_recv_bytes;
+            let updated_window_start_prewarm_sent_recv_bytes = window_start_prewarm_sent_recv_bytes;
             let estimates = self
                 .estimate_account_limit_tokens_multi(account_id)
                 .await
                 .unwrap_or(AccountLimitEstimates {
                     composite_q_limit: None,
+                    composite_q_bytes_limit: None,
+                    composite_q_bytes_no_prewarm_limit: None,
                     blended_limit: None,
                     cached_input_limit: None,
                     output_limit: None,
@@ -1196,6 +1384,9 @@ WHERE account_id = ? AND provider = ?
             snapshot_sent_bytes = sent_bytes_now;
             snapshot_recv_bytes = recv_bytes_now;
             snapshot_sent_recv_bytes = sent_recv_bytes_now;
+            snapshot_prewarm_sent_bytes = prewarm_sent_bytes_now;
+            snapshot_prewarm_recv_bytes = prewarm_recv_bytes_now;
+            snapshot_prewarm_sent_recv_bytes = prewarm_sent_recv_bytes_now;
             snapshot_percent_int = current_percent_int;
 
             sqlx::query(
@@ -1211,6 +1402,9 @@ SET
     last_snapshot_sent_bytes = ?,
     last_snapshot_recv_bytes = ?,
     last_snapshot_sent_recv_bytes = ?,
+    last_snapshot_prewarm_sent_bytes = ?,
+    last_snapshot_prewarm_recv_bytes = ?,
+    last_snapshot_prewarm_sent_recv_bytes = ?,
     last_snapshot_percent_int = ?,
     window_start_percent_int = ?,
     window_start_total_tokens = ?,
@@ -1221,7 +1415,10 @@ SET
     window_start_min_total_cached_output_tokens = ?,
     window_start_sent_bytes = ?,
     window_start_recv_bytes = ?,
-    window_start_sent_recv_bytes = ?
+    window_start_sent_recv_bytes = ?,
+    window_start_prewarm_sent_bytes = ?,
+    window_start_prewarm_recv_bytes = ?,
+    window_start_prewarm_sent_recv_bytes = ?
 WHERE account_id = ? AND provider = ?
                 "#,
             )
@@ -1234,6 +1431,9 @@ WHERE account_id = ? AND provider = ?
             .bind(sent_bytes_now)
             .bind(recv_bytes_now)
             .bind(sent_recv_bytes_now)
+            .bind(snapshot_prewarm_sent_bytes)
+            .bind(snapshot_prewarm_recv_bytes)
+            .bind(snapshot_prewarm_sent_recv_bytes)
             .bind(current_percent_int)
             .bind(updated_window_start_percent)
             .bind(updated_window_start_tokens)
@@ -1245,6 +1445,9 @@ WHERE account_id = ? AND provider = ?
             .bind(updated_window_start_sent_bytes)
             .bind(updated_window_start_recv_bytes)
             .bind(updated_window_start_sent_recv_bytes)
+            .bind(updated_window_start_prewarm_sent_bytes)
+            .bind(updated_window_start_prewarm_recv_bytes)
+            .bind(updated_window_start_prewarm_sent_recv_bytes)
             .bind(account_id)
             .bind(self.default_provider.as_str())
             .execute(self.pool.as_ref())
@@ -1264,6 +1467,9 @@ WHERE account_id = ? AND provider = ?
             anchor_sent_bytes,
             anchor_recv_bytes,
             anchor_sent_recv_bytes,
+            anchor_prewarm_sent_bytes,
+            anchor_prewarm_recv_bytes,
+            anchor_prewarm_sent_recv_bytes,
         ) = if current_percent_int != last_sample_percent {
             (
                 current_percent_int,
@@ -1276,6 +1482,9 @@ WHERE account_id = ? AND provider = ?
                 sent_bytes_now,
                 recv_bytes_now,
                 sent_recv_bytes_now,
+                prewarm_sent_bytes_now,
+                prewarm_recv_bytes_now,
+                prewarm_sent_recv_bytes_now,
             )
         } else {
             (
@@ -1289,6 +1498,9 @@ WHERE account_id = ? AND provider = ?
                 window_start_sent_bytes,
                 window_start_recv_bytes,
                 window_start_sent_recv_bytes,
+                window_start_prewarm_sent_bytes,
+                window_start_prewarm_recv_bytes,
+                window_start_prewarm_sent_recv_bytes,
             )
         };
 
@@ -1307,6 +1519,9 @@ INSERT INTO account_usage (
     sent_bytes,
     recv_bytes,
     sent_recv_bytes,
+    prewarm_sent_bytes,
+    prewarm_recv_bytes,
+    prewarm_sent_recv_bytes,
     updated_at,
     last_backend_limit_id,
     last_backend_limit_name,
@@ -1320,6 +1535,9 @@ INSERT INTO account_usage (
     last_snapshot_sent_bytes,
     last_snapshot_recv_bytes,
     last_snapshot_sent_recv_bytes,
+    last_snapshot_prewarm_sent_bytes,
+    last_snapshot_prewarm_recv_bytes,
+    last_snapshot_prewarm_sent_recv_bytes,
     last_snapshot_percent_int,
     window_start_percent_int,
     window_start_total_tokens,
@@ -1331,10 +1549,13 @@ INSERT INTO account_usage (
     window_start_sent_bytes,
     window_start_recv_bytes,
     window_start_sent_recv_bytes,
+    window_start_prewarm_sent_bytes,
+    window_start_prewarm_recv_bytes,
+    window_start_prewarm_sent_recv_bytes,
     last_backend_resets_at,
     last_backend_window_minutes,
     last_backend_seen_at
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id, provider) DO UPDATE SET
     updated_at = excluded.updated_at,
     last_backend_limit_id = excluded.last_backend_limit_id,
@@ -1349,6 +1570,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
     last_snapshot_sent_bytes = excluded.last_snapshot_sent_bytes,
     last_snapshot_recv_bytes = excluded.last_snapshot_recv_bytes,
     last_snapshot_sent_recv_bytes = excluded.last_snapshot_sent_recv_bytes,
+    last_snapshot_prewarm_sent_bytes = excluded.last_snapshot_prewarm_sent_bytes,
+    last_snapshot_prewarm_recv_bytes = excluded.last_snapshot_prewarm_recv_bytes,
+    last_snapshot_prewarm_sent_recv_bytes = excluded.last_snapshot_prewarm_sent_recv_bytes,
     last_snapshot_percent_int = excluded.last_snapshot_percent_int,
     window_start_percent_int = excluded.window_start_percent_int,
     window_start_total_tokens = excluded.window_start_total_tokens,
@@ -1360,6 +1584,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
     window_start_sent_bytes = excluded.window_start_sent_bytes,
     window_start_recv_bytes = excluded.window_start_recv_bytes,
     window_start_sent_recv_bytes = excluded.window_start_sent_recv_bytes,
+    window_start_prewarm_sent_bytes = excluded.window_start_prewarm_sent_bytes,
+    window_start_prewarm_recv_bytes = excluded.window_start_prewarm_recv_bytes,
+    window_start_prewarm_sent_recv_bytes = excluded.window_start_prewarm_sent_recv_bytes,
     last_backend_resets_at = excluded.last_backend_resets_at,
     last_backend_window_minutes = excluded.last_backend_window_minutes,
     last_backend_seen_at = excluded.last_backend_seen_at
@@ -1367,6 +1594,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         )
         .bind(account_id)
         .bind(self.default_provider.as_str())
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
         .bind(0_i64)
         .bind(0_i64)
         .bind(0_i64)
@@ -1390,6 +1620,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(snapshot_sent_bytes)
         .bind(snapshot_recv_bytes)
         .bind(snapshot_sent_recv_bytes)
+        .bind(snapshot_prewarm_sent_bytes)
+        .bind(snapshot_prewarm_recv_bytes)
+        .bind(snapshot_prewarm_sent_recv_bytes)
         .bind(snapshot_percent_int)
         .bind(anchor_percent_int)
         .bind(anchor_total_tokens)
@@ -1401,6 +1634,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(anchor_sent_bytes)
         .bind(anchor_recv_bytes)
         .bind(anchor_sent_recv_bytes)
+        .bind(anchor_prewarm_sent_bytes)
+        .bind(anchor_prewarm_recv_bytes)
+        .bind(anchor_prewarm_sent_recv_bytes)
         .bind(resets_at)
         .bind(window_minutes)
         .bind(seen_at)
@@ -1536,7 +1772,11 @@ SELECT
     window_start_recv_bytes,
     recv_bytes,
     window_start_sent_recv_bytes,
-    sent_recv_bytes
+    sent_recv_bytes,
+    window_start_prewarm_sent_bytes,
+    prewarm_sent_bytes,
+    window_start_prewarm_recv_bytes,
+    prewarm_recv_bytes
 FROM account_usage
 WHERE account_id = ? AND provider = ?
                 "#,
@@ -1582,6 +1822,14 @@ WHERE account_id = ? AND provider = ?
                 let window_start_sent_recv_bytes =
                     row.try_get::<i64, _>("window_start_sent_recv_bytes").ok();
                 let sent_recv_bytes_now = row.try_get::<i64, _>("sent_recv_bytes").ok();
+                let window_start_prewarm_sent_bytes = row
+                    .try_get::<i64, _>("window_start_prewarm_sent_bytes")
+                    .ok();
+                let prewarm_sent_bytes_now = row.try_get::<i64, _>("prewarm_sent_bytes").ok();
+                let window_start_prewarm_recv_bytes = row
+                    .try_get::<i64, _>("window_start_prewarm_recv_bytes")
+                    .ok();
+                let prewarm_recv_bytes_now = row.try_get::<i64, _>("prewarm_recv_bytes").ok();
                 (
                     backend_anchor_percent,
                     window_start_percent,
@@ -1603,6 +1851,10 @@ WHERE account_id = ? AND provider = ?
                     recv_bytes_now,
                     window_start_sent_recv_bytes,
                     sent_recv_bytes_now,
+                    window_start_prewarm_sent_bytes,
+                    prewarm_sent_bytes_now,
+                    window_start_prewarm_recv_bytes,
+                    prewarm_recv_bytes_now,
                 )
             });
             if let Some((
@@ -1626,6 +1878,10 @@ WHERE account_id = ? AND provider = ?
                 Some(recv_bytes_now),
                 Some(window_start_sent_recv_bytes),
                 Some(sent_recv_bytes_now),
+                Some(window_start_prewarm_sent_bytes),
+                Some(prewarm_sent_bytes_now),
+                Some(window_start_prewarm_recv_bytes),
+                Some(prewarm_recv_bytes_now),
             )) = usage_row
             {
                 let estimates = self
@@ -1633,6 +1889,8 @@ WHERE account_id = ? AND provider = ?
                     .await
                     .unwrap_or(AccountLimitEstimates {
                         composite_q_limit: None,
+                        composite_q_bytes_limit: None,
+                        composite_q_bytes_no_prewarm_limit: None,
                         blended_limit: None,
                         cached_input_limit: None,
                         output_limit: None,
@@ -1663,6 +1921,32 @@ WHERE account_id = ? AND provider = ?
                                 allowance,
                             )
                         }),
+                        estimates.composite_q_bytes_limit.and_then(|allowance| {
+                            estimate_account_usage_percent_for_log_f64(
+                                composite_q_bytes(sent_bytes_now, recv_bytes_now),
+                                backend_anchor_percent,
+                                window_start_percent,
+                                composite_q_bytes(window_start_sent_bytes, window_start_recv_bytes),
+                                allowance,
+                            )
+                        }),
+                        estimates
+                            .composite_q_bytes_no_prewarm_limit
+                            .and_then(|allowance| {
+                                estimate_account_usage_percent_for_log_f64(
+                                    composite_q_bytes(
+                                        sent_bytes_now - prewarm_sent_bytes_now,
+                                        recv_bytes_now - prewarm_recv_bytes_now,
+                                    ),
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    composite_q_bytes(
+                                        window_start_sent_bytes - window_start_prewarm_sent_bytes,
+                                        window_start_recv_bytes - window_start_prewarm_recv_bytes,
+                                    ),
+                                    allowance,
+                                )
+                            }),
                         estimates.blended_limit.and_then(|allowance| {
                             estimate_account_usage_percent_for_log(
                                 total_tokens_now,
@@ -1759,7 +2043,7 @@ WHERE account_id = ? AND provider = ?
                     ],
                     /*precision*/ 2,
                 );
-                format!(" usage_pct[q/b/c/o/x/m/n/s/r/z]={usage_pct_values}%")
+                format!(" usage_pct[q/w/p/b/c/o/x/m/n/s/r/z]={usage_pct_values}%")
             } else {
                 String::new()
             }
@@ -1922,9 +2206,18 @@ fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens
         + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
 }
 
+fn composite_q_bytes(sent_bytes: i64, recv_bytes: i64) -> f64 {
+    COMPOSITE_Q_SENT_BYTES_WEIGHT * sent_bytes.max(0) as f64
+        + COMPOSITE_Q_RECV_BYTES_WEIGHT * recv_bytes.max(0) as f64
+}
+
 fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
     let avg = format_metric_values_si([
         estimates.composite_q_limit.map(|value| value / 100.0),
+        estimates.composite_q_bytes_limit.map(|value| value / 100.0),
+        estimates
+            .composite_q_bytes_no_prewarm_limit
+            .map(|value| value / 100.0),
         estimates.blended_limit.map(|value| value / 100.0),
         estimates.cached_input_limit.map(|value| value / 100.0),
         estimates.output_limit.map(|value| value / 100.0),
@@ -1941,6 +2234,8 @@ fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
     ]);
     let allowance = format_metric_values_si([
         estimates.composite_q_limit,
+        estimates.composite_q_bytes_limit,
+        estimates.composite_q_bytes_no_prewarm_limit,
         estimates.blended_limit,
         estimates.cached_input_limit,
         estimates.output_limit,
@@ -1954,7 +2249,7 @@ fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
     format!("avg_tpp={avg} est_allow={allowance}")
 }
 
-fn format_metric_values_si(values: [Option<f64>; 10]) -> String {
+fn format_metric_values_si(values: [Option<f64>; 12]) -> String {
     let value = |entry: Option<f64>| match entry {
         Some(number) if number.is_finite() && number >= 0.0 => format_si_three_digits(number),
         _ => "-".to_string(),
@@ -1962,7 +2257,7 @@ fn format_metric_values_si(values: [Option<f64>; 10]) -> String {
     values.into_iter().map(value).collect::<Vec<_>>().join("/")
 }
 
-fn format_metric_values(values: [Option<f64>; 10], precision: usize) -> String {
+fn format_metric_values(values: [Option<f64>; 12], precision: usize) -> String {
     let value = |entry: Option<f64>| match entry {
         Some(number) if number.is_finite() && number >= 0.0 => format!("{number:.precision$}"),
         _ => "-".to_string(),
@@ -2022,9 +2317,12 @@ INSERT INTO account_usage_samples (
     delta_sent_bytes,
     delta_recv_bytes,
     delta_sent_recv_bytes,
+    delta_prewarm_sent_bytes,
+    delta_prewarm_recv_bytes,
+    delta_prewarm_sent_recv_bytes,
     window_minutes,
     resets_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(account_id)
@@ -2042,6 +2340,9 @@ INSERT INTO account_usage_samples (
     .bind(deltas.sent_bytes)
     .bind(deltas.recv_bytes)
     .bind(deltas.sent_recv_bytes)
+    .bind(deltas.prewarm_sent_bytes)
+    .bind(deltas.prewarm_recv_bytes)
+    .bind(deltas.prewarm_sent_recv_bytes)
     .bind(window_minutes)
     .bind(resets_at)
     .execute(pool)
