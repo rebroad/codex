@@ -1,5 +1,5 @@
-use codex_api::common::ToolChoice;
-pub use codex_api::common::ResponseEvent;
+use codex_api::ToolChoice;
+pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
