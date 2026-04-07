@@ -15,10 +15,33 @@ NPM_VENDOR_DIR_DEFAULT="dist/npm-vendor"
 NPM_X64_TARGET="x86_64-unknown-linux-musl"
 NPM_ARMV7_TARGET="armv7-unknown-linux-gnueabihf"
 ARGUMENT_COMMENT_LINT_LOCAL="false"
+SCRIPT_START_SECONDS="${SECONDS}"
+BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
+BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
+BUILD_TIMESTAMP_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}"
 
 RED=$'\033[31m'
 BOLD=$'\033[1m'
 RESET=$'\033[0m'
+
+# Prefix each emitted line with elapsed "MmSs" (or "Ss" under a minute) so
+# long-running build phases are easy to spot in logs.
+# Opt out with REBUILD_CODEX_NO_TIMER_PREFIX=1.
+if [[ "${REBUILD_CODEX_NO_TIMER_PREFIX:-0}" != "1" ]]; then
+  exec > >(
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      elapsed=$((SECONDS - SCRIPT_START_SECONDS))
+      minutes=$((elapsed / 60))
+      seconds=$((elapsed % 60))
+      if (( minutes > 0 )); then
+        timer_prefix="${minutes}m${seconds}s"
+      else
+        timer_prefix="${seconds}s"
+      fi
+      printf '%s %s\n' "${timer_prefix}" "${line}"
+    done
+  ) 2>&1
+fi
 
 log_error() {
   echo "${BOLD}${RED}ERROR:${RESET} $*" >&2
@@ -48,6 +71,46 @@ require_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+array_has_env_key() {
+  local -n arr_ref="$1"
+  local key="$2"
+  local assignment
+  for assignment in "${arr_ref[@]}"; do
+    if [[ "${assignment}" == "${key}="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+append_default_build_accel_env() {
+  local -n cargo_env_ref="$1"
+
+  # Default to sccache for normal builds when available and not explicitly overridden.
+  if ! array_has_env_key cargo_env_ref "RUSTC_WRAPPER" \
+    && [[ -z "${RUSTC_WRAPPER:-}" ]] \
+    && command -v sccache >/dev/null 2>&1; then
+    cargo_env_ref+=(RUSTC_WRAPPER=sccache)
+  fi
+
+  # Prefer mold linker by default when available, while respecting existing RUSTFLAGS.
+  if ! array_has_env_key cargo_env_ref "RUSTFLAGS" && command -v mold >/dev/null 2>&1; then
+    local rustflags_value="${RUSTFLAGS:-}"
+    if [[ "${rustflags_value}" != *"-fuse-ld=mold"* ]]; then
+      if [[ -n "${rustflags_value}" ]]; then
+        rustflags_value="${rustflags_value} "
+      fi
+      rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=mold"
+      cargo_env_ref+=(RUSTFLAGS="${rustflags_value}")
+    fi
+  fi
+}
+
+append_build_timestamp_env() {
+  local -n cargo_env_ref="$1"
+  cargo_env_ref+=(CODEX_BUILD_TIMESTAMP="${BUILD_TIMESTAMP_COMPILE}")
 }
 
 resolve_cargo_target_dir() {
@@ -262,8 +325,10 @@ run_release_build_with_locked_fallback() {
   local build_log
   local -a cargo_env
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  append_build_timestamp_env cargo_env
   if [[ "${BISECT_MODE}" == "true" ]]; then
     cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+    append_build_timestamp_env cargo_env
   fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
@@ -274,6 +339,7 @@ run_release_build_with_locked_fallback() {
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
     )
   fi
+  append_default_build_accel_env cargo_env
   build_log="$(mktemp)"
   set +e
   env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked 2>&1 | tee "${build_log}"
@@ -302,8 +368,10 @@ run_target_build_with_locked_fallback() {
   local build_log
   local -a cargo_env
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+  append_build_timestamp_env cargo_env
   if [[ "${BISECT_MODE}" == "true" ]]; then
     cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+    append_build_timestamp_env cargo_env
   fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
@@ -314,6 +382,7 @@ run_target_build_with_locked_fallback() {
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
     )
   fi
+  append_default_build_accel_env cargo_env
   build_log="$(mktemp)"
   set +e
   local -a cargo_cmd
@@ -699,7 +768,7 @@ resolve_publish_version() {
 
 patch_installed_binary_version_timestamp() {
   local bin_path="$1"
-  local base_version now_ts
+  local base_version now_ts from_ts
   if [[ ! -f "${bin_path}" ]]; then
     echo "Skipping embedded version timestamp patch; binary not found at ${bin_path}."
     return 0
@@ -710,24 +779,59 @@ patch_installed_binary_version_timestamp() {
     return 0
   fi
   now_ts="$(date +%Y%m%d%H%M)"
-  if ! python3 - "${bin_path}" "${base_version}" "${now_ts}" <<'PY'
+  from_ts="${BUILD_TIMESTAMP_COMPILE}"
+  if [[ "${from_ts}" == "${now_ts}" ]]; then
+    return 0
+  fi
+  if ! python3 - "${bin_path}" "${base_version}" "${from_ts}" "${now_ts}" <<'PY'
+import mmap
 import re
 import sys
 from pathlib import Path
 
 bin_path = Path(sys.argv[1])
 base_version = sys.argv[2].encode("utf-8")
-timestamp = sys.argv[3].encode("utf-8")
-pattern = re.compile(re.escape(base_version) + rb"-\d{12}")
-replacement = base_version + b"-" + timestamp
+from_ts = sys.argv[3].encode("utf-8")
+to_ts = sys.argv[4].encode("utf-8")
+needle = base_version + b"-" + from_ts
+replacement = base_version + b"-" + to_ts
 
-blob = bin_path.read_bytes()
-patched, count = pattern.subn(replacement, blob)
-if count == 0:
-    print(f"No embedded version string found in {bin_path}", file=sys.stderr)
+if len(needle) != len(replacement):
+    print("Internal error: needle/replacement lengths differ", file=sys.stderr)
     sys.exit(2)
-bin_path.write_bytes(patched)
-print(f"Patched {count} embedded version string(s) in {bin_path} to timestamp {timestamp.decode()}")
+
+count = 0
+with bin_path.open("r+b") as f:
+    mm = mmap.mmap(f.fileno(), 0)
+    try:
+        start = 0
+        while True:
+            idx = mm.find(needle, start)
+            if idx == -1:
+                break
+            mm[idx : idx + len(needle)] = replacement
+            count += 1
+            start = idx + len(needle)
+
+        # Fallback for binaries compiled with an unexpected source timestamp.
+        if count == 0:
+            pattern = re.compile(re.escape(base_version) + rb"-\d{12}")
+            for match in pattern.finditer(mm):
+                mm[match.start() : match.end()] = replacement
+                count += 1
+
+        if count == 0:
+            print(f"No embedded version string found in {bin_path}", file=sys.stderr)
+            sys.exit(2)
+
+        mm.flush()
+    finally:
+        mm.close()
+
+print(
+    f"Patched {count} embedded version string(s) in {bin_path} "
+    f"to timestamp {to_ts.decode()}"
+)
 PY
   then
     echo "Warning: failed to patch embedded version timestamp in ${bin_path}."
@@ -1189,6 +1293,10 @@ if [[ "${PREFLIGHT_ONLY}" == "true" && "${should_publish}" == "true" ]]; then
   exit 1
 fi
 
+if [[ "${MODE}" == "release" || "${should_publish}" == "true" || "${REFRESH_BUILD_INFO}" == "true" ]]; then
+  BUILD_TIMESTAMP_COMPILE="${BUILD_TIMESTAMP}"
+fi
+
 if [[ "${publish_to_github}" == "true" ]]; then
   require_cmd gh
   require_cmd jq
@@ -1307,13 +1415,16 @@ else
   fi
   cargo_flags=(build -p codex-cli)
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1)
+  append_build_timestamp_env cargo_env
   if [[ "${BISECT_MODE}" == "true" ]]; then
     cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+    append_build_timestamp_env cargo_env
   fi
   if [[ "${FAST_GATE}" == "true" ]]; then
     cargo_env+=(CARGO_NET_OFFLINE=true)
     cargo_flags=(build --locked -p codex-cli)
   fi
+  append_default_build_accel_env cargo_env
   if [[ -n "${BUILD_JOBS}" ]]; then
     echo "Using Cargo build jobs: ${BUILD_JOBS}"
     cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
@@ -1323,8 +1434,9 @@ else
   if ! env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" "${cargo_flags[@]}"; then
     if [[ "${FAST_GATE}" == "true" ]]; then
       echo "[fast-gate] --locked failed; retrying offline without --locked"
-      env RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_NET_OFFLINE=true \
-        cargo +"${TOOLCHAIN}" build -p codex-cli
+      retry_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_NET_OFFLINE=true)
+      append_build_timestamp_env retry_env
+      env "${retry_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli
     else
       exit 1
     fi
