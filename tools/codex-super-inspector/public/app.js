@@ -62,6 +62,10 @@ function formatBody(event) {
   return event.body || "";
 }
 
+function escapeForHtmlAttr(value) {
+  return escapeHtml(value).replaceAll('"', "&quot;");
+}
+
 function isSupervisorInjected(event) {
   const meta = event?.parsed?._supervisor;
   return (
@@ -72,8 +76,68 @@ function isSupervisorInjected(event) {
   );
 }
 
+function renderCollapsedResultDataBody(event) {
+  const parsed = event?.parsed;
+  if (!parsed || typeof parsed !== "object") return null;
+  if (typeof parsed.id !== "string") return null;
+  const result = parsed.result;
+  if (!result || typeof result !== "object" || !Array.isArray(result.data)) return null;
+  if (
+    result.data.some(
+      (item) =>
+        !item ||
+        typeof item !== "object" ||
+        !Object.prototype.hasOwnProperty.call(item, "name") ||
+        !Object.prototype.hasOwnProperty.call(item, "path") ||
+        !Object.prototype.hasOwnProperty.call(item, "cwd") ||
+        !Object.prototype.hasOwnProperty.call(item, "cliVersion"),
+    )
+  ) {
+    return null;
+  }
+
+  const rows = result.data
+    .map((item, idx) => {
+      if (!item || typeof item !== "object") return "";
+
+      const itemId = item.id ?? `item-${idx + 1}`;
+      const name = item.name;
+      const path = item.path;
+      const cwd = item.cwd;
+      const cliVersion = item.cliVersion;
+      const full = JSON.stringify(item, null, 2);
+
+      return (
+        `<article class="result-item">` +
+        `<div class="result-item-id"><code>${escapeHtml(itemId)}</code></div>` +
+        `<div class="result-item-meta">` +
+        `<div><span class="label">name</span><span title="${escapeForHtmlAttr(String(name))}">${escapeHtml(name)}</span></div>` +
+        `<div><span class="label">path</span><span title="${escapeForHtmlAttr(String(path))}">${escapeHtml(path)}</span></div>` +
+        `<div><span class="label">cwd</span><span title="${escapeForHtmlAttr(String(cwd))}">${escapeHtml(cwd)}</span></div>` +
+        `<div><span class="label">cliVersion</span><span>${escapeHtml(cliVersion)}</span></div>` +
+        `</div>` +
+        `<details class="result-item-full">` +
+        `<summary>Full data</summary>` +
+        `<pre>${escapeHtml(full)}</pre>` +
+        `</details>` +
+        `</article>`
+      );
+    })
+    .filter(Boolean)
+    .join("");
+
+  return (
+    `<section class="collapsed-result-data">` +
+    `<div class="result-response-id">id: <code>${escapeHtml(parsed.id)}</code></div>` +
+    `<div class="result-response-count">results: ${result.data.length}</div>` +
+    `<div class="result-items">${rows || '<div class="empty">(no object items)</div>'}</div>` +
+    `</section>`
+  );
+}
+
 function renderEvent(event, idx) {
   const supervisorInjected = isSupervisorInjected(event);
+  const collapsedResultDataBody = renderCollapsedResultDataBody(event);
   const chips = [
     `<span class="chip">#${idx + 1}</span>`,
     `<span class="chip">${escapeHtml(event.direction)}</span>`,
@@ -89,7 +153,7 @@ function renderEvent(event, idx) {
   return (
     `<article class="${classes.join(" ")}">` +
     `<div class="event-head">${chips}</div>` +
-    `<pre>${escapeHtml(formatBody(event))}</pre>` +
+    (collapsedResultDataBody || `<pre>${escapeHtml(formatBody(event))}</pre>`) +
     `<details><summary>Raw Event</summary><pre>${escapeHtml(JSON.stringify(event, null, 2))}</pre></details>` +
     `</article>`
   );
