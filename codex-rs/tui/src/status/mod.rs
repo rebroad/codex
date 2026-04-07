@@ -441,9 +441,7 @@ fn should_refresh_cli_rate_limits(usage: Option<&AccountUsageSnapshot>) -> bool 
         return true;
     };
 
-    let usage_changed_since_last_backend_snapshot = usage.updated_at > last_seen_at;
-    let last_snapshot_total = usage.last_snapshot_total_tokens.unwrap_or(usage.total_tokens);
-    usage_changed_since_last_backend_snapshot || usage.total_tokens > last_snapshot_total
+    usage.updated_at > last_seen_at
 }
 
 fn cached_rate_limit_snapshot_from_usage(
@@ -509,7 +507,7 @@ async fn fetch_account_usage_display(
     };
 
     let estimated_limit = store
-        .estimate_account_limit_tokens_q(account_id.as_str())
+        .estimate_account_limit_tokens_q_cached(account_id.as_str(), &usage)
         .await
         .ok()
         .unwrap_or((None, 0));
