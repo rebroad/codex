@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prompt Debug Inspector</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Prompt Debug Inspector</h1>
+      <p>Inspect <code>codex-prompt-debug.*</code> captures and render backend prompt payloads.</p>
+    </header>
+
+    <section class="panel controls">
+      <div class="row">
+        <label for="targetPath">Capture target</label>
+        <input id="targetPath" type="text" placeholder="/tmp/codex-prompt-debug.2770233 or /tmp/.../10_input.ndjson" />
+      </div>
+      <div class="row actions">
+        <button id="loadQueriesBtn">Load Queries</button>
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel query-list">
+        <h2>Queries</h2>
+        <div id="queriesMeta" class="meta"></div>
+        <ul id="queries"></ul>
+      </aside>
+      <main class="main-column">
+        <section class="panel">
+          <h2>Prompt View</h2>
+          <div id="promptMeta" class="meta"></div>
+          <div id="promptView" class="prompt-view">(select a query)</div>
+        </section>
+      </main>
+    </section>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
