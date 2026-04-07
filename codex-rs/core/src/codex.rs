@@ -565,10 +565,14 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
+        let environment = environment_manager
+            .current()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
         let user_instructions = if config.bare_prompt {
             None
         } else {
-            get_user_instructions(&config).await
+            get_user_instructions(&config, environment.as_deref()).await
         };
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
@@ -713,12 +717,12 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
-            environment_manager,
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
+            environment,
         )
         .await
         .map_err(|e| {
@@ -1611,12 +1615,12 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
-        environment_manager: Arc<EnvironmentManager>,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
+        environment: Option<Arc<Environment>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -2057,7 +2061,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: environment_manager.current().await?,
+            environment,
         };
         services
             .model_client
