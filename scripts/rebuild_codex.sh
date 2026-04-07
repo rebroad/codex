@@ -6,6 +6,7 @@ REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 RUST_WORKSPACE_DIR="${REPO_DIR}/codex-rs"
 TOOLCHAIN_FILE="${RUST_WORKSPACE_DIR}/rust-toolchain.toml"
 INSTALL_BIN="${HOME}/.cargo/bin/codex"
+INSTALL_BIN_DIR="${HOME}/.cargo/bin"
 CARGO_LOCK_REL="codex-rs/Cargo.lock"
 PUBLISH_TIMEOUT_MINUTES_DEFAULT=45
 TRIAGE_STATE_FILE_DEFAULT="tmp/ci-triaged-tags.json"
@@ -733,6 +734,25 @@ PY
   fi
 }
 
+resolve_versioned_install_name_from_binary() {
+  local bin_path="$1"
+  local full_version normalized_version
+  full_version="$("${bin_path}" --version | awk '{print $2}')"
+  if [[ -z "${full_version}" ]]; then
+    echo "Unable to read version from ${bin_path}" >&2
+    return 1
+  fi
+
+  normalized_version="${full_version#v}"
+  normalized_version="${normalized_version#0.}"
+  if [[ -z "${normalized_version}" ]]; then
+    echo "Unable to normalize version '${full_version}' from ${bin_path}" >&2
+    return 1
+  fi
+
+  echo "codex-${normalized_version}"
+}
+
 is_commit_preflight_passed() {
   local commit_sha="$1"
   local version="$2"
@@ -979,13 +999,13 @@ Usage: rebuild_codex.sh [--release] [--publish|--no-publish] [--publish-timeout-
 
 Default behavior:
 - Regenerate app-server schema (just write-app-server-schema)
-- Build debug codex, copy it to ~/.cargo/bin/codex
+- Build debug codex, install it as ~/.cargo/bin/codex-<version-with-timestamp>, and link ~/.cargo/bin/codex to it
 - Keep existing target artifacts for fast incremental rebuilds
 - Skip CI preflight checks unless publishing
 - Record successful preflight checks by content hash (git tree hash) for future publish skip decisions
 
 Options:
-  --release   Build/install release codex into ~/.cargo/bin/codex, then clean target binaries
+  --release   Build/install release codex as ~/.cargo/bin/codex-<version-with-timestamp> and relink ~/.cargo/bin/codex
   --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
   --publish-npm
              Publish directly to npm locally (no GitHub tag/workflow publish path)
@@ -1268,11 +1288,14 @@ if [[ "${MODE}" == "release" ]]; then
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex"
   patch_installed_binary_version_timestamp "${release_bin}"
-  echo "[3/4] Copying release codex to ${INSTALL_BIN}..."
-  install_tmp="${INSTALL_BIN}.new.$$"
+  install_tmp="${INSTALL_BIN_DIR}/.codex.new.$$"
   install -D -m 755 "${release_bin}" "${install_tmp}"
+  versioned_install_name="$(resolve_versioned_install_name_from_binary "${install_tmp}")"
+  versioned_install_bin="${INSTALL_BIN_DIR}/${versioned_install_name}"
+  echo "[3/4] Installing release codex to ${versioned_install_bin} and linking ${INSTALL_BIN}..."
+  mv -f "${install_tmp}" "${versioned_install_bin}"
   rm -f "${INSTALL_BIN}"
-  mv -f "${install_tmp}" "${INSTALL_BIN}"
+  ln -s "${versioned_install_name}" "${INSTALL_BIN}"
 else
   echo "[2/4] Building debug codex..."
   # Optional: force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
@@ -1309,11 +1332,14 @@ else
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
   patch_installed_binary_version_timestamp "${debug_bin}"
-  echo "[3/4] Copying debug codex to ${INSTALL_BIN}..."
-  install_tmp="${INSTALL_BIN}.new.$$"
+  install_tmp="${INSTALL_BIN_DIR}/.codex.new.$$"
   install -D -m 755 "${debug_bin}" "${install_tmp}"
+  versioned_install_name="$(resolve_versioned_install_name_from_binary "${install_tmp}")"
+  versioned_install_bin="${INSTALL_BIN_DIR}/${versioned_install_name}"
+  echo "[3/4] Installing debug codex to ${versioned_install_bin} and linking ${INSTALL_BIN}..."
+  mv -f "${install_tmp}" "${versioned_install_bin}"
   rm -f "${INSTALL_BIN}"
-  mv -f "${install_tmp}" "${INSTALL_BIN}"
+  ln -s "${versioned_install_name}" "${INSTALL_BIN}"
 fi
 
 if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
