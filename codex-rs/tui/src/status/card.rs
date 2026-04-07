@@ -31,7 +31,6 @@ use super::format::line_display_width;
 use super::format::push_label;
 use super::format::truncate_line_to_width;
 use super::helpers::compose_account_display;
-use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
@@ -85,10 +84,20 @@ struct StatusRateLimitState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusHistoryHandle {
+    agents_summary: Arc<RwLock<String>>,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
 }
 
 impl StatusHistoryHandle {
+    pub(crate) fn finish_agents_summary_discovery(&self, agents_summary: String) {
+        #[expect(clippy::expect_used)]
+        let mut current = self
+            .agents_summary
+            .write()
+            .expect("status history agents summary state poisoned");
+        *current = agents_summary;
+    }
+
     pub(crate) fn finish_rate_limit_refresh(
         &self,
         rate_limits: &[RateLimitSnapshotDisplay],
@@ -115,7 +124,7 @@ struct StatusHistoryCell {
     model_details: Vec<String>,
     directory: PathBuf,
     permissions: String,
-    agents_summary: String,
+    agents_summary: Arc<RwLock<String>>,
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
@@ -200,6 +209,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        "<none>".to_string(),
         refreshing_rate_limits,
         StatusCardVariant::Chat,
     )
@@ -222,6 +232,7 @@ fn new_status_output_with_rate_limits_handle_variant(
     model_name: &str,
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    agents_summary: String,
     refreshing_rate_limits: bool,
     variant: StatusCardVariant,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
@@ -240,6 +251,7 @@ fn new_status_output_with_rate_limits_handle_variant(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        agents_summary,
         refreshing_rate_limits,
         variant,
     );
@@ -270,6 +282,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     model_name: &str,
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    agents_summary: String,
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
     new_status_output_with_rate_limits_handle_variant(
@@ -287,6 +300,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        agents_summary,
         refreshing_rate_limits,
         StatusCardVariant::Chat,
     )
@@ -325,6 +339,7 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        "<none>".to_string(),
         /*refreshing_rate_limits*/ false,
         variant,
     )
@@ -357,6 +372,7 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
+        agents_summary: String,
         refreshing_rate_limits: bool,
         variant: StatusCardVariant,
     ) -> (Self, StatusHistoryHandle) {
@@ -421,7 +437,6 @@ impl StatusHistoryCell {
         } else {
             format!("Custom ({sandbox}, {approval})")
         };
-        let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
         let account = compose_account_display(account_display);
         let account_usage = account_usage.cloned();
@@ -453,6 +468,7 @@ impl StatusHistoryCell {
             rate_limits,
             refreshing_rate_limits,
         }));
+        let agents_summary = Arc::new(RwLock::new(agents_summary));
 
         (
             Self {
@@ -460,7 +476,6 @@ impl StatusHistoryCell {
                 model_details,
                 directory: config.cwd.to_path_buf(),
                 permissions,
-                agents_summary,
                 collaboration_mode: collaboration_mode.map(ToString::to_string),
                 model_provider,
                 account,
@@ -470,9 +485,13 @@ impl StatusHistoryCell {
                 forked_from,
                 token_usage,
                 variant,
+                agents_summary: agents_summary.clone(),
                 rate_limit_state: rate_limit_state.clone(),
             },
-            StatusHistoryHandle { rate_limit_state },
+            StatusHistoryHandle {
+                agents_summary,
+                rate_limit_state,
+            },
         )
     }
 
@@ -763,6 +782,12 @@ impl HistoryCell for StatusHistoryCell {
             .rate_limit_state
             .read()
             .expect("status history rate-limit state poisoned");
+        #[expect(clippy::expect_used)]
+        let agents_summary = self
+            .agents_summary
+            .read()
+            .expect("status history agents summary state poisoned")
+            .clone();
 
         if self.model_provider.is_some() {
             push_label(&mut labels, &mut seen, "Model provider");
@@ -826,7 +851,7 @@ impl HistoryCell for StatusHistoryCell {
             let directory_value = format_directory_display(&self.directory, Some(value_width));
             lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
             lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
-            lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
+            lines.push(formatter.line("Agents.md", vec![Span::from(agents_summary)]));
         }
 
         if let Some(account_value) = account_value {
