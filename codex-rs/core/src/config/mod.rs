@@ -906,12 +906,13 @@ fn load_workspace_writable_roots(
             ),
         )
     })?;
-    workspace_config
+    let roots = workspace_config
         .folders
         .into_iter()
         .filter_map(|folder| folder.path)
         .map(|path| AbsolutePathBuf::resolve_path_against_base(path, workspace_base.as_path()))
-        .collect()
+        .collect::<Vec<_>>();
+    Ok(roots)
 }
 
 fn merged_additional_writable_roots(
@@ -1543,7 +1544,7 @@ impl Config {
         let additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
             &cfg,
