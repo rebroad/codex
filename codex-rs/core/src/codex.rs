@@ -218,14 +218,17 @@ const MEMPALACE_MEMORY_GUIDANCE: &str = r#"## Memory strategy
 "#;
 
 fn append_mempalace_memory_guidance(
-    base_instructions: String,
+    base_instructions: Option<String>,
     bare_prompt: bool,
     has_mempalace_server: bool,
-) -> String {
+) -> Option<String> {
+    let Some(base_instructions) = base_instructions else {
+        return None;
+    };
     if bare_prompt || !has_mempalace_server || base_instructions.contains("MemPalace MCP") {
-        return base_instructions;
+        return Some(base_instructions);
     }
-    format!("{base_instructions}\n\n{MEMPALACE_MEMORY_GUIDANCE}")
+    Some(format!("{base_instructions}\n\n{MEMPALACE_MEMORY_GUIDANCE}"))
 }
 
 #[derive(Debug, PartialEq)]
@@ -623,11 +626,15 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = match config.base_instructions.clone() {
+            Some(base_instructions) => base_instructions,
+            None => conversation_history
+                .get_base_instructions()
+                .map(|base_instructions| {
+                    base_instructions.map(|base_instructions| base_instructions.text)
+                })
+                .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
+        };
         let has_mempalace_server = config.mcp_servers.contains_key("mempalace");
         let base_instructions = append_mempalace_memory_guidance(
             base_instructions,
@@ -1166,7 +1173,7 @@ pub(crate) struct SessionConfiguration {
     personality: Option<Personality>,
 
     /// Base instructions for the session.
-    base_instructions: String,
+    base_instructions: Option<String>,
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
@@ -1638,9 +1645,10 @@ impl Session {
                         conversation_id,
                         forked_from_id,
                         session_source,
-                        BaseInstructions {
-                            text: session_configuration.base_instructions.clone(),
-                        },
+                        session_configuration
+                            .base_instructions
+                            .clone()
+                            .map(|text| BaseInstructions { text }),
                         session_configuration.dynamic_tools.clone(),
                         if session_configuration.persist_extended_history {
                             EventPersistenceMode::Extended
@@ -2220,8 +2228,9 @@ impl Session {
                 ));
             }
         }
-        sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
-            .await;
+        if let Some(base_instructions) = session_configuration.base_instructions.clone() {
+            sess.schedule_startup_prewarm(base_instructions).await;
+        }
         let session_start_source = match &initial_history {
             InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -2323,18 +2332,23 @@ impl Session {
         state.history.estimate_token_count(turn_context)
     }
 
-    pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
+    pub(crate) async fn get_base_instructions(&self) -> Option<BaseInstructions> {
         let state = self.state.lock().await;
-        let text = if state
+        let base_instructions = state
+            .session_configuration
+            .base_instructions
+            .clone();
+        if state
             .session_configuration
             .original_config_do_not_use
             .bare_prompt
         {
-            String::new()
+            Some(BaseInstructions {
+                text: String::new(),
+            })
         } else {
-            state.session_configuration.base_instructions.clone()
-        };
-        BaseInstructions { text }
+            base_instructions.map(|text| BaseInstructions { text })
+        }
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
@@ -3768,7 +3782,11 @@ impl Session {
                 state.reference_context_item(),
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
-                state.session_configuration.base_instructions.clone(),
+                state
+                    .session_configuration
+                    .base_instructions
+                    .clone()
+                    .unwrap_or_default(),
                 state.session_configuration.session_source.clone(),
             )
         };
@@ -4082,7 +4100,13 @@ impl Session {
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let history = self.clone_history().await;
-        let base_instructions = self.get_base_instructions().await;
+        let empty_base_instructions = BaseInstructions {
+            text: String::new(),
+        };
+        let base_instructions = self
+            .get_base_instructions()
+            .await
+            .unwrap_or(empty_base_instructions);
         let Some(estimated_total_tokens) =
             history.estimate_token_count_with_base_instructions(&base_instructions)
         else {
@@ -6934,7 +6958,7 @@ pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
     turn_context: &TurnContext,
-    mut base_instructions: BaseInstructions,
+    mut base_instructions: Option<BaseInstructions>,
 ) -> Prompt {
     let deferred_dynamic_tools = turn_context
         .dynamic_tools
@@ -6960,7 +6984,9 @@ pub(crate) fn build_prompt(
     } else {
         ToolChoice::auto()
     };
-    if turn_context.config.bare_prompt {
+    if turn_context.config.bare_prompt
+        && let Some(base_instructions) = base_instructions.as_mut()
+    {
         base_instructions.text.clear();
     }
 

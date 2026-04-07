@@ -78,6 +78,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsManager;
+use codex_protocol::models::BaseInstructions;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
@@ -476,8 +477,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         js_repl_node_path: None,
         js_repl_node_module_dirs: None,
         zsh_path: None,
-        base_instructions: base_instructions_override_from_file,
-        developer_instructions: developer_instructions_override_from_file.clone(),
+        base_instructions: base_instructions_override_from_file.map(Some),
+        developer_instructions: developer_instructions_override_from_file.clone().map(Some),
         personality: personality.map(Into::into),
         compact_prompt: compact_prompt_override_from_file,
         compact_summary_preamble: compact_summary_preamble_override_from_file,
@@ -1087,12 +1088,14 @@ fn thread_start_params_from_config(
         ephemeral: Some(config.ephemeral),
         personality: config.personality,
         base_instructions: if bare_prompt {
-            Some(String::new())
+            Some(Some(String::new()))
         } else {
             config.base_instructions.clone()
         },
         developer_instructions: if bare_prompt {
-            Some(bare_prompt_developer_instructions.unwrap_or_default())
+            Some(Some(
+                bare_prompt_developer_instructions.unwrap_or_default(),
+            ))
         } else {
             None
         },
@@ -1117,12 +1120,14 @@ fn thread_resume_params_from_config(
         config: config_request_overrides_from_config(config, bare_prompt),
         personality: config.personality,
         base_instructions: if bare_prompt {
-            Some(String::new())
+            Some(Some(String::new()))
         } else {
             config.base_instructions.clone()
         },
         developer_instructions: if bare_prompt {
-            Some(bare_prompt_developer_instructions.unwrap_or_default())
+            Some(Some(
+                bare_prompt_developer_instructions.unwrap_or_default(),
+            ))
         } else {
             None
         },
@@ -1999,9 +2004,13 @@ async fn run_direct_request(
     prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
     prompt.personality = config.personality;
     if bare_prompt {
-        prompt.base_instructions.text = String::new();
-    } else if let Some(base_instructions) = &config.base_instructions {
-        prompt.base_instructions.text = base_instructions.clone();
+        prompt.base_instructions = Some(BaseInstructions {
+            text: String::new(),
+        });
+    } else if let Some(base_instructions) = config.base_instructions.clone().flatten() {
+        prompt.base_instructions = Some(BaseInstructions {
+            text: base_instructions,
+        });
     }
     let mut client_session = ModelClient::new(
         Some(auth_manager),
@@ -2655,7 +2664,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
-                base_instructions: Some("shared base".to_string()),
+                base_instructions: Some(Some("shared base".to_string())),
                 personality: Some(Personality::Pragmatic),
                 ..Default::default()
             })
@@ -2667,7 +2676,13 @@ mod tests {
         let start_params = thread_start_params_from_config(
             &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
         );
-        assert_eq!(start_params.base_instructions.as_deref(), Some("shared base"));
+        assert_eq!(
+            start_params
+                .base_instructions
+                .as_ref()
+                .and_then(Option::as_deref),
+            Some("shared base")
+        );
         assert_eq!(start_params.personality, Some(Personality::Pragmatic));
 
         let resume_params = thread_resume_params_from_config(
@@ -2676,7 +2691,13 @@ mod tests {
             /*bare_prompt*/ false,
             /*bare_prompt_developer_instructions*/ None,
         );
-        assert_eq!(resume_params.base_instructions.as_deref(), Some("shared base"));
+        assert_eq!(
+            resume_params
+                .base_instructions
+                .as_ref()
+                .and_then(Option::as_deref),
+            Some("shared base")
+        );
         assert_eq!(resume_params.personality, Some(Personality::Pragmatic));
     }
 
