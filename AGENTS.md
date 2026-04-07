@@ -5,6 +5,7 @@ In the `codex-rs` folder where the Rust code lives:
   - `CODEX_SANDBOX_NETWORK_DISABLED=1` is set when using the shell tool; existing checks are intentional.
   - `CODEX_SANDBOX=seatbelt` is set for processes spawned under Seatbelt; some tests intentionally exit early for this.
 - If you add compile-time file reads (for example `include_str!`, `include_bytes!`, `sqlx::migrate!`), update the crate `BUILD.bazel` `data` attributes so Bazel builds continue to work.
+- Prefer private modules and explicitly exported public crate API.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` before tests to keep `codex-rs/core/config.schema.json` in sync.
 - If you change Rust dependencies (`Cargo.toml` or `Cargo.lock`), run `just bazel-lock-update` at repo root, include `MODULE.bazel.lock` in the same change, then run `just bazel-lock-check`.
 - For Cargo commands that support it, prefer `--locked` (for example `cargo build --locked`, `cargo clippy --locked`, `cargo test --locked`) to avoid incidental lockfile rewrites. Also, escalated shell access is needed for cargo (due to sccache).
