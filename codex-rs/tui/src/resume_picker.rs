@@ -1,5 +1,8 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +32,8 @@ use codex_core::find_thread_names_by_ids;
 use codex_core::parse_turn_item;
 use codex_core::path_utils;
 use codex_core::prompt_preview_line;
+use codex_core::state_db::StateDbHandle;
+use codex_core::state_db::open_if_present as open_state_db_if_present;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
@@ -43,6 +48,12 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -51,6 +62,12 @@ use unicode_width::UnicodeWidthStr;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const HELP_POPUP_WIDTH: u16 = 84;
+const HELP_POPUP_HEIGHT: u16 = 16;
+const COLUMNS_POPUP_WIDTH: u16 = 38;
+const COLUMNS_POPUP_HEIGHT: u16 = 12;
+const DELETE_POPUP_WIDTH: u16 = 64;
+const DELETE_POPUP_HEIGHT: u16 = 6;
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
@@ -602,11 +619,30 @@ fn spawn_app_server_page_loader(
     })
 }
 
-/// Returns the human-readable column header for the given sort key.
-fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
-    match sort_key {
-        ThreadSortKey::CreatedAt => "Created at",
-        ThreadSortKey::UpdatedAt => "Updated at",
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SortColumn {
+    CreatedAt,
+    UpdatedAt,
+    Branch,
+    Prompts,
+    Cwd,
+    Pct,
+    Size,
+    Conversation,
+}
+
+impl SortColumn {
+    fn label(self) -> &'static str {
+        match self {
+            SortColumn::CreatedAt => "Created at",
+            SortColumn::UpdatedAt => "Updated at",
+            SortColumn::Branch => "Branch",
+            SortColumn::Prompts => "Prompts",
+            SortColumn::Cwd => "CWD",
+            SortColumn::Pct => "Pct",
+            SortColumn::Size => "Size",
+            SortColumn::Conversation => "Conversation",
+        }
     }
 }
 
@@ -651,10 +687,20 @@ struct PickerState {
     thread_name_cache: HashMap<ThreadId, Option<String>>,
     prompt_count_cache: HashMap<PathBuf, Option<usize>>,
     context_used_percent_cache: HashMap<PathBuf, Option<i64>>,
+    size_bytes_cache: HashMap<SeenRowKey, Option<u64>>,
+    sql_bytes_cache: HashMap<ThreadId, Option<u64>>,
     rollout_query_match_cache: HashMap<PathBuf, bool>,
+    state_db: Option<StateDbHandle>,
+    state_db_checked: bool,
     inline_error: Option<String>,
     input_mode: InputMode,
+    column_config: ColumnConfig,
+    columns_selected: usize,
+    selected_sort_column: SortColumn,
+    primary_sort_column: SortColumn,
+    secondary_sort_column: SortColumn,
     rename_draft: String,
+    pending_delete_label: Option<String>,
 }
 
 struct PaginationState {
@@ -687,6 +733,68 @@ enum InputMode {
     Navigation,
     Search,
     Rename,
+    Help,
+    Columns,
+    ConfirmDelete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ColumnKind {
+    CreatedAt,
+    UpdatedAt,
+    Branch,
+    Prompts,
+    Cwd,
+    Pct,
+    Size,
+}
+
+impl ColumnKind {
+    const BASE: [ColumnKind; 6] = [
+        ColumnKind::CreatedAt,
+        ColumnKind::UpdatedAt,
+        ColumnKind::Branch,
+        ColumnKind::Prompts,
+        ColumnKind::Pct,
+        ColumnKind::Size,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            ColumnKind::CreatedAt => "Created at",
+            ColumnKind::UpdatedAt => "Updated at",
+            ColumnKind::Branch => "Branch",
+            ColumnKind::Prompts => "Prompts",
+            ColumnKind::Cwd => "CWD",
+            ColumnKind::Pct => "Pct",
+            ColumnKind::Size => "Size",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ColumnConfig {
+    created_at: bool,
+    updated_at: bool,
+    branch: bool,
+    prompts: bool,
+    cwd: bool,
+    pct: bool,
+    size: bool,
+}
+
+impl Default for ColumnConfig {
+    fn default() -> Self {
+        Self {
+            created_at: true,
+            updated_at: true,
+            branch: true,
+            prompts: true,
+            cwd: true,
+            pct: true,
+            size: false,
+        }
+    }
 }
 
 enum LoadTrigger {
@@ -826,10 +934,20 @@ impl PickerState {
             thread_name_cache: HashMap::new(),
             prompt_count_cache: HashMap::new(),
             context_used_percent_cache: HashMap::new(),
+            size_bytes_cache: HashMap::new(),
+            sql_bytes_cache: HashMap::new(),
             rollout_query_match_cache: HashMap::new(),
+            state_db: None,
+            state_db_checked: false,
             inline_error: None,
             input_mode: InputMode::Navigation,
+            column_config: ColumnConfig::default(),
+            columns_selected: 0,
+            selected_sort_column: SortColumn::UpdatedAt,
+            primary_sort_column: SortColumn::UpdatedAt,
+            secondary_sort_column: SortColumn::CreatedAt,
             rename_draft: String::new(),
+            pending_delete_label: None,
         }
     }
 
@@ -839,6 +957,59 @@ impl PickerState {
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
         self.inline_error = None;
+        if self.input_mode == InputMode::Help {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => {
+                    self.input_mode = InputMode::Navigation;
+                    self.request_frame();
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+        if self.input_mode == InputMode::Columns {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.input_mode = InputMode::Navigation;
+                    self.request_frame();
+                }
+                KeyCode::Up => {
+                    self.columns_selected = self.columns_selected.saturating_sub(1);
+                    self.request_frame();
+                }
+                KeyCode::Down => {
+                    let max_index = self.toggleable_columns().len().saturating_sub(1);
+                    self.columns_selected = (self.columns_selected + 1).min(max_index);
+                    self.request_frame();
+                }
+                KeyCode::Char(' ') => {
+                    let columns = self.toggleable_columns();
+                    let kind = columns[self.columns_selected];
+                    self.toggle_column(kind);
+                    self.update_size_bytes().await;
+                    self.request_frame();
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+        if self.input_mode == InputMode::ConfirmDelete {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('n') => {
+                    self.input_mode = InputMode::Navigation;
+                    self.pending_delete_label = None;
+                    self.request_frame();
+                }
+                KeyCode::Enter | KeyCode::Char('y') => {
+                    self.input_mode = InputMode::Navigation;
+                    self.pending_delete_label = None;
+                    self.delete_selected_thread().await;
+                    self.request_frame();
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
         if self.input_mode == InputMode::Search {
             match key.code {
                 KeyCode::Esc => {
@@ -920,6 +1091,26 @@ impl PickerState {
                 self.input_mode = InputMode::Search;
                 self.request_frame();
             }
+            KeyCode::Char('?')
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+            {
+                self.input_mode = InputMode::Help;
+                self.request_frame();
+            }
+            KeyCode::Char('o')
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+            {
+                let max_index = self.toggleable_columns().len().saturating_sub(1);
+                self.columns_selected = self.columns_selected.min(max_index);
+                self.input_mode = InputMode::Columns;
+                self.request_frame();
+            }
             KeyCode::Char('r')
                 if !key
                     .modifiers
@@ -929,6 +1120,27 @@ impl PickerState {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     self.rename_draft = row.display_preview().to_string();
                     self.input_mode = InputMode::Rename;
+                    self.request_frame();
+                }
+            }
+            KeyCode::Char('t')
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+            {
+                self.touch_selected_thread().await;
+                self.request_frame();
+            }
+            KeyCode::Char('d')
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+            {
+                if let Some(row) = self.filtered_rows.get(self.selected) {
+                    self.pending_delete_label = Some(row.display_preview().to_string());
+                    self.input_mode = InputMode::ConfirmDelete;
                     self.request_frame();
                 }
             }
@@ -1003,6 +1215,23 @@ impl PickerState {
                     self.request_frame();
                 }
             }
+            KeyCode::Left => {
+                self.move_selected_sort_column(-1);
+                self.request_frame();
+            }
+            KeyCode::Right => {
+                self.move_selected_sort_column(1);
+                self.request_frame();
+            }
+            KeyCode::Char('s')
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+            {
+                self.apply_selected_column_sort().await;
+                self.request_frame();
+            }
             KeyCode::Tab => {
                 self.toggle_sort_key();
                 self.request_frame();
@@ -1049,11 +1278,214 @@ impl PickerState {
         }
     }
 
+    fn toggle_column(&mut self, kind: ColumnKind) {
+        match kind {
+            ColumnKind::CreatedAt => self.column_config.created_at = !self.column_config.created_at,
+            ColumnKind::UpdatedAt => self.column_config.updated_at = !self.column_config.updated_at,
+            ColumnKind::Branch => self.column_config.branch = !self.column_config.branch,
+            ColumnKind::Prompts => self.column_config.prompts = !self.column_config.prompts,
+            ColumnKind::Cwd => self.column_config.cwd = !self.column_config.cwd,
+            ColumnKind::Pct => self.column_config.pct = !self.column_config.pct,
+            ColumnKind::Size => self.column_config.size = !self.column_config.size,
+        }
+        let selectable = self.selectable_sort_columns();
+        if !selectable.contains(&self.selected_sort_column) {
+            self.selected_sort_column = selectable[0];
+        }
+        if !selectable.contains(&self.primary_sort_column) {
+            self.primary_sort_column = self.selected_sort_column;
+        }
+        if !selectable.contains(&self.secondary_sort_column) {
+            self.secondary_sort_column = self.primary_sort_column;
+        }
+    }
+
+    fn toggleable_columns(&self) -> Vec<ColumnKind> {
+        let mut columns = Vec::from(ColumnKind::BASE);
+        if self.show_all {
+            columns.insert(4, ColumnKind::Cwd);
+        }
+        columns
+    }
+
+    fn selectable_sort_columns(&self) -> Vec<SortColumn> {
+        let mut cols = Vec::new();
+        if self.column_config.created_at {
+            cols.push(SortColumn::CreatedAt);
+        }
+        if self.column_config.updated_at {
+            cols.push(SortColumn::UpdatedAt);
+        }
+        if self.column_config.branch && matches!(self.action, SessionPickerAction::Resume) {
+            cols.push(SortColumn::Branch);
+        }
+        if self.column_config.prompts && matches!(self.action, SessionPickerAction::Fork) {
+            cols.push(SortColumn::Prompts);
+        }
+        if self.show_all && self.column_config.cwd {
+            cols.push(SortColumn::Cwd);
+        }
+        if self.column_config.pct && matches!(self.action, SessionPickerAction::Resume) {
+            cols.push(SortColumn::Pct);
+        }
+        if self.column_config.size {
+            cols.push(SortColumn::Size);
+        }
+        cols.push(SortColumn::Conversation);
+        cols
+    }
+
+    fn move_selected_sort_column(&mut self, delta: isize) {
+        let cols = self.selectable_sort_columns();
+        if cols.is_empty() {
+            return;
+        }
+        let current_index = cols
+            .iter()
+            .position(|column| *column == self.selected_sort_column)
+            .unwrap_or(0);
+        let max_index = cols.len().saturating_sub(1);
+        let next_index = if delta < 0 {
+            current_index.saturating_sub(delta.unsigned_abs())
+        } else {
+            (current_index + delta as usize).min(max_index)
+        };
+        self.selected_sort_column = cols[next_index];
+    }
+
+    async fn apply_selected_column_sort(&mut self) {
+        if self.primary_sort_column != self.selected_sort_column {
+            self.secondary_sort_column = self.primary_sort_column;
+            self.primary_sort_column = self.selected_sort_column;
+        }
+        if self.primary_sort_column == SortColumn::Size
+            || self.secondary_sort_column == SortColumn::Size
+        {
+            self.update_size_bytes().await;
+        }
+        self.apply_filter();
+    }
+
+    async fn touch_selected_thread(&mut self) {
+        let Some(row) = self.filtered_rows.get(self.selected).cloned() else {
+            return;
+        };
+        let now = Utc::now();
+        let mut touched_anything = false;
+        let mut touch_error: Option<String> = None;
+
+        if let Some(path) = row.path.as_ref() {
+            match OpenOptions::new().append(true).open(path) {
+                Ok(file) => {
+                    if let Err(err) = file.set_times(FileTimes::new().set_modified(now.into())) {
+                        touch_error = Some(format!("Failed to touch rollout: {err}"));
+                    } else {
+                        touched_anything = true;
+                    }
+                }
+                Err(err) => {
+                    touch_error = Some(format!("Failed to open rollout for touch: {err}"));
+                }
+            }
+        }
+
+        let thread_id = self.resolve_row_thread_id(&row).await;
+        if let Some(thread_id) = thread_id
+            && let Some(state_db) = self.state_db_handle().await
+        {
+            match state_db.touch_thread_updated_at(thread_id, now).await {
+                Ok(updated) => {
+                    touched_anything |= updated;
+                }
+                Err(err) => {
+                    touch_error = Some(format!("Failed to touch thread in sqlite state db: {err}"));
+                }
+            }
+        }
+
+        if touched_anything {
+            self.start_initial_load();
+            return;
+        }
+
+        self.inline_error = Some(touch_error.unwrap_or_else(|| {
+            "Failed to touch selected session (unavailable for remote/pathless session)".to_string()
+        }));
+    }
+
+    async fn delete_selected_thread(&mut self) {
+        let Some(row) = self.filtered_rows.get(self.selected).cloned() else {
+            return;
+        };
+        let Some(path) = row.path.clone() else {
+            self.inline_error = Some("Cannot delete a pathless session".to_string());
+            return;
+        };
+
+        let thread_id = self.resolve_row_thread_id(&row).await;
+        let mut deleted_anything = false;
+
+        match tokio::fs::remove_file(path.as_path()).await {
+            Ok(()) => {
+                deleted_anything = true;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                self.inline_error = Some(format!("Failed to delete rollout file: {err}"));
+                return;
+            }
+        }
+
+        if let Some(thread_id) = thread_id
+            && let Some(state_db) = self.state_db_handle().await
+        {
+            let _ = state_db.delete_logs_for_thread(thread_id).await;
+            if let Ok(rows_affected) = state_db.delete_thread(thread_id).await {
+                deleted_anything |= rows_affected > 0;
+            }
+            self.sql_bytes_cache.remove(&thread_id);
+        }
+
+        if deleted_anything {
+            self.size_bytes_cache.clear();
+            self.start_initial_load();
+        } else {
+            self.inline_error = Some("Nothing was deleted for selected session".to_string());
+        }
+    }
+
+    async fn resolve_row_thread_id(&self, row: &Row) -> Option<ThreadId> {
+        match row.thread_id {
+            Some(thread_id) => Some(thread_id),
+            None => match row.path.as_ref() {
+                Some(path) => {
+                    crate::resolve_session_thread_id(path.as_path(), /*id_str_if_uuid*/ None).await
+                }
+                None => None,
+            },
+        }
+    }
+
+    async fn state_db_handle(&mut self) -> Option<StateDbHandle> {
+        if self.state_db_checked {
+            return self.state_db.clone();
+        }
+        self.state_db_checked = true;
+        let default_provider = match self.provider_filter {
+            ProviderFilter::Any => return None,
+            ProviderFilter::MatchDefault(ref default_provider) => default_provider.clone(),
+        };
+        self.state_db =
+            open_state_db_if_present(self.codex_home.as_path(), &default_provider).await;
+        self.state_db.clone()
+    }
+
     fn start_initial_load(&mut self) {
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
         self.seen_rows.clear();
+        self.size_bytes_cache.clear();
         self.selected = 0;
 
         let search_token = if self.query.is_empty() {
@@ -1101,6 +1533,7 @@ impl PickerState {
                 self.update_thread_names().await;
                 self.update_prompt_counts().await;
                 self.update_context_used_percent().await;
+                self.update_size_bytes().await;
                 self.update_rollout_query_match_cache().await;
                 self.apply_filter();
                 let completed_token = pending.search_token.or(search_token);
@@ -1295,6 +1728,57 @@ impl PickerState {
         }
     }
 
+    async fn update_size_bytes(&mut self) {
+        if !self.column_config.size {
+            return;
+        }
+
+        let mut missing_rows: Vec<Row> = Vec::new();
+        for row in &self.all_rows {
+            let Some(key) = row.seen_key() else {
+                continue;
+            };
+            if self.size_bytes_cache.contains_key(&key) {
+                continue;
+            }
+            missing_rows.push(row.clone());
+        }
+
+        for row in missing_rows {
+            let Some(key) = row.seen_key() else {
+                continue;
+            };
+            let Some(path) = row.path.as_ref() else {
+                self.size_bytes_cache.insert(key, None);
+                continue;
+            };
+            let file_bytes = tokio::fs::metadata(path)
+                .await
+                .map(|meta| meta.len())
+                .ok()
+                .unwrap_or(0);
+            let mut sql_bytes = 0u64;
+            let thread_id = self.resolve_row_thread_id(&row).await;
+            if let Some(thread_id) = thread_id {
+                if let Some(cached) = self.sql_bytes_cache.get(&thread_id).copied().flatten() {
+                    sql_bytes = cached;
+                } else if let Some(state_db) = self.state_db_handle().await {
+                    match state_db.estimated_log_bytes_for_thread(thread_id).await {
+                        Ok(bytes) => {
+                            self.sql_bytes_cache.insert(thread_id, Some(bytes));
+                            sql_bytes = bytes;
+                        }
+                        Err(_) => {
+                            self.sql_bytes_cache.insert(thread_id, None);
+                        }
+                    }
+                }
+            }
+            self.size_bytes_cache
+                .insert(key, Some(file_bytes.saturating_add(sql_bytes)));
+        }
+    }
+
     fn apply_filter(&mut self) {
         let base_iter = self
             .all_rows
@@ -1309,6 +1793,38 @@ impl PickerState {
                 .cloned()
                 .collect();
         }
+        let primary_sort_column = self.primary_sort_column;
+        let secondary_sort_column = self.secondary_sort_column;
+        let size_bytes_cache = self.size_bytes_cache.clone();
+        self.filtered_rows.sort_by(|left, right| {
+            let primary =
+                Self::compare_rows_by_column(left, right, primary_sort_column, &size_bytes_cache);
+            if primary != Ordering::Equal {
+                return primary;
+            }
+            let secondary =
+                Self::compare_rows_by_column(left, right, secondary_sort_column, &size_bytes_cache);
+            if secondary != Ordering::Equal {
+                return secondary;
+            }
+            Self::compare_rows_by_column(left, right, SortColumn::UpdatedAt, &size_bytes_cache)
+                .then_with(|| {
+                    Self::compare_rows_by_column(
+                        left,
+                        right,
+                        SortColumn::CreatedAt,
+                        &size_bytes_cache,
+                    )
+                })
+                .then_with(|| {
+                    Self::compare_rows_by_column(
+                        left,
+                        right,
+                        SortColumn::Conversation,
+                        &size_bytes_cache,
+                    )
+                })
+        });
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
         }
@@ -1317,6 +1833,63 @@ impl PickerState {
         }
         self.ensure_selected_visible();
         self.request_frame();
+    }
+
+    fn compare_rows_by_column(
+        left: &Row,
+        right: &Row,
+        column: SortColumn,
+        size_bytes_cache: &HashMap<SeenRowKey, Option<u64>>,
+    ) -> Ordering {
+        match column {
+            SortColumn::CreatedAt => right.created_at.cmp(&left.created_at),
+            SortColumn::UpdatedAt => {
+                let left_updated = left.updated_at.or(left.created_at);
+                let right_updated = right.updated_at.or(right.created_at);
+                right_updated.cmp(&left_updated)
+            }
+            SortColumn::Branch => right
+                .git_branch
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase()
+                .cmp(
+                    &left
+                        .git_branch
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase(),
+                ),
+            SortColumn::Prompts => right.prompt_count.cmp(&left.prompt_count),
+            SortColumn::Cwd => right
+                .cwd
+                .as_ref()
+                .map(|path| path.display().to_string().to_lowercase())
+                .unwrap_or_default()
+                .cmp(
+                    &left
+                        .cwd
+                        .as_ref()
+                        .map(|path| path.display().to_string().to_lowercase())
+                        .unwrap_or_default(),
+                ),
+            SortColumn::Pct => right.context_used_percent.cmp(&left.context_used_percent),
+            SortColumn::Size => {
+                let left_size = left
+                    .seen_key()
+                    .and_then(|key| size_bytes_cache.get(&key).copied().flatten())
+                    .unwrap_or(0);
+                let right_size = right
+                    .seen_key()
+                    .and_then(|key| size_bytes_cache.get(&key).copied().flatten())
+                    .unwrap_or(0);
+                right_size.cmp(&left_size)
+            }
+            SortColumn::Conversation => right
+                .display_preview()
+                .to_lowercase()
+                .cmp(&left.display_preview().to_lowercase()),
+        }
     }
 
     fn row_matches_filter(&self, row: &Row) -> bool {
@@ -1530,6 +2103,15 @@ impl PickerState {
             ThreadSortKey::CreatedAt => ThreadSortKey::UpdatedAt,
             ThreadSortKey::UpdatedAt => ThreadSortKey::CreatedAt,
         };
+        let new_primary = match self.sort_key {
+            ThreadSortKey::CreatedAt => SortColumn::CreatedAt,
+            ThreadSortKey::UpdatedAt => SortColumn::UpdatedAt,
+        };
+        if self.primary_sort_column != new_primary {
+            self.secondary_sort_column = self.primary_sort_column;
+            self.primary_sort_column = new_primary;
+        }
+        self.selected_sort_column = new_primary;
         self.start_initial_load();
     }
 }
@@ -1671,7 +2253,12 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "  ".into(),
             "Sort:".dim(),
             " ".into(),
-            sort_key_label(state.sort_key).magenta(),
+            format!(
+                "{} then {}",
+                state.primary_sort_column.label(),
+                state.secondary_sort_column.label()
+            )
+            .magenta(),
         ]
         .into();
         frame.render_widget_ref(header_line, header);
@@ -1679,10 +2266,26 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         // Search line
         frame.render_widget_ref(search_line(state), search);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, state.action);
+        let effective_sort_key =
+            effective_timestamp_sort_key(state.primary_sort_column, state.sort_key);
+        let metrics = calculate_column_metrics(
+            &state.filtered_rows,
+            state.show_all && state.column_config.cwd,
+            state.action,
+            state.column_config.size,
+            &state.size_bytes_cache,
+        );
 
         // Column headers and list
-        render_column_headers(frame, columns, &metrics, state.sort_key, state.action);
+        render_column_headers(
+            frame,
+            columns,
+            &metrics,
+            effective_sort_key,
+            state.action,
+            state.column_config,
+            state.selected_sort_column,
+        );
         render_list(frame, list, state, &metrics);
 
         // Hint line
@@ -1691,11 +2294,31 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             key_hint::plain(KeyCode::Enter).into(),
             format!(" to {action_label} ").dim(),
             "    ".dim(),
+            key_hint::plain(KeyCode::Char('?')).into(),
+            " for help ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Char('o')).into(),
+            " columns ".dim(),
+            "    ".dim(),
             key_hint::plain(KeyCode::Char('/')).into(),
             " to search ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Char('r')).into(),
             " to rename ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Char('t')).into(),
+            " touch ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Char('d')).into(),
+            " delete ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Left).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Right).into(),
+            " select column ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Char('s')).into(),
+            " sort by selected ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Tab).into(),
             " to toggle sort ".dim(),
@@ -1707,6 +2330,8 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         ]
         .into();
         frame.render_widget_ref(hint_line, hint);
+
+        render_popup_overlay(frame, area, state);
     })
 }
 
@@ -1721,6 +2346,106 @@ fn search_line(state: &PickerState) -> Line<'_> {
         return Line::from(format!("Search: {}", state.query));
     }
     Line::from("Press / to search".dim())
+}
+
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let popup_width = width.min(area.width);
+    let popup_height = height.min(area.height);
+    let x = area
+        .x
+        .saturating_add(area.width.saturating_sub(popup_width) / 2);
+    let y = area
+        .y
+        .saturating_add(area.height.saturating_sub(popup_height) / 2);
+    Rect::new(x, y, popup_width, popup_height)
+}
+
+fn render_popup_overlay(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    state: &PickerState,
+) {
+    match state.input_mode {
+        InputMode::Help => {
+            let popup = centered_rect(area, HELP_POPUP_WIDTH, HELP_POPUP_HEIGHT);
+            Clear.render(popup, frame.buffer_mut());
+            let help_text = vec![
+                "Shortcuts",
+                "",
+                "Enter: resume/fork selected session",
+                "/: search sessions",
+                "r: rename session",
+                "t: touch session (refresh Updated at)",
+                "d: delete session (asks for confirmation)",
+                "o: configure visible columns",
+                "←/→: choose a column (yellow header)",
+                "s: sort by selected column (previous becomes secondary)",
+                "tab: toggle sort key",
+                "↑/↓/PageUp/PageDown: navigate",
+                "esc: start new session",
+                "ctrl-c: quit",
+                "",
+                "Press Esc, Enter, or ? to close",
+            ]
+            .join("\n");
+            let block = Block::default().title(" Help ").borders(Borders::ALL);
+            frame.render_widget_ref(
+                Paragraph::new(help_text)
+                    .block(block)
+                    .wrap(Wrap { trim: false }),
+                popup,
+            );
+        }
+        InputMode::Columns => {
+            let popup = centered_rect(area, COLUMNS_POPUP_WIDTH, COLUMNS_POPUP_HEIGHT);
+            Clear.render(popup, frame.buffer_mut());
+            let toggleable_columns = state.toggleable_columns();
+            let mut lines = Vec::with_capacity(toggleable_columns.len() + 2);
+            lines.push("Toggle columns with Space".to_string());
+            lines.push(String::new());
+            for (idx, kind) in toggleable_columns.iter().enumerate() {
+                let selected = if idx == state.columns_selected {
+                    ">"
+                } else {
+                    " "
+                };
+                let checked = if column_enabled(state.column_config, *kind) {
+                    "x"
+                } else {
+                    " "
+                };
+                lines.push(format!("{selected} [{checked}] {}", kind.label()));
+            }
+            let block = Block::default()
+                .title(" Columns (Esc to close) ")
+                .borders(Borders::ALL);
+            frame.render_widget_ref(
+                Paragraph::new(lines.join("\n"))
+                    .block(block)
+                    .wrap(Wrap { trim: false }),
+                popup,
+            );
+        }
+        InputMode::ConfirmDelete => {
+            let popup = centered_rect(area, DELETE_POPUP_WIDTH, DELETE_POPUP_HEIGHT);
+            Clear.render(popup, frame.buffer_mut());
+            let label = state
+                .pending_delete_label
+                .as_deref()
+                .unwrap_or("selected session");
+            let text = format!(
+                "Delete this session?\n\n{label}\n\nPress y/Enter to confirm, n/Esc to cancel."
+            );
+            let block = Block::default()
+                .title(" Confirm Delete ")
+                .borders(Borders::ALL);
+            frame.render_widget_ref(
+                Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
+                popup,
+            );
+        }
+        InputMode::Navigation | InputMode::Search | InputMode::Rename => {}
+    }
 }
 
 fn render_list(
@@ -1746,17 +2471,35 @@ fn render_list(
     let labels = &metrics.labels;
     let mut y = area.y;
 
-    let visibility = column_visibility(area.width, metrics, state.sort_key, state.action);
+    let visibility = column_visibility(
+        area.width,
+        metrics,
+        state.sort_key,
+        state.action,
+        state.column_config,
+    );
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
     let max_branch_width = metrics.max_branch_width;
     let max_prompts_width = metrics.max_prompts_width;
     let max_cwd_width = metrics.max_cwd_width;
     let max_pct_width = metrics.max_pct_width;
+    let max_size_width = metrics.max_size_width;
 
     for (
         idx,
-        (row, (created_label, updated_label, branch_label, prompts_label, cwd_label, pct_label)),
+        (
+            row,
+            (
+                created_label,
+                updated_label,
+                branch_label,
+                prompts_label,
+                cwd_label,
+                pct_label,
+                size_label,
+            ),
+        ),
     ) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
@@ -1817,6 +2560,20 @@ fn render_list(
         } else {
             Some(Span::from(format!("{cwd_label:<max_cwd_width$}")).dim())
         };
+        let size_span = if !visibility.show_size {
+            None
+        } else if size_label.is_empty() {
+            Some(
+                Span::from(format!(
+                    "{empty:>width$}",
+                    empty = "-",
+                    width = max_size_width
+                ))
+                .dim(),
+            )
+        } else {
+            Some(Span::from(format!("{size_label:>max_size_width$}")).dim())
+        };
 
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
@@ -1838,12 +2595,16 @@ fn render_list(
         if visibility.show_pct {
             preview_width = preview_width.saturating_sub(max_pct_width + 2);
         }
+        if visibility.show_size {
+            preview_width = preview_width.saturating_sub(max_size_width + 2);
+        }
         let add_leading_gap = !visibility.show_created
             && !visibility.show_updated
             && !visibility.show_branch
             && !visibility.show_prompts
             && !visibility.show_cwd
-            && !visibility.show_pct;
+            && !visibility.show_pct
+            && !visibility.show_size;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
@@ -1875,12 +2636,18 @@ fn render_list(
         let preview_width_used = UnicodeWidthStr::width(preview.as_str());
         let preview_padding = preview_width.saturating_sub(preview_width_used);
         spans.push(preview.into());
-        if visibility.show_pct {
+        if visibility.show_pct || visibility.show_size {
             if preview_padding > 0 {
                 spans.push(" ".repeat(preview_padding).into());
             }
+        }
+        if visibility.show_pct {
             spans.push("  ".into());
             spans.push(Span::from(format!("{pct_label:>max_pct_width$}")).dim());
+        }
+        if let Some(size) = size_span {
+            spans.push("  ".into());
+            spans.push(size);
         }
 
         let line: Line = spans.into();
@@ -1922,6 +2689,19 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     }
 
     vec!["No sessions yet".italic().dim()].into()
+}
+
+fn effective_timestamp_sort_key(primary: SortColumn, fallback: ThreadSortKey) -> ThreadSortKey {
+    match primary {
+        SortColumn::CreatedAt => ThreadSortKey::CreatedAt,
+        SortColumn::UpdatedAt => ThreadSortKey::UpdatedAt,
+        SortColumn::Branch
+        | SortColumn::Prompts
+        | SortColumn::Cwd
+        | SortColumn::Pct
+        | SortColumn::Size
+        | SortColumn::Conversation => fallback,
+    }
 }
 
 fn human_time_ago(ts: DateTime<Utc>) -> String {
@@ -1980,20 +2760,27 @@ fn render_column_headers(
     metrics: &ColumnMetrics,
     sort_key: ThreadSortKey,
     action: SessionPickerAction,
+    column_config: ColumnConfig,
+    selected_sort_column: SortColumn,
 ) {
     if area.height == 0 {
         return;
     }
 
     let mut spans: Vec<Span> = vec!["  ".into()];
-    let visibility = column_visibility(area.width, metrics, sort_key, action);
+    let visibility = column_visibility(area.width, metrics, sort_key, action, column_config);
     if visibility.show_created {
         let label = format!(
             "{text:<width$}",
             text = "Created at",
             width = metrics.max_created_width
         );
-        spans.push(Span::from(label).bold());
+        let span = if selected_sort_column == SortColumn::CreatedAt {
+            Span::from(label).bold().yellow()
+        } else {
+            Span::from(label).bold()
+        };
+        spans.push(span);
         spans.push("  ".into());
     }
     if visibility.show_updated {
@@ -2002,7 +2789,12 @@ fn render_column_headers(
             text = "Updated at",
             width = metrics.max_updated_width
         );
-        spans.push(Span::from(label).bold());
+        let span = if selected_sort_column == SortColumn::UpdatedAt {
+            Span::from(label).bold().yellow()
+        } else {
+            Span::from(label).bold()
+        };
+        spans.push(span);
         spans.push("  ".into());
     }
     if visibility.show_branch {
@@ -2011,7 +2803,12 @@ fn render_column_headers(
             text = "Branch",
             width = metrics.max_branch_width
         );
-        spans.push(Span::from(label).bold());
+        let span = if selected_sort_column == SortColumn::Branch {
+            Span::from(label).bold().yellow()
+        } else {
+            Span::from(label).bold()
+        };
+        spans.push(span);
         spans.push("  ".into());
     }
     if visibility.show_prompts {
@@ -2020,7 +2817,12 @@ fn render_column_headers(
             text = "Prompts",
             width = metrics.max_prompts_width
         );
-        spans.push(Span::from(label).bold());
+        let span = if selected_sort_column == SortColumn::Prompts {
+            Span::from(label).bold().yellow()
+        } else {
+            Span::from(label).bold()
+        };
+        spans.push(span);
         spans.push("  ".into());
     }
     if visibility.show_cwd {
@@ -2029,7 +2831,12 @@ fn render_column_headers(
             text = "CWD",
             width = metrics.max_cwd_width
         );
-        spans.push(Span::from(label).bold());
+        let span = if selected_sort_column == SortColumn::Cwd {
+            Span::from(label).bold().yellow()
+        } else {
+            Span::from(label).bold()
+        };
+        spans.push(span);
         spans.push("  ".into());
     }
     let marker_width = 2usize;
@@ -2053,10 +2860,18 @@ fn render_column_headers(
     if visibility.show_pct {
         conversation_width = conversation_width.saturating_sub(metrics.max_pct_width + 2);
     }
+    if visibility.show_size {
+        conversation_width = conversation_width.saturating_sub(metrics.max_size_width + 2);
+    }
 
     let conversation_label = "Conversation";
-    spans.push(Span::from(conversation_label).bold());
-    if visibility.show_pct {
+    let conversation_span = if selected_sort_column == SortColumn::Conversation {
+        Span::from(conversation_label).bold().yellow()
+    } else {
+        Span::from(conversation_label).bold()
+    };
+    spans.push(conversation_span);
+    if visibility.show_pct || visibility.show_size {
         let conversation_width_used = UnicodeWidthStr::width(conversation_label);
         let conversation_padding = conversation_width.saturating_sub(conversation_width_used);
         if conversation_padding > 0 {
@@ -2070,7 +2885,26 @@ fn render_column_headers(
             text = "Pct",
             width = metrics.max_pct_width
         );
-        spans.push(Span::from(label).bold());
+        let span = if selected_sort_column == SortColumn::Pct {
+            Span::from(label).bold().yellow()
+        } else {
+            Span::from(label).bold()
+        };
+        spans.push(span);
+    }
+    if visibility.show_size {
+        spans.push("  ".into());
+        let label = format!(
+            "{text:>width$}",
+            text = "Size",
+            width = metrics.max_size_width
+        );
+        let span = if selected_sort_column == SortColumn::Size {
+            Span::from(label).bold().yellow()
+        } else {
+            Span::from(label).bold()
+        };
+        spans.push(span);
     }
     frame.render_widget_ref(Line::from(spans), area);
 }
@@ -2086,8 +2920,9 @@ struct ColumnMetrics {
     max_prompts_width: usize,
     max_cwd_width: usize,
     max_pct_width: usize,
-    /// (created_label, updated_label, branch_label, prompts_label, cwd_label, pct_label) per row.
-    labels: Vec<(String, String, String, String, String, String)>,
+    max_size_width: usize,
+    /// (created_label, updated_label, branch_label, prompts_label, cwd_label, pct_label, size_label) per row.
+    labels: Vec<(String, String, String, String, String, String, String)>,
 }
 
 /// Determines which columns to render given available terminal width.
@@ -2103,12 +2938,15 @@ struct ColumnVisibility {
     show_prompts: bool,
     show_cwd: bool,
     show_pct: bool,
+    show_size: bool,
 }
 
 fn calculate_column_metrics(
     rows: &[Row],
     include_cwd: bool,
     action: SessionPickerAction,
+    show_size: bool,
+    size_bytes_cache: &HashMap<SeenRowKey, Option<u64>>,
 ) -> ColumnMetrics {
     fn right_elide(s: &str, max: usize) -> String {
         if s.chars().count() <= max {
@@ -2129,7 +2967,7 @@ fn calculate_column_metrics(
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String, String, String, String)> =
+    let mut labels: Vec<(String, String, String, String, String, String, String)> =
         Vec::with_capacity(rows.len());
     let mut max_created_width = UnicodeWidthStr::width("Created at");
     let mut max_updated_width = UnicodeWidthStr::width("Updated at");
@@ -2150,6 +2988,11 @@ fn calculate_column_metrics(
     };
     let mut max_pct_width = if matches!(action, SessionPickerAction::Resume) {
         UnicodeWidthStr::width("Pct")
+    } else {
+        0
+    };
+    let mut max_size_width = if show_size {
+        UnicodeWidthStr::width("Size")
     } else {
         0
     };
@@ -2187,6 +3030,14 @@ fn calculate_column_metrics(
         } else {
             String::new()
         };
+        let size = if show_size {
+            row.seen_key()
+                .and_then(|key| size_bytes_cache.get(&key).copied().flatten())
+                .map(format_bytes)
+                .unwrap_or_else(|| "-".to_string())
+        } else {
+            String::new()
+        };
         max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         if matches!(action, SessionPickerAction::Resume) {
@@ -2197,7 +3048,10 @@ fn calculate_column_metrics(
             max_prompts_width = max_prompts_width.max(UnicodeWidthStr::width(prompts.as_str()));
         }
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((created, updated, branch, prompts, cwd, pct));
+        if show_size {
+            max_size_width = max_size_width.max(UnicodeWidthStr::width(size.as_str()));
+        }
+        labels.push((created, updated, branch, prompts, cwd, pct, size));
     }
 
     ColumnMetrics {
@@ -2207,7 +3061,23 @@ fn calculate_column_metrics(
         max_prompts_width,
         max_cwd_width,
         max_pct_width,
+        max_size_width,
         labels,
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes >= GB {
+        format!("{:.1}G", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1}M", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1}K", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes}B")
     }
 }
 
@@ -2221,21 +3091,31 @@ fn column_visibility(
     metrics: &ColumnMetrics,
     sort_key: ThreadSortKey,
     action: SessionPickerAction,
+    column_config: ColumnConfig,
 ) -> ColumnVisibility {
     const MIN_PREVIEW_WIDTH: usize = 10;
 
-    let show_branch = matches!(action, SessionPickerAction::Resume) && metrics.max_branch_width > 0;
-    let show_prompts = matches!(action, SessionPickerAction::Fork) && metrics.max_prompts_width > 0;
-    let show_cwd = metrics.max_cwd_width > 0;
-    let show_pct = matches!(action, SessionPickerAction::Resume) && metrics.max_pct_width > 0;
+    let show_created_base = column_config.created_at && metrics.max_created_width > 0;
+    let show_updated_base = column_config.updated_at && metrics.max_updated_width > 0;
+    let show_branch = column_config.branch
+        && matches!(action, SessionPickerAction::Resume)
+        && metrics.max_branch_width > 0;
+    let show_prompts = column_config.prompts
+        && matches!(action, SessionPickerAction::Fork)
+        && metrics.max_prompts_width > 0;
+    let show_cwd = column_config.cwd && metrics.max_cwd_width > 0;
+    let show_pct = column_config.pct
+        && matches!(action, SessionPickerAction::Resume)
+        && metrics.max_pct_width > 0;
+    let show_size = column_config.size && metrics.max_size_width > 0;
 
     // Calculate remaining width after all optional columns.
     let mut preview_width = area_width as usize;
     preview_width = preview_width.saturating_sub(2); // marker
-    if metrics.max_created_width > 0 {
+    if show_created_base {
         preview_width = preview_width.saturating_sub(metrics.max_created_width + 2);
     }
-    if metrics.max_updated_width > 0 {
+    if show_updated_base {
         preview_width = preview_width.saturating_sub(metrics.max_updated_width + 2);
     }
     if show_branch {
@@ -2250,18 +3130,21 @@ fn column_visibility(
     if show_pct {
         preview_width = preview_width.saturating_sub(metrics.max_pct_width + 2);
     }
+    if show_size {
+        preview_width = preview_width.saturating_sub(metrics.max_size_width + 2);
+    }
 
     // If preview would be too narrow, hide the non-active timestamp column.
     let show_both = preview_width >= MIN_PREVIEW_WIDTH;
-    let show_created = if show_both {
-        metrics.max_created_width > 0
+    let show_created = if show_both || !show_created_base || !show_updated_base {
+        show_created_base
     } else {
-        sort_key == ThreadSortKey::CreatedAt
+        show_created_base && sort_key == ThreadSortKey::CreatedAt
     };
-    let show_updated = if show_both {
-        metrics.max_updated_width > 0
+    let show_updated = if show_both || !show_created_base || !show_updated_base {
+        show_updated_base
     } else {
-        sort_key == ThreadSortKey::UpdatedAt
+        show_updated_base && sort_key == ThreadSortKey::UpdatedAt
     };
 
     ColumnVisibility {
@@ -2271,6 +3154,19 @@ fn column_visibility(
         show_prompts,
         show_cwd,
         show_pct,
+        show_size,
+    }
+}
+
+fn column_enabled(config: ColumnConfig, kind: ColumnKind) -> bool {
+    match kind {
+        ColumnKind::CreatedAt => config.created_at,
+        ColumnKind::UpdatedAt => config.updated_at,
+        ColumnKind::Branch => config.branch,
+        ColumnKind::Prompts => config.prompts,
+        ColumnKind::Cwd => config.cwd,
+        ColumnKind::Pct => config.pct,
+        ColumnKind::Size => config.size,
     }
 }
 
@@ -2645,7 +3541,13 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(/*rows*/ 3);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, state.action);
+        let metrics = calculate_column_metrics(
+            &state.filtered_rows,
+            state.show_all && state.column_config.cwd,
+            state.action,
+            state.column_config.size,
+            &state.size_bytes_cache,
+        );
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -2664,6 +3566,8 @@ mod tests {
                 &metrics,
                 state.sort_key,
                 state.action,
+                state.column_config,
+                state.selected_sort_column,
             );
             render_list(&mut frame, segments[1], &state, &metrics);
         }
@@ -2961,7 +3865,13 @@ mod tests {
 
         state.update_thread_names().await;
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, state.action);
+        let metrics = calculate_column_metrics(
+            &state.filtered_rows,
+            state.show_all && state.column_config.cwd,
+            state.action,
+            state.column_config.size,
+            &state.size_bytes_cache,
+        );
 
         let width: u16 = 80;
         let height: u16 = 5;
@@ -2980,6 +3890,8 @@ mod tests {
                 &metrics,
                 state.sort_key,
                 state.action,
+                state.column_config,
+                state.selected_sort_column,
             );
             render_list(&mut frame, segments[1], &state, &metrics);
         }
@@ -3099,6 +4011,7 @@ mod tests {
             max_prompts_width: 0,
             max_cwd_width: 0,
             max_pct_width: 0,
+            max_size_width: 0,
             labels: Vec::new(),
         };
 
@@ -3107,6 +4020,7 @@ mod tests {
             &metrics,
             ThreadSortKey::CreatedAt,
             SessionPickerAction::Resume,
+            ColumnConfig::default(),
         );
         assert_eq!(
             created,
@@ -3117,6 +4031,7 @@ mod tests {
                 show_prompts: false,
                 show_cwd: false,
                 show_pct: false,
+                show_size: false,
             }
         );
 
@@ -3125,6 +4040,7 @@ mod tests {
             &metrics,
             ThreadSortKey::UpdatedAt,
             SessionPickerAction::Resume,
+            ColumnConfig::default(),
         );
         assert_eq!(
             updated,
@@ -3135,6 +4051,7 @@ mod tests {
                 show_prompts: false,
                 show_cwd: false,
                 show_pct: false,
+                show_size: false,
             }
         );
 
@@ -3143,6 +4060,7 @@ mod tests {
             &metrics,
             ThreadSortKey::CreatedAt,
             SessionPickerAction::Resume,
+            ColumnConfig::default(),
         );
         assert_eq!(
             wide,
@@ -3153,6 +4071,7 @@ mod tests {
                 show_prompts: false,
                 show_cwd: false,
                 show_pct: false,
+                show_size: false,
             }
         );
     }

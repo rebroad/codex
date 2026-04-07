@@ -408,6 +408,27 @@ ORDER BY ts DESC, ts_nanos DESC, id DESC
         self.query_feedback_logs_for_threads(&[thread_id]).await
     }
 
+    /// Returns the estimated number of persisted bytes for logs tied to `thread_id`.
+    pub async fn estimated_log_bytes_for_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
+        let row = sqlx::query(
+            "SELECT COALESCE(SUM(estimated_bytes), 0) AS total_bytes FROM logs WHERE thread_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .fetch_one(self.logs_pool.as_ref())
+        .await?;
+        let total_bytes: i64 = row.try_get("total_bytes")?;
+        Ok(total_bytes.max(0) as u64)
+    }
+
+    /// Deletes all persisted logs tied to `thread_id`.
+    pub async fn delete_logs_for_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM logs WHERE thread_id = ?")
+            .bind(thread_id.to_string())
+            .execute(self.logs_pool.as_ref())
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Return the max log id matching optional filters.
     pub async fn max_log_id(&self, query: &LogQuery) -> anyhow::Result<i64> {
         let mut builder =
