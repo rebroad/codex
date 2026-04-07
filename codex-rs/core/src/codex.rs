@@ -1344,9 +1344,9 @@ fn exec_policy_path_for_amendment(session_configuration: &SessionConfiguration) 
     ) {
         if matches!(&layer.name, ConfigLayerSource::Project { .. })
             && let Some(config_folder) = layer.config_folder()
-            && let Ok(policy_dir) = config_folder.join("rules")
-            && let Ok(policy_path) = policy_dir.join("default.rules")
         {
+            let policy_dir = config_folder.join("rules");
+            let policy_path = policy_dir.join("default.rules");
             return policy_path.as_path().to_path_buf();
         }
     }
