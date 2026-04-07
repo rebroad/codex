@@ -10,7 +10,7 @@ use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
-use codex_api::common::ToolChoice;
+use codex_api::ToolChoice;
 use codex_api::ResponseEvent;
 use codex_config::types::MemoriesConfig;
 use codex_otel::SessionTelemetry;

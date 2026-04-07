@@ -19,7 +19,7 @@ use codex_login::CodexAuth;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
-use codex_api::api_bridge::CoreAuthProvider;
+use codex_api::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
