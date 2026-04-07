@@ -7,6 +7,7 @@ use crate::provider::Provider;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::Request;
+use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
 use codex_client::Response;
 use codex_client::StreamResponse;
@@ -23,6 +24,16 @@ pub(crate) struct EndpointSession<T: HttpTransport, A: AuthProvider> {
     provider: Provider,
     auth: A,
     request_telemetry: Option<Arc<dyn RequestTelemetry>>,
+}
+
+fn request_body_json(body: Option<&RequestBody>) -> serde_json::Value {
+    match body {
+        Some(RequestBody::Json(value)) => value.clone(),
+        Some(RequestBody::Raw(body)) => serde_json::json!({
+            "raw_bytes": body.len(),
+        }),
+        None => serde_json::Value::Null,
+    }
 }
 
 impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
@@ -57,7 +68,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         let mut req = self.provider.build_request(method.clone(), path);
         req.headers.extend(extra_headers.clone());
         if let Some(body) = body {
-            req.body = Some(body.clone());
+            req.body = Some(RequestBody::Json(body.clone()));
         }
         add_auth_headers(&self.auth, req)
     }
@@ -114,7 +125,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                     "method": req.method.as_str(),
                     "url": req.url,
                     "headers": capture_headers_json(&req.headers),
-                    "body": req.body,
+                    "body": request_body_json(req.body.as_ref()),
                     "compression": format!("{:?}", req.compression),
                     "timeout_ms": req.timeout.map(|timeout| timeout.as_millis()),
                 }));
@@ -194,7 +205,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                     "method": req.method.as_str(),
                     "url": req.url,
                     "headers": capture_headers_json(&req.headers),
-                    "body": req.body,
+                    "body": request_body_json(req.body.as_ref()),
                     "compression": format!("{:?}", req.compression),
                     "timeout_ms": req.timeout.map(|timeout| timeout.as_millis()),
                 }));

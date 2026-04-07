@@ -119,6 +119,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
             prompt: "backend prompt".to_string(),
             session_id: None,
             voice: None,
+            transport: None,
         }))
         .await?;
 

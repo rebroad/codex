@@ -137,6 +137,16 @@ pub struct ConversationStartParams {
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voice: Option<RealtimeVoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ConversationStartTransport>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+pub enum ConversationStartTransport {
+    Websocket,
+    Webrtc { sdp: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1229,6 +1239,9 @@ pub enum EventMsg {
     /// Realtime conversation lifecycle close event.
     RealtimeConversationClosed(RealtimeConversationClosedEvent),
 
+    /// Realtime session description protocol payload.
+    RealtimeConversationSdp(RealtimeConversationSdpEvent),
+
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
 
@@ -1553,6 +1566,11 @@ pub struct RealtimeConversationRealtimeEvent {
 pub struct RealtimeConversationClosedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct RealtimeConversationSdpEvent {
+    pub sdp: String,
 }
 
 impl From<CollabAgentSpawnBeginEvent> for EventMsg {
@@ -4424,6 +4442,14 @@ mod tests {
             prompt: "be helpful".to_string(),
             session_id: Some("conv_1".to_string()),
             voice: None,
+            transport: None,
+        });
+        let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "be helpful".to_string(),
+            session_id: Some("conv_1".to_string()),
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
         });
         let text = Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),
@@ -4463,6 +4489,18 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<Op>(serde_json::to_value(&close).unwrap()).unwrap(),
             close
+        );
+        assert_eq!(
+            serde_json::to_value(&webrtc_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "prompt": "be helpful",
+                "session_id": "conv_1",
+                "transport": {
+                    "type": "webrtc",
+                    "sdp": "v=offer\r\n"
+                }
+            })
         );
     }
 

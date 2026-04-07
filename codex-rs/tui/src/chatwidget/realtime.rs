@@ -230,6 +230,7 @@ impl ChatWidget {
                 prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
                 session_id: None,
                 voice: self.config.realtime.voice,
+                transport: None,
             },
         ));
         self.request_redraw();
