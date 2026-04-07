@@ -840,6 +840,14 @@ WHERE account_id = ? AND provider = ?
             });
             let key = (account_id.to_string(), self.default_provider.clone());
             let seen_ts = seen_at.unwrap_or(now);
+            let same_candidate_as_db_pending = prior_usage.as_ref().is_some_and(|row| {
+                let previous_resets_at: Option<i64> = row.try_get("last_backend_resets_at").ok();
+                let previous_window: Option<i64> = row.try_get("last_backend_window_minutes").ok();
+                previous_window == window_minutes
+                    && previous_resets_at == resets_at
+                    && previous_backend_percent
+                        .is_some_and(|previous| (previous - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON)
+            });
             let mut pending_updates = self.pending_backend_updates.lock().await;
             let mut should_remove_pending = false;
             let confirmation_state = if backend_candidate_confirmed_from_db {
@@ -914,16 +922,20 @@ WHERE account_id = ? AND provider = ?
                 .bind(self.default_provider.as_str())
                 .execute(self.pool.as_ref())
                 .await?;
-                self.log_usage_event(
-                    account_id,
-                    Some(used_percent),
-                    previous_backend_percent,
-                    format!(
-                        "backend_change_pending=1 confirmations={confirmations} delta_percent={}",
-                        delta_percent.unwrap_or(0.0)
-                    ),
-                )
-                .await;
+                // Suppress repeated "pending confirmations=1" logs when the backend
+                // candidate is unchanged from what we already persisted.
+                if confirmations > 1 || !same_candidate_as_db_pending {
+                    self.log_usage_event(
+                        account_id,
+                        Some(used_percent),
+                        previous_backend_percent,
+                        format!(
+                            "backend_change_pending=1 confirmations={confirmations} delta_percent={}",
+                            delta_percent.unwrap_or(0.0)
+                        ),
+                    )
+                    .await;
+                }
                 return Ok(());
             }
             self.log_usage_event(
@@ -1555,7 +1567,7 @@ INSERT INTO account_usage (
     last_backend_resets_at,
     last_backend_window_minutes,
     last_backend_seen_at
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id, provider) DO UPDATE SET
     updated_at = excluded.updated_at,
     last_backend_limit_id = excluded.last_backend_limit_id,
