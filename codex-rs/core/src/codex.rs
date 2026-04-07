@@ -912,7 +912,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
-    pub(crate) environment: Arc<Environment>,
+    pub(crate) environment: Option<Arc<Environment>>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -1013,6 +1013,7 @@ impl TurnContext {
             config.builtin_enabled_tools.clone(),
             config.builtin_disabled_tools.clone(),
         )
+        .with_has_environment(self.tools_config.has_environment)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
@@ -1032,7 +1033,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
-            environment: Arc::clone(&self.environment),
+            environment: self.environment.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -1494,7 +1495,7 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
-        environment: Arc<Environment>,
+        environment: Option<Arc<Environment>>,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -1531,6 +1532,7 @@ impl Session {
             per_turn_config.builtin_enabled_tools.clone(),
             per_turn_config.builtin_disabled_tools.clone(),
         )
+        .with_has_environment(environment.is_some())
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -2660,7 +2662,7 @@ impl Session {
                 .network_proxy
                 .as_ref()
                 .map(StartedNetworkProxy::proxy),
-            Arc::clone(&self.services.environment),
+            self.services.environment.clone(),
             sub_id,
             Arc::clone(&self.js_repl),
             skills_outcome,
@@ -5974,6 +5976,7 @@ async fn spawn_review_thread(
         config.builtin_enabled_tools.clone(),
         config.builtin_disabled_tools.clone(),
     )
+    .with_has_environment(parent_turn_context.environment.is_some())
     .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         &config.agent_roles,
     ));
@@ -6032,7 +6035,7 @@ async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
-        environment: Arc::clone(&parent_turn_context.environment),
+        environment: parent_turn_context.environment.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
