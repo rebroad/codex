@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Super Inspector</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Codex Super Inspector</h1>
+      <p>Inspect <code>codex-super.PID.{c2s,s2c}.log</code> with merged chronological view.</p>
+    </header>
+
+    <section class="panel controls">
+      <div class="row">
+        <label for="targetPath">Target path</label>
+        <input id="targetPath" type="text" placeholder="/tmp or /tmp/codex-super.2770233.c2s.log" />
+      </div>
+      <div class="row actions">
+        <button id="loadBtn">Load Sessions</button>
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel sessions">
+        <h2>Sessions</h2>
+        <div id="sessionsMeta" class="meta"></div>
+        <ul id="sessions"></ul>
+      </aside>
+      <main class="main-column">
+        <section class="panel">
+          <h2>Events</h2>
+          <div class="toolbar">
+            <label for="modeSelect">Mode</label>
+            <select id="modeSelect">
+              <option value="merged">merged (chronological)</option>
+              <option value="c2s">c2s only</option>
+              <option value="s2c">s2c only</option>
+            </select>
+            <label for="filterInput">Filter</label>
+            <input id="filterInput" type="text" placeholder="method, id, text..." />
+          </div>
+          <div id="eventsMeta" class="meta"></div>
+          <div id="events" class="events">(select a session)</div>
+        </section>
+      </main>
+    </section>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
