@@ -42,6 +42,7 @@ use codex_state::AccountUsageSnapshot;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
+pub(crate) use helpers::discover_agents_summary;
 pub(crate) use helpers::format_directory_display;
 pub(crate) use helpers::format_tokens_compact;
 pub(crate) use helpers::plan_type_display_name;
