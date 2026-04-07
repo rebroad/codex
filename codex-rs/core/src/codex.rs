@@ -171,6 +171,7 @@ use uuid::Uuid;
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
+use crate::client::PrewarmCompletionStats;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::codex_thread::ThreadConfigSnapshot;
@@ -3883,6 +3884,7 @@ impl Session {
                                 query_id,
                                 sent_bytes: transport_bytes.map(|value| value.sent),
                                 recv_bytes: transport_bytes.map(|value| value.recv),
+                                is_prewarm: false,
                             },
                         )
                         .await
@@ -3893,6 +3895,43 @@ impl Session {
             }
         }
         self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn record_startup_prewarm_usage(&self, completion: PrewarmCompletionStats) {
+        let Some(state_db) = self.account_usage_store.as_ref() else {
+            return;
+        };
+        let auth = self.services.auth_manager.auth().await;
+        let Some(auth) = auth else {
+            return;
+        };
+        let Some(account_key) = account_usage_key(
+            auth.get_account_id().as_deref(),
+            auth.get_account_email().as_deref(),
+        ) else {
+            return;
+        };
+        if let Some(account_display) = account_usage_display(auth.get_account_email().as_deref()) {
+            state_db
+                .cache_account_display(account_key.as_str(), account_display)
+                .await;
+        }
+        let token_usage = completion.token_usage.unwrap_or_default();
+        if let Err(err) = state_db
+            .record_account_token_usage(
+                account_key.as_str(),
+                &token_usage,
+                AccountUsageEventMeta {
+                    query_id: completion.capture_id.as_deref(),
+                    sent_bytes: completion.transport_bytes.as_ref().map(|value| value.sent),
+                    recv_bytes: completion.transport_bytes.as_ref().map(|value| value.recv),
+                    is_prewarm: true,
+                },
+            )
+            .await
+        {
+            warn!("failed to record startup prewarm usage: {err}");
+        }
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
