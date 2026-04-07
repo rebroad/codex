@@ -6340,7 +6340,7 @@ impl CodexMessageProcessor {
     async fn turn_start(
         &self,
         request_id: ConnectionRequestId,
-        params: TurnStartParams,
+        mut params: TurnStartParams,
         app_server_client_name: Option<String>,
     ) {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
@@ -6372,6 +6372,10 @@ impl CodexMessageProcessor {
         {
             self.outgoing.send_error(request_id, error).await;
             return;
+        }
+        if let Some(requested_sandbox_policy) = params.sandbox_policy.as_mut() {
+            let session_sandbox_policy = thread.config_snapshot().await.sandbox_policy;
+            merge_workspace_write_roots(requested_sandbox_policy, &session_sandbox_policy);
         }
 
         let collaboration_modes_config = CollaborationModesConfig {
@@ -7922,6 +7926,32 @@ fn collect_resume_override_mismatches(
     mismatch_details
 }
 
+fn merge_workspace_write_roots(
+    requested_policy: &mut codex_app_server_protocol::SandboxPolicy,
+    session_policy: &codex_protocol::protocol::SandboxPolicy,
+) {
+    let codex_app_server_protocol::SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
+        requested_policy
+    else {
+        return;
+    };
+    let codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+        writable_roots: session_roots,
+        ..
+    } = session_policy
+    else {
+        return;
+    };
+
+    let mut seen = HashSet::new();
+    writable_roots.retain(|root| seen.insert(root.clone()));
+    for root in session_roots {
+        if seen.insert(root.clone()) {
+            writable_roots.push(root.clone());
+        }
+    }
+}
+
 fn merge_persisted_resume_metadata(
     request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: &mut ConfigOverrides,
@@ -8856,6 +8886,54 @@ mod tests {
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
             vec!["service_tier requested=Some(Fast) active=Some(Flex)".to_string()]
+        );
+    }
+
+    #[test]
+    fn merge_workspace_write_roots_unions_with_session_roots() {
+        let workspace_root = if cfg!(windows) {
+            r"C:\workspace"
+        } else {
+            "/workspace"
+        };
+        let temp_root = if cfg!(windows) {
+            r"C:\var\tmp"
+        } else {
+            "/var/tmp"
+        };
+        let mut requested = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path(workspace_root).expect("absolute path"),
+            ],
+            read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let session = codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path(workspace_root).expect("absolute path"),
+                AbsolutePathBuf::from_absolute_path(temp_root).expect("absolute path"),
+            ],
+            read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        merge_workspace_write_roots(&mut requested, &session);
+
+        let codex_app_server_protocol::SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
+            requested
+        else {
+            panic!("expected workspace-write policy");
+        };
+        assert_eq!(
+            writable_roots,
+            vec![
+                AbsolutePathBuf::from_absolute_path(workspace_root).expect("absolute path"),
+                AbsolutePathBuf::from_absolute_path(temp_root).expect("absolute path"),
+            ]
         );
     }
 
