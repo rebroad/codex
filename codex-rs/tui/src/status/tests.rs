@@ -143,6 +143,10 @@ fn account_usage_estimate_can_exceed_100_percent() {
         last_backend_resets_at: None,
         last_backend_window_minutes: None,
         last_backend_seen_at: None,
+        cached_q_limit: None,
+        cached_q_limit_sample_count: None,
+        cached_q_limit_computed_at: None,
+        cached_q_limit_for_updated_at: None,
     };
     let estimated_percent = super::estimate_account_usage_percent(&usage, Some(1_000.0));
     assert_eq!(estimated_percent, Some(295.0));
