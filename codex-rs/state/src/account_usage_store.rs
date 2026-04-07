@@ -80,6 +80,10 @@ pub struct AccountUsageSnapshot {
     pub last_backend_resets_at: Option<i64>,
     pub last_backend_window_minutes: Option<i64>,
     pub last_backend_seen_at: Option<i64>,
+    pub cached_q_limit: Option<f64>,
+    pub cached_q_limit_sample_count: Option<i64>,
+    pub cached_q_limit_computed_at: Option<i64>,
+    pub cached_q_limit_for_updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -274,7 +278,11 @@ SELECT
     window_start_min_total_cached_output_tokens,
     last_backend_resets_at,
     last_backend_window_minutes,
-    last_backend_seen_at
+    last_backend_seen_at,
+    cached_q_limit,
+    cached_q_limit_sample_count,
+    cached_q_limit_computed_at,
+    cached_q_limit_for_updated_at
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -320,6 +328,10 @@ WHERE account_id = ? AND provider = ?
             last_backend_resets_at: row.try_get("last_backend_resets_at")?,
             last_backend_window_minutes: row.try_get("last_backend_window_minutes")?,
             last_backend_seen_at: row.try_get("last_backend_seen_at")?,
+            cached_q_limit: row.try_get("cached_q_limit")?,
+            cached_q_limit_sample_count: row.try_get("cached_q_limit_sample_count")?,
+            cached_q_limit_computed_at: row.try_get("cached_q_limit_computed_at")?,
+            cached_q_limit_for_updated_at: row.try_get("cached_q_limit_for_updated_at")?,
         }))
     }
 
@@ -337,6 +349,41 @@ WHERE account_id = ? AND provider = ?
     ) -> anyhow::Result<(Option<f64>, i64)> {
         let estimates = self.estimate_account_limit_tokens_multi(account_id).await?;
         Ok((estimates.composite_q_limit, estimates.sample_count))
+    }
+
+    pub async fn estimate_account_limit_tokens_q_cached(
+        &self,
+        account_id: &str,
+        usage: &AccountUsageSnapshot,
+    ) -> anyhow::Result<(Option<f64>, i64)> {
+        if usage.cached_q_limit_for_updated_at == Some(usage.updated_at) {
+            return Ok((usage.cached_q_limit, usage.cached_q_limit_sample_count.unwrap_or(0)));
+        }
+
+        let (cached_q_limit, cached_q_limit_sample_count) =
+            self.estimate_account_limit_tokens_q(account_id).await?;
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+UPDATE account_usage
+SET
+    cached_q_limit = ?,
+    cached_q_limit_sample_count = ?,
+    cached_q_limit_computed_at = ?,
+    cached_q_limit_for_updated_at = ?
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind(cached_q_limit)
+        .bind(cached_q_limit_sample_count)
+        .bind(now)
+        .bind(usage.updated_at)
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok((cached_q_limit, cached_q_limit_sample_count))
     }
 
     pub async fn estimate_account_limit_bytes_q(
@@ -759,7 +806,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_backend_percent,
+                previous_percent_for_jump,
                 format!("{window_log}{sep}{reset_log}"),
             )
             .await;
@@ -973,7 +1020,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_backend_percent,
+                previous_percent_for_jump,
                 format!(
                     "refund_rewind_disabled=1 delta_percent={}",
                     delta_percent.unwrap_or(0.0)
@@ -1218,7 +1265,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_backend_percent,
+                previous_percent_for_jump,
                 format!(
                     "reset=1 reached_full_window={} samples_cleared={cleared_samples}",
                     if reached_full_window { 1 } else { 0 }
@@ -1382,7 +1429,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_backend_percent,
+                previous_percent_for_jump,
                 log_message,
             )
             .await;
