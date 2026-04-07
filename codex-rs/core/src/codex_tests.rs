@@ -2775,7 +2775,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
-        environment: Arc::clone(&environment),
+        environment: Some(Arc::clone(&environment)),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -2802,7 +2802,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
-        environment,
+        Some(environment),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,
@@ -3617,7 +3617,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
-        environment: Arc::clone(&environment),
+        environment: Some(Arc::clone(&environment)),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3644,7 +3644,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         model_info,
         &models_manager,
         /*network*/ None,
-        environment,
+        Some(environment),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,
