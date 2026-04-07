@@ -2,10 +2,12 @@
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const http = require("node:http");
+const net = require("node:net");
 
 const DEFAULT_PORT = 8788;
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_RETRY_MS = 250;
+const PORT_SCAN_WINDOW = 20;
 
 function usage() {
   console.log(`Usage:
@@ -87,6 +89,70 @@ function openBrowser(url) {
   return false;
 }
 
+function isHealthy(port) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/api/health",
+        timeout: 500,
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          if (res.statusCode !== 200) {
+            resolve(false);
+            return;
+          }
+          try {
+            const parsed = JSON.parse(body);
+            resolve(Boolean(parsed && parsed.ok));
+          } catch (_error) {
+            resolve(false);
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+function canBind(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.on("error", () => {
+      resolve(false);
+    });
+    server.listen({ host: "127.0.0.1", port }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function selectPort(preferredPort) {
+  for (let port = preferredPort; port <= preferredPort + PORT_SCAN_WINDOW; port += 1) {
+    if (await isHealthy(port)) {
+      return { port, reuseExisting: true };
+    }
+    if (await canBind(port)) {
+      return { port, reuseExisting: false };
+    }
+  }
+  throw new Error(
+    `could not find an available port in ${preferredPort}-${preferredPort + PORT_SCAN_WINDOW}`,
+  );
+}
+
 function waitForHealthy(port) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
@@ -133,33 +199,38 @@ function waitForHealthy(port) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const serverPath = path.join(__dirname, "server.js");
-  const serverArgs = [serverPath, "--port", String(args.port)];
-  if (args.target) {
-    serverArgs.push("--target", args.target);
+  const selected = await selectPort(args.port);
+  const port = selected.port;
+
+  if (!selected.reuseExisting) {
+    const serverArgs = [serverPath, "--port", String(port)];
+    if (args.target) {
+      serverArgs.push("--target", args.target);
+    }
+
+    const server = spawn(process.execPath, serverArgs, { stdio: "inherit" });
+    let exited = false;
+    server.on("exit", () => {
+      exited = true;
+    });
+
+    process.on("SIGINT", () => {
+      if (!exited) {
+        server.kill("SIGINT");
+      }
+      process.exit(130);
+    });
+    process.on("SIGTERM", () => {
+      if (!exited) {
+        server.kill("SIGTERM");
+      }
+      process.exit(143);
+    });
+
+    await waitForHealthy(port);
   }
 
-  const server = spawn(process.execPath, serverArgs, { stdio: "inherit" });
-  let exited = false;
-  server.on("exit", () => {
-    exited = true;
-  });
-
-  process.on("SIGINT", () => {
-    if (!exited) {
-      server.kill("SIGINT");
-    }
-    process.exit(130);
-  });
-  process.on("SIGTERM", () => {
-    if (!exited) {
-      server.kill("SIGTERM");
-    }
-    process.exit(143);
-  });
-
-  await waitForHealthy(args.port);
-
-  const pageUrl = new URL(`http://127.0.0.1:${args.port}/`);
+  const pageUrl = new URL(`http://127.0.0.1:${port}/`);
   if (args.target) {
     pageUrl.searchParams.set("target", args.target);
   }
