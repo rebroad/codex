@@ -1992,15 +1992,19 @@ async fn run_direct_request(
         AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
             .await
             .ok();
-    let account_key = auth_snapshot.as_ref().and_then(|auth| {
-        account_usage_key(
-            auth.get_account_id().as_deref(),
-            auth.get_account_email().as_deref(),
-        )
-    });
+    let account_key = auth_snapshot
+        .as_ref()
+        .and_then(|auth| {
+            account_usage_key(
+                auth.get_account_id().as_deref(),
+                auth.get_account_email().as_deref(),
+            )
+        })
+        .or_else(|| Some(format!("direct:{}", config.model_provider_id)));
     let account_display = auth_snapshot
         .as_ref()
-        .and_then(|auth| account_usage_display(auth.get_account_email().as_deref()));
+        .and_then(|auth| account_usage_display(auth.get_account_email().as_deref()))
+        .or_else(|| Some(format!("direct-{}", config.model_provider_id)));
 
     consume_direct_stream(&mut stream, usage_store, account_key, account_display).await
 }
@@ -2136,6 +2140,7 @@ async fn consume_direct_stream(
                                     query_id: capture_id.as_deref(),
                                     sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
                                     recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                    is_prewarm: false,
                                 },
                             )
                             .await
