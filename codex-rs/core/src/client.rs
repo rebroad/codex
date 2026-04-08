@@ -541,7 +541,15 @@ impl ModelClient {
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
         let auth = match self.state.auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
+            Some(manager) => manager
+                .auth_with_refresh_if_expired_strict()
+                .await
+                .map_err(|err| match err {
+                    crate::auth::RefreshTokenError::Permanent(failed) => {
+                        CodexErr::RefreshTokenFailed(failed)
+                    }
+                    crate::auth::RefreshTokenError::Transient(other) => CodexErr::Io(other),
+                })?,
             None => None,
         };
         let api_provider = self
