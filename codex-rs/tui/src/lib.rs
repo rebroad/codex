@@ -223,6 +223,7 @@ use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
+pub use status::CompactStatusOutputMode;
 // (tests access modules directly within the crate)
 
 async fn start_embedded_app_server(
@@ -602,8 +603,9 @@ pub async fn render_compact_status_for_cli(
     config: &Config,
     auth: Option<&CodexAuth>,
     use_utc: bool,
+    output_mode: CompactStatusOutputMode,
 ) -> String {
-    status::render_compact_status_for_cli(config, auth, use_utc).await
+    status::render_compact_status_for_cli(config, auth, use_utc, output_mode).await
 }
 
 pub async fn run_main(
