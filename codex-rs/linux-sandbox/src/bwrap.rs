@@ -478,9 +478,11 @@ fn append_read_only_subpath_args(
     allowed_write_paths: &[PathBuf],
 ) {
     if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
+        if should_mask_symlink_with_dev_null(&symlink_path, allowed_write_paths) {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&symlink_path));
+        }
         return;
     }
 
@@ -509,9 +511,11 @@ fn append_unreadable_root_args(
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
     if let Some(symlink_path) = find_symlink_in_path(unreadable_root, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
+        if should_mask_symlink_with_dev_null(&symlink_path, allowed_write_paths) {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&symlink_path));
+        }
         return Ok(());
     }
 
@@ -612,6 +616,38 @@ fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> 
     }
 
     None
+}
+
+fn should_mask_symlink_with_dev_null(
+    symlink_path: &Path,
+    allowed_write_paths: &[PathBuf],
+) -> bool {
+    let Ok(link_target) = std::fs::read_link(symlink_path) else {
+        return false;
+    };
+
+    // `ro-bind /dev/null <symlink>` can fail when the symlink resolves to a
+    // directory, or to a path outside writable roots. In those cases, skip the
+    // direct symlink mask instead of hard-failing sandbox startup.
+    let resolved_target = if link_target.is_absolute() {
+        link_target
+    } else {
+        let Some(parent) = symlink_path.parent() else {
+            return false;
+        };
+        parent.join(link_target)
+    };
+    let Ok(canonical_target) = resolved_target.canonicalize() else {
+        return false;
+    };
+    if !is_within_allowed_write_paths(&canonical_target, allowed_write_paths) {
+        return false;
+    }
+    let Ok(target_metadata) = std::fs::metadata(&canonical_target) else {
+        return false;
+    };
+
+    !target_metadata.is_dir()
 }
 
 /// Find the first missing path component while walking `target_path`.
@@ -764,6 +800,86 @@ mod tests {
                 .args
                 .windows(2)
                 .any(|window| { window == ["--chdir", link_command_cwd.as_str()] })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_subpath_skips_dev_null_mask_for_absolute_symlink_outside_writable_root() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        let outside_root = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&writable_root).expect("create writable root");
+        std::fs::create_dir_all(&outside_root).expect("create outside root");
+
+        let protected_path = writable_root.join(".git");
+        std::os::unix::fs::symlink(outside_root.join("git"), &protected_path)
+            .expect("create absolute symlink");
+
+        let mut args = Vec::new();
+        append_read_only_subpath_args(
+            &mut args,
+            &protected_path,
+            std::slice::from_ref(&writable_root),
+        );
+
+        assert!(
+            args.is_empty(),
+            "absolute symlink outside writable roots should skip /dev/null mask: {args:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_subpath_skips_dev_null_mask_for_relative_directory_symlink() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        std::fs::create_dir_all(&writable_root).expect("create writable root");
+
+        let real_git = writable_root.join("real-git");
+        std::fs::create_dir_all(&real_git).expect("create real git dir");
+        let protected_path = writable_root.join(".git");
+        std::os::unix::fs::symlink("real-git", &protected_path).expect("create relative symlink");
+
+        let mut args = Vec::new();
+        append_read_only_subpath_args(
+            &mut args,
+            &protected_path,
+            std::slice::from_ref(&writable_root),
+        );
+
+        assert!(
+            args.is_empty(),
+            "directory symlink should skip /dev/null mask to avoid bwrap file-vs-dir mount errors: {args:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_subpath_masks_relative_file_symlink_in_writable_root_with_dev_null() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        std::fs::create_dir_all(&writable_root).expect("create writable root");
+
+        let real_git = writable_root.join("real-git");
+        std::fs::write(&real_git, "gitdir: somewhere\n").expect("create real git file");
+        let protected_path = writable_root.join(".git");
+        std::os::unix::fs::symlink("real-git", &protected_path).expect("create relative symlink");
+
+        let mut args = Vec::new();
+        append_read_only_subpath_args(
+            &mut args,
+            &protected_path,
+            std::slice::from_ref(&writable_root),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "--ro-bind".to_string(),
+                "/dev/null".to_string(),
+                path_to_string(&protected_path),
+            ]
         );
     }
 
