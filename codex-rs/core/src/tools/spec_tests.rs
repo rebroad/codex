@@ -1817,6 +1817,52 @@ fn test_build_specs_mcp_tools_converted() {
 }
 
 #[test]
+fn builtin_tool_allowlist_filters_only_builtin_tools() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_builtin_tool_policy(Some(vec!["update_plan".to_string()]), Vec::new());
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            "test_server/do_something_cool".to_string(),
+            mcp_tool(
+                "do_something_cool",
+                "Do something cool",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "arg": { "type": "string" }
+                    },
+                    "additionalProperties": false,
+                }),
+            ),
+        )])),
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert_contains_tool_names(&tools, &["update_plan", "test_server/do_something_cool"]);
+    assert_lacks_tool_name(&tools, "exec_command");
+    assert_lacks_tool_name(&tools, "write_stdin");
+    assert_lacks_tool_name(&tools, "list_mcp_resources");
+    assert_lacks_tool_name(&tools, "list_mcp_resource_templates");
+    assert_lacks_tool_name(&tools, "read_mcp_resource");
+}
+
+#[test]
 fn test_build_specs_mcp_tools_sorted_by_name() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);

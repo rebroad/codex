@@ -152,6 +152,28 @@ bare_prompt = true
 You can also enable this for a single `codex exec` invocation with
 `--bare-prompt`.
 
+## Built-in Tool Policy
+
+Use `builtin_enabled_tools` and `builtin_disabled_tools` in `config.toml` to
+control built-in (non-MCP) tools:
+
+```toml
+# Allow-list mode: only these built-in tools are exposed.
+builtin_enabled_tools = ["update_plan", "view_image"]
+
+# Optional deny-list applied after the allow-list.
+builtin_disabled_tools = ["view_image"]
+```
+
+Notes:
+
+- If `builtin_enabled_tools` is unset, built-in tools are allowed by default
+  (subject to other feature/model constraints).
+- If `builtin_enabled_tools = []`, all built-in tools are blocked.
+- `builtin_disabled_tools` always wins over `builtin_enabled_tools`.
+- This policy applies only to built-in tools; MCP tools are configured through
+  `mcp_servers`.
+
 ## Project workspace writable roots
 
 For projects using `workspace-write` sandbox mode, you can import extra

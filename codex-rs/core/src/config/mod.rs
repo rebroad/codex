@@ -419,6 +419,14 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Explicit allow-list of built-in (non-MCP) tools.
+    /// When set, only listed built-in tools are exposed.
+    pub builtin_enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of built-in (non-MCP) tools.
+    /// Applied after `builtin_enabled_tools`.
+    pub builtin_disabled_tools: Vec<String>,
+
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
@@ -1300,6 +1308,15 @@ pub struct ConfigToml {
 
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
+
+    /// Explicit allow-list of built-in (non-MCP) tools.
+    /// When set, only listed built-in tools are exposed.
+    pub builtin_enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of built-in (non-MCP) tools.
+    /// Applied after `builtin_enabled_tools`.
+    #[serde(default)]
+    pub builtin_disabled_tools: Option<Vec<String>>,
 
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
@@ -2250,7 +2267,7 @@ impl Config {
                 trust_level: None,
                 workspace_file: None,
             });
-        let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
+        let additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect::<Result<Vec<_>, _>>()?;
@@ -2791,6 +2808,8 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            builtin_enabled_tools: cfg.builtin_enabled_tools,
+            builtin_disabled_tools: cfg.builtin_disabled_tools.unwrap_or_default(),
             agent_max_threads,
             agent_max_depth,
             agent_roles,
