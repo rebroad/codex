@@ -15,7 +15,6 @@ NPM_VENDOR_DIR_DEFAULT="dist/npm-vendor"
 NPM_X64_TARGET="x86_64-unknown-linux-musl"
 NPM_ARMV7_TARGET="armv7-unknown-linux-gnueabihf"
 ARGUMENT_COMMENT_LINT_LOCAL="false"
-BUILD_HEARTBEAT_SECS_DEFAULT=10
 SCRIPT_START_SECONDS="${SECONDS}"
 BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
 BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
@@ -46,74 +45,6 @@ fi
 
 log_error() {
   echo "${BOLD}${RED}ERROR:${RESET} $*" >&2
-}
-
-latest_cargo_status_line() {
-  local log_file="$1"
-  grep -E '(^[[:space:]]*(Compiling|Checking|Finished|Running)\b)|(^error:)|(^warning: build failed)' "${log_file}" \
-    | tail -n 1 \
-    | sed 's/^[[:space:]]*//'
-}
-
-summarize_cargo_status_line() {
-  local status_line="$1"
-  local after_crate_name crate_name
-  if [[ "${status_line}" == Running* && "${status_line}" == *"--crate-name "* ]]; then
-    after_crate_name="${status_line#*--crate-name }"
-    crate_name="${after_crate_name%% *}"
-    if [[ -n "${crate_name}" ]]; then
-      echo "Compiling ${crate_name}"
-      return
-    fi
-  fi
-  if [[ "${status_line}" == Running* ]]; then
-    local command_name="${status_line#Running \`}"
-    command_name="${command_name%% *}"
-    command_name="${command_name##*/}"
-    command_name="${command_name%\`}"
-    if [[ -n "${command_name}" ]]; then
-      echo "Running ${command_name}"
-      return
-    fi
-  fi
-  echo "${status_line}"
-}
-
-append_cargo_build_verbosity_args() {
-  local -n cargo_cmd_ref="$1"
-  if [[ "${REBUILD_CODEX_CARGO_VERBOSE:-1}" == "1" ]]; then
-    cargo_cmd_ref+=(-vv)
-  fi
-}
-
-run_with_build_heartbeat() {
-  local log_file="$1"
-  shift
-  local start_secs now elapsed status_line
-  local last_emitted_line=""
-  start_secs="$(date +%s)"
-  : > "${log_file}"
-  "$@" > "${log_file}" 2>&1 &
-  local cmd_pid=$!
-
-  while kill -0 "${cmd_pid}" 2>/dev/null; do
-    sleep "${BUILD_HEARTBEAT_SECS:-${BUILD_HEARTBEAT_SECS_DEFAULT}}"
-    if ! kill -0 "${cmd_pid}" 2>/dev/null; then
-      break
-    fi
-    status_line="$(latest_cargo_status_line "${log_file}")"
-    now="$(date +%s)"
-    elapsed="$((now - start_secs))"
-    if [[ -n "${status_line}" ]]; then
-      status_line="$(summarize_cargo_status_line "${status_line}")"
-    fi
-    if [[ -n "${status_line}" && "${status_line}" != "${last_emitted_line}" ]]; then
-      echo "[build] ${elapsed}s ${status_line}"
-      last_emitted_line="${status_line}"
-    fi
-  done
-
-  wait "${cmd_pid}"
 }
 
 resolve_main_worktree_dir() {
@@ -410,15 +341,9 @@ run_release_build_with_locked_fallback() {
   fi
   append_default_build_accel_env cargo_env
   build_log="$(mktemp)"
-  local -a cargo_cmd
-  cargo_cmd=(cargo +"${TOOLCHAIN}")
-  append_cargo_build_verbosity_args cargo_cmd
-  cargo_cmd+=(build -p codex-cli --release --locked)
   set +e
-  run_with_build_heartbeat \
-    "${build_log}" \
-    env "${cargo_env[@]}" "${cargo_cmd[@]}"
-  local status=$?
+  env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked 2>&1 | tee "${build_log}"
+  local status=${PIPESTATUS[0]}
   set -e
 
   if (( status == 0 )); then
@@ -429,23 +354,12 @@ run_release_build_with_locked_fallback() {
   if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build needs lockfile regeneration; retrying release build without --locked."
     rm -f "${build_log}"
-    build_log="$(mktemp)"
-    cargo_cmd=(cargo +"${TOOLCHAIN}")
-    append_cargo_build_verbosity_args cargo_cmd
-    cargo_cmd+=(build -p codex-cli --release)
-    run_with_build_heartbeat \
-      "${build_log}" \
-      env "${cargo_env[@]}" "${cargo_cmd[@]}"
-    local retry_status=$?
-    rm -f "${build_log}"
-    return "${retry_status}"
+    env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli --release
+    return 0
   fi
 
-  if (( status != 0 )); then
-    tail -n 120 "${build_log}"
-    rm -f "${build_log}"
-    return "${status}"
-  fi
+  rm -f "${build_log}"
+  return "${status}"
 }
 
 run_target_build_with_locked_fallback() {
@@ -472,14 +386,12 @@ run_target_build_with_locked_fallback() {
   build_log="$(mktemp)"
   set +e
   local -a cargo_cmd
-  cargo_cmd=(cargo +"${TOOLCHAIN}")
-  append_cargo_build_verbosity_args cargo_cmd
-  cargo_cmd+=(build -p codex-cli --target "${target}" --locked)
+  cargo_cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli --target "${target}" --locked)
   if [[ "${profile}" == "release" ]]; then
     cargo_cmd+=(--release)
   fi
-  run_with_build_heartbeat "${build_log}" env "${cargo_env[@]}" "${cargo_cmd[@]}"
-  local status=$?
+  env "${cargo_env[@]}" "${cargo_cmd[@]}" 2>&1 | tee "${build_log}"
+  local status=${PIPESTATUS[0]}
   set -e
 
   if (( status == 0 )); then
@@ -490,27 +402,16 @@ run_target_build_with_locked_fallback() {
   if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build for ${target} (${profile}) needs lockfile regeneration; retrying without --locked."
     rm -f "${build_log}"
-    build_log="$(mktemp)"
-    cargo_cmd=(cargo +"${TOOLCHAIN}")
-    append_cargo_build_verbosity_args cargo_cmd
-    cargo_cmd+=(build -p codex-cli --target "${target}")
+    cargo_cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli --target "${target}")
     if [[ "${profile}" == "release" ]]; then
       cargo_cmd+=(--release)
     fi
-    run_with_build_heartbeat "${build_log}" env "${cargo_env[@]}" "${cargo_cmd[@]}"
-    local retry_status=$?
-    rm -f "${build_log}"
-    return "${retry_status}"
-  fi
-
-  if (( status != 0 )); then
-    tail -n 120 "${build_log}"
-    rm -f "${build_log}"
-    return "${status}"
+    env "${cargo_env[@]}" "${cargo_cmd[@]}"
+    return 0
   fi
 
   rm -f "${build_log}"
-  return 0
+  return "${status}"
 }
 
 run_armv7_build() {
@@ -1527,43 +1428,19 @@ else
   if [[ -n "${BUILD_JOBS}" ]]; then
     echo "Using Cargo build jobs: ${BUILD_JOBS}"
     cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
+  else
+    :
   fi
-  build_log="$(mktemp)"
-  cargo_cmd=(cargo +"${TOOLCHAIN}")
-  append_cargo_build_verbosity_args cargo_cmd
-  cargo_cmd+=("${cargo_flags[@]}")
-  set +e
-  run_with_build_heartbeat "${build_log}" env "${cargo_env[@]}" "${cargo_cmd[@]}"
-  build_status=$?
-  set -e
-  if (( build_status != 0 )); then
+  if ! env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" "${cargo_flags[@]}"; then
     if [[ "${FAST_GATE}" == "true" ]]; then
       echo "[fast-gate] --locked failed; retrying offline without --locked"
       retry_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_NET_OFFLINE=true)
       append_build_timestamp_env retry_env
-      rm -f "${build_log}"
-      build_log="$(mktemp)"
-      cargo_cmd=(cargo +"${TOOLCHAIN}")
-      append_cargo_build_verbosity_args cargo_cmd
-      cargo_cmd+=(build -p codex-cli)
-      set +e
-      run_with_build_heartbeat \
-        "${build_log}" \
-        env "${retry_env[@]}" "${cargo_cmd[@]}"
-      build_status=$?
-      set -e
-      if (( build_status != 0 )); then
-        tail -n 120 "${build_log}"
-        rm -f "${build_log}"
-        exit "${build_status}"
-      fi
+      env "${retry_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli
     else
-      tail -n 120 "${build_log}"
-      rm -f "${build_log}"
-      exit "${build_status}"
+      exit 1
     fi
   fi
-  rm -f "${build_log}"
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
   patch_installed_binary_version_timestamp "${debug_bin}"
