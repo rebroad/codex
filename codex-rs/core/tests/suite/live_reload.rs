@@ -25,6 +25,7 @@ use tokio::time::timeout;
 fn enable_trusted_project(config: &mut codex_core::config::Config) {
     config.active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
+        workspace_file: None,
     };
 }
 
