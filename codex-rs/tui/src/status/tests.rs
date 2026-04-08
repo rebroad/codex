@@ -159,6 +159,60 @@ fn account_usage_estimate_can_exceed_100_percent() {
     assert_eq!(estimated_percent, Some(295.0));
 }
 
+#[test]
+fn compact_status_prefers_codex_weekly_window() {
+    let snapshots = vec![
+        RateLimitSnapshot {
+            limit_id: Some("codex-other".to_string()),
+            limit_name: None,
+            primary: None,
+            secondary: Some(RateLimitWindow {
+                used_percent: 9.0,
+                window_minutes: Some(10080),
+                resets_at: Some(111),
+            }),
+            credits: None,
+            plan_type: None,
+        },
+        RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 60.0,
+                window_minutes: Some(300),
+                resets_at: Some(222),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 89.0,
+                window_minutes: Some(10080),
+                resets_at: Some(333),
+            }),
+            credits: None,
+            plan_type: None,
+        },
+    ];
+
+    let selected = super::select_compact_usage_window(&snapshots).expect("weekly window");
+    assert_eq!(selected.used_percent, 89.0);
+    assert_eq!(selected.resets_at, Some(333));
+}
+
+#[tokio::test]
+async fn compact_status_unknown_mode_uses_question_mark_placeholders() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home).await;
+
+    let line = super::render_compact_status_for_cli(
+        &config,
+        /*auth*/ None,
+        /*use_utc*/ false,
+        super::CompactStatusOutputMode::UnknownUsage,
+    )
+    .await;
+
+    assert_eq!(line, "???????????? - ???%");
+}
+
 #[tokio::test]
 async fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");

@@ -33,9 +33,10 @@ use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::TokenUsage;
-use codex_state::AccountUsageSnapshot;
 use codex_state::AccountUsageEstimatorConfig;
+use codex_state::AccountUsageSnapshot;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
@@ -64,6 +65,8 @@ const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
 const BACKEND_PERCENT_EPSILON: f64 = 0.0001;
 const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
 const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
+const UNKNOWN_COMPACT_STATUS_TIMESTAMP: &str = "????????????";
+const UNKNOWN_COMPACT_STATUS_PERCENT: &str = "???%";
 
 #[derive(Debug)]
 enum CliRateLimitFetchOutcome {
@@ -123,7 +126,8 @@ pub(crate) async fn render_status_lines_for_cli(
     let cached_rate_limits = usage_snapshot
         .as_ref()
         .and_then(cached_rate_limit_snapshot_from_usage);
-    let should_refresh_rate_limits = should_refresh_cli_rate_limits(config, usage_snapshot.as_ref());
+    let should_refresh_rate_limits =
+        should_refresh_cli_rate_limits(config, usage_snapshot.as_ref());
 
     let fetch_outcome = if let Some(auth) = auth.as_ref() {
         if should_refresh_rate_limits {
@@ -244,16 +248,30 @@ pub(crate) async fn render_compact_status_for_cli(
     config: &Config,
     auth: Option<&CodexAuth>,
     use_utc: bool,
+    output_mode: CompactStatusOutputMode,
 ) -> String {
+    let email = truncate_status_email_local_part(auth.and_then(CodexAuth::get_account_email))
+        .unwrap_or_else(|| "-".to_string());
+    if output_mode == CompactStatusOutputMode::UnknownUsage {
+        return format!(
+            "{UNKNOWN_COMPACT_STATUS_TIMESTAMP} {email} {UNKNOWN_COMPACT_STATUS_PERCENT}"
+        );
+    }
+
     let compact_usage = compact_status_usage(config, auth).await;
     let timestamp_with_timezone =
         compact_status_timestamp_with_timezone(compact_usage.reset_at_unix, use_utc);
-    let email = truncate_status_email_local_part(auth.and_then(CodexAuth::get_account_email))
-        .unwrap_or_else(|| "-".to_string());
     format!(
         "{timestamp_with_timezone} {email} {}%",
         compact_usage.percent_left
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompactStatusOutputMode {
+    #[default]
+    Normal,
+    UnknownUsage,
 }
 
 fn compact_status_timestamp_with_timezone(reset_at_unix: Option<i64>, use_utc: bool) -> String {
@@ -343,15 +361,92 @@ async fn compact_status_usage(config: &Config, auth: Option<&CodexAuth>) -> Comp
         .await
         .ok()
         .flatten();
+    let cached_rate_limits = usage
+        .as_ref()
+        .and_then(cached_rate_limit_snapshot_from_usage);
+    let should_refresh_rate_limits = should_refresh_cli_rate_limits(config, usage.as_ref());
+    let fetch_outcome = if should_refresh_rate_limits {
+        fetch_rate_limits_for_cli(config.chatgpt_base_url.clone(), auth.clone()).await
+    } else {
+        CliRateLimitFetchOutcome::Skipped
+    };
+    let fetched_rate_limits = match &fetch_outcome {
+        CliRateLimitFetchOutcome::Success(snapshots) => snapshots.clone(),
+        CliRateLimitFetchOutcome::Skipped
+        | CliRateLimitFetchOutcome::Timeout
+        | CliRateLimitFetchOutcome::BackendUnavailable(_)
+        | CliRateLimitFetchOutcome::Other(_) => Vec::new(),
+    };
+    let mut rate_limits = if should_refresh_rate_limits {
+        if fetched_rate_limits.is_empty() {
+            cached_rate_limits.clone().into_iter().collect()
+        } else {
+            fetched_rate_limits.clone()
+        }
+    } else {
+        cached_rate_limits.clone().into_iter().collect()
+    };
+    if rate_limits.is_empty()
+        && let Some(cached) = cached_rate_limits
+    {
+        rate_limits.push(cached);
+    }
+    for snapshot in &fetched_rate_limits {
+        let _ = account_usage_store
+            .record_account_backend_rate_limit(account_id.as_str(), snapshot)
+            .await;
+    }
+    let selected_window = select_compact_usage_window(rate_limits.as_slice());
+    let fallback_used_percent = usage.as_ref().and_then(|u| u.last_backend_used_percent);
+    let fallback_reset_at = usage.as_ref().and_then(|u| u.last_backend_resets_at);
+    let used_percent = selected_window
+        .as_ref()
+        .map(|window| window.used_percent)
+        .or(fallback_used_percent);
+    let reset_at_unix = selected_window
+        .as_ref()
+        .and_then(|window| window.resets_at)
+        .or(fallback_reset_at);
     CompactStatusUsage {
-        percent_left: usage
-            .as_ref()
-            .and_then(|u| u.last_backend_used_percent)
+        percent_left: used_percent
             .map(|used_percent| (100.0 - used_percent).round() as i64)
             .map(|percent_left| percent_left.clamp(0, 100))
             .unwrap_or(0),
-        reset_at_unix: usage.and_then(|u| u.last_backend_resets_at),
+        reset_at_unix,
     }
+}
+
+fn select_compact_usage_window(rate_limits: &[RateLimitSnapshot]) -> Option<RateLimitWindow> {
+    let is_codex_limit = |snapshot: &RateLimitSnapshot| {
+        snapshot
+            .limit_id
+            .as_deref()
+            .is_none_or(|id| id.eq_ignore_ascii_case("codex"))
+    };
+
+    rate_limits
+        .iter()
+        .find(|snapshot| is_codex_limit(snapshot) && snapshot.secondary.is_some())
+        .and_then(|snapshot| snapshot.secondary.as_ref())
+        .or_else(|| {
+            rate_limits
+                .iter()
+                .find(|snapshot| snapshot.secondary.is_some())
+                .and_then(|snapshot| snapshot.secondary.as_ref())
+        })
+        .or_else(|| {
+            rate_limits
+                .iter()
+                .find(|snapshot| is_codex_limit(snapshot) && snapshot.primary.is_some())
+                .and_then(|snapshot| snapshot.primary.as_ref())
+        })
+        .or_else(|| {
+            rate_limits
+                .iter()
+                .find(|snapshot| snapshot.primary.is_some())
+                .and_then(|snapshot| snapshot.primary.as_ref())
+        })
+        .cloned()
 }
 
 fn default_reasoning_effort_from_catalog(
@@ -465,7 +560,10 @@ fn should_refresh_cli_rate_limits(config: &Config, usage: Option<&AccountUsageSn
     let Some(usage) = usage else {
         return true;
     };
-    !is_backend_percent_stable_for_cli(usage, config.account_usage_estimator.stable_backend_percent_window)
+    !is_backend_percent_stable_for_cli(
+        usage,
+        config.account_usage_estimator.stable_backend_percent_window,
+    )
 }
 
 fn is_backend_percent_stable_for_cli(
