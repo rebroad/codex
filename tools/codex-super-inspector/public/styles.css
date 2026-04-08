@@ -10,6 +10,7 @@
   --c2s: #143747;
   --s2c: #2f263c;
   --c2s-supervisor: #4a2f11;
+  --s2c-suppressed: #3a1e2f;
 }
 
 * {
@@ -159,6 +160,11 @@ button:hover {
   border-color: #a88443;
 }
 
+.event-card.supervisor-suppressed {
+  background: var(--s2c-suppressed);
+  border-color: #cd7fa9;
+}
+
 .event-head {
   display: flex;
   flex-wrap: wrap;
@@ -177,6 +183,11 @@ button:hover {
 .chip-supervisor {
   border-color: #a88443;
   background: #5a3b14;
+}
+
+.chip-suppressed {
+  border-color: #cd7fa9;
+  background: #5f2d49;
 }
 
 pre {

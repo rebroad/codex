@@ -7,6 +7,8 @@ const { URL } = require("node:url");
 const DEFAULT_PORT = 8789;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const LOG_PATTERN = /^codex-super\.(?<pid>\d+)\.(?<dir>c2s|s2c)\.log$/;
+const DEFAULT_PAGE_LIMIT = 250;
+const MAX_PAGE_LIMIT = 2000;
 
 function json(res, statusCode, value) {
   res.writeHead(statusCode, {
@@ -124,6 +126,16 @@ async function parseLogFile(filePath, direction) {
   return events;
 }
 
+async function countEventsInLogFile(filePath) {
+  const textData = await fs.readFile(filePath, "utf8");
+  const lines = textData.split(/\r?\n/);
+  let count = 0;
+  for (const line of lines) {
+    if (line.trim()) count += 1;
+  }
+  return count;
+}
+
 async function discoverSessions(targetPath) {
   const stat = await fs.stat(targetPath);
   if (stat.isFile()) {
@@ -196,6 +208,9 @@ function buildMergedEvents(c2sEvents, s2cEvents) {
       return a.timestampMs - b.timestampMs;
     }
     if (aHas !== bHas) return aHas ? -1 : 1;
+    // Some older captures don't include parseable timestamps. In that case, avoid
+    // grouping by direction; interleave by line number so merged pages show both sides.
+    if (a.lineNo !== b.lineNo) return a.lineNo - b.lineNo;
     if (a.direction !== b.direction) return a.direction.localeCompare(b.direction);
     return a.lineNo - b.lineNo;
   });
@@ -243,27 +258,62 @@ async function handleSession(res, targetPath, sessionKey) {
   const session = sessions.find((entry) => entry.key === sessionKey);
   if (!session) {
     json(res, 404, { error: `session not found: ${sessionKey}` });
-    return;
+    return null;
   }
+  return session;
+}
 
+async function loadEventsForMode(session, mode) {
   let c2sEvents = [];
   let s2cEvents = [];
+
+  if (mode === "c2s" || mode === "merged") {
+    if (session.c2s) {
+      try {
+        c2sEvents = await parseLogFile(session.c2s, "c2s");
+      } catch (_error) {
+        c2sEvents = [];
+      }
+    }
+  }
+
+  if (mode === "s2c" || mode === "merged") {
+    if (session.s2c) {
+      try {
+        s2cEvents = await parseLogFile(session.s2c, "s2c");
+      } catch (_error) {
+        s2cEvents = [];
+      }
+    }
+  }
+
+  if (mode === "c2s") return c2sEvents;
+  if (mode === "s2c") return s2cEvents;
+  if (mode === "merged") return buildMergedEvents(c2sEvents, s2cEvents);
+  throw new Error(`invalid mode: ${mode}`);
+}
+
+async function handleSessionMeta(res, targetPath, sessionKey) {
+  const session = await handleSession(res, targetPath, sessionKey);
+  if (!session) return;
+
+  let c2sTotal = 0;
+  let s2cTotal = 0;
   if (session.c2s) {
     try {
-      c2sEvents = await parseLogFile(session.c2s, "c2s");
+      c2sTotal = await countEventsInLogFile(session.c2s);
     } catch (_error) {
-      c2sEvents = [];
+      c2sTotal = 0;
     }
   }
   if (session.s2c) {
     try {
-      s2cEvents = await parseLogFile(session.s2c, "s2c");
+      s2cTotal = await countEventsInLogFile(session.s2c);
     } catch (_error) {
-      s2cEvents = [];
+      s2cTotal = 0;
     }
   }
 
-  const merged = buildMergedEvents(c2sEvents, s2cEvents);
   json(res, 200, {
     target: targetPath,
     session: {
@@ -273,15 +323,40 @@ async function handleSession(res, targetPath, sessionKey) {
       s2c: session.s2c,
     },
     totals: {
-      c2s: c2sEvents.length,
-      s2c: s2cEvents.length,
-      merged: merged.length,
+      c2s: c2sTotal,
+      s2c: s2cTotal,
+      merged: c2sTotal + s2cTotal,
     },
-    events: {
-      c2s: c2sEvents.map(canonicalEvent),
-      s2c: s2cEvents.map(canonicalEvent),
-      merged: merged.map(canonicalEvent),
-    },
+  });
+}
+
+async function handleEventsPage(
+  res,
+  targetPath,
+  sessionKey,
+  mode,
+  offset,
+  limit,
+) {
+  const session = await handleSession(res, targetPath, sessionKey);
+  if (!session) return;
+
+  const events = await loadEventsForMode(session, mode);
+  const boundedOffset = Math.max(0, offset);
+  const boundedLimit = Math.max(1, Math.min(limit, MAX_PAGE_LIMIT));
+  const page = events.slice(boundedOffset, boundedOffset + boundedLimit);
+  const nextOffset = boundedOffset + page.length;
+
+  json(res, 200, {
+    target: targetPath,
+    session: sessionKey,
+    mode,
+    offset: boundedOffset,
+    limit: boundedLimit,
+    total: events.length,
+    hasMore: nextOffset < events.length,
+    nextOffset,
+    events: page.map(canonicalEvent),
   });
 }
 
@@ -319,7 +394,42 @@ async function createServer(defaultTarget) {
         return;
       }
       try {
-        await handleSession(res, path.resolve(target), sessionKey);
+        await handleSessionMeta(res, path.resolve(target), sessionKey);
+      } catch (error) {
+        json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (reqUrl.pathname === "/api/events") {
+      let target = reqUrl.searchParams.get("target");
+      if (!target) target = defaultTarget;
+      if (!target) target = await latestTarget();
+      const sessionKey = reqUrl.searchParams.get("session");
+      const mode = reqUrl.searchParams.get("mode") || "merged";
+      const offset = Number.parseInt(reqUrl.searchParams.get("offset") ?? "0", 10);
+      const limit = Number.parseInt(
+        reqUrl.searchParams.get("limit") ?? String(DEFAULT_PAGE_LIMIT),
+        10,
+      );
+      if (!target || !sessionKey) {
+        json(res, 400, { error: "target and session are required" });
+        return;
+      }
+      if (!["c2s", "s2c", "merged"].includes(mode)) {
+        json(res, 400, { error: `invalid mode: ${mode}` });
+        return;
+      }
+      if (!Number.isFinite(offset) || offset < 0) {
+        json(res, 400, { error: `invalid offset: ${offset}` });
+        return;
+      }
+      if (!Number.isFinite(limit) || limit <= 0) {
+        json(res, 400, { error: `invalid limit: ${limit}` });
+        return;
+      }
+      try {
+        await handleEventsPage(res, path.resolve(target), sessionKey, mode, offset, limit);
       } catch (error) {
         json(res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
