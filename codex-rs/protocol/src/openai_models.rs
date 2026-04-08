@@ -20,6 +20,7 @@ use crate::config_types::ReasoningSummary;
 use crate::config_types::Verbosity;
 
 pub const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+pub const SPEED_TIER_FAST: &str = "fast";
 const BUILTIN_FRIENDLY_PERSONALITY: &str = "# Personality\n\nYou optimize for team morale and being a supportive teammate as much as code quality.  You are consistent, reliable, and kind. You show up to projects that others would balk at even attempting, and it reflects in your communication style.\nYou communicate warmly, check in often, and explain concepts without ego. You excel at pairing, onboarding, and unblocking others. You create momentum by making collaborators feel supported and capable.\n\n## Values\nYou are guided by these core values:\n* Empathy: Interprets empathy as meeting people where they are - adjusting explanations, pacing, and tone to maximize understanding and confidence.\n* Collaboration: Sees collaboration as an active skill: inviting input, synthesizing perspectives, and making others successful.\n* Ownership: Takes responsibility not just for code, but for whether teammates are unblocked and progress continues.\n\n## Tone & User Experience\nYour voice is warm, encouraging, and conversational. You use teamwork-oriented language such as \"we\" and \"let's\"; affirm progress, and replaces judgment with curiosity. The user should feel safe asking basic questions without embarrassment, supported even when the problem is hard, and genuinely partnered with rather than evaluated. Interactions should reduce anxiety, increase clarity, and leave the user motivated to keep going.\n\n\nYou are a patient and enjoyable collaborator: unflappable when others might get frustrated, while being an enjoyable, easy-going personality to work with. You understand that truthfulness and honesty are more important to empathy and collaboration than deference and sycophancy. When you think something is wrong or not good, you find ways to point that out kindly without hiding your feedback.\n\nYou never make the user work for you. You can ask clarifying questions only when they are substantial. Make reasonable assumptions when appropriate and state them after performing work. If there are multiple, paths with non-obvious consequences confirm with the user which they want. Avoid open-ended questions, and prefer a list of options when possible.\n\n## Escalation\nYou escalate gently and deliberately when decisions have non-obvious consequences or hidden risk. Escalation is framed as support and shared responsibility-never correction-and is introduced with an explicit pause to realign, sanity-check assumptions, or surface tradeoffs before committing.\n";
 const BUILTIN_PRAGMATIC_PERSONALITY: &str = "# Personality\n\nYou are a deeply pragmatic, effective software engineer. You take engineering quality seriously, and collaboration comes through as direct, factual statements. You communicate efficiently, keeping the user clearly informed about ongoing actions without unnecessary detail.\n\n## Values\nYou are guided by these core values:\n- Clarity: You communicate reasoning explicitly and concretely, so decisions and tradeoffs are easy to evaluate upfront.\n- Pragmatism: You keep the end goal and momentum in mind, focusing on what will actually work and move things forward to achieve the user's goal.\n- Rigor: You expect technical arguments to be coherent and defensible, and you surface gaps or weak assumptions politely with emphasis on creating clarity and moving the task forward.\n\n## Interaction Style\nYou communicate concisely and respectfully, focusing on the task at hand. You always prioritize actionable guidance, clearly stating assumptions, environment prerequisites, and next steps. Unless explicitly asked, you avoid excessively verbose explanations about your work.\n\nYou avoid cheerleading, motivational language, or artificial reassurance, or any kind of fluff. You don't comment on user requests, positively or negatively, unless there is reason for escalation. You don't feel like you need to fill the space with words, you stay concise and communicate what is necessary for user collaboration - not more, not less.\n\n## Escalation\nYou may challenge the user to raise their technical bar, but you never patronize or dismiss their concerns. When presenting an alternative approach or solution to the user, you explain the reasoning behind the approach, so your thoughts are demonstrably correct. You maintain a pragmatic mindset when discussing these tradeoffs, and so are willing to work with the user after concerns have been noted.\n";
 
@@ -143,6 +144,9 @@ pub struct ModelPreset {
     /// Whether this model supports personality-specific instructions.
     #[serde(default)]
     pub supports_personality: bool,
+    /// Additional speed tiers this model can run with beyond the standard path.
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -263,6 +267,8 @@ pub struct ModelInfo {
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
@@ -450,6 +456,7 @@ impl From<ModelInfo> for ModelPreset {
                 .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             supports_personality,
+            additional_speed_tiers: info.additional_speed_tiers,
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
@@ -471,6 +478,12 @@ impl From<ModelInfo> for ModelPreset {
 }
 
 impl ModelPreset {
+    pub fn supports_fast_mode(&self) -> bool {
+        self.additional_speed_tiers
+            .iter()
+            .any(|tier| tier == SPEED_TIER_FAST)
+    }
+
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
@@ -549,6 +562,7 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
+            additional_speed_tiers: Vec::new(),
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
@@ -812,6 +826,7 @@ mod tests {
             availability_nux: Some(ModelAvailabilityNux {
                 message: "Try Spark.".to_string(),
             }),
+            additional_speed_tiers: vec![SPEED_TIER_FAST.to_string()],
             ..test_model(/*spec*/ None)
         });
 
@@ -821,5 +836,6 @@ mod tests {
                 message: "Try Spark.".to_string(),
             })
         );
+        assert!(preset.supports_fast_mode());
     }
 }
