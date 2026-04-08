@@ -443,6 +443,8 @@ pub struct Config {
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
+    /// Tuning for account-usage estimation and `usage_pct` display.
+    pub account_usage_estimator: AccountUsageEstimatorConfig,
     /// App-server tracing output configuration.
     pub app_server_log: AppServerLogConfig,
 
@@ -1274,6 +1276,9 @@ pub struct ConfigToml {
     /// Directory where Codex writes log files, for example `codex-tui.log`.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
+    /// Tuning for account-usage estimation and `usage_pct` display.
+    #[serde(default)]
+    pub account_usage_estimator: AccountUsageEstimatorConfigToml,
     /// App-server tracing output configuration.
     pub app_server_log: Option<AppServerLogToml>,
 
@@ -1476,6 +1481,49 @@ impl ProjectConfig {
 
     pub fn is_untrusted(&self) -> bool {
         matches!(self.trust_level, Some(TrustLevel::Untrusted))
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountUsageEstimatorConfig {
+    pub min_usage_pct_sample_count: i64,
+    pub max_usage_pct_display_percent_before_full: f64,
+    pub stable_backend_percent_window: i64,
+}
+
+impl Default for AccountUsageEstimatorConfig {
+    fn default() -> Self {
+        Self {
+            min_usage_pct_sample_count: 1,
+            max_usage_pct_display_percent_before_full: 0.0,
+            stable_backend_percent_window: 5,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountUsageEstimatorConfigToml {
+    pub min_usage_pct_sample_count: Option<i64>,
+    pub max_usage_pct_display_percent_before_full: Option<f64>,
+    pub stable_backend_percent_window: Option<i64>,
+}
+
+impl AccountUsageEstimatorConfigToml {
+    fn resolve_with_defaults(self) -> AccountUsageEstimatorConfig {
+        let defaults = AccountUsageEstimatorConfig::default();
+        AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: self
+                .min_usage_pct_sample_count
+                .unwrap_or(defaults.min_usage_pct_sample_count),
+            max_usage_pct_display_percent_before_full: self
+                .max_usage_pct_display_percent_before_full
+                .unwrap_or(defaults.max_usage_pct_display_percent_before_full),
+            stable_backend_percent_window: self
+                .stable_backend_percent_window
+                .unwrap_or(defaults.stable_backend_percent_window),
+        }
     }
 }
 
@@ -2543,6 +2591,10 @@ impl Config {
                 p
             });
         let app_server_log: AppServerLogConfig = cfg.app_server_log.unwrap_or_default().into();
+        let account_usage_estimator = cfg
+            .account_usage_estimator
+            .clone()
+            .resolve_with_defaults();
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
@@ -2688,6 +2740,7 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
+            account_usage_estimator,
             app_server_log,
             config_layer_stack,
             history,

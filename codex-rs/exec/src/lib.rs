@@ -95,6 +95,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_state::AccountUsageEventMeta;
+use codex_state::AccountUsageEstimatorConfig;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
@@ -1988,10 +1989,21 @@ async fn run_direct_request(
         )
         .await?;
 
-    let usage_store =
-        AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-            .await
-            .ok();
+    let usage_store = AccountUsageStore::init_with_estimator_config(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+        AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: config.account_usage_estimator.min_usage_pct_sample_count,
+            max_usage_pct_display_percent_before_full: config
+                .account_usage_estimator
+                .max_usage_pct_display_percent_before_full,
+            stable_backend_percent_window: config
+                .account_usage_estimator
+                .stable_backend_percent_window,
+        },
+    )
+    .await
+    .ok();
     let account_key = auth_snapshot
         .as_ref()
         .and_then(|auth| {

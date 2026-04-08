@@ -21,6 +21,7 @@ pub use model::Phase2JobClaimOutcome;
 pub use runtime::StateRuntime;
 
 pub use account_usage_store::AccountUsageEventMeta;
+pub use account_usage_store::AccountUsageEstimatorConfig;
 pub use account_usage_store::AccountUsageSnapshot;
 pub use account_usage_store::AccountUsageStore;
 pub use account_usage_store::account_usage_display;
