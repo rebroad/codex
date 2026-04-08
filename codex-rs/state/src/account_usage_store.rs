@@ -36,6 +36,8 @@ const PLAUSIBLE_JUMP_ABS_SLACK_PERCENT: f64 = 0.5;
 const USAGE_LOG_DIRNAME: &str = "log";
 const USAGE_LOG_FILENAME_PREFIX: &str = "usage-";
 const USAGE_LOG_FILENAME_SUFFIX: &str = ".log";
+const USAGE_LIMIT_100_LOG_FILENAME: &str = "usage-limit-100.log";
+const USAGE_LIMIT_101_LOG_FILENAME: &str = "usage-limit-101.log";
 
 pub fn account_usage_key(account_id: Option<&str>, account_email: Option<&str>) -> Option<String> {
     account_id
@@ -144,6 +146,17 @@ struct SampleTokenDeltas {
     prewarm_sent_bytes: i64,
     prewarm_recv_bytes: i64,
     prewarm_sent_recv_bytes: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ThresholdUsageCounts {
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+    sent_bytes: i64,
+    recv_bytes: i64,
+    sent_bytes_including_warmups: i64,
+    recv_bytes_including_warmups: i64,
 }
 
 // Composite usage model calibrated from local/backend usage logs.
@@ -1722,14 +1735,37 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .execute(self.pool.as_ref())
         .await?;
 
+        self.log_usage_limit_threshold_events(
+            account_id,
+            previous_backend_percent,
+            used_percent,
+            ThresholdUsageCounts {
+                input_tokens: input_tokens_now,
+                cached_input_tokens: cached_input_tokens_now,
+                output_tokens: output_tokens_now,
+                sent_bytes: (sent_bytes_now - prewarm_sent_bytes_now).max(0),
+                recv_bytes: (recv_bytes_now - prewarm_recv_bytes_now).max(0),
+                sent_bytes_including_warmups: sent_bytes_now.max(0),
+                recv_bytes_including_warmups: recv_bytes_now.max(0),
+            },
+        )
+        .await;
+
         Ok(())
     }
 
     pub async fn record_usage_limit_reached(&self, account_id: &str) -> anyhow::Result<()> {
-        let previous_percent = sqlx::query(
+        let threshold_state = sqlx::query(
             r#"
 SELECT
-    last_backend_used_percent
+    last_backend_used_percent,
+    input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    sent_bytes,
+    recv_bytes,
+    prewarm_sent_bytes,
+    prewarm_recv_bytes
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -1737,14 +1773,59 @@ WHERE account_id = ? AND provider = ?
         .bind(account_id)
         .bind(self.default_provider.as_str())
         .fetch_optional(self.pool.as_ref())
-        .await?
-        .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+        .await?;
+        let previous_percent = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
 
         self.log_usage_event(
             account_id,
             Some(101.0),
             previous_percent,
             "usage_limit_reached=1 synthetic_used_percent=101".to_string(),
+        )
+        .await;
+        let input_tokens = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("input_tokens").ok())
+            .unwrap_or(0);
+        let cached_input_tokens = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("cached_input_tokens").ok())
+            .unwrap_or(0);
+        let output_tokens = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("output_tokens").ok())
+            .unwrap_or(0);
+        let sent_bytes_now = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("sent_bytes").ok())
+            .unwrap_or(0);
+        let recv_bytes_now = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("recv_bytes").ok())
+            .unwrap_or(0);
+        let prewarm_sent_bytes = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("prewarm_sent_bytes").ok())
+            .unwrap_or(0);
+        let prewarm_recv_bytes = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("prewarm_recv_bytes").ok())
+            .unwrap_or(0);
+        self.log_usage_limit_threshold_events(
+            account_id,
+            previous_percent,
+            101.0,
+            ThresholdUsageCounts {
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                sent_bytes: (sent_bytes_now - prewarm_sent_bytes).max(0),
+                recv_bytes: (recv_bytes_now - prewarm_recv_bytes).max(0),
+                sent_bytes_including_warmups: sent_bytes_now.max(0),
+                recv_bytes_including_warmups: recv_bytes_now.max(0),
+            },
         )
         .await;
 
@@ -2164,6 +2245,44 @@ WHERE account_id = ? AND provider = ?
             .cloned()
             .unwrap_or_else(|| "unknown".to_string())
     }
+
+    async fn log_usage_limit_threshold_events(
+        &self,
+        account_id: &str,
+        previous_percent: Option<f64>,
+        current_percent: f64,
+        counts: ThresholdUsageCounts,
+    ) {
+        let account_display = self.resolve_account_display(account_id).await;
+        for (threshold, filename) in [
+            (100.0, USAGE_LIMIT_100_LOG_FILENAME),
+            (101.0, USAGE_LIMIT_101_LOG_FILENAME),
+        ] {
+            let crossed = if current_percent >= threshold {
+                previous_percent.is_none_or(|value| !value.is_finite() || value < threshold)
+            } else {
+                false
+            };
+            if !crossed {
+                continue;
+            }
+            if let Some(mut file) = open_usage_log_file_by_name(filename) {
+                let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+                let _ = writeln!(
+                    file,
+                    "{ts} account={} input={} cached_input={} output={} recv_bytes={} sent_bytes={} recv_bytes_including_warmups={} sent_bytes_including_warmups={}",
+                    account_display,
+                    counts.input_tokens,
+                    counts.cached_input_tokens,
+                    counts.output_tokens,
+                    counts.recv_bytes,
+                    counts.sent_bytes,
+                    counts.recv_bytes_including_warmups,
+                    counts.sent_bytes_including_warmups
+                );
+            }
+        }
+    }
 }
 
 async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
@@ -2213,6 +2332,20 @@ fn usage_log_path(account_display: &str) -> Option<PathBuf> {
 
 fn open_usage_log_file(account_display: &str) -> Option<std::fs::File> {
     let path = usage_log_path(account_display)?;
+    open_usage_log_file_path(path)
+}
+
+fn usage_named_log_path(filename: &str) -> Option<PathBuf> {
+    let codex_home = find_codex_home().ok()?;
+    Some(codex_home.join(USAGE_LOG_DIRNAME).join(filename))
+}
+
+fn open_usage_log_file_by_name(filename: &str) -> Option<std::fs::File> {
+    let path = usage_named_log_path(filename)?;
+    open_usage_log_file_path(path)
+}
+
+fn open_usage_log_file_path(path: PathBuf) -> Option<std::fs::File> {
     let parent = path.parent()?;
     std::fs::create_dir_all(parent).ok()?;
     OpenOptions::new().create(true).append(true).open(path).ok()
