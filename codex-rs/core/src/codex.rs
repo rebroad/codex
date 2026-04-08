@@ -198,6 +198,25 @@ mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
+const MEMPALACE_MEMORY_GUIDANCE: &str = r#"## Memory strategy
+
+- Use MemPalace MCP tools for durable, reusable memory (user preferences, long-lived project facts, recurring constraints, decisions, and timelines).
+- Use normal conversation context for short-lived task details.
+- Before re-asking likely-known context, check MemPalace first.
+- Persist new high-signal facts to MemPalace when that will help future sessions.
+"#;
+
+fn append_mempalace_memory_guidance(
+    base_instructions: String,
+    bare_prompt: bool,
+    has_mempalace_server: bool,
+) -> String {
+    if bare_prompt || !has_mempalace_server || base_instructions.contains("MemPalace MCP") {
+        return base_instructions;
+    }
+    format!("{base_instructions}\n\n{MEMPALACE_MEMORY_GUIDANCE}")
+}
+
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
@@ -585,6 +604,12 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let has_mempalace_server = config.mcp_servers.contains_key("mempalace");
+        let base_instructions = append_mempalace_memory_guidance(
+            base_instructions,
+            config.bare_prompt,
+            has_mempalace_server,
+        );
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
