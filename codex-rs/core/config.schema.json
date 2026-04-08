@@ -6,6 +6,24 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountUsageEstimatorConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "max_usage_pct_display_percent_before_full": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_usage_pct_sample_count": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "stable_backend_percent_window": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -1351,6 +1369,14 @@
       "properties": {
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
+        },
+        "workspace_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional VS Code workspace file to import additional writable roots from."
         }
       },
       "type": "object"
@@ -1966,6 +1992,19 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "account_usage_estimator": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountUsageEstimatorConfigToml"
+        }
+      ],
+      "default": {
+        "max_usage_pct_display_percent_before_full": null,
+        "min_usage_pct_sample_count": null,
+        "stable_backend_percent_window": null
+      },
+      "description": "Tuning for account-usage estimation and `usage_pct` display."
+    },
     "agents": {
       "allOf": [
         {
@@ -2061,6 +2100,10 @@
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
+      "type": "string"
+    },
+    "compact_summary_preamble": {
+      "description": "Optional text inserted after the compaction summary marker and before the generated compacted summary body.",
       "type": "string"
     },
     "default_permissions": {

@@ -1837,9 +1837,20 @@ async fn run_usage_clear_command(
         }
     }
 
-    let usage_store =
-        codex_state::AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id)
-            .await?;
+    let usage_store = codex_state::AccountUsageStore::init_with_estimator_config(
+        config.sqlite_home.clone(),
+        config.model_provider_id,
+        codex_state::AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: config.account_usage_estimator.min_usage_pct_sample_count,
+            max_usage_pct_display_percent_before_full: config
+                .account_usage_estimator
+                .max_usage_pct_display_percent_before_full,
+            stable_backend_percent_window: config
+                .account_usage_estimator
+                .stable_backend_percent_window,
+        },
+    )
+    .await?;
 
     let (usage_rows_deleted, sample_rows_deleted, scope) = if clear_command.all_accounts {
         let (usage_rows_deleted, sample_rows_deleted) =

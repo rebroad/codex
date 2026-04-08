@@ -38,6 +38,24 @@ const USAGE_LOG_FILENAME_PREFIX: &str = "usage-";
 const USAGE_LOG_FILENAME_SUFFIX: &str = ".log";
 const USAGE_LIMIT_100_LOG_FILENAME: &str = "usage-limit-100.log";
 const USAGE_LIMIT_101_LOG_FILENAME: &str = "usage-limit-101.log";
+const STABILIZED_BACKEND_MEDIAN_WINDOW_SAMPLES: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AccountUsageEstimatorConfig {
+    pub min_usage_pct_sample_count: i64,
+    pub max_usage_pct_display_percent_before_full: f64,
+    pub stable_backend_percent_window: i64,
+}
+
+impl Default for AccountUsageEstimatorConfig {
+    fn default() -> Self {
+        Self {
+            min_usage_pct_sample_count: 1,
+            max_usage_pct_display_percent_before_full: 0.0,
+            stable_backend_percent_window: 5,
+        }
+    }
+}
 
 pub fn account_usage_key(account_id: Option<&str>, account_email: Option<&str>) -> Option<String> {
     account_id
@@ -82,6 +100,7 @@ pub struct AccountUsageSnapshot {
     pub last_backend_resets_at: Option<i64>,
     pub last_backend_window_minutes: Option<i64>,
     pub last_backend_seen_at: Option<i64>,
+    pub backend_percent_history: Option<String>,
     pub cached_q_limit: Option<f64>,
     pub cached_q_limit_sample_count: Option<i64>,
     pub cached_q_limit_computed_at: Option<i64>,
@@ -100,6 +119,7 @@ pub struct AccountUsageEventMeta<'a> {
 pub struct AccountUsageStore {
     sqlite_home: PathBuf,
     default_provider: String,
+    estimator_config: AccountUsageEstimatorConfig,
     pool: Arc<SqlitePool>,
     pending_backend_updates:
         Arc<Mutex<std::collections::HashMap<(String, String), PendingBackendRateLimitUpdate>>>,
@@ -117,6 +137,7 @@ struct PendingBackendRateLimitUpdate {
 
 #[derive(Debug, Clone)]
 struct AccountLimitEstimates {
+    byte_weights: ByteWeights,
     composite_q_limit: Option<f64>,
     composite_q_bytes_limit: Option<f64>,
     composite_q_bytes_no_prewarm_limit: Option<f64>,
@@ -162,17 +183,48 @@ struct ThresholdUsageCounts {
 // Composite usage model calibrated from local/backend usage logs.
 const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
 const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
-const COMPOSITE_Q_SENT_BYTES_WEIGHT: f64 = 0.15;
-const COMPOSITE_Q_RECV_BYTES_WEIGHT: f64 = 0.85;
+const DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT: f64 = 0.15;
+const DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT: f64 = 0.85;
+const BYTE_WEIGHT_FIT_STEP: f64 = 0.01;
+const BYTE_WEIGHT_FIT_MIN_SAMPLES: usize = 3;
+
+#[derive(Debug, Clone, Copy)]
+struct ByteWeights {
+    sent_weight: f64,
+    recv_weight: f64,
+}
+
+impl ByteWeights {
+    fn defaults() -> Self {
+        Self {
+            sent_weight: DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT,
+            recv_weight: DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT,
+        }
+    }
+}
 
 impl AccountUsageStore {
     pub async fn init(sqlite_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
+        Self::init_with_estimator_config(
+            sqlite_home,
+            default_provider,
+            AccountUsageEstimatorConfig::default(),
+        )
+        .await
+    }
+
+    pub async fn init_with_estimator_config(
+        sqlite_home: PathBuf,
+        default_provider: String,
+        estimator_config: AccountUsageEstimatorConfig,
+    ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&sqlite_home).await?;
         let usage_path = usage_db_path(sqlite_home.as_path());
         let pool = open_sqlite(&usage_path).await?;
         Ok(Arc::new(Self {
             sqlite_home,
             default_provider,
+            estimator_config,
             pool: Arc::new(pool),
             pending_backend_updates: Arc::new(Mutex::new(std::collections::HashMap::new())),
             account_displays: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -213,7 +265,6 @@ WHERE account_id = ? AND provider = ?
             let mut account_displays = self.account_displays.lock().await;
             account_displays.remove(account_id);
         }
-
         Ok((usage_rows_deleted, sample_rows_deleted))
     }
 
@@ -245,7 +296,6 @@ WHERE provider = ?
             let mut account_displays = self.account_displays.lock().await;
             account_displays.clear();
         }
-
         Ok((usage_rows_deleted, sample_rows_deleted))
     }
 
@@ -292,6 +342,7 @@ SELECT
     last_backend_resets_at,
     last_backend_window_minutes,
     last_backend_seen_at,
+    backend_percent_history,
     cached_q_limit,
     cached_q_limit_sample_count,
     cached_q_limit_computed_at,
@@ -341,6 +392,7 @@ WHERE account_id = ? AND provider = ?
             last_backend_resets_at: row.try_get("last_backend_resets_at")?,
             last_backend_window_minutes: row.try_get("last_backend_window_minutes")?,
             last_backend_seen_at: row.try_get("last_backend_seen_at")?,
+            backend_percent_history: row.try_get("backend_percent_history")?,
             cached_q_limit: row.try_get("cached_q_limit")?,
             cached_q_limit_sample_count: row.try_get("cached_q_limit_sample_count")?,
             cached_q_limit_computed_at: row.try_get("cached_q_limit_computed_at")?,
@@ -422,146 +474,172 @@ WHERE account_id = ? AND provider = ?
         &self,
         account_id: &str,
     ) -> anyhow::Result<AccountLimitEstimates> {
-        let query = String::from(
+        let usage_row = sqlx::query(
             r#"
 SELECT
-    SUM(delta_tokens) AS blended_tokens,
-    SUM(delta_input_tokens) AS input_tokens,
-    SUM(delta_cached_input_tokens) AS cached_input_tokens,
-    SUM(delta_output_tokens) AS output_tokens,
-    SUM(delta_context_total_tokens) AS context_total_tokens,
-    SUM(delta_min_total_cached_output_tokens) AS min_total_cached_output_tokens,
-    SUM(delta_output_tokens + MIN(delta_input_tokens, delta_cached_input_tokens)) AS min_input_cached_output_tokens,
-    SUM(delta_sent_bytes) AS sent_bytes,
-    SUM(delta_recv_bytes) AS recv_bytes,
-    SUM(delta_sent_recv_bytes) AS sent_recv_bytes,
-    SUM(delta_prewarm_sent_bytes) AS prewarm_sent_bytes,
-    SUM(delta_prewarm_recv_bytes) AS prewarm_recv_bytes,
-    SUM(delta_prewarm_sent_recv_bytes) AS prewarm_sent_recv_bytes,
-    SUM(delta_percent_int) AS total_percent,
-    COUNT(*) AS sample_count
-FROM account_usage_samples
+    total_tokens,
+    input_tokens,
+    cached_input_tokens,
+    output_tokens,
+    context_total_tokens,
+    min_total_cached_output_tokens,
+    sent_bytes,
+    recv_bytes,
+    sent_recv_bytes,
+    prewarm_sent_bytes,
+    prewarm_recv_bytes,
+    prewarm_sent_recv_bytes,
+    last_backend_used_percent,
+    backend_percent_history
+FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
+        )
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        let current_total_tokens = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("total_tokens").ok())
+            .unwrap_or(0);
+        let current_input_tokens = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("input_tokens").ok())
+            .unwrap_or(0);
+        let current_cached_input_tokens = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("cached_input_tokens").ok())
+            .unwrap_or(0);
+        let current_output_tokens = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("output_tokens").ok())
+            .unwrap_or(0);
+        let current_context_total_tokens = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("context_total_tokens").ok())
+            .unwrap_or(0);
+        let current_min_total_cached_output_tokens = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("min_total_cached_output_tokens").ok())
+            .unwrap_or(0);
+        let current_sent_bytes = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("sent_bytes").ok())
+            .unwrap_or(0);
+        let current_recv_bytes = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("recv_bytes").ok())
+            .unwrap_or(0);
+        let current_sent_recv_bytes = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("sent_recv_bytes").ok())
+            .unwrap_or(0);
+        let current_prewarm_sent_bytes = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("prewarm_sent_bytes").ok())
+            .unwrap_or(0);
+        let current_prewarm_recv_bytes = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("prewarm_recv_bytes").ok())
+            .unwrap_or(0);
+        let current_backend_used_percent = usage_row.as_ref().and_then(|row| {
+            row.try_get::<Option<f64>, _>("last_backend_used_percent")
+                .ok()
+                .flatten()
+        });
+        let recent_backend_percents = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<Option<String>, _>("backend_percent_history").ok())
+            .flatten()
+            .as_deref()
+            .map(parse_backend_percent_history)
+            .unwrap_or_default();
+        let sample_count = recent_backend_percents.len() as i64;
+        let smoothed_backend_percent = smooth_backend_used_percent(
+            current_backend_used_percent,
+            recent_backend_percents.as_slice(),
+            self.estimator_config,
         );
-        let row = sqlx::query(query.as_str())
+        let byte_weights = if let Some(stabilized_percent) = smoothed_backend_percent {
+            let byte_fit_samples = sqlx::query(
+                r#"
+SELECT
+    delta_sent_bytes,
+    delta_recv_bytes,
+    delta_prewarm_sent_bytes,
+    delta_prewarm_recv_bytes,
+    delta_percent_int
+FROM account_usage_samples
+WHERE account_id = ? AND provider = ? AND delta_percent_int > 0
+ORDER BY observed_at DESC, id DESC
+LIMIT 200
+                "#,
+            )
             .bind(account_id)
             .bind(self.default_provider.as_str())
-            .fetch_one(self.pool.as_ref())
+            .fetch_all(self.pool.as_ref())
             .await?;
-
-        let blended_tokens = row
-            .try_get::<Option<i64>, _>("blended_tokens")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let input_tokens = row
-            .try_get::<Option<i64>, _>("input_tokens")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let cached_input_tokens = row
-            .try_get::<Option<i64>, _>("cached_input_tokens")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let output_tokens = row
-            .try_get::<Option<i64>, _>("output_tokens")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let context_total_tokens = row
-            .try_get::<Option<i64>, _>("context_total_tokens")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let min_total_cached_output_tokens = row
-            .try_get::<Option<i64>, _>("min_total_cached_output_tokens")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let min_input_cached_output_tokens = row
-            .try_get::<Option<i64>, _>("min_input_cached_output_tokens")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let sent_bytes = row
-            .try_get::<Option<i64>, _>("sent_bytes")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let recv_bytes = row
-            .try_get::<Option<i64>, _>("recv_bytes")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let sent_recv_bytes = row
-            .try_get::<Option<i64>, _>("sent_recv_bytes")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let prewarm_sent_bytes = row
-            .try_get::<Option<i64>, _>("prewarm_sent_bytes")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let prewarm_recv_bytes = row
-            .try_get::<Option<i64>, _>("prewarm_recv_bytes")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let _prewarm_sent_recv_bytes = row
-            .try_get::<Option<i64>, _>("prewarm_sent_recv_bytes")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let total_percent: i64 = row
-            .try_get::<Option<i64>, _>("total_percent")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-        let sample_count: i64 = row
-            .try_get::<Option<i64>, _>("sample_count")
-            .unwrap_or(Some(0))
-            .unwrap_or(0);
-
-        if total_percent <= 0 || sample_count <= 0 {
-            return Ok(AccountLimitEstimates {
-                composite_q_limit: None,
-                composite_q_bytes_limit: None,
-                composite_q_bytes_no_prewarm_limit: None,
-                blended_limit: None,
-                cached_input_limit: None,
-                output_limit: None,
-                context_total_limit: None,
-                min_total_cached_output_limit: None,
-                min_input_cached_output_limit: None,
-                sent_limit: None,
-                recv_limit: None,
-                sent_recv_limit: None,
-                sample_count,
-            });
+            let byte_fit_samples = byte_fit_samples
+                .into_iter()
+                .filter_map(|row| {
+                    let sent = row.try_get::<i64, _>("delta_sent_bytes").ok()?;
+                    let recv = row.try_get::<i64, _>("delta_recv_bytes").ok()?;
+                    let prewarm_sent = row.try_get::<i64, _>("delta_prewarm_sent_bytes").ok()?;
+                    let prewarm_recv = row.try_get::<i64, _>("delta_prewarm_recv_bytes").ok()?;
+                    let delta_percent = row.try_get::<i64, _>("delta_percent_int").ok()?;
+                    (delta_percent > 0).then_some((
+                        sent + prewarm_sent,
+                        recv + prewarm_recv,
+                        delta_percent,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            fit_byte_weights(
+                current_sent_bytes + current_prewarm_sent_bytes,
+                current_recv_bytes + current_prewarm_recv_bytes,
+                byte_fit_samples.as_slice(),
+                stabilized_percent,
+            )
+        } else {
+            None
         }
-
-        let percent = total_percent as f64 / 100.0;
-        let estimate = |tokens: f64| {
-            if tokens <= 0.0 || !tokens.is_finite() {
-                return None;
-            }
-            let estimated_limit = tokens / percent;
-            if !estimated_limit.is_finite() || estimated_limit <= 0.0 {
-                None
-            } else {
-                Some(estimated_limit)
-            }
-        };
+        .unwrap_or_else(ByteWeights::defaults);
+        let cumulative_estimate =
+            |tokens: f64| estimate_limit_from_running_totals(tokens, smoothed_backend_percent);
 
         Ok(AccountLimitEstimates {
-            composite_q_limit: estimate(composite_q_tokens(
-                input_tokens,
-                cached_input_tokens,
-                output_tokens,
+            byte_weights,
+            composite_q_limit: cumulative_estimate(composite_q_tokens(
+                current_input_tokens,
+                current_cached_input_tokens,
+                current_output_tokens,
             )),
-            composite_q_bytes_limit: estimate(composite_q_bytes(sent_bytes, recv_bytes)),
-            composite_q_bytes_no_prewarm_limit: estimate(composite_q_bytes(
-                sent_bytes - prewarm_sent_bytes,
-                recv_bytes - prewarm_recv_bytes,
+            composite_q_bytes_limit: cumulative_estimate(composite_q_bytes(
+                current_sent_bytes + current_prewarm_sent_bytes,
+                current_recv_bytes + current_prewarm_recv_bytes,
+                byte_weights,
             )),
-            blended_limit: estimate(blended_tokens as f64),
-            cached_input_limit: estimate(cached_input_tokens as f64),
-            output_limit: estimate(output_tokens as f64),
-            context_total_limit: estimate(context_total_tokens as f64),
-            min_total_cached_output_limit: estimate(min_total_cached_output_tokens as f64),
-            min_input_cached_output_limit: estimate(min_input_cached_output_tokens as f64),
-            sent_limit: estimate(sent_bytes as f64),
-            recv_limit: estimate(recv_bytes as f64),
-            sent_recv_limit: estimate(sent_recv_bytes as f64),
+            composite_q_bytes_no_prewarm_limit: cumulative_estimate(composite_q_bytes(
+                current_sent_bytes,
+                current_recv_bytes,
+                byte_weights,
+            )),
+            blended_limit: cumulative_estimate(current_total_tokens as f64),
+            cached_input_limit: cumulative_estimate(current_cached_input_tokens as f64),
+            output_limit: cumulative_estimate(current_output_tokens as f64),
+            context_total_limit: cumulative_estimate(current_context_total_tokens as f64),
+            min_total_cached_output_limit: cumulative_estimate(current_min_total_cached_output_tokens as f64),
+            min_input_cached_output_limit: cumulative_estimate(
+                min_input_cached_output_tokens(
+                    current_input_tokens,
+                    current_cached_input_tokens,
+                    current_output_tokens,
+                ) as f64,
+            ),
+            sent_limit: cumulative_estimate(current_sent_bytes as f64),
+            recv_limit: cumulative_estimate(current_recv_bytes as f64),
+            sent_recv_limit: cumulative_estimate(current_sent_recv_bytes as f64),
             sample_count,
         })
     }
@@ -582,10 +660,12 @@ WHERE account_id = ? AND provider = ?
         let min_total_cached_output_tokens = total_tokens.min(cached_input_tokens + output_tokens);
         let sent = meta.sent_bytes.unwrap_or(0).max(0);
         let recv = meta.recv_bytes.unwrap_or(0).max(0);
-        let sent_recv = sent.saturating_add(recv);
         let prewarm_sent = if meta.is_prewarm { sent } else { 0 };
         let prewarm_recv = if meta.is_prewarm { recv } else { 0 };
         let prewarm_sent_recv = prewarm_sent.saturating_add(prewarm_recv);
+        let sent_without_prewarm = if meta.is_prewarm { 0 } else { sent };
+        let recv_without_prewarm = if meta.is_prewarm { 0 } else { recv };
+        let sent_recv_without_prewarm = sent_without_prewarm.saturating_add(recv_without_prewarm);
         if total_tokens == 0
             && input_tokens == 0
             && cached_input_tokens == 0
@@ -644,9 +724,9 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(reasoning_output_tokens)
         .bind(context_total_tokens)
         .bind(min_total_cached_output_tokens)
-        .bind(sent)
-        .bind(recv)
-        .bind(sent_recv)
+        .bind(sent_without_prewarm)
+        .bind(recv_without_prewarm)
+        .bind(sent_recv_without_prewarm)
         .bind(prewarm_sent)
         .bind(prewarm_recv)
         .bind(prewarm_sent_recv)
@@ -666,8 +746,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
             ("output", output_tokens),
             ("reasoning", reasoning_output_tokens),
             ("context_total", context_total_tokens),
-            ("sent", sent),
-            ("recv", recv),
+            ("sent", sent_without_prewarm),
+            ("recv", recv_without_prewarm),
             ("prewarm_sent", prewarm_sent),
             ("prewarm_recv", prewarm_recv),
         ] {
@@ -758,7 +838,8 @@ SELECT
     window_start_prewarm_sent_recv_bytes,
     last_backend_resets_at,
     last_backend_window_minutes,
-    last_backend_seen_at
+    last_backend_seen_at,
+    backend_percent_history
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -771,6 +852,10 @@ WHERE account_id = ? AND provider = ?
         let previous_backend_percent = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+        let previous_backend_percent_history = prior_usage
+            .as_ref()
+            .and_then(|row| row.try_get::<Option<String>, _>("backend_percent_history").ok())
+            .flatten();
         let previous_snapshot_percent = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("last_snapshot_percent_int").ok())
@@ -868,6 +953,7 @@ WHERE account_id = ? AND provider = ?
                         .estimate_account_limit_tokens_multi(account_id)
                         .await
                         .unwrap_or(AccountLimitEstimates {
+                            byte_weights: ByteWeights::defaults(),
                             composite_q_limit: None,
                             composite_q_bytes_limit: None,
                             composite_q_bytes_no_prewarm_limit: None,
@@ -1002,6 +1088,13 @@ WHERE account_id = ? AND provider = ?
                 .bind(self.default_provider.as_str())
                 .execute(self.pool.as_ref())
                 .await?;
+                self
+                    .persist_backend_percent_history(
+                        account_id,
+                        previous_backend_percent_history.as_deref(),
+                        used_percent,
+                    )
+                    .await?;
                 // Suppress repeated "pending confirmations=1" logs when the backend
                 // candidate is unchanged from what we already persisted.
                 if confirmations > 1 || !same_candidate_as_db_pending {
@@ -1294,6 +1387,13 @@ WHERE account_id = ? AND provider = ?
             .bind(self.default_provider.as_str())
             .execute(self.pool.as_ref())
             .await?;
+            self
+                .persist_backend_percent_history(
+                    account_id,
+                    previous_backend_percent_history.as_deref(),
+                    used_percent,
+                )
+                .await?;
 
             self.log_usage_event(
                 account_id,
@@ -1444,6 +1544,7 @@ WHERE account_id = ? AND provider = ?
                 .estimate_account_limit_tokens_multi(account_id)
                 .await
                 .unwrap_or(AccountLimitEstimates {
+                    byte_weights: ByteWeights::defaults(),
                     composite_q_limit: None,
                     composite_q_bytes_limit: None,
                     composite_q_bytes_no_prewarm_limit: None,
@@ -1734,6 +1835,13 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(seen_at)
         .execute(self.pool.as_ref())
         .await?;
+        self
+            .persist_backend_percent_history(
+                account_id,
+                previous_backend_percent_history.as_deref(),
+                used_percent,
+            )
+            .await?;
 
         self.log_usage_limit_threshold_events(
             account_id,
@@ -1743,10 +1851,10 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
                 input_tokens: input_tokens_now,
                 cached_input_tokens: cached_input_tokens_now,
                 output_tokens: output_tokens_now,
-                sent_bytes: (sent_bytes_now - prewarm_sent_bytes_now).max(0),
-                recv_bytes: (recv_bytes_now - prewarm_recv_bytes_now).max(0),
-                sent_bytes_including_warmups: sent_bytes_now.max(0),
-                recv_bytes_including_warmups: recv_bytes_now.max(0),
+                sent_bytes: sent_bytes_now.max(0),
+                recv_bytes: recv_bytes_now.max(0),
+                sent_bytes_including_warmups: (sent_bytes_now + prewarm_sent_bytes_now).max(0),
+                recv_bytes_including_warmups: (recv_bytes_now + prewarm_recv_bytes_now).max(0),
             },
         )
         .await;
@@ -1821,10 +1929,10 @@ WHERE account_id = ? AND provider = ?
                 input_tokens,
                 cached_input_tokens,
                 output_tokens,
-                sent_bytes: (sent_bytes_now - prewarm_sent_bytes).max(0),
-                recv_bytes: (recv_bytes_now - prewarm_recv_bytes).max(0),
-                sent_bytes_including_warmups: sent_bytes_now.max(0),
-                recv_bytes_including_warmups: recv_bytes_now.max(0),
+                sent_bytes: sent_bytes_now.max(0),
+                recv_bytes: recv_bytes_now.max(0),
+                sent_bytes_including_warmups: (sent_bytes_now + prewarm_sent_bytes).max(0),
+                recv_bytes_including_warmups: (recv_bytes_now + prewarm_recv_bytes).max(0),
             },
         )
         .await;
@@ -1879,25 +1987,27 @@ WHERE account_id = ? AND provider = ?
         let percent_display = if is_token_usage_event {
             None
         } else {
-            let used_percent_int = used_percent.map(|value| value.floor() as i64);
-            Some(match (previous_percent, used_percent_int) {
-                (Some(previous), Some(current)) => {
-                    let previous_int = previous.floor() as i64;
-                    if previous_int != current {
-                        format!("percent={previous_int}->{current}")
-                    } else {
-                        format!("percent={current}")
-                    }
-                }
-                (None, Some(current)) => {
-                    if current > 0 {
-                        format!("percent=0->{current}")
-                    } else {
-                        format!("percent={current}")
-                    }
-                }
-                _ => "percent=unknown".to_string(),
-            })
+            let backend_percent_history = sqlx::query(
+                r#"
+SELECT backend_percent_history
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+                "#,
+            )
+            .bind(account_id)
+            .bind(self.default_provider.as_str())
+            .fetch_optional(self.pool.as_ref())
+            .await
+            .ok()
+            .flatten()
+            .and_then(|row| row.try_get::<Option<String>, _>("backend_percent_history").ok())
+            .flatten();
+            Some(format_percent_display(
+                previous_percent,
+                used_percent,
+                backend_percent_history.as_deref(),
+                self.estimator_config,
+            ))
         };
         let account_display = self.resolve_account_display(account_id).await;
         let pid = std::process::id();
@@ -2048,6 +2158,7 @@ WHERE account_id = ? AND provider = ?
                     .estimate_account_limit_tokens_multi(account_id)
                     .await
                     .unwrap_or(AccountLimitEstimates {
+                        byte_weights: ByteWeights::defaults(),
                         composite_q_limit: None,
                         composite_q_bytes_limit: None,
                         composite_q_bytes_no_prewarm_limit: None,
@@ -2062,110 +2173,22 @@ WHERE account_id = ? AND provider = ?
                         sent_recv_limit: None,
                         sample_count: 0,
                     });
-                let usage_pct_values = format_metric_values(
-                    [
-                        estimates.composite_q_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log_f64(
-                                composite_q_tokens(
-                                    input_tokens_now,
-                                    cached_input_tokens_now,
-                                    output_tokens_now,
-                                ),
-                                backend_anchor_percent,
-                                window_start_percent,
-                                composite_q_tokens(
-                                    window_start_input_tokens,
-                                    window_start_cached_input_tokens,
-                                    window_start_output_tokens,
-                                ),
-                                allowance,
-                            )
-                        }),
-                        estimates.composite_q_bytes_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log_f64(
-                                composite_q_bytes(sent_bytes_now, recv_bytes_now),
-                                backend_anchor_percent,
-                                window_start_percent,
-                                composite_q_bytes(window_start_sent_bytes, window_start_recv_bytes),
-                                allowance,
-                            )
-                        }),
-                        estimates
-                            .composite_q_bytes_no_prewarm_limit
-                            .and_then(|allowance| {
+                if estimates.sample_count < self.estimator_config.min_usage_pct_sample_count {
+                    String::new()
+                } else {
+                    let usage_pct_values = format_metric_values(
+                        clamp_usage_pct_values(
+                            [
+                            estimates.composite_q_limit.and_then(|allowance| {
                                 estimate_account_usage_percent_for_log_f64(
-                                    composite_q_bytes(
-                                        sent_bytes_now - prewarm_sent_bytes_now,
-                                        recv_bytes_now - prewarm_recv_bytes_now,
-                                    ),
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    composite_q_bytes(
-                                        window_start_sent_bytes - window_start_prewarm_sent_bytes,
-                                        window_start_recv_bytes - window_start_prewarm_recv_bytes,
-                                    ),
-                                    allowance,
-                                )
-                            }),
-                        estimates.blended_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log(
-                                total_tokens_now,
-                                backend_anchor_percent,
-                                window_start_percent,
-                                window_start_total_tokens,
-                                allowance,
-                            )
-                        }),
-                        estimates.cached_input_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log(
-                                cached_input_tokens_now,
-                                backend_anchor_percent,
-                                window_start_percent,
-                                window_start_cached_input_tokens,
-                                allowance,
-                            )
-                        }),
-                        estimates.output_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log(
-                                output_tokens_now,
-                                backend_anchor_percent,
-                                window_start_percent,
-                                window_start_output_tokens,
-                                allowance,
-                            )
-                        }),
-                        estimates.context_total_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log(
-                                context_total_tokens_now,
-                                backend_anchor_percent,
-                                window_start_percent,
-                                window_start_context_total_tokens,
-                                allowance,
-                            )
-                        }),
-                        estimates
-                            .min_total_cached_output_limit
-                            .and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    min_total_cached_output_tokens_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_min_total_cached_output_tokens,
-                                    allowance,
-                                )
-                            }),
-                        estimates
-                            .min_input_cached_output_limit
-                            .and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    min_input_cached_output_tokens(
+                                    composite_q_tokens(
                                         input_tokens_now,
                                         cached_input_tokens_now,
                                         output_tokens_now,
                                     ),
                                     backend_anchor_percent,
                                     window_start_percent,
-                                    min_input_cached_output_tokens(
+                                    composite_q_tokens(
                                         window_start_input_tokens,
                                         window_start_cached_input_tokens,
                                         window_start_output_tokens,
@@ -2173,37 +2196,143 @@ WHERE account_id = ? AND provider = ?
                                     allowance,
                                 )
                             }),
-                        estimates.sent_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log(
-                                sent_bytes_now,
-                                backend_anchor_percent,
-                                window_start_percent,
-                                window_start_sent_bytes,
-                                allowance,
-                            )
-                        }),
-                        estimates.recv_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log(
-                                recv_bytes_now,
-                                backend_anchor_percent,
-                                window_start_percent,
-                                window_start_recv_bytes,
-                                allowance,
-                            )
-                        }),
-                        estimates.sent_recv_limit.and_then(|allowance| {
-                            estimate_account_usage_percent_for_log(
-                                sent_recv_bytes_now,
-                                backend_anchor_percent,
-                                window_start_percent,
-                                window_start_sent_recv_bytes,
-                                allowance,
-                            )
-                        }),
-                    ],
-                    /*precision*/ 2,
-                );
-                format!(" usage_pct[q/w/p/b/c/o/x/m/n/s/r/z]={usage_pct_values}%")
+                            estimates.composite_q_bytes_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log_f64(
+                                    composite_q_bytes(
+                                        sent_bytes_now + prewarm_sent_bytes_now,
+                                        recv_bytes_now + prewarm_recv_bytes_now,
+                                        estimates.byte_weights,
+                                    ),
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    composite_q_bytes(
+                                        window_start_sent_bytes + window_start_prewarm_sent_bytes,
+                                        window_start_recv_bytes + window_start_prewarm_recv_bytes,
+                                        estimates.byte_weights,
+                                    ),
+                                    allowance,
+                                )
+                            }),
+                            estimates
+                                .composite_q_bytes_no_prewarm_limit
+                                .and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log_f64(
+                                        composite_q_bytes(
+                                            sent_bytes_now,
+                                            recv_bytes_now,
+                                            estimates.byte_weights,
+                                        ),
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        composite_q_bytes(
+                                            window_start_sent_bytes,
+                                            window_start_recv_bytes,
+                                            estimates.byte_weights,
+                                        ),
+                                        allowance,
+                                    )
+                                }),
+                            estimates.blended_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log(
+                                    total_tokens_now,
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    window_start_total_tokens,
+                                    allowance,
+                                )
+                            }),
+                            estimates.cached_input_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log(
+                                    cached_input_tokens_now,
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    window_start_cached_input_tokens,
+                                    allowance,
+                                )
+                            }),
+                            estimates.output_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log(
+                                    output_tokens_now,
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    window_start_output_tokens,
+                                    allowance,
+                                )
+                            }),
+                            estimates.context_total_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log(
+                                    context_total_tokens_now,
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    window_start_context_total_tokens,
+                                    allowance,
+                                )
+                            }),
+                            estimates
+                                .min_total_cached_output_limit
+                                .and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        min_total_cached_output_tokens_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_min_total_cached_output_tokens,
+                                        allowance,
+                                    )
+                                }),
+                            estimates
+                                .min_input_cached_output_limit
+                                .and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        min_input_cached_output_tokens(
+                                            input_tokens_now,
+                                            cached_input_tokens_now,
+                                            output_tokens_now,
+                                        ),
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        min_input_cached_output_tokens(
+                                            window_start_input_tokens,
+                                            window_start_cached_input_tokens,
+                                            window_start_output_tokens,
+                                        ),
+                                        allowance,
+                                    )
+                                }),
+                            estimates.sent_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log(
+                                    sent_bytes_now,
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    window_start_sent_bytes,
+                                    allowance,
+                                )
+                            }),
+                            estimates.recv_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log(
+                                    recv_bytes_now,
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    window_start_recv_bytes,
+                                    allowance,
+                                )
+                            }),
+                            estimates.sent_recv_limit.and_then(|allowance| {
+                                estimate_account_usage_percent_for_log(
+                                    sent_recv_bytes_now,
+                                    backend_anchor_percent,
+                                    window_start_percent,
+                                    window_start_sent_recv_bytes,
+                                    allowance,
+                                )
+                            }),
+                            ],
+                            backend_anchor_percent,
+                            self.estimator_config,
+                        ),
+                        /*precision*/ 2,
+                    );
+                    format!(" usage_pct[q/w/p/b/c/o/x/m/n/s/r/z]={usage_pct_values}%")
+                }
             } else {
                 String::new()
             }
@@ -2244,6 +2373,32 @@ WHERE account_id = ? AND provider = ?
             .get(account_id)
             .cloned()
             .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    async fn persist_backend_percent_history(
+        &self,
+        account_id: &str,
+        previous_history: Option<&str>,
+        used_percent: f64,
+    ) -> anyhow::Result<()> {
+        let mut history = previous_history
+            .map(parse_backend_percent_history)
+            .unwrap_or_default();
+        append_backend_percent_sample(&mut history, used_percent);
+        let history_text = serialize_backend_percent_history(&history);
+        sqlx::query(
+            r#"
+UPDATE account_usage
+SET backend_percent_history = ?
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind(history_text)
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
     }
 
     async fn log_usage_limit_threshold_events(
@@ -2391,6 +2546,145 @@ fn estimate_account_usage_percent_for_log_f64(
     Some(base_percent + percent)
 }
 
+fn format_percent_display(
+    previous_percent: Option<f64>,
+    used_percent: Option<f64>,
+    backend_percent_history: Option<&str>,
+    estimator_config: AccountUsageEstimatorConfig,
+) -> String {
+    let used_percent_int = used_percent.map(|value| value.floor() as i64);
+    let raw_display = match (previous_percent, used_percent_int) {
+        (Some(previous), Some(current)) => {
+            let previous_int = previous.floor() as i64;
+            if previous_int != current {
+                format!("percent={previous_int}->{current}")
+            } else {
+                format!("percent={current}")
+            }
+        }
+        (None, Some(current)) => {
+            if current > 0 {
+                format!("percent=0->{current}")
+            } else {
+                format!("percent={current}")
+            }
+        }
+        _ => "percent=unknown".to_string(),
+    };
+
+    let history = backend_percent_history
+        .map(parse_backend_percent_history)
+        .unwrap_or_default();
+    let stabilized_previous =
+        stabilized_backend_percent(previous_percent, used_percent, &history, estimator_config);
+    let stabilized_current =
+        smooth_backend_used_percent(used_percent, history.as_slice(), estimator_config);
+
+    match (stabilized_previous, stabilized_current) {
+        (Some(previous), Some(current))
+            if (current - previous).abs() > USED_PERCENT_REFUND_EPSILON =>
+        {
+            format!("{raw_display} stabilized_percent={previous:.2}->{current:.2}")
+        }
+        (_, Some(current)) => format!("{raw_display} stabilized_percent={current:.2}"),
+        _ => raw_display,
+    }
+}
+
+fn stabilized_backend_percent(
+    previous_percent: Option<f64>,
+    used_percent: Option<f64>,
+    backend_percent_history: &[f64],
+    estimator_config: AccountUsageEstimatorConfig,
+) -> Option<f64> {
+    let previous_percent = previous_percent?;
+    let mut history = backend_percent_history.to_vec();
+    if let Some(current_percent) = used_percent
+        && let Some(last) = history.last().copied()
+        && (last - current_percent).abs() <= USED_PERCENT_REFUND_EPSILON
+        && (previous_percent - current_percent).abs() > USED_PERCENT_REFUND_EPSILON
+    {
+        history.pop();
+    }
+    smooth_backend_used_percent(Some(previous_percent), history.as_slice(), estimator_config)
+}
+
+fn parse_backend_percent_history(raw: &str) -> Vec<f64> {
+    raw.split(',')
+        .filter_map(|item| item.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .collect()
+}
+
+fn append_backend_percent_sample(history: &mut Vec<f64>, used_percent: f64) {
+    if !used_percent.is_finite() || used_percent < 0.0 {
+        return;
+    }
+    history.push(used_percent);
+    let max_len = 200usize;
+    if history.len() > max_len {
+        let remove_count = history.len() - max_len;
+        history.drain(0..remove_count);
+    }
+}
+
+fn serialize_backend_percent_history(history: &[f64]) -> Option<String> {
+    if history.is_empty() {
+        None
+    } else {
+        Some(
+            history
+                .iter()
+                .map(|value| format!("{value:.4}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    }
+}
+
+fn smooth_backend_used_percent(
+    backend_percent: Option<f64>,
+    recent_backend_percents: &[f64],
+    estimator_config: AccountUsageEstimatorConfig,
+) -> Option<f64> {
+    let mut values = recent_backend_percents
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .collect::<Vec<_>>();
+    if let Some(percent) = backend_percent {
+        append_backend_percent_sample(&mut values, percent);
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let window_size = usize::try_from(estimator_config.stable_backend_percent_window.max(1))
+        .unwrap_or(STABILIZED_BACKEND_MEDIAN_WINDOW_SAMPLES);
+    let window_start = values.len().saturating_sub(window_size);
+    let mut window = values[window_start..].to_vec();
+    window.sort_by(f64::total_cmp);
+    let mid = window.len() / 2;
+    let percent = if window.len() % 2 == 0 {
+        (window[mid - 1] + window[mid]) / 2.0
+    } else {
+        window[mid]
+    };
+    Some(percent)
+}
+
+fn estimate_limit_from_running_totals(tokens: f64, smoothed_percent: Option<f64>) -> Option<f64> {
+    let percent = smoothed_percent?;
+    if tokens <= 0.0 || !tokens.is_finite() || percent <= 0.0 || !percent.is_finite() {
+        return None;
+    }
+    let estimated_limit = tokens * 100.0 / percent;
+    if estimated_limit <= 0.0 || !estimated_limit.is_finite() {
+        None
+    } else {
+        Some(estimated_limit)
+    }
+}
+
 fn normalize_usage_for_accounting(usage: &TokenUsage) -> TokenUsage {
     let cached_input_tokens = usage.cached_input_tokens.max(0);
     let input_tokens = usage.non_cached_input();
@@ -2418,9 +2712,69 @@ fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens
         + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
 }
 
-fn composite_q_bytes(sent_bytes: i64, recv_bytes: i64) -> f64 {
-    COMPOSITE_Q_SENT_BYTES_WEIGHT * sent_bytes.max(0) as f64
-        + COMPOSITE_Q_RECV_BYTES_WEIGHT * recv_bytes.max(0) as f64
+fn composite_q_bytes(sent_bytes: i64, recv_bytes: i64, weights: ByteWeights) -> f64 {
+    weights.sent_weight * sent_bytes.max(0) as f64 + weights.recv_weight * recv_bytes.max(0) as f64
+}
+
+fn fit_byte_weights(
+    total_sent_bytes: i64,
+    total_recv_bytes: i64,
+    samples: &[(i64, i64, i64)],
+    stabilized_backend_percent: f64,
+) -> Option<ByteWeights> {
+    if samples.len() < BYTE_WEIGHT_FIT_MIN_SAMPLES
+        || !stabilized_backend_percent.is_finite()
+        || stabilized_backend_percent <= 0.0
+    {
+        return None;
+    }
+    let total_sent = total_sent_bytes.max(0) as f64;
+    let total_recv = total_recv_bytes.max(0) as f64;
+    if total_sent <= 0.0 && total_recv <= 0.0 {
+        return None;
+    }
+
+    let mut best: Option<(f64, f64)> = None;
+    for step in 0..=100 {
+        let sent_weight = step as f64 * BYTE_WEIGHT_FIT_STEP;
+        let recv_weight = 1.0 - sent_weight;
+        let total_weighted = sent_weight * total_sent + recv_weight * total_recv;
+        let Some(estimated_limit) =
+            estimate_limit_from_running_totals(total_weighted, Some(stabilized_backend_percent))
+        else {
+            continue;
+        };
+
+        let mut score = 0.0;
+        let mut included = 0usize;
+        for (sample_sent, sample_recv, delta_percent_int) in samples {
+            if *delta_percent_int <= 0 {
+                continue;
+            }
+            let sample_weighted =
+                sent_weight * (*sample_sent).max(0) as f64 + recv_weight * (*sample_recv).max(0) as f64;
+            if sample_weighted <= 0.0 {
+                continue;
+            }
+            let predicted_delta_percent = sample_weighted * 100.0 / estimated_limit;
+            let observed_delta_percent = *delta_percent_int as f64;
+            let error = predicted_delta_percent - observed_delta_percent;
+            score += error * error;
+            included += 1;
+        }
+        if included >= BYTE_WEIGHT_FIT_MIN_SAMPLES {
+            let mean_score = score / included as f64;
+            if best.is_none_or(|(best_score, _)| mean_score < best_score) {
+                best = Some((mean_score, sent_weight));
+            }
+        }
+    }
+
+    let fitted_sent_weight = best.map(|(_, weight)| weight)?;
+    Some(ByteWeights {
+        sent_weight: fitted_sent_weight,
+        recv_weight: 1.0 - fitted_sent_weight,
+    })
 }
 
 fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
@@ -2458,7 +2812,11 @@ fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
         estimates.recv_limit,
         estimates.sent_recv_limit,
     ]);
-    format!("avg_tpp={avg} est_allow={allowance}")
+    format!(
+        "avg_tpp={avg} est_allow={allowance} byte_weights={:.2}/{:.2}",
+        estimates.byte_weights.sent_weight,
+        estimates.byte_weights.recv_weight
+    )
 }
 
 fn format_metric_values_si(values: [Option<f64>; 12]) -> String {
@@ -2475,6 +2833,36 @@ fn format_metric_values(values: [Option<f64>; 12], precision: usize) -> String {
         _ => "-".to_string(),
     };
     values.into_iter().map(value).collect::<Vec<_>>().join("/")
+}
+
+fn clamp_usage_pct_values(
+    values: [Option<f64>; 12],
+    backend_anchor_percent: f64,
+    estimator_config: AccountUsageEstimatorConfig,
+) -> [Option<f64>; 12] {
+    let configured_cap = estimator_config.max_usage_pct_display_percent_before_full;
+    let max_percent = if backend_anchor_percent < 100.0
+        && configured_cap.is_finite()
+        && configured_cap > 0.0
+    {
+        Some(configured_cap)
+    } else {
+        None
+    };
+    values.map(|entry| {
+        entry.and_then(|value| {
+            if value.is_finite() {
+                let clamped = value.max(0.0);
+                Some(if let Some(max_percent) = max_percent {
+                    clamped.min(max_percent)
+                } else {
+                    clamped
+                })
+            } else {
+                None
+            }
+        })
+    })
 }
 
 fn format_si_three_digits(mut value: f64) -> String {
@@ -2621,6 +3009,60 @@ mod tests {
         assert_eq!(snapshot.input_tokens, 90);
         assert_eq!(snapshot.cached_input_tokens, 10);
         assert_eq!(snapshot.output_tokens, 13);
+    }
+
+    #[tokio::test]
+    async fn prewarm_network_bytes_do_not_increment_default_sent_recv_counters() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime = AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+            .await
+            .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 0,
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+        };
+        runtime
+            .record_account_token_usage(
+                "account-1",
+                &usage,
+                AccountUsageEventMeta {
+                    sent_bytes: Some(11),
+                    recv_bytes: Some(29),
+                    is_prewarm: true,
+                    ..AccountUsageEventMeta::default()
+                },
+            )
+            .await
+            .expect("record prewarm usage");
+        runtime
+            .record_account_token_usage(
+                "account-1",
+                &usage,
+                AccountUsageEventMeta {
+                    sent_bytes: Some(7),
+                    recv_bytes: Some(5),
+                    is_prewarm: false,
+                    ..AccountUsageEventMeta::default()
+                },
+            )
+            .await
+            .expect("record regular usage");
+
+        let snapshot = runtime
+            .get_account_usage("account-1")
+            .await
+            .expect("read")
+            .expect("row");
+        assert_eq!(snapshot.sent_bytes, 7);
+        assert_eq!(snapshot.recv_bytes, 5);
+        assert_eq!(snapshot.sent_recv_bytes, 12);
+        assert_eq!(snapshot.prewarm_sent_bytes, 11);
+        assert_eq!(snapshot.prewarm_recv_bytes, 29);
+        assert_eq!(snapshot.prewarm_sent_recv_bytes, 40);
     }
 
     #[tokio::test]
@@ -3495,6 +3937,40 @@ WHERE account_id = ? AND provider = ?
         assert_eq!(format_si_three_digits(/*value*/ 35_705_600.0), "35.7M");
         assert_eq!(format_si_three_digits(/*value*/ 24_813.0), "24.8K");
     }
+
+    #[test]
+    fn fit_byte_weights_refits_sent_recv_mix() {
+        let samples = vec![
+            (1000, 200, 8),
+            (400, 900, 6),
+            (1500, 100, 11),
+            (300, 1200, 6),
+            (1100, 600, 9),
+        ];
+        let weights = fit_byte_weights(
+            /*total_sent_bytes*/ 3_200,
+            /*total_recv_bytes*/ 860,
+            samples.as_slice(),
+            /*stabilized_backend_percent*/ 25.0,
+        )
+        .expect("fit byte weights");
+        assert!(weights.sent_weight > 0.60);
+        assert!(weights.sent_weight < 0.80);
+        assert!((weights.sent_weight + weights.recv_weight - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fit_byte_weights_requires_enough_samples() {
+        let samples = vec![(100, 200, 1), (200, 100, 1)];
+        let weights = fit_byte_weights(
+            /*total_sent_bytes*/ 1_000,
+            /*total_recv_bytes*/ 1_000,
+            samples.as_slice(),
+            /*stabilized_backend_percent*/ 20.0,
+        );
+        assert!(weights.is_none());
+    }
+
     #[test]
     fn normalize_usage_for_accounting_uses_non_cached_input() {
         let usage = TokenUsage {
