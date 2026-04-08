@@ -125,6 +125,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_state::AccountUsageEventMeta;
+use codex_state::AccountUsageEstimatorConfig;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
@@ -1958,10 +1959,23 @@ impl Session {
         ));
         let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
             watch::channel(false);
-        let account_usage_store =
-            AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-                .await
-                .ok();
+        let account_usage_store = AccountUsageStore::init_with_estimator_config(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+            AccountUsageEstimatorConfig {
+                min_usage_pct_sample_count: config
+                    .account_usage_estimator
+                    .min_usage_pct_sample_count,
+                max_usage_pct_display_percent_before_full: config
+                    .account_usage_estimator
+                    .max_usage_pct_display_percent_before_full,
+                stable_backend_percent_window: config
+                    .account_usage_estimator
+                    .stable_backend_percent_window,
+            },
+        )
+        .await
+        .ok();
         let (mailbox, mailbox_rx) = Mailbox::new();
         let sess = Arc::new(Session {
             conversation_id,
