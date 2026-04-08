@@ -2077,6 +2077,21 @@
       "description": "When set to `true`, disable built-in/system and contextual prompt scaffolding so only user text is sent.",
       "type": "boolean"
     },
+    "builtin_disabled_tools": {
+      "default": null,
+      "description": "Explicit deny-list of built-in (non-MCP) tools. Applied after `builtin_enabled_tools`.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "builtin_enabled_tools": {
+      "description": "Explicit allow-list of built-in (non-MCP) tools. When set, only listed built-in tools are exposed.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
