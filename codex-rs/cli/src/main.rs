@@ -53,6 +53,7 @@ use codex_core::AuthManager;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
+use codex_core::auth::RefreshTokenError;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -1751,12 +1752,24 @@ async fn run_status_command(
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     ));
-    let auth = auth_manager.auth_with_refresh_if_expired().await;
+    let (auth, compact_output_mode) = match auth_manager.auth_with_refresh_if_expired_strict().await
+    {
+        Ok(auth) => (auth, codex_tui::CompactStatusOutputMode::Normal),
+        Err(err) => {
+            tracing::warn!("proactive auth refresh failed: {err}");
+            let compact_mode = match err {
+                RefreshTokenError::Permanent(_) => codex_tui::CompactStatusOutputMode::UnknownUsage,
+                RefreshTokenError::Transient(_) => codex_tui::CompactStatusOutputMode::Normal,
+            };
+            (auth_manager.auth_cached(), compact_mode)
+        }
+    };
     if status_output_mode.compact {
         let compact_line = codex_tui::render_compact_status_for_cli(
             &config,
             auth.as_ref(),
             status_output_mode.utc,
+            compact_output_mode,
         )
         .await;
         println!("{compact_line}");
