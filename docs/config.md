@@ -50,6 +50,23 @@ in a separate usage database under `sqlite_home` (see `docs/account-usage.md`).
 This usage DB is updated whenever token usage or rate limit snapshots are
 received, including during ephemeral sessions.
 
+## Account Usage Estimator
+
+You can tune account usage percent estimation with `[account_usage_estimator]`:
+
+```toml
+[account_usage_estimator]
+min_usage_pct_sample_count = 1
+max_usage_pct_display_percent_before_full = 101.0
+stable_backend_percent_window = 5
+```
+
+Knobs:
+
+- `min_usage_pct_sample_count`: minimum `account_usage_samples` rows required before `usage_pct[...]` is shown.
+- `max_usage_pct_display_percent_before_full`: cap applied to predicted usage percentages while backend `used_percent < 100`; no cap is applied once backend usage reaches 100.
+- `stable_backend_percent_window`: rolling window size used to compute stabilized backend percent.
+
 ## Sandbox Debug Logging
 
 Set `sandbox_debug = false` in `config.toml` to disable Linux sandbox debug
