@@ -1581,15 +1581,12 @@ fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<(
 }
 
 #[test]
-fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
+fn workspace_write_does_not_auto_add_memories_root() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let memories_root = codex_home.path().join("memories");
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
-                writable_roots: vec![memories_root.abs()],
-                ..Default::default()
-            }),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite::default()),
             ..Default::default()
         },
         ConfigOverrides {
@@ -1605,22 +1602,13 @@ fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
             other => panic!("expected read-only policy on Windows, got {other:?}"),
         }
     } else {
-        assert!(
-            memories_root.is_dir(),
-            "expected memories root directory to exist at {}",
-            memories_root.display()
-        );
         let expected_memories_root = memories_root.abs();
         match config.permissions.sandbox_policy.get() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_memories_root)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_memories_root.display()
+                assert!(
+                    !writable_roots.contains(&expected_memories_root),
+                    "did not expect writable roots to include {} unless explicitly configured",
+                    expected_memories_root.display(),
                 );
             }
             other => panic!("expected workspace-write policy, got {other:?}"),
