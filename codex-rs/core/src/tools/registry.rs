@@ -508,6 +508,20 @@ impl ToolRegistryBuilder {
         }
     }
 
+    pub fn retain_specs<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&ConfiguredToolSpec) -> bool,
+    {
+        self.specs.retain(|spec| keep(spec));
+    }
+
+    pub fn retain_handlers<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&str) -> bool,
+    {
+        self.handlers.retain(|name, _| keep(name));
+    }
+
     // TODO(jif) for dynamic tools.
     // pub fn register_many<I>(&mut self, names: I, handler: Arc<dyn ToolHandler>)
     // where
