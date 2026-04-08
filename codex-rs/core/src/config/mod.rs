@@ -821,6 +821,63 @@ fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> 
     Ok(catalog)
 }
 
+#[derive(Deserialize)]
+struct CodeWorkspaceConfig {
+    #[serde(default)]
+    folders: Vec<CodeWorkspaceFolder>,
+}
+
+#[derive(Deserialize)]
+struct CodeWorkspaceFolder {
+    path: Option<PathBuf>,
+}
+
+fn load_workspace_writable_roots(
+    workspace_file: &AbsolutePathBuf,
+) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    let file_contents = std::fs::read_to_string(workspace_file)?;
+    let workspace_config =
+        serde_json::from_str::<CodeWorkspaceConfig>(&file_contents).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to parse project.workspace_file `{}` as JSON: {err}",
+                    workspace_file.display()
+                ),
+            )
+        })?;
+    let workspace_base = workspace_file.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "project.workspace_file `{}` has no parent directory",
+                workspace_file.display()
+            ),
+        )
+    })?;
+    workspace_config
+        .folders
+        .into_iter()
+        .filter_map(|folder| folder.path)
+        .map(|path| AbsolutePathBuf::resolve_path_against_base(path, workspace_base.as_path()))
+        .collect()
+}
+
+fn merged_additional_writable_roots(
+    additional_writable_roots: &[AbsolutePathBuf],
+    workspace_file: Option<&AbsolutePathBuf>,
+) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    let mut merged = additional_writable_roots.to_vec();
+    if let Some(workspace_file) = workspace_file {
+        for path in load_workspace_writable_roots(workspace_file)? {
+            if !merged.iter().any(|existing| existing == &path) {
+                merged.push(path);
+            }
+        }
+    }
+    Ok(merged)
+}
+
 fn load_model_catalog(
     model_catalog_json: Option<AbsolutePathBuf>,
 ) -> std::io::Result<Option<ModelsResponse>> {
@@ -1472,6 +1529,8 @@ impl From<ConfigToml> for UserSavedConfig {
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    /// Optional VS Code workspace file to import additional writable roots from.
+    pub workspace_file: Option<AbsolutePathBuf>,
 }
 
 impl ProjectConfig {
@@ -2186,13 +2245,16 @@ impl Config {
                 }
             }
         }))?;
+        let active_project = cfg
+            .get_active_project(resolved_cwd.as_path())
+            .unwrap_or(ProjectConfig {
+                trust_level: None,
+                workspace_file: None,
+            });
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect::<Result<Vec<_>, _>>()?;
-        let active_project = cfg
-            .get_active_project(resolved_cwd.as_path())
-            .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
             &cfg,
@@ -2266,10 +2328,14 @@ impl Config {
             let mut sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+                let merged_writable_roots = merged_additional_writable_roots(
+                    &additional_writable_roots,
+                    active_project.workspace_file.as_ref(),
+                )?;
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
-                        &additional_writable_roots,
+                        &merged_writable_roots,
                     );
                 sandbox_policy = file_system_sandbox_policy
                     .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
@@ -2290,7 +2356,11 @@ impl Config {
                 Some(&constrained_sandbox_policy),
             );
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
-                for path in &additional_writable_roots {
+                let merged_writable_roots = merged_additional_writable_roots(
+                    &additional_writable_roots,
+                    active_project.workspace_file.as_ref(),
+                )?;
+                for path in &merged_writable_roots {
                     if !writable_roots.iter().any(|existing| existing == path) {
                         writable_roots.push(path.clone());
                     }

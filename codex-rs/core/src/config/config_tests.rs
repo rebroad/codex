@@ -1457,6 +1457,113 @@ fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
 }
 
 #[test]
+fn project_workspace_file_extends_workspace_writable_roots() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let project_root = temp_dir.path().join("project");
+    let shared_root = temp_dir.path().join("shared");
+    let absolute_extra_root = temp_dir.path().join("extra");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&project_root)?;
+    std::fs::create_dir_all(&shared_root)?;
+    std::fs::create_dir_all(&absolute_extra_root)?;
+
+    let workspace_file = temp_dir.path().join("codex.code-workspace");
+    let workspace_json = serde_json::json!({
+        "folders": [
+            { "path": "../shared" },
+            { "path": absolute_extra_root }
+        ]
+    });
+    std::fs::write(
+        &workspace_file,
+        serde_json::to_string(&workspace_json).expect("workspace json should serialize"),
+    )?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_root.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                    workspace_file: Some(workspace_file.abs()),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(project_root.clone()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        codex_home,
+    )?;
+
+    if cfg!(target_os = "windows") {
+        match config.permissions.sandbox_policy.get() {
+            SandboxPolicy::ReadOnly { .. } => {}
+            other => panic!("expected read-only policy on Windows, got {other:?}"),
+        }
+    } else {
+        let expected_shared_root = shared_root.abs();
+        let expected_absolute_extra_root = absolute_extra_root.abs();
+        match config.permissions.sandbox_policy.get() {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert!(
+                    writable_roots.contains(&expected_shared_root),
+                    "expected workspace writable roots to include {}",
+                    expected_shared_root.display()
+                );
+                assert!(
+                    writable_roots.contains(&expected_absolute_extra_root),
+                    "expected workspace writable roots to include {}",
+                    expected_absolute_extra_root.display()
+                );
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn project_workspace_file_invalid_json_is_rejected_for_workspace_write() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&project_root)?;
+
+    let workspace_file = temp_dir.path().join("codex.code-workspace");
+    std::fs::write(&workspace_file, "not json")?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_root.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                    workspace_file: Some(workspace_file.abs()),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(project_root),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        codex_home,
+    )
+    .expect_err("invalid workspace file JSON should fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("project.workspace_file"));
+    Ok(())
+}
+
+#[test]
 fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
@@ -4584,7 +4691,10 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             suppress_unstable_features_warning: false,
             sandbox_debug: true,
             active_profile: Some("o3".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                workspace_file: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4731,7 +4841,10 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         suppress_unstable_features_warning: false,
         sandbox_debug: true,
         active_profile: Some("gpt3".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        },
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -4876,7 +4989,10 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         suppress_unstable_features_warning: false,
         sandbox_debug: true,
         active_profile: Some("zdr".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        },
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -5007,7 +5123,10 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         suppress_unstable_features_warning: false,
         sandbox_debug: true,
         active_profile: Some("gpt5".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        },
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -5318,6 +5437,7 @@ fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defaults() 
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                workspace_file: None,
             },
         )])),
         ..Default::default()
@@ -5358,6 +5478,7 @@ fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallback() 
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                workspace_file: None,
             },
         )])),
         ..Default::default()
@@ -5585,6 +5706,7 @@ fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Resul
                 test_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    workspace_file: None,
                 },
             )])),
             ..Default::default()
