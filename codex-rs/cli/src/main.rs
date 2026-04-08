@@ -1751,7 +1751,7 @@ async fn run_status_command(
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     ));
-    let auth = auth_manager.auth().await;
+    let auth = auth_manager.auth_with_refresh_if_expired().await;
     if status_output_mode.compact {
         let compact_line = codex_tui::render_compact_status_for_cli(
             &config,

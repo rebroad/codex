@@ -1239,6 +1239,22 @@ impl AuthManager {
         self.auth_cached()
     }
 
+    /// Current auth (clone), proactively refreshing expired ChatGPT access tokens once.
+    ///
+    /// This is intended for status-style surfaces that can safely attempt a one-shot refresh
+    /// before presenting auth health.
+    pub async fn auth_with_refresh_if_expired(&self) -> Option<CodexAuth> {
+        let auth = self.auth().await?;
+        if !Self::is_access_token_expired(&auth) {
+            return Some(auth);
+        }
+
+        if let Err(err) = self.refresh_token().await {
+            tracing::warn!("proactive auth refresh failed: {err}");
+        }
+        self.auth_cached()
+    }
+
     /// Force a reload of the auth information from auth.json. Returns
     /// whether the auth value changed.
     pub fn reload(&self) -> bool {
