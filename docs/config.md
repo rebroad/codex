@@ -152,6 +152,20 @@ bare_prompt = true
 You can also enable this for a single `codex exec` invocation with
 `--bare-prompt`.
 
+## Project workspace writable roots
+
+For projects using `workspace-write` sandbox mode, you can import extra
+writable roots from a VS Code `.code-workspace` file:
+
+```toml
+[projects."/home/rebroad/src/codex"]
+trust_level = "trusted"
+workspace_file = "/home/rebroad/Desktop/codex.code-workspace"
+```
+
+Codex reads the workspace file's `folders[].path` entries and adds them to
+the sandbox writable roots for that project.
+
 ## Prompt layers and one-off overrides (`codex exec`)
 
 Canonical terms used by Codex:
