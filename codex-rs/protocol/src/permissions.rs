@@ -1124,11 +1124,14 @@ fn default_read_only_subpaths_for_writable_root(
         .join(".git")
         .expect(".git is a valid relative path");
     // This applies to typical repos (directory .git), worktrees/submodules
-    // (file .git with gitdir pointer), and bare repos when the gitdir is the
-    // writable root itself.
+    // (file .git with gitdir pointer), symlinked .git entries, and bare repos
+    // when the gitdir is the writable root itself.
+    let top_level_git_is_symlink = std::fs::symlink_metadata(top_level_git.as_path())
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_symlink());
     let top_level_git_is_file = top_level_git.as_path().is_file();
     let top_level_git_is_dir = top_level_git.as_path().is_dir();
-    if top_level_git_is_dir || top_level_git_is_file {
+    if top_level_git_is_dir || top_level_git_is_file || top_level_git_is_symlink {
         if top_level_git_is_file
             && is_git_pointer_file(&top_level_git)
             && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
@@ -1634,6 +1637,42 @@ mod tests {
             !writable_roots[0]
                 .read_only_subpaths
                 .contains(&unexpected_decoy)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_preserve_symlinked_dot_git_subpath() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = cwd.path().join("root");
+        let real_git = root.join("real-git");
+        let dot_git = root.join(".git");
+        fs::create_dir_all(&real_git).expect("create real git dir");
+        symlink_dir(&real_git, &dot_git).expect("create .git symlink");
+
+        let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
+        let expected_dot_git = root.join(".git").expect("absolute .git symlink");
+        let unexpected_real_git = AbsolutePathBuf::from_absolute_path(
+            real_git.canonicalize().expect("canonicalize real git dir"),
+        )
+        .expect("absolute canonical real git dir");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: root },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_dot_git)
+        );
+        assert!(
+            !writable_roots[0]
+                .read_only_subpaths
+                .contains(&unexpected_real_git)
         );
     }
 
