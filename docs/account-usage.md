@@ -19,6 +19,22 @@ Usage events are also appended to per-account log files under `CODEX_HOME`:
 - Each line includes timestamp, pid, percent/sample metadata, and event details.
 - The account email is no longer duplicated on each line because it is encoded in the filename.
 
+Threshold-crossing events are also written to shared usage-limit logs:
+
+- `CODEX_HOME/log/usage-limit-100.log`
+- `CODEX_HOME/log/usage-limit-101.log`
+
+Each threshold line records:
+
+- `account`
+- `input`
+- `cached_input`
+- `output`
+- `recv_bytes`
+- `sent_bytes`
+- `recv_bytes_including_warmups`
+- `sent_bytes_including_warmups`
+
 ## Compatibility Notes
 
 Earlier iterations of the tracker stored usage tables in the upstream state DB. Those tables are no longer used. If you previously ran a build that added those migrations, you may need to reset the state DB (or point `CODEX_SQLITE_HOME` to a fresh directory) to clear SQLx migration mismatches. This does not affect the usage database described above.
@@ -96,7 +112,12 @@ Retention:
 
 ## Correlating With Backend Usage
 
-The backend provides `used_percent` for the window. When one or more samples exist for the current `resets_at`, we estimate the token allowance using the total positive percent deltas and total token deltas, then compute an approximate percent for the locally tracked total.
+The backend provides `used_percent` for the window. For each tracked metric, Codex derives an estimated allowance by blending:
+
+- a sampled estimate from `account_usage_samples` deltas (`delta_metric / delta_percent`), and
+- a cumulative estimate from running totals (`current_metric / smoothed_backend_percent`).
+
+The sampled estimate receives more weight as sample count increases (up to a configurable cap). The cumulative estimate keeps results stable earlier in the window when sample volume is low.
 
 `usage_pct` prediction is anchored to the latest backend snapshot percent and the local token totals observed at that same snapshot. As local token totals increase between backend snapshots, predicted percent advances using the estimated allowance:
 
@@ -106,10 +127,15 @@ estimated_percent = backend_anchor_percent + ((local_total_tokens - anchor_total
 ```
 
 This estimate is displayed in `/status` when the correlation is available.
+`usage_pct` is hidden until a minimum sample count is reached.
+Before the backend reaches 100%, `usage_pct` values are capped by configuration; after backend `used_percent >= 100`, values are allowed to grow beyond 100.
 
 Current `usage_pct` log order is:
 
 - `q`: composite calibrated metric (`output + 0.006*input + 0.003*cached_input`)
+- `w`: weighted bytes including prewarm traffic (`a*(sent+prewarm_sent) + (1-a)*(recv+prewarm_recv)`)
+- `p`: weighted bytes excluding prewarm traffic (`a*sent + (1-a)*recv`)
+  where `a` is refit from recent samples to stay aligned with stabilized backend percent.
 - `b`: blended total tokens
 - `c`: cached input
 - `o`: output
