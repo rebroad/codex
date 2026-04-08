@@ -34,6 +34,7 @@ use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_state::AccountUsageSnapshot;
+use codex_state::AccountUsageEstimatorConfig;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
@@ -59,6 +60,7 @@ pub(crate) struct AccountUsageDisplay {
 }
 
 const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
+const BACKEND_PERCENT_EPSILON: f64 = 0.0001;
 const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
 const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
 
@@ -78,10 +80,21 @@ pub(crate) async fn render_status_lines_for_cli(
     width: u16,
 ) -> Vec<String> {
     let mut plan_type = auth.as_ref().and_then(CodexAuth::account_plan_type);
-    let account_usage_store =
-        AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-            .await
-            .ok();
+    let account_usage_store = AccountUsageStore::init_with_estimator_config(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+        AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: config.account_usage_estimator.min_usage_pct_sample_count,
+            max_usage_pct_display_percent_before_full: config
+                .account_usage_estimator
+                .max_usage_pct_display_percent_before_full,
+            stable_backend_percent_window: config
+                .account_usage_estimator
+                .stable_backend_percent_window,
+        },
+    )
+    .await
+    .ok();
     let account_id = auth.as_ref().and_then(|auth| {
         account_usage_key(
             auth.get_account_id().as_deref(),
@@ -109,7 +122,7 @@ pub(crate) async fn render_status_lines_for_cli(
     let cached_rate_limits = usage_snapshot
         .as_ref()
         .and_then(cached_rate_limit_snapshot_from_usage);
-    let should_refresh_rate_limits = should_refresh_cli_rate_limits(usage_snapshot.as_ref());
+    let should_refresh_rate_limits = should_refresh_cli_rate_limits(config, usage_snapshot.as_ref());
 
     let fetch_outcome = if let Some(auth) = auth.as_ref() {
         if should_refresh_rate_limits {
@@ -219,8 +232,12 @@ pub(crate) async fn render_status_lines_for_cli(
         });
 
     let total_usage = TokenUsage::default();
-    let account_usage =
-        fetch_account_usage_display(account_usage_store.as_deref(), auth.as_ref()).await;
+    let account_usage = fetch_account_usage_display(
+        account_usage_store.as_deref(),
+        auth.as_ref(),
+        config.account_usage_estimator.stable_backend_percent_window,
+    )
+    .await;
     let output = card::new_status_output_with_rate_limits_variant(
         config,
         account_display.as_ref(),
@@ -318,10 +335,21 @@ async fn compact_status_usage(config: &Config, auth: Option<&CodexAuth>) -> Comp
         };
     };
 
-    let account_usage_store =
-        AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-            .await
-            .ok();
+    let account_usage_store = AccountUsageStore::init_with_estimator_config(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+        AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: config.account_usage_estimator.min_usage_pct_sample_count,
+            max_usage_pct_display_percent_before_full: config
+                .account_usage_estimator
+                .max_usage_pct_display_percent_before_full,
+            stable_backend_percent_window: config
+                .account_usage_estimator
+                .stable_backend_percent_window,
+        },
+    )
+    .await
+    .ok();
     let Some(account_usage_store) = account_usage_store else {
         return CompactStatusUsage {
             percent_left: 0,
@@ -456,15 +484,67 @@ fn auth_access_token_state(auth: &CodexAuth) -> AuthAccessTokenState {
     }
 }
 
-fn should_refresh_cli_rate_limits(usage: Option<&AccountUsageSnapshot>) -> bool {
+fn should_refresh_cli_rate_limits(config: &Config, usage: Option<&AccountUsageSnapshot>) -> bool {
     let Some(usage) = usage else {
         return true;
     };
-    let Some(last_seen_at) = usage.last_backend_seen_at else {
-        return true;
-    };
+    !is_backend_percent_stable_for_cli(usage, config.account_usage_estimator.stable_backend_percent_window)
+}
 
-    usage.updated_at > last_seen_at
+fn is_backend_percent_stable_for_cli(
+    usage: &AccountUsageSnapshot,
+    stable_distinct_window: i64,
+) -> bool {
+    let window_size = stable_distinct_window.max(1) as usize;
+    let mut values = usage
+        .backend_percent_history
+        .as_deref()
+        .map(parse_backend_percent_history)
+        .unwrap_or_default();
+    let Some(current_backend_percent) = usage.last_backend_used_percent else {
+        return false;
+    };
+    if !current_backend_percent.is_finite() || current_backend_percent < 0.0 {
+        return false;
+    }
+    if values
+        .last()
+        .is_none_or(|last| (last - current_backend_percent).abs() > BACKEND_PERCENT_EPSILON)
+    {
+        values.push(current_backend_percent);
+    }
+    let recent = take_last_distinct_backend_percents(&values, window_size);
+    recent.len() == window_size
+        && recent
+            .windows(2)
+            .all(|pair| pair[1] > pair[0] + BACKEND_PERCENT_EPSILON)
+}
+
+fn parse_backend_percent_history(raw: &str) -> Vec<f64> {
+    raw.split(',')
+        .filter_map(|item| item.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .collect()
+}
+
+fn take_last_distinct_backend_percents(values: &[f64], window_size: usize) -> Vec<f64> {
+    if window_size == 0 {
+        return Vec::new();
+    }
+    let mut distinct_reversed = Vec::with_capacity(window_size);
+    for value in values.iter().rev() {
+        if distinct_reversed
+            .last()
+            .is_none_or(|last: &f64| (*last - *value).abs() > BACKEND_PERCENT_EPSILON)
+        {
+            distinct_reversed.push(*value);
+            if distinct_reversed.len() >= window_size {
+                break;
+            }
+        }
+    }
+    distinct_reversed.reverse();
+    distinct_reversed
 }
 
 fn cached_rate_limit_snapshot_from_usage(
@@ -512,6 +592,7 @@ async fn fetch_rate_limits_for_cli(base_url: String, auth: CodexAuth) -> CliRate
 async fn fetch_account_usage_display(
     store: Option<&AccountUsageStore>,
     auth: Option<&CodexAuth>,
+    stable_distinct_window: i64,
 ) -> Option<AccountUsageDisplay> {
     let account_id = match auth.and_then(|auth| {
         account_usage_key(
@@ -534,15 +615,24 @@ async fn fetch_account_usage_display(
         .await
         .ok()
         .unwrap_or((None, 0));
-    Some(build_account_usage_display(&usage, estimated_limit))
+    Some(build_account_usage_display(
+        &usage,
+        estimated_limit,
+        is_backend_percent_stable_for_cli(&usage, stable_distinct_window),
+    ))
 }
 
 fn build_account_usage_display(
     usage: &AccountUsageSnapshot,
     estimated_limit: (Option<f64>, i64),
+    backend_percent_stable: bool,
 ) -> AccountUsageDisplay {
     let (limit, sample_count) = estimated_limit;
-    let estimated_percent = estimate_account_usage_percent(usage, limit);
+    let estimated_percent = if backend_percent_stable {
+        estimate_account_usage_percent(usage, limit)
+    } else {
+        None
+    };
     AccountUsageDisplay {
         total_tokens: usage.total_tokens,
         estimated_percent,
