@@ -574,6 +574,15 @@ impl Codex {
         };
 
         let config = Arc::new(config);
+        auth_manager
+            .auth_with_refresh_if_expired_strict()
+            .await
+            .map_err(|err| match err {
+                crate::auth::RefreshTokenError::Permanent(failed) => {
+                    CodexErr::RefreshTokenFailed(failed)
+                }
+                crate::auth::RefreshTokenError::Transient(other) => CodexErr::Io(other),
+            })?;
         let refresh_strategy = match session_source {
             SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,
             _ => crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
