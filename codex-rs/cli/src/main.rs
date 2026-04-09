@@ -31,6 +31,7 @@ use codex_state::state_db_path;
 use codex_state::usage_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use codex_tui::CliStatusRateLimitMode;
 use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
@@ -188,6 +189,10 @@ enum Subcommand {
 
 #[derive(Debug, Parser)]
 struct StatusCommand {
+    /// Use locally cached usage/rate-limit values when available.
+    #[arg(long, default_value_t = false)]
+    cached: bool,
+
     /// Extra arguments accepted after `--` for machine-readable output mode.
     #[arg(last = true, allow_hyphen_values = true, value_name = "ARG")]
     trailing_args: Vec<String>,
@@ -741,6 +746,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         &root_config_overrides,
                         &interactive,
                         StatusOutputMode::default(),
+                        CliStatusRateLimitMode::LiveOnly,
                     )
                     .await?;
                     return Ok(());
@@ -857,8 +863,16 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             }
         }
         Some(Subcommand::Status(status_command)) => {
-            let status_options =
-                parse_status_invocation_options(&raw_argv, &status_command.trailing_args)?;
+            let default_rate_limit_mode = if status_command.cached {
+                CliStatusRateLimitMode::AllowCached
+            } else {
+                CliStatusRateLimitMode::LiveOnly
+            };
+            let status_options = parse_status_invocation_options(
+                &raw_argv,
+                default_rate_limit_mode,
+                &status_command.trailing_args,
+            )?;
             if let Some(auth_file_override) = status_options.auth_file_override {
                 codex_login::set_auth_file_override(Some(auth_file_override));
             }
@@ -866,6 +880,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &root_config_overrides,
                 &interactive,
                 status_options.output_mode,
+                status_options.rate_limit_mode,
             )
             .await?;
         }
@@ -1670,26 +1685,34 @@ struct StatusOutputMode {
 struct StatusInvocationOptions {
     output_mode: StatusOutputMode,
     auth_file_override: Option<PathBuf>,
+    rate_limit_mode: CliStatusRateLimitMode,
 }
 
 fn parse_status_invocation_options(
     raw_argv: &[String],
+    default_rate_limit_mode: CliStatusRateLimitMode,
     trailing_args: &[String],
 ) -> anyhow::Result<StatusInvocationOptions> {
     let Some(status_index) = raw_argv.iter().position(|arg| arg == "status") else {
         if trailing_args.is_empty() {
-            return Ok(StatusInvocationOptions::default());
+            return Ok(StatusInvocationOptions {
+                rate_limit_mode: default_rate_limit_mode,
+                ..StatusInvocationOptions::default()
+            });
         }
         anyhow::bail!("Unknown arguments for `codex status`.");
     };
     let has_double_dash = raw_argv[status_index + 1..].iter().any(|arg| arg == "--");
     if !has_double_dash {
         if trailing_args.is_empty() {
-            return Ok(StatusInvocationOptions::default());
+            return Ok(StatusInvocationOptions {
+                rate_limit_mode: default_rate_limit_mode,
+                ..StatusInvocationOptions::default()
+            });
         }
         let provided = trailing_args.join(" ");
         anyhow::bail!(
-            "Unknown arguments for `codex status`: {provided}. Use `codex status` or `codex status -- [--utc]`."
+            "Unknown arguments for `codex status`: {provided}. Use `codex status [--cached]` or `codex status -- [--utc] [--cached]`."
         );
     }
 
@@ -1699,12 +1722,16 @@ fn parse_status_invocation_options(
             utc: false,
         },
         auth_file_override: None,
+        rate_limit_mode: default_rate_limit_mode,
     };
     let mut i = 0usize;
     while i < trailing_args.len() {
         match trailing_args[i].as_str() {
             "--utc" => {
                 options.output_mode.utc = true;
+            }
+            "--cached" => {
+                options.rate_limit_mode = CliStatusRateLimitMode::AllowCached;
             }
             flag if flag.starts_with("--auth-file=") => {
                 let value = flag.trim_start_matches("--auth-file=");
@@ -1730,6 +1757,7 @@ async fn run_status_command(
     root_config_overrides: &CliConfigOverrides,
     interactive: &TuiCli,
     status_output_mode: StatusOutputMode,
+    rate_limit_mode: CliStatusRateLimitMode,
 ) -> anyhow::Result<()> {
     let mut cli_kv_overrides = root_config_overrides
         .parse_overrides()
@@ -1770,6 +1798,7 @@ async fn run_status_command(
             auth.as_ref(),
             status_output_mode.utc,
             compact_output_mode,
+            rate_limit_mode,
         )
         .await;
         println!("{compact_line}");
@@ -1777,7 +1806,14 @@ async fn run_status_command(
     }
 
     let model_name = config.model.as_deref().unwrap_or("<unknown>");
-    let lines = codex_tui::render_status_for_cli(&config, auth, model_name, /*width*/ 80).await;
+    let lines = codex_tui::render_status_for_cli(
+        &config,
+        auth,
+        model_name,
+        /*width*/ 80,
+        rate_limit_mode,
+    )
+    .await;
     for line in lines {
         println!("{line}");
     }
@@ -2176,17 +2212,22 @@ mod tests {
 
     #[test]
     fn status_output_mode_defaults_without_double_dash() {
-        let options =
-            parse_status_invocation_options(&["codex".to_string(), "status".to_string()], &[])
-                .expect("status mode");
+        let options = parse_status_invocation_options(
+            &["codex".to_string(), "status".to_string()],
+            CliStatusRateLimitMode::LiveOnly,
+            &[],
+        )
+        .expect("status mode");
         assert_eq!(options.output_mode, StatusOutputMode::default());
         assert_eq!(options.auth_file_override, None);
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
     }
 
     #[test]
     fn status_output_mode_compact_with_double_dash() {
         let options = parse_status_invocation_options(
             &["codex".to_string(), "status".to_string(), "--".to_string()],
+            CliStatusRateLimitMode::LiveOnly,
             &[],
         )
         .expect("status mode");
@@ -2198,6 +2239,7 @@ mod tests {
             }
         );
         assert_eq!(options.auth_file_override, None);
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
     }
 
     #[test]
@@ -2209,6 +2251,7 @@ mod tests {
                 "--".to_string(),
                 "--utc".to_string(),
             ],
+            CliStatusRateLimitMode::LiveOnly,
             &["--utc".to_string()],
         )
         .expect("status mode");
@@ -2220,6 +2263,7 @@ mod tests {
             }
         );
         assert_eq!(options.auth_file_override, None);
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
     }
 
     #[test]
@@ -2232,6 +2276,7 @@ mod tests {
                 "--auth-file=roger@gmail.com".to_string(),
                 "--utc".to_string(),
             ],
+            CliStatusRateLimitMode::LiveOnly,
             &[
                 "--auth-file=roger@gmail.com".to_string(),
                 "--utc".to_string(),
@@ -2245,6 +2290,7 @@ mod tests {
                 utc: true
             }
         );
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
     }
 
     #[test]
@@ -2256,6 +2302,7 @@ mod tests {
                 "--".to_string(),
                 "--auth-file=/tmp/alt-auth.json".to_string(),
             ],
+            CliStatusRateLimitMode::LiveOnly,
             &["--auth-file=/tmp/alt-auth.json".to_string()],
         )
         .expect("status mode");
@@ -2263,15 +2310,66 @@ mod tests {
             options.auth_file_override,
             Some(std::path::PathBuf::from("/tmp/alt-auth.json"))
         );
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
+    }
+
+    #[test]
+    fn status_output_mode_compact_parses_cached_flag() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--cached".to_string(),
+            ],
+            CliStatusRateLimitMode::LiveOnly,
+            &["--cached".to_string()],
+        )
+        .expect("status mode");
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::AllowCached);
+    }
+
+    #[test]
+    fn status_output_mode_uses_cached_flag_from_subcommand() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--cached".to_string(),
+            ],
+            CliStatusRateLimitMode::AllowCached,
+            &[],
+        )
+        .expect("status mode");
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::AllowCached);
     }
 
     #[test]
     fn status_subcommand_accepts_trailing_args_after_double_dash() {
         let cli = MultitoolCli::try_parse_from(["codex", "status", "--", "--utc"]).expect("parse");
-        let Some(Subcommand::Status(StatusCommand { trailing_args })) = cli.subcommand else {
+        let Some(Subcommand::Status(StatusCommand {
+            cached,
+            trailing_args,
+        })) = cli.subcommand
+        else {
             panic!("expected status subcommand");
         };
+        assert_eq!(cached, false);
         assert_eq!(trailing_args, vec!["--utc".to_string()]);
+    }
+
+    #[test]
+    fn status_subcommand_accepts_cached_flag() {
+        let cli = MultitoolCli::try_parse_from(["codex", "status", "--cached"]).expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            cached,
+            trailing_args,
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert_eq!(cached, true);
+        assert_eq!(trailing_args, Vec::<String>::new());
     }
 
     #[test]
