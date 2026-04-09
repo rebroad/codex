@@ -1786,7 +1786,8 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: None,
-            },
+            voice: None,
+        },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("thread/realtime/start"));
