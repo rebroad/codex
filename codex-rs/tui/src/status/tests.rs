@@ -207,6 +207,7 @@ async fn compact_status_unknown_mode_uses_question_mark_placeholders() {
         /*auth*/ None,
         /*use_utc*/ false,
         super::CompactStatusOutputMode::UnknownUsage,
+        super::CliStatusRateLimitMode::LiveOnly,
     )
     .await;
 
