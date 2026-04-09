@@ -223,6 +223,7 @@ use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
+pub use status::CliStatusRateLimitMode;
 pub use status::CompactStatusOutputMode;
 // (tests access modules directly within the crate)
 
@@ -595,8 +596,9 @@ pub async fn render_status_for_cli(
     auth: Option<CodexAuth>,
     model_name: &str,
     width: u16,
+    rate_limit_mode: CliStatusRateLimitMode,
 ) -> Vec<String> {
-    status::render_status_lines_for_cli(config, auth, model_name, width).await
+    status::render_status_lines_for_cli(config, auth, model_name, width, rate_limit_mode).await
 }
 
 pub async fn render_compact_status_for_cli(
@@ -604,8 +606,9 @@ pub async fn render_compact_status_for_cli(
     auth: Option<&CodexAuth>,
     use_utc: bool,
     output_mode: CompactStatusOutputMode,
+    rate_limit_mode: CliStatusRateLimitMode,
 ) -> String {
-    status::render_compact_status_for_cli(config, auth, use_utc, output_mode).await
+    status::render_compact_status_for_cli(config, auth, use_utc, output_mode, rate_limit_mode).await
 }
 
 pub async fn run_main(
