@@ -1617,6 +1617,7 @@ pub enum RealtimeWsMode {
 }
 
 pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
+pub use codex_protocol::protocol::RealtimeVoice;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -1624,6 +1625,7 @@ pub struct RealtimeConfig {
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
+    pub voice: Option<RealtimeVoice>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1632,6 +1634,7 @@ pub struct RealtimeToml {
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
+    pub voice: Option<RealtimeVoice>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -2863,9 +2866,13 @@ impl Config {
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             realtime: cfg
                 .realtime
-                .map_or_else(RealtimeConfig::default, |realtime| RealtimeConfig {
-                    version: realtime.version.unwrap_or_default(),
-                    session_type: realtime.session_type.unwrap_or_default(),
+                .map_or_else(RealtimeConfig::default, |realtime| {
+                    let defaults = RealtimeConfig::default();
+                    RealtimeConfig {
+                        version: realtime.version.unwrap_or(defaults.version),
+                        session_type: realtime.session_type.unwrap_or(defaults.session_type),
+                        voice: realtime.voice,
+                    }
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
