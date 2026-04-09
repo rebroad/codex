@@ -6639,6 +6639,7 @@ impl CodexMessageProcessor {
                 Op::RealtimeConversationStart(ConversationStartParams {
                     prompt: params.prompt,
                     session_id: params.session_id,
+                    voice: params.voice,
                 }),
             )
             .await;
