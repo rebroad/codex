@@ -9,6 +9,7 @@ use crate::endpoint::realtime_websocket::methods_v2::websocket_intent as v2_webs
 use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
+use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 
 pub(super) const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
@@ -52,11 +53,12 @@ pub(super) fn session_update_session(
     event_parser: RealtimeEventParser,
     instructions: String,
     session_mode: RealtimeSessionMode,
+    voice: RealtimeVoice,
 ) -> SessionUpdateSession {
     let session_mode = normalized_session_mode(event_parser, session_mode);
     match event_parser {
-        RealtimeEventParser::V1 => v1_session_update_session(instructions),
-        RealtimeEventParser::RealtimeV2 => v2_session_update_session(instructions, session_mode),
+        RealtimeEventParser::V1 => v1_session_update_session(instructions, voice),
+        RealtimeEventParser::RealtimeV2 => v2_session_update_session(instructions, session_mode, voice),
     }
 }
 
