@@ -33,6 +33,7 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeVoice;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
@@ -53,6 +54,7 @@ const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
+const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 const ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 
@@ -481,8 +483,18 @@ async fn prepare_realtime_start(
     } else {
         format!("{prompt}\n\n{startup_context}")
     };
-    let model = config.experimental_realtime_ws_model.clone();
+    let model = Some(
+        config
+            .experimental_realtime_ws_model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_REALTIME_MODEL.to_string()),
+    );
     let version = config.realtime.version;
+    let voice = params
+        .voice
+        .or(config.realtime.voice)
+        .unwrap_or_else(|| default_realtime_voice(version));
+    validate_realtime_voice(version, voice)?;
     let event_parser = match version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
@@ -498,6 +510,7 @@ async fn prepare_realtime_start(
         session_id: requested_session_id.clone(),
         event_parser,
         session_mode,
+        voice,
     };
     let extra_headers =
         realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
@@ -508,6 +521,51 @@ async fn prepare_realtime_start(
         version,
         session_config,
     })
+}
+
+fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
+    match version {
+        RealtimeWsVersion::V1 => RealtimeVoice::Cove,
+        RealtimeWsVersion::V2 => RealtimeVoice::Marin,
+    }
+}
+
+fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
+    let valid = match version {
+        RealtimeWsVersion::V1 => matches!(
+            voice,
+            RealtimeVoice::Juniper
+                | RealtimeVoice::Maple
+                | RealtimeVoice::Spruce
+                | RealtimeVoice::Ember
+                | RealtimeVoice::Vale
+                | RealtimeVoice::Breeze
+                | RealtimeVoice::Arbor
+                | RealtimeVoice::Sol
+                | RealtimeVoice::Cove
+        ),
+        RealtimeWsVersion::V2 => matches!(
+            voice,
+            RealtimeVoice::Alloy
+                | RealtimeVoice::Ash
+                | RealtimeVoice::Ballad
+                | RealtimeVoice::Coral
+                | RealtimeVoice::Echo
+                | RealtimeVoice::Sage
+                | RealtimeVoice::Shimmer
+                | RealtimeVoice::Verse
+                | RealtimeVoice::Marin
+                | RealtimeVoice::Cedar
+        ),
+    };
+
+    if valid {
+        Ok(())
+    } else {
+        Err(CodexErr::InvalidRequest(format!(
+            "realtime voice `{voice:?}` is not supported for {version:?}"
+        )))
+    }
 }
 
 async fn handle_start_inner(

@@ -6386,6 +6386,7 @@ fn realtime_loads_from_config_toml() -> std::io::Result<()> {
 [realtime]
 version = "v2"
 type = "transcription"
+voice = "cedar"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -6395,6 +6396,7 @@ type = "transcription"
         Some(RealtimeToml {
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
+            voice: Some(RealtimeVoice::Cedar),
         })
     );
 
@@ -6410,6 +6412,7 @@ type = "transcription"
         RealtimeConfig {
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
+            voice: Some(RealtimeVoice::Cedar),
         }
     );
     Ok(())

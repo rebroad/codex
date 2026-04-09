@@ -133,6 +133,8 @@ pub struct ConversationStartParams {
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<RealtimeVoice>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1519,9 +1521,33 @@ pub struct HookCompletedEvent {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeConversationVersion {
-    #[default]
     V1,
+    #[default]
     V2,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeVoice {
+    Alloy,
+    Arbor,
+    Ash,
+    Ballad,
+    Breeze,
+    Cedar,
+    Coral,
+    Cove,
+    Echo,
+    Ember,
+    Juniper,
+    Maple,
+    Marin,
+    Sage,
+    Shimmer,
+    Sol,
+    Spruce,
+    Vale,
+    Verse,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4397,6 +4423,7 @@ mod tests {
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "be helpful".to_string(),
             session_id: Some("conv_1".to_string()),
+            voice: None,
         });
         let text = Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),

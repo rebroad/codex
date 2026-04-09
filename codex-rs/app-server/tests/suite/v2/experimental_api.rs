@@ -75,6 +75,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             thread_id: "thr_123".to_string(),
             prompt: "hello".to_string(),
             session_id: None,
+            voice: None,
         })
         .await?;
     let error = timeout(

@@ -9,6 +9,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
+use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
@@ -303,9 +304,10 @@ impl RealtimeWebsocketWriter {
         &self,
         instructions: String,
         session_mode: RealtimeSessionMode,
+        voice: RealtimeVoice,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
-        let session = session_update_session(self.event_parser, instructions, session_mode);
+        let session = session_update_session(self.event_parser, instructions, session_mode, voice);
         self.send_json(&RealtimeOutboundMessage::SessionUpdate { session })
             .await
     }
@@ -503,7 +505,7 @@ impl RealtimeWebsocketClient {
         );
         connection
             .writer
-            .send_session_update(config.instructions, config.session_mode)
+            .send_session_update(config.instructions, config.session_mode, config.voice)
             .await?;
         Ok(connection)
     }
@@ -1263,6 +1265,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                voice: codex_protocol::protocol::RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1536,6 +1539,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Conversational,
+                voice: codex_protocol::protocol::RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1640,6 +1644,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
                     session_mode: RealtimeSessionMode::Transcription,
+                voice: codex_protocol::protocol::RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1742,6 +1747,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Transcription,
+                voice: codex_protocol::protocol::RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1830,6 +1836,7 @@ mod tests {
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
                     session_mode: RealtimeSessionMode::Conversational,
+                voice: codex_protocol::protocol::RealtimeVoice::Marin,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),

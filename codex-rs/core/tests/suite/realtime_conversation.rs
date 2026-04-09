@@ -182,7 +182,8 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let started = wait_for_event_match(&test.codex, |msg| match msg {
@@ -324,7 +325,8 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let started = wait_for_event_match(&test.codex, |msg| match msg {
@@ -383,7 +385,8 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let started = wait_for_event_match(&test.codex, |msg| match msg {
@@ -466,7 +469,8 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let err = wait_for_event_match(&test.codex, |msg| match msg {
@@ -506,7 +510,8 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let err = wait_for_event_match(&test.codex, |msg| match msg {
@@ -594,6 +599,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "old".to_string(),
             session_id: Some("conv_old".to_string()),
+            voice: None,
         }))
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
@@ -610,6 +616,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "new".to_string(),
             session_id: Some("conv_new".to_string()),
+            voice: None,
         }))
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
@@ -696,7 +703,8 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
@@ -750,7 +758,8 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "prompt from op".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
@@ -812,7 +821,8 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "prompt from op".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
@@ -872,7 +882,8 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "prompt from op".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
@@ -925,7 +936,8 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
@@ -978,7 +990,8 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
@@ -1029,7 +1042,8 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
@@ -1113,7 +1127,8 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1239,7 +1254,8 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1380,7 +1396,8 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1474,7 +1491,8 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1566,7 +1584,8 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1665,7 +1684,8 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1777,7 +1797,8 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1919,7 +1940,8 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -2045,7 +2067,8 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
@@ -2186,7 +2209,8 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
-        }))
+            voice: None,
+        })) 
         .await?;
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
