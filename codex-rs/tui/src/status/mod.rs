@@ -82,6 +82,7 @@ pub(crate) async fn render_status_lines_for_cli(
     auth: Option<CodexAuth>,
     model_name: &str,
     width: u16,
+    rate_limit_mode: CliStatusRateLimitMode,
 ) -> Vec<String> {
     let mut plan_type = auth.as_ref().and_then(CodexAuth::account_plan_type);
     let account_usage_store = AccountUsageStore::init_with_estimator_config(
@@ -107,7 +108,8 @@ pub(crate) async fn render_status_lines_for_cli(
     });
 
     let mut usage_snapshot = None;
-    if let Some(auth) = auth.as_ref()
+    if rate_limit_mode == CliStatusRateLimitMode::AllowCached
+        && let Some(auth) = auth.as_ref()
         && let Some(account_id) = account_id.as_ref()
         && let Some(store) = account_usage_store.as_ref()
     {
@@ -126,8 +128,12 @@ pub(crate) async fn render_status_lines_for_cli(
     let cached_rate_limits = usage_snapshot
         .as_ref()
         .and_then(cached_rate_limit_snapshot_from_usage);
-    let should_refresh_rate_limits =
-        should_refresh_cli_rate_limits(config, usage_snapshot.as_ref());
+    let should_refresh_rate_limits = match rate_limit_mode {
+        CliStatusRateLimitMode::LiveOnly => true,
+        CliStatusRateLimitMode::AllowCached => {
+            should_refresh_cli_rate_limits(config, usage_snapshot.as_ref())
+        }
+    };
 
     let fetch_outcome = if let Some(auth) = auth.as_ref() {
         if should_refresh_rate_limits {
@@ -147,17 +153,23 @@ pub(crate) async fn render_status_lines_for_cli(
         | CliRateLimitFetchOutcome::Other(_) => Vec::new(),
     };
 
-    let mut rate_limits = if should_refresh_rate_limits {
-        if fetched_rate_limits.is_empty() {
-            cached_rate_limits.clone().into_iter().collect()
-        } else {
-            fetched_rate_limits.clone()
+    let mut rate_limits = match rate_limit_mode {
+        CliStatusRateLimitMode::LiveOnly => fetched_rate_limits.clone(),
+        CliStatusRateLimitMode::AllowCached => {
+            if should_refresh_rate_limits {
+                if fetched_rate_limits.is_empty() {
+                    cached_rate_limits.clone().into_iter().collect()
+                } else {
+                    fetched_rate_limits.clone()
+                }
+            } else {
+                cached_rate_limits.clone().into_iter().collect()
+            }
         }
-    } else {
-        cached_rate_limits.clone().into_iter().collect()
     };
 
-    if rate_limits.is_empty()
+    if rate_limit_mode == CliStatusRateLimitMode::AllowCached
+        && rate_limits.is_empty()
         && let Some(cached) = cached_rate_limits.clone()
     {
         rate_limits.push(cached);
@@ -249,6 +261,7 @@ pub(crate) async fn render_compact_status_for_cli(
     auth: Option<&CodexAuth>,
     use_utc: bool,
     output_mode: CompactStatusOutputMode,
+    rate_limit_mode: CliStatusRateLimitMode,
 ) -> String {
     let email = truncate_status_email_local_part(auth.and_then(CodexAuth::get_account_email))
         .unwrap_or_else(|| "-".to_string());
@@ -258,7 +271,7 @@ pub(crate) async fn render_compact_status_for_cli(
         );
     }
 
-    let compact_usage = compact_status_usage(config, auth).await;
+    let compact_usage = compact_status_usage(config, auth, rate_limit_mode).await;
     let timestamp_with_timezone =
         compact_status_timestamp_with_timezone(compact_usage.reset_at_unix, use_utc);
     format!(
@@ -272,6 +285,13 @@ pub enum CompactStatusOutputMode {
     #[default]
     Normal,
     UnknownUsage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CliStatusRateLimitMode {
+    #[default]
+    LiveOnly,
+    AllowCached,
 }
 
 fn compact_status_timestamp_with_timezone(reset_at_unix: Option<i64>, use_utc: bool) -> String {
@@ -313,7 +333,11 @@ struct CompactStatusUsage {
     reset_at_unix: Option<i64>,
 }
 
-async fn compact_status_usage(config: &Config, auth: Option<&CodexAuth>) -> CompactStatusUsage {
+async fn compact_status_usage(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    rate_limit_mode: CliStatusRateLimitMode,
+) -> CompactStatusUsage {
     let Some(auth) = auth else {
         return CompactStatusUsage {
             percent_left: 0,
@@ -356,15 +380,24 @@ async fn compact_status_usage(config: &Config, auth: Option<&CodexAuth>) -> Comp
             .cache_account_display(account_id.as_str(), account_display)
             .await;
     }
-    let usage = account_usage_store
-        .get_account_usage(account_id.as_str())
-        .await
-        .ok()
-        .flatten();
+    let usage = if rate_limit_mode == CliStatusRateLimitMode::AllowCached {
+        account_usage_store
+            .get_account_usage(account_id.as_str())
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     let cached_rate_limits = usage
         .as_ref()
         .and_then(cached_rate_limit_snapshot_from_usage);
-    let should_refresh_rate_limits = should_refresh_cli_rate_limits(config, usage.as_ref());
+    let should_refresh_rate_limits = match rate_limit_mode {
+        CliStatusRateLimitMode::LiveOnly => true,
+        CliStatusRateLimitMode::AllowCached => {
+            should_refresh_cli_rate_limits(config, usage.as_ref())
+        }
+    };
     let fetch_outcome = if should_refresh_rate_limits {
         fetch_rate_limits_for_cli(config.chatgpt_base_url.clone(), auth.clone()).await
     } else {
@@ -377,16 +410,22 @@ async fn compact_status_usage(config: &Config, auth: Option<&CodexAuth>) -> Comp
         | CliRateLimitFetchOutcome::BackendUnavailable(_)
         | CliRateLimitFetchOutcome::Other(_) => Vec::new(),
     };
-    let mut rate_limits = if should_refresh_rate_limits {
-        if fetched_rate_limits.is_empty() {
-            cached_rate_limits.clone().into_iter().collect()
-        } else {
-            fetched_rate_limits.clone()
+    let mut rate_limits = match rate_limit_mode {
+        CliStatusRateLimitMode::LiveOnly => fetched_rate_limits.clone(),
+        CliStatusRateLimitMode::AllowCached => {
+            if should_refresh_rate_limits {
+                if fetched_rate_limits.is_empty() {
+                    cached_rate_limits.clone().into_iter().collect()
+                } else {
+                    fetched_rate_limits.clone()
+                }
+            } else {
+                cached_rate_limits.clone().into_iter().collect()
+            }
         }
-    } else {
-        cached_rate_limits.clone().into_iter().collect()
     };
-    if rate_limits.is_empty()
+    if rate_limit_mode == CliStatusRateLimitMode::AllowCached
+        && rate_limits.is_empty()
         && let Some(cached) = cached_rate_limits
     {
         rate_limits.push(cached);
@@ -397,8 +436,16 @@ async fn compact_status_usage(config: &Config, auth: Option<&CodexAuth>) -> Comp
             .await;
     }
     let selected_window = select_compact_usage_window(rate_limits.as_slice());
-    let fallback_used_percent = usage.as_ref().and_then(|u| u.last_backend_used_percent);
-    let fallback_reset_at = usage.as_ref().and_then(|u| u.last_backend_resets_at);
+    let fallback_used_percent = if rate_limit_mode == CliStatusRateLimitMode::AllowCached {
+        usage.as_ref().and_then(|u| u.last_backend_used_percent)
+    } else {
+        None
+    };
+    let fallback_reset_at = if rate_limit_mode == CliStatusRateLimitMode::AllowCached {
+        usage.as_ref().and_then(|u| u.last_backend_resets_at)
+    } else {
+        None
+    };
     let used_percent = selected_window
         .as_ref()
         .map(|window| window.used_percent)
