@@ -668,16 +668,15 @@ def open_with_viewimg(output_path: Path) -> None:
 
 def resolve_usage_log_path(email: str) -> Path:
     filename = f"usage-{email}.log"
+    usage_log_dir = os.environ.get("CODEX_USAGE_LOG_DIR")
+    if usage_log_dir:
+        return Path(usage_log_dir).expanduser() / filename
     env_codex_home = os.environ.get("CODEX_HOME")
-    codex_home = (
-        Path(env_codex_home).expanduser()
-        if env_codex_home
-        else Path.home() / ".codex"
-    )
     candidates = [
-        codex_home / "log" / filename,
         Path.home() / ".codex" / "log" / filename,
     ]
+    if env_codex_home:
+        candidates.append(Path(env_codex_home).expanduser() / "log" / filename)
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -699,7 +698,7 @@ def main() -> int:
     parser.add_argument(
         "--email",
         dest="option_email",
-        help="Account email to load from usage-<email>.log in CODEX_HOME/log or ~/.codex/log.",
+        help="Account email to load from usage-<email>.log in CODEX_USAGE_LOG_DIR or ~/.codex/log.",
     )
     parser.add_argument(
         "--input",

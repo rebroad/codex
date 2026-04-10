@@ -13,16 +13,17 @@ Usage data is stored in a dedicated SQLite database:
 
 This keeps usage tracking isolated from the upstream `state_*.sqlite` files.
 
-Usage events are also appended to per-account log files under `CODEX_HOME`:
+Usage events are also appended to per-account log files under a usage-log directory:
 
-- Path: `CODEX_HOME/log/usage-<email>.log`
+- Default path: `$HOME/.codex/log/usage-<email>.log`
+- Override: `CODEX_USAGE_LOG_DIR=/path/to/logdir`
 - Each line includes timestamp, pid, percent/sample metadata, and event details.
 - The account email is no longer duplicated on each line because it is encoded in the filename.
 
 Threshold-crossing events are also written to shared usage-limit logs:
 
-- `CODEX_HOME/log/usage-limit-100.log`
-- `CODEX_HOME/log/usage-limit-101.log`
+- `$HOME/.codex/log/usage-limit-100.log` (or `CODEX_USAGE_LOG_DIR/usage-limit-100.log`)
+- `$HOME/.codex/log/usage-limit-101.log` (or `CODEX_USAGE_LOG_DIR/usage-limit-101.log`)
 
 Each threshold line records:
 
