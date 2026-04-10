@@ -441,8 +441,9 @@ pub(crate) async fn handle_start(
 }
 
 struct PreparedRealtimeConversationStart {
-    api_provider: ApiProvider,
-    extra_headers: Option<HeaderMap>,
+    primary_api_provider: ApiProvider,
+    primary_extra_headers: Option<HeaderMap>,
+    fallback_api_key_start: Option<(ApiProvider, Option<HeaderMap>)>,
     requested_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
@@ -459,11 +460,11 @@ async fn prepare_realtime_start(
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let auth = auth_manager.auth().await;
-    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-    let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
+    let mut primary_api_provider =
+        provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
-        api_provider.base_url = realtime_ws_base_url.clone();
+        primary_api_provider.base_url = realtime_ws_base_url.clone();
     }
     let prompt = config
         .experimental_realtime_ws_backend_prompt
@@ -511,11 +512,25 @@ async fn prepare_realtime_start(
         session_mode,
         voice,
     };
-    let extra_headers =
-        realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
+    let primary_extra_headers = realtime_request_headers(
+        requested_session_id.as_deref(),
+        /*auth_token*/ None,
+    )?;
+    let fallback_api_key_start = if let Some(api_key) = realtime_api_key(auth.as_ref(), &provider) {
+        let mut fallback_api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
+        if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
+            fallback_api_provider.base_url = realtime_ws_base_url.clone();
+        }
+        let fallback_extra_headers =
+            realtime_request_headers(requested_session_id.as_deref(), Some(api_key.as_str()))?;
+        Some((fallback_api_provider, fallback_extra_headers))
+    } else {
+        None
+    };
     Ok(PreparedRealtimeConversationStart {
-        api_provider,
-        extra_headers,
+        primary_api_provider,
+        primary_extra_headers,
+        fallback_api_key_start,
         requested_session_id,
         version,
         session_config,
@@ -573,17 +588,37 @@ async fn handle_start_inner(
     prepared_start: PreparedRealtimeConversationStart,
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
-        api_provider,
-        extra_headers,
+        primary_api_provider,
+        primary_extra_headers,
+        fallback_api_key_start,
         requested_session_id,
         version,
         session_config,
     } = prepared_start;
     info!("starting realtime conversation");
-    let (events_rx, realtime_active) = sess
+    let (events_rx, realtime_active) = match sess
         .conversation
-        .start(api_provider, extra_headers, session_config)
-        .await?;
+        .start(
+            primary_api_provider,
+            primary_extra_headers,
+            session_config.clone(),
+        )
+        .await
+    {
+        Ok(started) => started,
+        Err(primary_err) => {
+            if let Some((fallback_api_provider, fallback_extra_headers)) = fallback_api_key_start {
+                warn!(
+                    "realtime start without api key failed; retrying with api key auth: {primary_err}"
+                );
+                sess.conversation
+                    .start(fallback_api_provider, fallback_extra_headers, session_config)
+                    .await?
+            } else {
+                return Err(primary_err);
+            }
+        }
+    };
 
     info!("realtime conversation started");
 
@@ -690,27 +725,34 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
 fn realtime_api_key(
     auth: Option<&CodexAuth>,
     provider: &crate::ModelProviderInfo,
-) -> CodexResult<String> {
-    if let Some(api_key) = provider.api_key()? {
-        return Ok(api_key);
+) -> Option<String> {
+    if let Ok(Some(api_key)) = provider.api_key() {
+        return Some(api_key);
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(token);
+        return Some(token);
     }
 
     if let Some(api_key) = auth.and_then(CodexAuth::api_key) {
-        return Ok(api_key.to_string());
+        return Some(api_key.to_string());
     }
 
-    Err(CodexErr::InvalidRequest(
-        "realtime conversation requires API key auth".to_string(),
-    ))
+    // Best-effort fallback for local setups where the provider itself does not
+    // expose an API key but OPENAI_API_KEY is set.
+    if provider.is_openai()
+        && let Ok(api_key) = std::env::var("OPENAI_API_KEY")
+        && !api_key.trim().is_empty()
+    {
+        return Some(api_key);
+    }
+
+    None
 }
 
 fn realtime_request_headers(
     session_id: Option<&str>,
-    api_key: &str,
+    auth_token: Option<&str>,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
@@ -720,10 +762,12 @@ fn realtime_request_headers(
         headers.insert("x-session-id", session_id);
     }
 
-    let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
-        CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
-    })?;
-    headers.insert(AUTHORIZATION, auth_value);
+    if let Some(auth_token) = auth_token {
+        let auth_value = HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|err| {
+            CodexErr::InvalidRequest(format!("invalid realtime auth header: {err}"))
+        })?;
+        headers.insert(AUTHORIZATION, auth_value);
+    }
 
     Ok(Some(headers))
 }
