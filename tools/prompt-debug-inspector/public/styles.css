@@ -282,6 +282,36 @@ summary {
   color: var(--accent);
 }
 
+.streams-view {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.stream-panel h2 {
+  margin-bottom: 6px;
+}
+
+.stream-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stream-record {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0a1117;
+  padding: 8px;
+}
+
+.stream-record > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;
