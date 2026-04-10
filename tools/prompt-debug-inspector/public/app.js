@@ -187,21 +187,62 @@ function renderPrompt(prompt) {
   );
 }
 
+function renderStreamRecord(record) {
+  const chips = [
+    `line=${record.line}`,
+    `transport=${record.transport || "(none)"}`,
+    `event=${record.eventType || "(none)"}`,
+    `payload=${record.payloadType || "(none)"}`,
+  ];
+  return (
+    `<details class="stream-record">` +
+    `<summary>${chips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}</summary>` +
+    `<pre>${escapeHtml(record.summary || "(no summary)")}</pre>` +
+    `<div class="section-title">Payload Preview</div>` +
+    `<pre>${escapeHtml(record.payloadPreview || "")}</pre>` +
+    `</details>`
+  );
+}
+
+function renderStreamSection(title, stream) {
+  if (!stream) {
+    return "";
+  }
+  const records = Array.isArray(stream.records) ? stream.records : [];
+  const missing = Boolean(stream.missing);
+  return (
+    `<section class="panel stream-panel">` +
+    `<h2>${escapeHtml(title)}</h2>` +
+    `<div class="meta">file=${escapeHtml(stream.file || "(none)")}\nlines=${escapeHtml(
+      String(stream.totals?.lines ?? 0),
+    )} parse_errors=${escapeHtml(String(stream.totals?.parseErrors ?? 0))}${missing ? "\n(missing file)" : ""}</div>` +
+    (records.length
+      ? `<div class="stream-list">${records.map(renderStreamRecord).join("")}</div>`
+      : `<div class="empty">(no records)</div>`) +
+    `</section>`
+  );
+}
+
 function renderPromptView(view) {
   currentQueryId = view.queryId;
   $("promptMeta").textContent =
     `query=${view.queryId}\n` +
     `file=${view.file}\n` +
-    `lines=${view.totals.lines} prompt_variants=${view.totals.promptVariants} occurrences=${view.totals.promptOccurrences} parse_errors=${view.totals.parseErrors}`;
+    `lines=${view.totals.lines} prompt_variants=${view.totals.promptVariants} occurrences=${view.totals.promptOccurrences} parse_errors=${view.totals.parseErrors}\n` +
+    `output_lines=${view.output?.totals?.lines ?? 0} reasoning_lines=${view.reasoning?.totals?.lines ?? 0}`;
 
   if (!Array.isArray(view.prompts) || view.prompts.length === 0) {
     $("promptView").innerHTML = `<div class="empty">(no response.create payloads detected)</div>`;
-    return;
+  } else {
+    $("promptView").innerHTML = view.prompts.map(renderPrompt).join("");
+    wirePreviousResponseLinks($("promptView"));
+    wireToolAccordions($("promptView"));
   }
 
-  $("promptView").innerHTML = view.prompts.map(renderPrompt).join("");
-  wirePreviousResponseLinks($("promptView"));
-  wireToolAccordions($("promptView"));
+  const streams = $("streamsView");
+  streams.innerHTML =
+    renderStreamSection("Output Stream", view.output) +
+    renderStreamSection("Reasoning Stream", view.reasoning);
 }
 
 async function loadQueries() {
