@@ -782,7 +782,8 @@ fn build_account_usage_display(
         estimate_account_usage_percent(usage, limit)
     } else {
         None
-    };
+    }
+    .or(usage.last_backend_used_percent);
     AccountUsageDisplay {
         total_tokens: usage.total_tokens,
         estimated_percent,

@@ -11,7 +11,6 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
-use codex_utils_home_dir::find_codex_home;
 use log::LevelFilter;
 use sqlx::ConnectOptions;
 use sqlx::Row;
@@ -34,6 +33,8 @@ const BACKEND_CHANGE_PENDING_TTL_SECS: i64 = 120;
 const PLAUSIBLE_JUMP_MIN_MATCH_RATIO: f64 = 0.75;
 const PLAUSIBLE_JUMP_ABS_SLACK_PERCENT: f64 = 0.5;
 const USAGE_LOG_DIRNAME: &str = "log";
+const DEFAULT_CODEX_HOME_DIRNAME: &str = ".codex";
+const USAGE_LOG_DIR_ENV_VAR: &str = "CODEX_USAGE_LOG_DIR";
 const USAGE_LOG_FILENAME_PREFIX: &str = "usage-";
 const USAGE_LOG_FILENAME_SUFFIX: &str = ".log";
 const USAGE_LIMIT_100_LOG_FILENAME: &str = "usage-limit-100.log";
@@ -852,6 +853,18 @@ WHERE account_id = ? AND provider = ?
         let previous_backend_percent = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+        let backend_percent_changed = previous_backend_percent
+            .is_none_or(|previous| (previous - used_percent).abs() > USED_PERCENT_REFUND_EPSILON);
+        if backend_percent_changed {
+            let delta_percent = previous_backend_percent.map_or(used_percent, |previous| used_percent - previous);
+            self.log_usage_event(
+                account_id,
+                Some(used_percent),
+                previous_backend_percent,
+                format!("backend_percent_changed=1 delta_percent={delta_percent}"),
+            )
+            .await;
+        }
         let previous_backend_percent_history = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<Option<String>, _>("backend_percent_history").ok())
@@ -1885,6 +1898,11 @@ WHERE account_id = ? AND provider = ?
         let previous_percent = threshold_state
             .as_ref()
             .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+        let first_threshold_crossing = previous_percent.is_none_or(|value| !value.is_finite() || value < 101.0);
+        if !first_threshold_crossing {
+            return Ok(());
+        }
+        let now = Utc::now().timestamp();
 
         self.log_usage_event(
             account_id,
@@ -1936,6 +1954,60 @@ WHERE account_id = ? AND provider = ?
             },
         )
         .await;
+        sqlx::query(
+            r#"
+UPDATE account_usage
+SET
+    total_tokens = 0,
+    input_tokens = 0,
+    cached_input_tokens = 0,
+    output_tokens = 0,
+    reasoning_output_tokens = 0,
+    context_total_tokens = 0,
+    min_total_cached_output_tokens = 0,
+    sent_bytes = 0,
+    recv_bytes = 0,
+    sent_recv_bytes = 0,
+    prewarm_sent_bytes = 0,
+    prewarm_recv_bytes = 0,
+    prewarm_sent_recv_bytes = 0,
+    updated_at = ?,
+    last_backend_used_percent = ?,
+    last_snapshot_total_tokens = 0,
+    last_snapshot_input_tokens = 0,
+    last_snapshot_cached_input_tokens = 0,
+    last_snapshot_output_tokens = 0,
+    last_snapshot_context_total_tokens = 0,
+    last_snapshot_min_total_cached_output_tokens = 0,
+    last_snapshot_sent_bytes = 0,
+    last_snapshot_recv_bytes = 0,
+    last_snapshot_sent_recv_bytes = 0,
+    last_snapshot_prewarm_sent_bytes = 0,
+    last_snapshot_prewarm_recv_bytes = 0,
+    last_snapshot_prewarm_sent_recv_bytes = 0,
+    last_snapshot_percent_int = 0,
+    window_start_percent_int = 0,
+    window_start_total_tokens = 0,
+    window_start_input_tokens = 0,
+    window_start_cached_input_tokens = 0,
+    window_start_output_tokens = 0,
+    window_start_context_total_tokens = 0,
+    window_start_min_total_cached_output_tokens = 0,
+    window_start_sent_bytes = 0,
+    window_start_recv_bytes = 0,
+    window_start_sent_recv_bytes = 0,
+    window_start_prewarm_sent_bytes = 0,
+    window_start_prewarm_recv_bytes = 0,
+    window_start_prewarm_sent_recv_bytes = 0
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind(now)
+        .bind(101.0_f64)
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
 
         Ok(())
     }
@@ -2477,12 +2549,7 @@ fn usage_log_filename(account_display: &str) -> String {
 }
 
 fn usage_log_path(account_display: &str) -> Option<PathBuf> {
-    let codex_home = find_codex_home().ok()?;
-    Some(
-        codex_home
-            .join(USAGE_LOG_DIRNAME)
-            .join(usage_log_filename(account_display)),
-    )
+    Some(usage_log_root_dir()?.join(usage_log_filename(account_display)))
 }
 
 fn open_usage_log_file(account_display: &str) -> Option<std::fs::File> {
@@ -2491,8 +2558,7 @@ fn open_usage_log_file(account_display: &str) -> Option<std::fs::File> {
 }
 
 fn usage_named_log_path(filename: &str) -> Option<PathBuf> {
-    let codex_home = find_codex_home().ok()?;
-    Some(codex_home.join(USAGE_LOG_DIRNAME).join(filename))
+    Some(usage_log_root_dir()?.join(filename))
 }
 
 fn open_usage_log_file_by_name(filename: &str) -> Option<std::fs::File> {
@@ -2504,6 +2570,13 @@ fn open_usage_log_file_path(path: PathBuf) -> Option<std::fs::File> {
     let parent = path.parent()?;
     std::fs::create_dir_all(parent).ok()?;
     OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+fn usage_log_root_dir() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os(USAGE_LOG_DIR_ENV_VAR).filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(value));
+    }
+    Some(dirs::home_dir()?.join(DEFAULT_CODEX_HOME_DIRNAME).join(USAGE_LOG_DIRNAME))
 }
 
 fn estimate_account_usage_percent_for_log(
