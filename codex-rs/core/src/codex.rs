@@ -6378,19 +6378,21 @@ pub(crate) async fn run_turn(
                     continue;
                 }
 
+                if sess.survival_mode_active().await {
+                    last_agent_message = sampling_request_last_agent_message.clone();
+                    while sess.survival_mode_active().await && !sess.has_pending_input().await {
+                        if cancellation_token.is_cancelled() {
+                            return None;
+                        }
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                    if sess.has_pending_input().await {
+                        continue;
+                    }
+                }
+
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    if sess.survival_mode_active().await {
-                        while sess.survival_mode_active().await && !sess.has_pending_input().await {
-                            if cancellation_token.is_cancelled() {
-                                return None;
-                            }
-                            tokio::time::sleep(Duration::from_millis(250)).await;
-                        }
-                        if sess.has_pending_input().await {
-                            continue;
-                        }
-                    }
                     let stop_hook_permission_mode = match turn_context.approval_policy.value() {
                         AskForApproval::Never => "bypassPermissions",
                         AskForApproval::UnlessTrusted
