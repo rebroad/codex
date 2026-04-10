@@ -459,10 +459,34 @@ const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 const SURVIVAL_MODE_WEEKLY_WINDOW_MINUTES: i64 = 7 * 24 * 60;
+const FINAL_CHANNEL_GUIDANCE_LINE: &str =
+    "- After you have completed all your work, send a message to the `final` channel.";
+const SURVIVAL_MODE_COMPLETION_CHANNEL_LINE: &str =
+    "- After you have completed all your work, send a message to the `commentary` channel.";
+const COMMENTARY_CHANNEL_GUIDANCE_LINE: &str =
+    "- Share intermediary updates in `commentary` channel.";
 const SURVIVAL_MODE_PROMPT_GUIDANCE: &str = "\
 Survival mode is active because backend weekly usage reached 95%. \
 Keep the current turn open and continue via same-turn input instead of ending the turn. \
-Prefer local compaction paths, and use request_user_input when clarification is needed.";
+Prefer local compaction paths, and use request_user_input when clarification is needed. \
+Do not send a message in the final channel while survival mode is active. \
+Use commentary channel updates only. \
+When work appears complete, ask what to do next with request_user_input (2-3 short options).";
+
+fn rewrite_channel_guidance_for_survival_mode(mut base_text: String) -> String {
+    base_text = base_text.replace(
+        FINAL_CHANNEL_GUIDANCE_LINE,
+        SURVIVAL_MODE_COMPLETION_CHANNEL_LINE,
+    );
+
+    for line in [SURVIVAL_MODE_COMPLETION_CHANNEL_LINE, COMMENTARY_CHANNEL_GUIDANCE_LINE] {
+        let duplicated = format!("{line}\n{line}");
+        while base_text.contains(&duplicated) {
+            base_text = base_text.replace(&duplicated, line);
+        }
+    }
+    base_text
+}
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -6892,7 +6916,8 @@ async fn run_sampling_request(
     if sess.survival_mode_active().await
         && !base_instructions.text.contains(SURVIVAL_MODE_PROMPT_GUIDANCE)
     {
-        let base_text = std::mem::take(&mut base_instructions.text);
+        let base_text =
+            rewrite_channel_guidance_for_survival_mode(std::mem::take(&mut base_instructions.text));
         base_instructions.text = format!("{base_text}\n\n{SURVIVAL_MODE_PROMPT_GUIDANCE}");
     }
     let tool_calls_blocked_pending_steer = sess
