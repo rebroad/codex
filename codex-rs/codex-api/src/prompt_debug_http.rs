@@ -159,40 +159,47 @@ fn append_json_line(path: &Path, value: &serde_json::Value) {
     append_line(path, &value.to_string());
 }
 
-fn collect_function_calls(value: &serde_json::Value, out: &mut Vec<(String, Option<String>)>) {
+fn tool_name_from_call(map: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    let item_type = map.get("type").and_then(serde_json::Value::as_str)?;
+    if !item_type.ends_with("_call") {
+        return None;
+    }
+
+    if let Some(name) = map.get("name").and_then(serde_json::Value::as_str) {
+        return Some(name.to_string());
+    }
+
+    if let Some(name) = map
+        .get("function")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|function| function.get("name"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(name.to_string());
+    }
+
+    Some(item_type.trim_end_matches("_call").to_string())
+}
+
+fn collect_tool_calls(value: &serde_json::Value, out: &mut Vec<(String, Option<String>)>) {
     match value {
         serde_json::Value::Array(items) => {
             for item in items {
-                collect_function_calls(item, out);
+                collect_tool_calls(item, out);
             }
         }
         serde_json::Value::Object(map) => {
-            let is_function_call =
-                map.get("type").and_then(serde_json::Value::as_str) == Some("function_call");
-            if is_function_call {
-                let name = map
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| {
-                        map.get("function")
-                            .and_then(serde_json::Value::as_object)
-                            .and_then(|function| {
-                                function.get("name").and_then(serde_json::Value::as_str)
-                            })
-                    })
-                    .map(str::to_owned);
+            if let Some(name) = tool_name_from_call(map) {
                 let call_id = map
                     .get("call_id")
                     .or_else(|| map.get("id"))
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned);
-                if let Some(tool_name) = name {
-                    out.push((tool_name, call_id));
-                }
+                out.push((name, call_id));
             }
 
             for child in map.values() {
-                collect_function_calls(child, out);
+                collect_tool_calls(child, out);
             }
         }
         _ => {}
@@ -240,7 +247,7 @@ fn record_tool_usage(session: &PromptCaptureSession, payload: &serde_json::Value
     };
 
     let mut calls = Vec::new();
-    collect_function_calls(payload, &mut calls);
+    collect_tool_calls(payload, &mut calls);
     if calls.is_empty() {
         return;
     }
@@ -431,4 +438,50 @@ pub fn prompt_debug_http_log(message: impl AsRef<str>) {
     }
 
     eprintln!("{CODEX_PROMPT_DEBUG_HTTP_PREFIX} {}", message.as_ref());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn collect_tool_calls_includes_function_and_custom_calls() {
+        let payload = serde_json::json!({
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "call_id": "call_1"
+                },
+                {
+                    "type": "custom_tool_call",
+                    "name": "apply_patch",
+                    "call_id": "call_2"
+                }
+            ]
+        });
+
+        let mut calls = Vec::new();
+        collect_tool_calls(&payload, &mut calls);
+        assert_eq!(
+            calls,
+            vec![
+                ("exec_command".to_string(), Some("call_1".to_string())),
+                ("apply_patch".to_string(), Some("call_2".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_tool_calls_falls_back_to_type_stem_when_name_missing() {
+        let payload = serde_json::json!({
+            "type": "web_search_call",
+            "id": "ws_123"
+        });
+
+        let mut calls = Vec::new();
+        collect_tool_calls(&payload, &mut calls);
+        assert_eq!(calls, vec![("web_search".to_string(), Some("ws_123".to_string()))]);
+    }
 }
