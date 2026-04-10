@@ -1,6 +1,5 @@
 use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
-use crate::auth::read_openai_api_key_from_env;
 use crate::codex::Session;
 use crate::config::RealtimeWsMode;
 use crate::config::RealtimeWsVersion;
@@ -702,14 +701,6 @@ fn realtime_api_key(
 
     if let Some(api_key) = auth.and_then(CodexAuth::api_key) {
         return Ok(api_key.to_string());
-    }
-
-    // TODO(aibrahim): Remove this temporary fallback once realtime auth no longer
-    // requires API key auth for ChatGPT/SIWC sessions.
-    if provider.is_openai()
-        && let Some(api_key) = read_openai_api_key_from_env()
-    {
-        return Ok(api_key);
     }
 
     Err(CodexErr::InvalidRequest(
