@@ -21,6 +21,7 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) survival_mode_active: bool,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
@@ -43,6 +44,7 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
+            survival_mode_active: false,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
@@ -117,6 +119,14 @@ impl SessionState {
             self.latest_rate_limits.as_ref(),
             snapshot,
         ));
+    }
+
+    pub(crate) fn set_survival_mode_active(&mut self, active: bool) {
+        self.survival_mode_active = active;
+    }
+
+    pub(crate) fn survival_mode_active(&self) -> bool {
+        self.survival_mode_active
     }
 
     pub(crate) fn token_info_and_rate_limits(

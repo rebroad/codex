@@ -14,37 +14,54 @@ fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
     assert_eq!(
         request_user_input_unavailable_message(
             ModeKind::Plan,
-            /*default_mode_request_user_input*/ false
+            /*default_mode_request_user_input*/ false,
+            /*survival_mode_active*/ false,
         ),
         None
     );
     assert_eq!(
         request_user_input_unavailable_message(
             ModeKind::Default,
-            /*default_mode_request_user_input*/ false
+            /*default_mode_request_user_input*/ false,
+            /*survival_mode_active*/ false,
         ),
         Some("request_user_input is unavailable in Default mode".to_string())
     );
     assert_eq!(
         request_user_input_unavailable_message(
             ModeKind::Default,
-            /*default_mode_request_user_input*/ true
+            /*default_mode_request_user_input*/ true,
+            /*survival_mode_active*/ false,
         ),
         None
     );
     assert_eq!(
         request_user_input_unavailable_message(
             ModeKind::Execute,
-            /*default_mode_request_user_input*/ false
+            /*default_mode_request_user_input*/ false,
+            /*survival_mode_active*/ false,
         ),
         Some("request_user_input is unavailable in Execute mode".to_string())
     );
     assert_eq!(
         request_user_input_unavailable_message(
             ModeKind::PairProgramming,
-            /*default_mode_request_user_input*/ false
+            /*default_mode_request_user_input*/ false,
+            /*survival_mode_active*/ false,
         ),
         Some("request_user_input is unavailable in Pair Programming mode".to_string())
+    );
+}
+
+#[test]
+fn request_user_input_available_when_survival_mode_active() {
+    assert_eq!(
+        request_user_input_unavailable_message(
+            ModeKind::Default,
+            /*default_mode_request_user_input*/ false,
+            /*survival_mode_active*/ true,
+        ),
+        None
     );
 }
 
@@ -52,10 +69,10 @@ fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
 fn request_user_input_tool_description_mentions_available_modes() {
     assert_eq!(
             request_user_input_tool_description(/*default_mode_request_user_input*/ false),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
+            "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode, or when survival mode is active.".to_string()
         );
     assert_eq!(
             request_user_input_tool_description(/*default_mode_request_user_input*/ true),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
+            "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode, or when survival mode is active.".to_string()
         );
 }

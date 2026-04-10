@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -457,6 +458,11 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
+const SURVIVAL_MODE_WEEKLY_WINDOW_MINUTES: i64 = 7 * 24 * 60;
+const SURVIVAL_MODE_PROMPT_GUIDANCE: &str = "\
+Survival mode is active because backend weekly usage reached 100%. \
+Keep the current turn open and continue via same-turn input instead of ending the turn. \
+Prefer local compaction paths, and use request_user_input when clarification is needed.";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -3648,6 +3654,11 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
+    pub(crate) async fn survival_mode_active(&self) -> bool {
+        let state = self.state.lock().await;
+        state.survival_mode_active()
+    }
+
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
@@ -4024,10 +4035,15 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
+        let should_activate_survival_mode =
+            weekly_limit_reached_full(&new_rate_limits) && !self.survival_mode_active().await;
         let tracking_snapshot = new_rate_limits.clone();
         {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
+            if should_activate_survival_mode {
+                state.set_survival_mode_active(true);
+            }
         }
         if let Some(state_db) = self.account_usage_store.as_ref() {
             let auth = self.services.auth_manager.auth().await;
@@ -4052,10 +4068,24 @@ impl Session {
                 }
             }
         }
+        if should_activate_survival_mode {
+            self.send_event(
+                turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: "Survival mode activated: backend weekly usage reached 100%. Keeping the current turn open and forcing local compaction until backend hard-rejects requests.".to_string(),
+                }),
+            )
+            .await;
+        }
         self.send_token_count_event(turn_context).await;
     }
 
-    pub(crate) async fn record_usage_limit_reached(&self) {
+    pub(crate) async fn record_usage_limit_reached(&self, turn_context: &TurnContext) {
+        let was_survival_mode_active = self.survival_mode_active().await;
+        {
+            let mut state = self.state.lock().await;
+            state.set_survival_mode_active(false);
+        }
         if let Some(state_db) = self.account_usage_store.as_ref() {
             let auth = self.services.auth_manager.auth().await;
             if let Some(auth) = auth
@@ -4078,6 +4108,15 @@ impl Session {
                     warn!("failed to record usage limit reached event: {err}");
                 }
             }
+        }
+        if was_survival_mode_active {
+            self.send_event(
+                turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: "Survival mode deactivated: backend rejected the request (usage-limit hard stop).".to_string(),
+                }),
+            )
+            .await;
         }
     }
 
@@ -6337,6 +6376,17 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
+                    if sess.survival_mode_active().await {
+                        while sess.survival_mode_active().await && !sess.has_pending_input().await {
+                            if cancellation_token.is_cancelled() {
+                                return None;
+                            }
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                        }
+                        if sess.has_pending_input().await {
+                            continue;
+                        }
+                    }
                     let stop_hook_permission_mode = match turn_context.approval_policy.value() {
                         AskForApproval::Never => "bypassPermissions",
                         AskForApproval::UnlessTrusted
@@ -6568,10 +6618,8 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    let use_local_compaction = turn_context
-        .config
-        .features
-        .enabled(Feature::LocalCompaction);
+    let use_local_compaction = turn_context.config.features.enabled(Feature::LocalCompaction)
+        || sess.survival_mode_active().await;
     if should_use_remote_compact_task(&turn_context.provider) && !use_local_compaction {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
@@ -6588,6 +6636,23 @@ async fn run_auto_compact(
         .await?;
     }
     Ok(())
+}
+
+fn weekly_limit_reached_full(snapshot: &RateLimitSnapshot) -> bool {
+    let secondary_full = snapshot
+        .secondary
+        .as_ref()
+        .is_some_and(|window| window.used_percent >= 100.0);
+    if secondary_full {
+        return true;
+    }
+
+    snapshot.primary.as_ref().is_some_and(|window| {
+        window.used_percent >= 100.0
+            && window
+                .window_minutes
+                .is_some_and(|minutes| minutes >= SURVIVAL_MODE_WEEKLY_WINDOW_MINUTES)
+    })
 }
 
 fn collect_explicit_app_ids_from_skill_items(
@@ -6817,7 +6882,13 @@ async fn run_sampling_request(
     )
     .await?;
 
-    let base_instructions = sess.get_base_instructions().await;
+    let mut base_instructions = sess.get_base_instructions().await;
+    if sess.survival_mode_active().await
+        && !base_instructions.text.contains(SURVIVAL_MODE_PROMPT_GUIDANCE)
+    {
+        let base_text = std::mem::take(&mut base_instructions.text);
+        base_instructions.text = format!("{base_text}\n\n{SURVIVAL_MODE_PROMPT_GUIDANCE}");
+    }
     let tool_calls_blocked_pending_steer = sess
         .tool_calls_blocked_pending_steer(&turn_context.sub_id)
         .await;
@@ -6872,7 +6943,7 @@ async fn run_sampling_request(
                 if let Some(rate_limits) = rate_limits {
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
-                sess.record_usage_limit_reached().await;
+                sess.record_usage_limit_reached(&turn_context).await;
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(err) => err,
