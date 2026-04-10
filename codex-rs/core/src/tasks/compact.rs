@@ -28,7 +28,8 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
-        let use_local_compaction = ctx.config.features.enabled(Feature::LocalCompaction);
+        let use_local_compaction = ctx.config.features.enabled(Feature::LocalCompaction)
+            || session.survival_mode_active().await;
         let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider)
             && !use_local_compaction
         {

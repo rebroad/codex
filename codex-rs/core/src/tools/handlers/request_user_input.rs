@@ -9,7 +9,15 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 
-fn request_user_input_is_available(mode: ModeKind, default_mode_request_user_input: bool) -> bool {
+fn request_user_input_is_available(
+    mode: ModeKind,
+    default_mode_request_user_input: bool,
+    survival_mode_active: bool,
+) -> bool {
+    if survival_mode_active {
+        return true;
+    }
+
     mode.allows_request_user_input()
         || (default_mode_request_user_input && mode == ModeKind::Default)
 }
@@ -17,7 +25,13 @@ fn request_user_input_is_available(mode: ModeKind, default_mode_request_user_inp
 fn format_allowed_modes(default_mode_request_user_input: bool) -> String {
     let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
         .into_iter()
-        .filter(|mode| request_user_input_is_available(*mode, default_mode_request_user_input))
+        .filter(|mode| {
+            request_user_input_is_available(
+                *mode,
+                default_mode_request_user_input,
+                /*survival_mode_active*/ false,
+            )
+        })
         .map(ModeKind::display_name)
         .collect();
 
@@ -32,8 +46,10 @@ fn format_allowed_modes(default_mode_request_user_input: bool) -> String {
 pub(crate) fn request_user_input_unavailable_message(
     mode: ModeKind,
     default_mode_request_user_input: bool,
+    survival_mode_active: bool,
 ) -> Option<String> {
-    if request_user_input_is_available(mode, default_mode_request_user_input) {
+    if request_user_input_is_available(mode, default_mode_request_user_input, survival_mode_active)
+    {
         None
     } else {
         let mode_name = mode.display_name();
@@ -46,7 +62,7 @@ pub(crate) fn request_user_input_unavailable_message(
 pub(crate) fn request_user_input_tool_description(default_mode_request_user_input: bool) -> String {
     let allowed_modes = format_allowed_modes(default_mode_request_user_input);
     format!(
-        "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
+        "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}, or when survival mode is active."
     )
 }
 
@@ -80,8 +96,13 @@ impl ToolHandler for RequestUserInputHandler {
         };
 
         let mode = session.collaboration_mode().await.mode;
+        let survival_mode_active = session.survival_mode_active().await;
         if let Some(message) =
-            request_user_input_unavailable_message(mode, self.default_mode_request_user_input)
+            request_user_input_unavailable_message(
+                mode,
+                self.default_mode_request_user_input,
+                survival_mode_active,
+            )
         {
             return Err(FunctionCallError::RespondToModel(message));
         }
