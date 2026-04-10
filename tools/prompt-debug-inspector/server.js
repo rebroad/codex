@@ -121,6 +121,65 @@ function parseMaybeJson(raw) {
   }
 }
 
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function previewValue(value, maxChars = 800) {
+  let text;
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value);
+    } catch (_error) {
+      text = String(value);
+    }
+  }
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}…`;
+}
+
+function summarizeStreamRecord(record) {
+  const transport = record.data?.transport || "";
+  const payload = parseMaybeJson(record.data?.payload);
+  const payloadType = Array.isArray(payload) ? "array" : typeof payload;
+  const eventType = isObject(payload) && typeof payload.type === "string" ? payload.type : "";
+  let summary = "";
+
+  if (isObject(payload)) {
+    if (typeof payload.delta === "string") {
+      summary = payload.delta;
+    } else if (typeof payload.text === "string") {
+      summary = payload.text;
+    } else if (isObject(payload.item) && typeof payload.item.type === "string") {
+      const phase = typeof payload.item.phase === "string" ? ` phase=${payload.item.phase}` : "";
+      const status =
+        typeof payload.item.status === "string" ? ` status=${payload.item.status}` : "";
+      summary = `item=${payload.item.type}${phase}${status}`;
+    } else if (isObject(payload.response)) {
+      const status =
+        typeof payload.response.status === "string" ? ` status=${payload.response.status}` : "";
+      summary = `${payload.type || "response"}${status}`;
+    } else {
+      summary = previewValue(payload, 240);
+    }
+  } else {
+    summary = previewValue(payload, 240);
+  }
+
+  return {
+    line: record.line,
+    transport,
+    payloadType,
+    eventType,
+    summary,
+    payloadPreview: previewValue(payload, 1600),
+  };
+}
+
 function extractTextFromMessageContent(content) {
   if (!Array.isArray(content)) {
     return "";
@@ -397,6 +456,11 @@ async function buildPromptView(targetPath, queryId) {
     seen.set(key, promptRecord);
   }
 
+  const outputFile = selected.replace(/_input\.ndjson$/, "_output.ndjson");
+  const reasoningFile = selected.replace(/_input\.ndjson$/, "_reasoning.ndjson");
+  const output = await buildStreamView(outputFile);
+  const reasoning = await buildStreamView(reasoningFile);
+
   return {
     queryId,
     file: selected,
@@ -409,7 +473,35 @@ async function buildPromptView(targetPath, queryId) {
     responseIdToQueryId,
     parseErrors,
     prompts,
+    output,
+    reasoning,
   };
+}
+
+async function buildStreamView(filePath) {
+  try {
+    const { records, parseErrors } = await parseNdjsonFile(filePath);
+    return {
+      file: filePath,
+      totals: {
+        lines: records.length,
+        parseErrors: parseErrors.length,
+      },
+      parseErrors,
+      records: records.map(summarizeStreamRecord),
+    };
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return {
+        file: filePath,
+        missing: true,
+        totals: { lines: 0, parseErrors: 0 },
+        parseErrors: [],
+        records: [],
+      };
+    }
+    throw error;
+  }
 }
 
 async function handleApi(res, urlObj, defaultTarget) {
