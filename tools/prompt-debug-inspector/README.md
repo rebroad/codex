@@ -2,12 +2,14 @@
 
 Local browser viewer for `codex-prompt-debug.*` captures.
 
-It renders backend prompt payloads (`response.create`) in a human-readable layout:
+It renders per-query capture data in a human-readable layout:
 
 - Instructions text
 - Input items (messages, function call outputs, etc.)
 - Tool list
 - Raw prompt JSON (for exact inspection)
+- Output stream events (`*_output.ndjson`)
+- Reasoning stream events (`*_reasoning.ndjson`)
 
 ## One-shot command
 
