@@ -18,7 +18,9 @@ ARGUMENT_COMMENT_LINT_LOCAL="false"
 SCRIPT_START_SECONDS="${SECONDS}"
 BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
 BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
-BUILD_TIMESTAMP_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}"
+BUILD_COMMIT_HASH_PLACEHOLDER="000000000000"
+BUILD_COMMIT_SHORT="${BUILD_COMMIT_HASH_PLACEHOLDER}"
+BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH_PLACEHOLDER}"
 
 RED=$'\033[31m'
 BOLD=$'\033[1m'
@@ -110,7 +112,7 @@ append_default_build_accel_env() {
 
 append_build_timestamp_env() {
   local -n cargo_env_ref="$1"
-  cargo_env_ref+=(CODEX_BUILD_TIMESTAMP="${BUILD_TIMESTAMP_COMPILE}")
+  cargo_env_ref+=(CODEX_BUILD_TIMESTAMP="${BUILD_VERSION_SUFFIX_COMPILE}")
 }
 
 resolve_cargo_target_dir() {
@@ -757,7 +759,7 @@ resolve_publish_version() {
   version="$(read_workspace_version)"
   if [[ -z "${version}" ]]; then
     version_from_codex="$("${INSTALL_BIN}" --version | awk '{print $2}')"
-    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})$ ]]; then
+    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})(-[0-9a-f]{7,40})?$ ]]; then
       version="${BASH_REMATCH[1]}"
     else
       version="${version_from_codex}"
@@ -768,7 +770,7 @@ resolve_publish_version() {
 
 patch_installed_binary_version_timestamp() {
   local bin_path="$1"
-  local base_version now_ts from_ts
+  local base_version now_suffix from_suffix
   if [[ ! -f "${bin_path}" ]]; then
     echo "Skipping embedded version timestamp patch; binary not found at ${bin_path}."
     return 0
@@ -778,12 +780,12 @@ patch_installed_binary_version_timestamp() {
     echo "Skipping embedded version timestamp patch; unable to resolve workspace version."
     return 0
   fi
-  now_ts="$(date +%Y%m%d%H%M)"
-  from_ts="${BUILD_TIMESTAMP_COMPILE}"
-  if [[ "${from_ts}" == "${now_ts}" ]]; then
+  now_suffix="$(date +%Y%m%d%H%M)-${BUILD_COMMIT_SHORT}"
+  from_suffix="${BUILD_VERSION_SUFFIX_COMPILE}"
+  if [[ "${from_suffix}" == "${now_suffix}" ]]; then
     return 0
   fi
-  if ! python3 - "${bin_path}" "${base_version}" "${from_ts}" "${now_ts}" <<'PY'
+  if ! python3 - "${bin_path}" "${base_version}" "${from_suffix}" "${now_suffix}" <<'PY'
 import mmap
 import re
 import sys
@@ -791,10 +793,10 @@ from pathlib import Path
 
 bin_path = Path(sys.argv[1])
 base_version = sys.argv[2].encode("utf-8")
-from_ts = sys.argv[3].encode("utf-8")
-to_ts = sys.argv[4].encode("utf-8")
-needle = base_version + b"-" + from_ts
-replacement = base_version + b"-" + to_ts
+from_suffix = sys.argv[3].encode("utf-8")
+to_suffix = sys.argv[4].encode("utf-8")
+needle = base_version + b"-" + from_suffix
+replacement = base_version + b"-" + to_suffix
 
 if len(needle) != len(replacement):
     print("Internal error: needle/replacement lengths differ", file=sys.stderr)
@@ -815,8 +817,10 @@ with bin_path.open("r+b") as f:
 
         # Fallback for binaries compiled with an unexpected source timestamp.
         if count == 0:
-            pattern = re.compile(re.escape(base_version) + rb"-\d{12}")
+            pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{7,40})?")
             for match in pattern.finditer(mm):
+                if (match.end() - match.start()) != len(replacement):
+                    continue
                 mm[match.start() : match.end()] = replacement
                 count += 1
 
@@ -830,7 +834,7 @@ with bin_path.open("r+b") as f:
 
 print(
     f"Patched {count} embedded version string(s) in {bin_path} "
-    f"to timestamp {to_ts.decode()}"
+    f"to version suffix {to_suffix.decode()}"
 )
 PY
   then
@@ -855,6 +859,106 @@ resolve_versioned_install_name_from_binary() {
   fi
 
   echo "codex-${normalized_version}"
+}
+
+offer_duplicate_cleanup_for_installed_binaries() {
+  local bin_path name size timestamp series
+  local -a records
+
+  shopt -s nullglob
+  for bin_path in "${INSTALL_BIN_DIR}"/codex-*; do
+    [[ -f "${bin_path}" ]] || continue
+    name="$(basename "${bin_path}")"
+    if [[ ! "${name}" =~ ^codex-(.+)-([0-9]{12})(-[0-9a-f]{7,40})?$ ]]; then
+      continue
+    fi
+    size="$(stat -c %s "${bin_path}" 2>/dev/null || true)"
+    if [[ -z "${size}" ]]; then
+      continue
+    fi
+    series="${BASH_REMATCH[1]}"
+    timestamp="${BASH_REMATCH[2]}"
+    records+=("${series}|${timestamp}|${size}|${name}")
+  done
+  shopt -u nullglob
+
+  if (( ${#records[@]} == 0 )); then
+    return 0
+  fi
+
+  local sorted_tmp
+  sorted_tmp="$(mktemp /var/tmp/rebuild_codex_duplicates.XXXXXX)"
+  printf '%s\n' "${records[@]}" | LC_ALL=C sort -t'|' -k1,1 -k2,2 > "${sorted_tmp}"
+
+  local prev_series="" prev_size="" prev_name=""
+  local -a batch_names=() delete_names=() keep_names=()
+
+  while IFS='|' read -r series timestamp size name; do
+    if [[ "${series}" == "${prev_series}" && "${size}" == "${prev_size}" ]]; then
+      if (( ${#batch_names[@]} == 0 )); then
+        batch_names=("${prev_name}" "${name}")
+      else
+        batch_names+=("${name}")
+      fi
+    else
+      if (( ${#batch_names[@]} >= 2 )); then
+        local keep_idx idx
+        keep_idx=$((${#batch_names[@]} - 1))
+        keep_names+=("${batch_names[keep_idx]}")
+        for ((idx = 0; idx < keep_idx; idx++)); do
+          delete_names+=("${batch_names[idx]}")
+        done
+      fi
+      batch_names=()
+    fi
+    prev_series="${series}"
+    prev_size="${size}"
+    prev_name="${name}"
+  done < "${sorted_tmp}"
+  rm -f "${sorted_tmp}"
+
+  if (( ${#batch_names[@]} >= 2 )); then
+    local keep_idx idx
+    keep_idx=$((${#batch_names[@]} - 1))
+    keep_names+=("${batch_names[keep_idx]}")
+    for ((idx = 0; idx < keep_idx; idx++)); do
+      delete_names+=("${batch_names[idx]}")
+    done
+  fi
+
+  if (( ${#delete_names[@]} == 0 )); then
+    return 0
+  fi
+
+  echo "Detected ${#delete_names[@]} duplicate codex binaries (same size in adjacent timestamp runs)."
+  local i
+  for ((i = 0; i < ${#keep_names[@]}; i++)); do
+    echo "- Keep:   ${keep_names[i]}"
+  done
+  for ((i = 0; i < ${#delete_names[@]}; i++)); do
+    echo "- Delete: ${delete_names[i]}"
+  done
+
+  if [[ ! -t 0 ]]; then
+    echo "Skipping duplicate cleanup prompt in non-interactive mode."
+    return 0
+  fi
+
+  local reply
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    printf 'Delete duplicate binaries now and keep only the latest of each batch? [y/N] ' > /dev/tty
+    read -r reply < /dev/tty
+  else
+    read -r -p "Delete duplicate binaries now and keep only the latest of each batch? [y/N] " reply
+  fi
+  if [[ "${reply}" =~ ^[Yy]$ ]]; then
+    for name in "${delete_names[@]}"; do
+      rm -f "${INSTALL_BIN_DIR}/${name}"
+    done
+    echo "Deleted ${#delete_names[@]} duplicate binaries from ${INSTALL_BIN_DIR}."
+  else
+    echo "Duplicate cleanup skipped."
+  fi
 }
 
 is_commit_preflight_passed() {
@@ -1103,13 +1207,13 @@ Usage: rebuild_codex.sh [--release] [--publish|--no-publish] [--publish-timeout-
 
 Default behavior:
 - Regenerate app-server schema (just write-app-server-schema)
-- Build debug codex, install it as ~/.cargo/bin/codex-<version-with-timestamp>, and link ~/.cargo/bin/codex to it
+- Build debug codex, install it as ~/.cargo/bin/codex-<version-with-timestamp-and-commit>, and link ~/.cargo/bin/codex to it
 - Keep existing target artifacts for fast incremental rebuilds
 - Skip CI preflight checks unless publishing
 - Record successful preflight checks by content hash (git tree hash) for future publish skip decisions
 
 Options:
-  --release   Build/install release codex as ~/.cargo/bin/codex-<version-with-timestamp> and relink ~/.cargo/bin/codex
+  --release   Build/install release codex as ~/.cargo/bin/codex-<version-with-timestamp-and-commit> and relink ~/.cargo/bin/codex
   --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
   --publish-npm
              Publish directly to npm locally (no GitHub tag/workflow publish path)
@@ -1293,8 +1397,9 @@ if [[ "${PREFLIGHT_ONLY}" == "true" && "${should_publish}" == "true" ]]; then
   exit 1
 fi
 
+BUILD_COMMIT_SHORT="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD)"
 if [[ "${MODE}" == "release" || "${should_publish}" == "true" || "${REFRESH_BUILD_INFO}" == "true" ]]; then
-  BUILD_TIMESTAMP_COMPILE="${BUILD_TIMESTAMP}"
+  BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP}-${BUILD_COMMIT_SHORT}"
 fi
 
 if [[ "${publish_to_github}" == "true" ]]; then
@@ -1453,6 +1558,8 @@ else
   rm -f "${INSTALL_BIN}"
   ln -s "${versioned_install_name}" "${INSTALL_BIN}"
 fi
+
+offer_duplicate_cleanup_for_installed_binaries
 
 if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
   require_cmd python3
