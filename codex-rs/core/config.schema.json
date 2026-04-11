@@ -20,6 +20,10 @@
         "stable_backend_percent_window": {
           "format": "int64",
           "type": "integer"
+        },
+        "survival_mode_activation_threshold_percent": {
+          "format": "double",
+          "type": "number"
         }
       },
       "type": "object"
@@ -2028,7 +2032,8 @@
       "default": {
         "max_usage_pct_display_percent_before_full": null,
         "min_usage_pct_sample_count": null,
-        "stable_backend_percent_window": null
+        "stable_backend_percent_window": null,
+        "survival_mode_activation_threshold_percent": null
       },
       "description": "Tuning for account-usage estimation and `usage_pct` display."
     },

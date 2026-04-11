@@ -151,6 +151,7 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
+pub(crate) const DEFAULT_SURVIVAL_MODE_ACTIVATION_THRESHOLD_PERCENT: f64 = 95.0;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
@@ -1565,6 +1566,8 @@ pub struct AccountUsageEstimatorConfig {
     pub min_usage_pct_sample_count: i64,
     pub max_usage_pct_display_percent_before_full: f64,
     pub stable_backend_percent_window: i64,
+    /// Usage percent threshold at/above which survival mode activates.
+    pub survival_mode_activation_threshold_percent: f64,
 }
 
 impl Default for AccountUsageEstimatorConfig {
@@ -1573,6 +1576,8 @@ impl Default for AccountUsageEstimatorConfig {
             min_usage_pct_sample_count: 1,
             max_usage_pct_display_percent_before_full: 0.0,
             stable_backend_percent_window: 5,
+            survival_mode_activation_threshold_percent:
+                DEFAULT_SURVIVAL_MODE_ACTIVATION_THRESHOLD_PERCENT,
         }
     }
 }
@@ -1583,6 +1588,7 @@ pub struct AccountUsageEstimatorConfigToml {
     pub min_usage_pct_sample_count: Option<i64>,
     pub max_usage_pct_display_percent_before_full: Option<f64>,
     pub stable_backend_percent_window: Option<i64>,
+    pub survival_mode_activation_threshold_percent: Option<f64>,
 }
 
 impl AccountUsageEstimatorConfigToml {
@@ -1598,6 +1604,9 @@ impl AccountUsageEstimatorConfigToml {
             stable_backend_percent_window: self
                 .stable_backend_percent_window
                 .unwrap_or(defaults.stable_backend_percent_window),
+            survival_mode_activation_threshold_percent: self
+                .survival_mode_activation_threshold_percent
+                .unwrap_or(defaults.survival_mode_activation_threshold_percent),
         }
     }
 }

@@ -24,6 +24,7 @@ use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::config::DEFAULT_SURVIVAL_MODE_ACTIVATION_THRESHOLD_PERCENT;
 use crate::config::ManagedFeatures;
 use crate::config::types::ExecPolicyRuleWriteScope;
 use crate::connectors;
@@ -466,7 +467,7 @@ const SURVIVAL_MODE_COMPLETION_CHANNEL_LINE: &str =
 const COMMENTARY_CHANNEL_GUIDANCE_LINE: &str =
     "- Share intermediary updates in `commentary` channel.";
 const SURVIVAL_MODE_PROMPT_GUIDANCE: &str = "\
-Survival mode is active because backend weekly usage reached 95%. \
+Survival mode is active because backend weekly usage reached the configured threshold. \
 Keep the current turn open and continue via same-turn input instead of ending the turn. \
 Prefer local compaction paths, and use request_user_input when clarification is needed. \
 Do not send a message in the final channel while survival mode is active. \
@@ -4063,8 +4064,13 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
-        let should_activate_survival_mode =
-            weekly_limit_near_full(&new_rate_limits) && !self.survival_mode_active().await;
+        let should_activate_survival_mode = weekly_limit_near_full(
+            &new_rate_limits,
+            turn_context
+                .config
+                .account_usage_estimator
+                .survival_mode_activation_threshold_percent,
+        ) && !self.survival_mode_active().await;
         let tracking_snapshot = new_rate_limits.clone();
         {
             let mut state = self.state.lock().await;
@@ -4100,7 +4106,7 @@ impl Session {
             self.send_event(
                 turn_context,
                 EventMsg::Warning(WarningEvent {
-                    message: "Survival mode activated: backend weekly usage reached 100%. Keeping the current turn open and forcing local compaction until backend hard-rejects requests.".to_string(),
+                    message: "Survival mode activated: backend weekly usage reached the configured threshold. Keeping the current turn open and forcing local compaction until backend hard-rejects requests.".to_string(),
                 }),
             )
             .await;
@@ -6668,17 +6674,22 @@ async fn run_auto_compact(
     Ok(())
 }
 
-fn weekly_limit_near_full(snapshot: &RateLimitSnapshot) -> bool {
+fn weekly_limit_near_full(snapshot: &RateLimitSnapshot, threshold_percent: f64) -> bool {
+    let threshold_percent = if threshold_percent.is_finite() {
+        threshold_percent
+    } else {
+        DEFAULT_SURVIVAL_MODE_ACTIVATION_THRESHOLD_PERCENT
+    };
     let secondary_full = snapshot
         .secondary
         .as_ref()
-        .is_some_and(|window| window.used_percent >= 95.0);
+        .is_some_and(|window| window.used_percent >= threshold_percent);
     if secondary_full {
         return true;
     }
 
     snapshot.primary.as_ref().is_some_and(|window| {
-        window.used_percent >= 95.0
+        window.used_percent >= threshold_percent
             && window
                 .window_minutes
                 .is_some_and(|minutes| minutes >= SURVIVAL_MODE_WEEKLY_WINDOW_MINUTES)
