@@ -64,7 +64,7 @@ const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
 const BACKEND_PERCENT_EPSILON: f64 = 0.0001;
 const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
 const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
-const UNKNOWN_COMPACT_STATUS_TIMESTAMP: &str = "????????????";
+const UNKNOWN_COMPACT_STATUS_TIMESTAMP: &str = "??????????????";
 const UNKNOWN_COMPACT_STATUS_PERCENT: &str = "???%";
 
 #[derive(Debug)]
@@ -327,7 +327,7 @@ fn compact_status_timestamp_with_timezone(reset_at_unix: Option<i64>, use_utc: b
         .and_then(|ts| Utc.timestamp_opt(ts, 0).single())
         .unwrap_or_else(Utc::now);
     if use_utc {
-        return utc_dt.format("%Y%m%d%H%M").to_string();
+        return utc_dt.format("%Y%m%d%H%M%S").to_string();
     }
 
     let local_dt = utc_dt.with_timezone(&Local);
@@ -352,7 +352,7 @@ fn compact_status_timestamp_with_timezone(reset_at_unix: Option<i64>, use_utc: b
         let minutes = total_minutes % 60;
         format!("{sign}{hours:02}{minutes:02}")
     };
-    format!("{}{timezone_suffix}", local_dt.format("%Y%m%d%H%M"))
+    format!("{}{timezone_suffix}", local_dt.format("%Y%m%d%H%M%S"))
 }
 
 #[derive(Debug, Clone, Copy)]
