@@ -75,6 +75,36 @@ require_cmd() {
   fi
 }
 
+resolve_build_commit_short() {
+  local commit parent_dir base_name candidate
+
+  if [[ -n "${CODEX_BUILD_COMMIT_SHORT:-}" ]] && [[ "${CODEX_BUILD_COMMIT_SHORT}" =~ ^[0-9a-f]{7,40}$ ]]; then
+    echo "${CODEX_BUILD_COMMIT_SHORT:0:12}"
+    return 0
+  fi
+
+  if command -v git >/dev/null 2>&1; then
+    if commit="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD 2>/dev/null)"; then
+      echo "${commit}"
+      return 0
+    fi
+
+    parent_dir="$(dirname "${REPO_DIR}")"
+    base_name="$(basename "${REPO_DIR}")"
+    for candidate in "${parent_dir}/${base_name%.make}" "${parent_dir}/${base_name%.build}"; do
+      if [[ "${candidate}" == "${REPO_DIR}" ]]; then
+        continue
+      fi
+      if commit="$(git -C "${candidate}" rev-parse --short=12 HEAD 2>/dev/null)"; then
+        echo "${commit}"
+        return 0
+      fi
+    done
+  fi
+
+  echo "${BUILD_COMMIT_HASH_PLACEHOLDER}"
+}
+
 prepare_patched_v8_source() {
   local source_repo="$1"
   local version="$2"
@@ -418,6 +448,7 @@ run_in_docker_buster() {
     --platform linux/amd64
     -e DEBIAN_FRONTEND=noninteractive
     -e CODEX_ARMV7_IN_DOCKER=1
+    -e CODEX_BUILD_COMMIT_SHORT="${BUILD_COMMIT_SHORT}"
     "${maybe_cache_mount[@]}"
     -v "${REPO_DIR}:/work/codex"
     "${maybe_mount[@]}"
@@ -755,6 +786,8 @@ for arg in "$@"; do
   esac
 done
 
+BUILD_COMMIT_SHORT="$(resolve_build_commit_short)"
+
 host_arch="$(uname -m)"
 if [[ ! "${host_arch}" =~ ^(armv7|armv6|armhf|arm)$ ]]; then
   echo "Host architecture is ${host_arch}; using cross-compile mode for ${TARGET}."
@@ -809,7 +842,6 @@ fi
 cd "${RUST_WORKSPACE_DIR}"
 
 export RUSTUP_DISABLE_SELF_UPDATE=1
-BUILD_COMMIT_SHORT="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD)"
 BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_SHORT}"
 export CODEX_BUILD_TIMESTAMP="${BUILD_VERSION_SUFFIX_COMPILE}"
 
