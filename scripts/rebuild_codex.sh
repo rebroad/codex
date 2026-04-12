@@ -445,6 +445,16 @@ run_armv7_build() {
   if [[ -n "${ARMV7_GITHUB_RELEASE_TAG}" ]]; then
     armv7_cmd+=("--github-release-tag=${ARMV7_GITHUB_RELEASE_TAG}")
   fi
+  if [[ "${ARMV7_STRIP}" == "true" ]]; then
+    armv7_cmd+=(--strip)
+  else
+    armv7_cmd+=(--no-strip)
+  fi
+  if [[ "${ARMV7_BINARY_ONLY}" == "true" ]]; then
+    armv7_cmd+=(--binary-only)
+  else
+    armv7_cmd+=(--full-artifacts)
+  fi
   "${armv7_cmd[@]}"
 }
 
@@ -1057,6 +1067,8 @@ ARMV7_TARGET=""
 ARMV7_PUBLISH_GITHUB="false"
 ARMV7_GITHUB_RELEASE_REPO=""
 ARMV7_GITHUB_RELEASE_TAG=""
+ARMV7_STRIP="false"
+ARMV7_BINARY_ONLY="false"
 REGEN_SCHEMA="auto"
 CI_PREFLIGHT="auto"
 FORCE_TAG="true"
@@ -1155,6 +1167,18 @@ for arg in "$@"; do
     --armv7-github-release-tag=*)
       ARMV7_GITHUB_RELEASE_TAG="${arg#*=}"
       ;;
+    --armv7-strip)
+      ARMV7_STRIP="true"
+      ;;
+    --armv7-no-strip)
+      ARMV7_STRIP="false"
+      ;;
+    --armv7-binary-only)
+      ARMV7_BINARY_ONLY="true"
+      ;;
+    --armv7-full-artifacts)
+      ARMV7_BINARY_ONLY="false"
+      ;;
     --publish-timeout-minutes=*)
       PUBLISH_TIMEOUT_MINUTES="${arg#*=}"
       ;;
@@ -1245,6 +1269,14 @@ Options:
              Forward armv7 GitHub release repo
   --armv7-github-release-tag=<tag>
              Forward armv7 GitHub release tag
+  --armv7-strip
+             Strip generated armv7 binary
+  --armv7-no-strip
+             Keep debug symbols in armv7 binary (default)
+  --armv7-binary-only
+             Publish only armv7 binary artifact (skip tar.gz/.sha256/.json)
+  --armv7-full-artifacts
+             Publish full armv7 artifact set (default)
   --no-force-tag
              Do not replace existing tags (default is to replace)
   --fix
