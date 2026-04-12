@@ -17,6 +17,7 @@ pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::build_authorize_url;
+pub use server::complete_oauth_login_with_callback_url;
 pub use server::ensure_workspace_allowed;
 pub use server::exchange_code_for_tokens;
 pub use server::generate_oauth_state;
