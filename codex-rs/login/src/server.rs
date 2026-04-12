@@ -513,6 +513,94 @@ pub fn generate_oauth_state() -> String {
     generate_state()
 }
 
+/// Completes browser OAuth login from a pasted localhost callback URL.
+pub async fn complete_oauth_login_with_callback_url(
+    opts: &ServerOptions,
+    callback_url: &str,
+    redirect_uri: &str,
+    expected_state: &str,
+    pkce: &PkceCodes,
+) -> io::Result<()> {
+    let parsed_callback_url = url::Url::parse(callback_url)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid callback URL: {err}")))?;
+    let parsed_redirect_uri = url::Url::parse(redirect_uri).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid redirect URI in pending login state: {err}"),
+        )
+    })?;
+
+    let callback_origin = (
+        parsed_callback_url.scheme(),
+        parsed_callback_url.host_str(),
+        parsed_callback_url.port_or_known_default(),
+        parsed_callback_url.path(),
+    );
+    let expected_origin = (
+        parsed_redirect_uri.scheme(),
+        parsed_redirect_uri.host_str(),
+        parsed_redirect_uri.port_or_known_default(),
+        parsed_redirect_uri.path(),
+    );
+    if callback_origin != expected_origin {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "callback URL must target {}",
+                parsed_redirect_uri.as_str()
+            ),
+        ));
+    }
+
+    let params: std::collections::HashMap<String, String> =
+        parsed_callback_url.query_pairs().into_owned().collect();
+    let Some(state) = params.get("state") else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "callback URL is missing state",
+        ));
+    };
+    if state != expected_state {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "callback state mismatch",
+        ));
+    }
+    if let Some(error_code) = params.get("error") {
+        let error_description = params.get("error_description").map(String::as_str);
+        let message = oauth_callback_error_message(error_code, error_description);
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+    }
+    let Some(code) = params.get("code").filter(|code| !code.is_empty()) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "callback URL is missing authorization code",
+        ));
+    };
+
+    let tokens = exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, code)
+        .await
+        .map_err(|err| io::Error::other(format!("oauth callback exchange failed: {err}")))?;
+    if let Err(message) = ensure_workspace_allowed(
+        opts.forced_chatgpt_workspace_id.as_deref(),
+        &tokens.id_token,
+    ) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+    }
+    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
+        .await
+        .ok();
+    persist_tokens_async(
+        &opts.codex_home,
+        api_key,
+        tokens.id_token,
+        tokens.access_token,
+        tokens.refresh_token,
+        opts.cli_auth_credentials_store_mode,
+    )
+    .await
+}
+
 fn send_cancel_request(port: u16) -> io::Result<()> {
     let addr: SocketAddr = format!("127.0.0.1:{port}")
         .parse()

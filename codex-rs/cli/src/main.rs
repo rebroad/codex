@@ -418,17 +418,20 @@ struct TloginCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum TloginSubcommand {
-    /// Start a Telegram login flow and print the device verification details.
+    /// Start a Telegram login flow and print authorization details.
     Start(TloginStartCommand),
-    /// Complete a Telegram login flow after the user approves device auth.
+    /// Complete a Telegram login flow.
     Complete(TloginCompleteCommand),
 }
 
 #[derive(Debug, Parser)]
 struct TloginStartCommand {
-    /// Stable bot user identifier for caching pending device auth state.
+    /// Stable bot user identifier for caching pending login state.
     #[arg(long = "user-id", value_name = "USER_ID")]
     user_id: String,
+    /// Use legacy device-auth flow instead of browser OAuth callback flow.
+    #[arg(long = "device-auth", default_value_t = false)]
+    device_auth: bool,
     /// Emit machine-readable JSON.
     #[arg(long = "json", default_value_t = false)]
     json: bool,
@@ -439,6 +442,9 @@ struct TloginCompleteCommand {
     /// Stable bot user identifier used during `tlogin start`.
     #[arg(long = "user-id", value_name = "USER_ID")]
     user_id: String,
+    /// Localhost callback URL copied from browser (required for non-device flow).
+    #[arg(long = "callback-url", value_name = "URL")]
+    callback_url: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -1127,12 +1133,17 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             match tlogin_cli.action {
                 TloginSubcommand::Start(start) => {
-                    let result =
-                        run_tlogin_start(root_config_overrides.clone(), start.user_id).await?;
+                    let result = run_tlogin_start(
+                        root_config_overrides.clone(),
+                        start.user_id,
+                        start.device_auth,
+                    )
+                    .await?;
                     if start.json {
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
+                                "authorizationUrl": result.authorization_url,
                                 "verificationUrl": result.verification_url,
                                 "userCode": result.user_code,
                                 "message": result.message,
@@ -1143,7 +1154,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     }
                 }
                 TloginSubcommand::Complete(complete) => {
-                    run_tlogin_complete(root_config_overrides.clone(), complete.user_id).await?;
+                    run_tlogin_complete(
+                        root_config_overrides.clone(),
+                        complete.user_id,
+                        complete.callback_url,
+                    )
+                    .await?;
                     eprintln!("Successfully logged in");
                 }
             }
@@ -2948,11 +2964,39 @@ mod tests {
         let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
             panic!("expected tlogin subcommand");
         };
-        let TloginSubcommand::Start(TloginStartCommand { user_id, json }) = action else {
+        let TloginSubcommand::Start(TloginStartCommand {
+            user_id,
+            json,
+            device_auth,
+        }) = action
+        else {
             panic!("expected tlogin start");
         };
         assert_eq!(user_id, "1234");
         assert!(json);
+        assert!(!device_auth);
+    }
+
+    #[test]
+    fn tlogin_start_device_auth_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "start",
+            "--user-id",
+            "1234",
+            "--device-auth",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Start(TloginStartCommand { device_auth, .. }) = action else {
+            panic!("expected tlogin start");
+        };
+        assert!(device_auth);
     }
 
     #[test]
@@ -2970,10 +3014,41 @@ mod tests {
         let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
             panic!("expected tlogin subcommand");
         };
-        let TloginSubcommand::Complete(TloginCompleteCommand { user_id }) = action else {
+        let TloginSubcommand::Complete(TloginCompleteCommand {
+            user_id,
+            callback_url,
+        }) = action
+        else {
             panic!("expected tlogin complete");
         };
         assert_eq!(user_id, "1234");
+        assert_eq!(callback_url, None);
+    }
+
+    #[test]
+    fn tlogin_complete_with_callback_url_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "complete",
+            "--user-id",
+            "1234",
+            "--callback-url",
+            "http://localhost:1455/auth/callback?code=abc&state=xyz",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Complete(TloginCompleteCommand { callback_url, .. }) = action else {
+            panic!("expected tlogin complete");
+        };
+        assert_eq!(
+            callback_url.as_deref(),
+            Some("http://localhost:1455/auth/callback?code=abc&state=xyz")
+        );
     }
 
     #[test]
