@@ -21,10 +21,16 @@ DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:2}"
 PUBLISH_GITHUB="false"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
+STRIP_BINARY="false"
+BINARY_ONLY="false"
+BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
+BUILD_COMMIT_HASH_PLACEHOLDER="000000000000"
+BUILD_COMMIT_SHORT="${BUILD_COMMIT_HASH_PLACEHOLDER}"
+BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH_PLACEHOLDER}"
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -54,6 +60,10 @@ Options:
                         Release repository (default: derived from git remote origin)
   --github-release-tag=<tag>
                         Release tag used for uploads (default: codex-armv7-local-v<version>)
+  --strip               Strip the produced binary (uses target strip tool when available)
+  --no-strip            Keep debug symbols in output binary (default)
+  --binary-only         Publish only the binary under dist/local-armv7 (skip tar.gz/.sha256/.json)
+  --full-artifacts      Publish binary + tar.gz + sha256 + metadata (default)
   -h, --help            Show this help
 EOF
 }
@@ -369,6 +379,16 @@ run_in_docker_buster() {
   if [[ -n "${RUSTY_V8_RELEASE_TAG}" ]]; then
     forwarded_args+=("--rusty-v8-release-tag=${RUSTY_V8_RELEASE_TAG}")
   fi
+  if [[ "${STRIP_BINARY}" == "true" ]]; then
+    forwarded_args+=(--strip)
+  else
+    forwarded_args+=(--no-strip)
+  fi
+  if [[ "${BINARY_ONLY}" == "true" ]]; then
+    forwarded_args+=(--binary-only)
+  else
+    forwarded_args+=(--full-artifacts)
+  fi
   if [[ "${PUBLISH_GITHUB}" == "true" ]]; then
     forwarded_args+=("--publish-github")
   else
@@ -459,6 +479,12 @@ publish_local_artifacts() {
   mkdir -p "${out_dir}"
 
   install -m 0755 "${bin_path}" "${out_dir}/${artifact_base}"
+  if [[ "${BINARY_ONLY}" == "true" ]]; then
+    echo "Published local artifact:"
+    echo "- Binary: ${out_dir}/${artifact_base}"
+    return 0
+  fi
+
   tar -C "${out_dir}" -czf "${tarball}" "${artifact_base}"
   sha256sum "${tarball}" > "${checksum_file}"
 
@@ -497,6 +523,94 @@ PY
   echo "- Tarball: ${tarball}"
   echo "- SHA256: ${checksum_file}"
   echo "- Metadata: ${metadata_file}"
+}
+
+patch_binary_version_suffix() {
+  local bin_path="$1"
+  local base_version="$2"
+  local commit_short="$3"
+  local from_suffix now_suffix
+  from_suffix="${BUILD_VERSION_SUFFIX_COMPILE}"
+  now_suffix="$(date +%Y%m%d%H%M)-${commit_short}"
+  if [[ "${from_suffix}" == "${now_suffix}" ]]; then
+    return 0
+  fi
+
+  python3 - "${bin_path}" "${base_version}" "${from_suffix}" "${now_suffix}" <<'PY'
+import mmap
+import re
+import sys
+from pathlib import Path
+
+bin_path = Path(sys.argv[1])
+base_version = sys.argv[2].encode("utf-8")
+from_suffix = sys.argv[3].encode("utf-8")
+to_suffix = sys.argv[4].encode("utf-8")
+needle = base_version + b"-" + from_suffix
+replacement = base_version + b"-" + to_suffix
+
+if len(needle) != len(replacement):
+    print("Internal error: needle/replacement lengths differ", file=sys.stderr)
+    sys.exit(2)
+
+count = 0
+with bin_path.open("r+b") as f:
+    mm = mmap.mmap(f.fileno(), 0)
+    try:
+        start = 0
+        while True:
+            idx = mm.find(needle, start)
+            if idx == -1:
+                break
+            mm[idx : idx + len(needle)] = replacement
+            count += 1
+            start = idx + len(needle)
+
+        if count == 0:
+            pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{12})?")
+            for match in pattern.finditer(mm):
+                if (match.end() - match.start()) != len(replacement):
+                    continue
+                mm[match.start() : match.end()] = replacement
+                count += 1
+
+        if count == 0:
+            print(f"No embedded version string found in {bin_path}", file=sys.stderr)
+            sys.exit(2)
+
+        mm.flush()
+    finally:
+        mm.close()
+PY
+}
+
+strip_binary_if_requested() {
+  local bin_path="$1"
+  local target="$2"
+  local strip_cmd
+  local -a strip_candidates
+
+  if [[ "${STRIP_BINARY}" != "true" ]]; then
+    return 0
+  fi
+
+  strip_candidates=()
+  if [[ "${target}" == "armv7-unknown-linux-gnueabihf" ]]; then
+    strip_candidates+=("arm-linux-gnueabihf-strip")
+  fi
+  strip_candidates+=("llvm-strip" "strip")
+
+  for strip_cmd in "${strip_candidates[@]}"; do
+    if command -v "${strip_cmd}" >/dev/null 2>&1; then
+      if "${strip_cmd}" --strip-unneeded "${bin_path}" >/dev/null 2>&1; then
+        echo "Stripped binary with ${strip_cmd}."
+        return 0
+      fi
+    fi
+  done
+
+  echo "Unable to strip binary: no compatible strip tool succeeded." >&2
+  exit 1
 }
 
 resolve_github_release_repo() {
@@ -539,6 +653,9 @@ publish_github_artifacts() {
   metadata_file="${out_dir}/${artifact_base}.json"
   binary_file="${out_dir}/${artifact_base}"
   upload_files=("${binary_file}" "${tarball}" "${checksum_file}" "${metadata_file}")
+  if [[ "${BINARY_ONLY}" == "true" ]]; then
+    upload_files=("${binary_file}")
+  fi
 
   if ! gh auth status >/dev/null 2>&1; then
     echo "GitHub CLI is not authenticated. Run: gh auth login" >&2
@@ -614,6 +731,18 @@ for arg in "$@"; do
     --github-release-tag=*)
       GITHUB_RELEASE_TAG="${arg#*=}"
       ;;
+    --strip)
+      STRIP_BINARY="true"
+      ;;
+    --no-strip)
+      STRIP_BINARY="false"
+      ;;
+    --binary-only)
+      BINARY_ONLY="true"
+      ;;
+    --full-artifacts)
+      BINARY_ONLY="false"
+      ;;
     -h|--help)
       usage
       exit 0
@@ -680,6 +809,9 @@ fi
 cd "${RUST_WORKSPACE_DIR}"
 
 export RUSTUP_DISABLE_SELF_UPDATE=1
+BUILD_COMMIT_SHORT="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD)"
+BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_SHORT}"
+export CODEX_BUILD_TIMESTAMP="${BUILD_VERSION_SUFFIX_COMPILE}"
 
 resolved_v8_version="$(resolve_v8_crate_version)"
 if [[ -z "${resolved_v8_version}" ]]; then
@@ -769,6 +901,17 @@ if [[ ! -x "${bin_path}" ]]; then
   exit 1
 fi
 
+version="$(resolve_codex_version)"
+if [[ -n "${version}" ]]; then
+  if patch_binary_version_suffix "${bin_path}" "${version}" "${BUILD_COMMIT_SHORT}"; then
+    :
+  else
+    echo "Warning: failed to patch embedded version timestamp in ${bin_path}." >&2
+  fi
+fi
+
+strip_binary_if_requested "${bin_path}" "${TARGET}"
+
 bin_desc="$(file -b "${bin_path}" || true)"
 if [[ "${TARGET}" == "${TARGET_DEFAULT}" ]] && ! grep -Eq 'ARM|arm' <<<"${bin_desc}"; then
   echo "Built binary does not appear to be ARM (${bin_desc})" >&2
@@ -782,12 +925,15 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   validate_pi3_abi_compat "${bin_path}"
 fi
 
-version="$(resolve_codex_version)"
-if [[ -n "${version}" ]]; then
-  publish_local_artifacts "${bin_path}" "${version}" "${PROFILE}" "${TARGET}" "${release_tag}"
+artifact_version="$("${bin_path}" --version | awk '{print $2}')"
+if [[ -z "${artifact_version}" ]]; then
+  artifact_version="${version}"
+fi
+if [[ -n "${artifact_version}" ]]; then
+  publish_local_artifacts "${bin_path}" "${artifact_version}" "${PROFILE}" "${TARGET}" "${release_tag}"
   if [[ "${PUBLISH_GITHUB}" == "true" ]]; then
-    artifact_base="codex-${TARGET}-${version}-${PROFILE}"
-    artifact_dir="${REPO_DIR}/dist/local-armv7/${version}"
-    publish_github_artifacts "${version}" "${PROFILE}" "${TARGET}" "${artifact_dir}" "${artifact_base}"
+    artifact_base="codex-${TARGET}-${artifact_version}-${PROFILE}"
+    artifact_dir="${REPO_DIR}/dist/local-armv7/${artifact_version}"
+    publish_github_artifacts "${artifact_version}" "${PROFILE}" "${TARGET}" "${artifact_dir}" "${artifact_base}"
   fi
 fi
