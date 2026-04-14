@@ -21,12 +21,13 @@ DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:2}"
 PUBLISH_GITHUB="false"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
-STRIP_BINARY="false"
-BINARY_ONLY="false"
+STRIP_BINARY="true"
+BINARY_ONLY="true"
 BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
 BUILD_COMMIT_HASH_PLACEHOLDER="000000000000"
 BUILD_COMMIT_SHORT="${BUILD_COMMIT_HASH_PLACEHOLDER}"
 BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH_PLACEHOLDER}"
+PATCHED_VERSION_SUFFIX=""
 
 usage() {
   cat <<'EOF'
@@ -60,10 +61,10 @@ Options:
                         Release repository (default: derived from git remote origin)
   --github-release-tag=<tag>
                         Release tag used for uploads (default: codex-armv7-local-v<version>)
-  --strip               Strip the produced binary (uses target strip tool when available)
-  --no-strip            Keep debug symbols in output binary (default)
-  --binary-only         Publish only the binary under dist/local-armv7 (skip tar.gz/.sha256/.json)
-  --full-artifacts      Publish binary + tar.gz + sha256 + metadata (default)
+  --strip               Strip the produced binary (default; uses target strip tool when available)
+  --no-strip            Keep debug symbols in output binary
+  --binary-only         Publish only the binary under dist/local-armv7 (default; skip tar.gz/.sha256/.json)
+  --full-artifacts      Publish binary + tar.gz + sha256 + metadata
   -h, --help            Show this help
 EOF
 }
@@ -563,6 +564,7 @@ patch_binary_version_suffix() {
   local from_suffix now_suffix
   from_suffix="${BUILD_VERSION_SUFFIX_COMPILE}"
   now_suffix="$(date +%Y%m%d%H%M)-${commit_short}"
+  PATCHED_VERSION_SUFFIX="${now_suffix}"
   if [[ "${from_suffix}" == "${now_suffix}" ]]; then
     return 0
   fi
@@ -957,9 +959,13 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   validate_pi3_abi_compat "${bin_path}"
 fi
 
-artifact_version="$("${bin_path}" --version | awk '{print $2}')"
-if [[ -z "${artifact_version}" ]]; then
-  artifact_version="${version}"
+artifact_version="${version}"
+if [[ -n "${version}" ]]; then
+  resolved_suffix="${PATCHED_VERSION_SUFFIX}"
+  if [[ -z "${resolved_suffix}" ]]; then
+    resolved_suffix="$(date +%Y%m%d%H%M)-${BUILD_COMMIT_SHORT}"
+  fi
+  artifact_version="${version}-${resolved_suffix}"
 fi
 if [[ -n "${artifact_version}" ]]; then
   publish_local_artifacts "${bin_path}" "${artifact_version}" "${PROFILE}" "${TARGET}" "${release_tag}"
