@@ -1155,12 +1155,6 @@ for arg in "$@"; do
     --armv7-target=*)
       ARMV7_TARGET="${arg#*=}"
       ;;
-    --armv7-publish-github)
-      ARMV7_PUBLISH_GITHUB="true"
-      ;;
-    --armv7-no-publish-github)
-      ARMV7_PUBLISH_GITHUB="false"
-      ;;
     --armv7-github-release-repo=*)
       ARMV7_GITHUB_RELEASE_REPO="${arg#*=}"
       ;;
@@ -1238,7 +1232,8 @@ Default behavior:
 
 Options:
   --release   Build/install release codex as ~/.cargo/bin/codex-<version-with-timestamp-and-commit> and relink ~/.cargo/bin/codex
-  --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...])
+  --publish   Create + push a git tag for the workspace version (codex-vX.Y.Z[-...]).
+             With --armv7, publish armv7 artifacts to GitHub release instead of tag workflow.
   --publish-npm
              Publish directly to npm locally (no GitHub tag/workflow publish path)
   --no-publish
@@ -1261,10 +1256,6 @@ Options:
              Forward ephemeral Docker mode to armv7 build
   --armv7-target=<triple>
              Forward target override to armv7 build
-  --armv7-publish-github
-             Forward GitHub artifact publish to armv7 build
-  --armv7-no-publish-github
-             Disable GitHub artifact publish for armv7 build (default)
   --armv7-github-release-repo=<owner/repo>
              Forward armv7 GitHub release repo
   --armv7-github-release-tag=<tag>
@@ -1341,6 +1332,18 @@ cd "${REPO_DIR}"
 if [[ "${ARMV7_ONLY}" == "true" && "${PREFLIGHT_ONLY}" == "true" ]]; then
   echo "--armv7 cannot be combined with --preflight-only." >&2
   exit 1
+fi
+if [[ "${ARMV7_ONLY}" == "true" ]]; then
+  if [[ "${PUBLISH}" == "true" && "${PUBLISH_MODE}" == "npm" ]]; then
+    echo "--publish-npm cannot be combined with --armv7." >&2
+    exit 1
+  fi
+  if [[ "${PUBLISH}" == "true" ]]; then
+    ARMV7_PUBLISH_GITHUB="true"
+  fi
+  # In armv7-only mode, consume --publish for armv7 artifact upload and skip
+  # main release/tag workflow logic.
+  PUBLISH="false"
 fi
 
 schema_should_run="false"
