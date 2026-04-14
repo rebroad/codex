@@ -28,6 +28,7 @@ BUILD_COMMIT_HASH_PLACEHOLDER="000000000000"
 BUILD_COMMIT_SHORT="${BUILD_COMMIT_HASH_PLACEHOLDER}"
 BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH_PLACEHOLDER}"
 PATCHED_VERSION_SUFFIX=""
+BUILD_VERSION_SUFFIX_FIXED="${CODEX_BUILD_VERSION_SUFFIX_FIXED:-}"
 
 usage() {
   cat <<'EOF'
@@ -380,6 +381,7 @@ run_in_docker_buster() {
   local container_rusty_v8_path=""
   local docker_cargo_home="${ARMV7_CACHE_DIR}/docker-cargo-home"
   local docker_rustup_home="${ARMV7_CACHE_DIR}/docker-rustup-home"
+  local version artifact_version artifact_base artifact_dir
   local -a maybe_mount maybe_cache_mount
   maybe_mount=()
   maybe_cache_mount=()
@@ -420,11 +422,8 @@ run_in_docker_buster() {
   else
     forwarded_args+=(--full-artifacts)
   fi
-  if [[ "${PUBLISH_GITHUB}" == "true" ]]; then
-    forwarded_args+=("--publish-github")
-  else
-    forwarded_args+=("--no-publish-github")
-  fi
+  # Publish on host after Docker build; container image does not include gh.
+  forwarded_args+=("--no-publish-github")
   if [[ -n "${GITHUB_RELEASE_REPO}" ]]; then
     forwarded_args+=("--github-release-repo=${GITHUB_RELEASE_REPO}")
   fi
@@ -450,6 +449,7 @@ run_in_docker_buster() {
     -e DEBIAN_FRONTEND=noninteractive
     -e CODEX_ARMV7_IN_DOCKER=1
     -e CODEX_BUILD_COMMIT_SHORT="${BUILD_COMMIT_SHORT}"
+    -e CODEX_BUILD_VERSION_SUFFIX_FIXED="${BUILD_VERSION_SUFFIX_FIXED}"
     "${maybe_cache_mount[@]}"
     -v "${REPO_DIR}:/work/codex"
     "${maybe_mount[@]}"
@@ -471,6 +471,18 @@ run_in_docker_buster() {
       ${script_in_container} ${forwarded_args[*]}"
   )
   "${docker_cmd[@]}"
+
+  if [[ "${PUBLISH_GITHUB}" == "true" ]]; then
+    version="$(resolve_codex_version)"
+    if [[ -z "${version}" ]]; then
+      echo "Unable to resolve workspace version for GitHub artifact upload." >&2
+      exit 1
+    fi
+    artifact_version="${version}-${BUILD_VERSION_SUFFIX_FIXED}"
+    artifact_base="codex-${TARGET}-${artifact_version}-${PROFILE}"
+    artifact_dir="${REPO_DIR}/dist/local-armv7/${artifact_version}"
+    publish_github_artifacts "${artifact_version}" "${PROFILE}" "${TARGET}" "${artifact_dir}" "${artifact_base}"
+  fi
 }
 
 validate_pi3_abi_compat() {
@@ -563,7 +575,11 @@ patch_binary_version_suffix() {
   local commit_short="$3"
   local from_suffix now_suffix
   from_suffix="${BUILD_VERSION_SUFFIX_COMPILE}"
-  now_suffix="$(date +%Y%m%d%H%M)-${commit_short}"
+  if [[ -n "${BUILD_VERSION_SUFFIX_FIXED}" ]]; then
+    now_suffix="${BUILD_VERSION_SUFFIX_FIXED}"
+  else
+    now_suffix="$(date +%Y%m%d%H%M)-${commit_short}"
+  fi
   PATCHED_VERSION_SUFFIX="${now_suffix}"
   if [[ "${from_suffix}" == "${now_suffix}" ]]; then
     return 0
@@ -789,6 +805,9 @@ for arg in "$@"; do
 done
 
 BUILD_COMMIT_SHORT="$(resolve_build_commit_short)"
+if [[ -z "${BUILD_VERSION_SUFFIX_FIXED}" ]]; then
+  BUILD_VERSION_SUFFIX_FIXED="$(date +%Y%m%d%H%M)-${BUILD_COMMIT_SHORT}"
+fi
 
 host_arch="$(uname -m)"
 if [[ ! "${host_arch}" =~ ^(armv7|armv6|armhf|arm)$ ]]; then
@@ -963,7 +982,7 @@ artifact_version="${version}"
 if [[ -n "${version}" ]]; then
   resolved_suffix="${PATCHED_VERSION_SUFFIX}"
   if [[ -z "${resolved_suffix}" ]]; then
-    resolved_suffix="$(date +%Y%m%d%H%M)-${BUILD_COMMIT_SHORT}"
+    resolved_suffix="${BUILD_VERSION_SUFFIX_FIXED}"
   fi
   artifact_version="${version}-${resolved_suffix}"
 fi
