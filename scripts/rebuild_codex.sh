@@ -1067,8 +1067,8 @@ ARMV7_TARGET=""
 ARMV7_PUBLISH_GITHUB="false"
 ARMV7_GITHUB_RELEASE_REPO=""
 ARMV7_GITHUB_RELEASE_TAG=""
-ARMV7_STRIP="false"
-ARMV7_BINARY_ONLY="false"
+ARMV7_STRIP="true"
+ARMV7_BINARY_ONLY="true"
 REGEN_SCHEMA="auto"
 CI_PREFLIGHT="auto"
 FORCE_TAG="true"
@@ -1270,13 +1270,13 @@ Options:
   --armv7-github-release-tag=<tag>
              Forward armv7 GitHub release tag
   --armv7-strip
-             Strip generated armv7 binary
+             Strip generated armv7 binary (default)
   --armv7-no-strip
-             Keep debug symbols in armv7 binary (default)
+             Keep debug symbols in armv7 binary
   --armv7-binary-only
-             Publish only armv7 binary artifact (skip tar.gz/.sha256/.json)
+             Publish only armv7 binary artifact (default; skip tar.gz/.sha256/.json)
   --armv7-full-artifacts
-             Publish full armv7 artifact set (default)
+             Publish full armv7 artifact set
   --no-force-tag
              Do not replace existing tags (default is to replace)
   --fix
