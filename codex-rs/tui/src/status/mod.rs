@@ -56,15 +56,16 @@ mod tests;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AccountUsageDisplay {
-    pub total_tokens: i64,
+    pub usage_usd: f64,
     pub estimated_percent: Option<f64>,
     pub sample_count: Option<i64>,
 }
 
 const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
 const BACKEND_PERCENT_EPSILON: f64 = 0.0001;
-const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
-const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
+const COMPOSITE_Q_INPUT_WEIGHT: f64 = 1.72;
+const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.175;
+const COMPOSITE_Q_OUTPUT_WEIGHT: f64 = 14.0;
 const UNKNOWN_COMPACT_STATUS_TIMESTAMP: &str = "??????????????";
 const UNKNOWN_COMPACT_STATUS_PERCENT: &str = "???%";
 
@@ -757,7 +758,11 @@ fn build_account_usage_display(
     }
     .or(usage.last_backend_used_percent);
     AccountUsageDisplay {
-        total_tokens: usage.total_tokens,
+        usage_usd: composite_q_tokens(
+            usage.input_tokens,
+            usage.cached_input_tokens,
+            usage.output_tokens,
+        ),
         estimated_percent,
         sample_count: Some(sample_count).filter(|count| *count > 0),
     }
@@ -792,9 +797,9 @@ fn estimate_account_usage_percent(
 }
 
 fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> f64 {
-    output_tokens.max(0) as f64
-        + COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
+    COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
         + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
+        + COMPOSITE_Q_OUTPUT_WEIGHT * output_tokens.max(0) as f64
 }
 
 fn line_to_ansi(line: &ratatui::text::Line<'_>) -> String {
