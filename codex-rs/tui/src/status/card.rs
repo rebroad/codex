@@ -217,9 +217,9 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
 impl StatusHistoryCell {
     fn format_usage_usd(usage_usd: f64) -> String {
         if usage_usd.is_finite() {
-            format!("{usage_usd:.2} usd")
+            format!("${usage_usd:.2}")
         } else {
-            "0.00 usd".to_string()
+            "$0.00".to_string()
         }
     }
 
