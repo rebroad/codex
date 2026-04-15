@@ -205,6 +205,13 @@ ensure_rusty_v8_source_repo_for_version() {
   local ref cache_repo remote_url
   ref="v${version}"
 
+  # Docker builds operate on bind-mounted host paths that may be owned by a
+  # different uid/gid than the in-container user. Mark these repos safe so
+  # git -C checks don't fail with "dubious ownership".
+  if [[ -d "${requested_repo_path}/.git" ]]; then
+    git config --global --add safe.directory "${requested_repo_path}" >/dev/null 2>&1 || true
+  fi
+
   if [[ -d "${requested_repo_path}/.git" ]] \
     && git -C "${requested_repo_path}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
     echo "${requested_repo_path}"
@@ -214,10 +221,14 @@ ensure_rusty_v8_source_repo_for_version() {
   cache_repo="${ARMV7_CACHE_DIR}/rusty_v8-source-cache"
   remote_url="https://github.com/${RUSTY_V8_RELEASE_REPO}.git"
   mkdir -p "${ARMV7_CACHE_DIR}"
+  if [[ -d "${cache_repo}/.git" ]]; then
+    git config --global --add safe.directory "${cache_repo}" >/dev/null 2>&1 || true
+  fi
 
   if [[ ! -d "${cache_repo}/.git" ]]; then
     echo "Local rusty_v8 checkout lacks ${ref}; cloning ${remote_url} into cache..." >&2
     git clone --filter=blob:none "${remote_url}" "${cache_repo}" >/dev/null
+    git config --global --add safe.directory "${cache_repo}" >/dev/null 2>&1 || true
   fi
 
   if ! git -C "${cache_repo}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
