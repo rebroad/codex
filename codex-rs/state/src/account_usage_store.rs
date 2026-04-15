@@ -70,6 +70,8 @@ pub fn account_usage_display(account_email: Option<&str>) -> Option<String> {
 
 #[derive(Debug, Clone)]
 pub struct AccountUsageSnapshot {
+    pub total_usage_usd: f64,
+    pub total_usage_usd_with_prewarm: f64,
     pub total_tokens: i64,
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
@@ -181,9 +183,15 @@ struct ThresholdUsageCounts {
     recv_bytes_including_warmups: i64,
 }
 
-// Composite usage model calibrated from local/backend usage logs.
-const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
-const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
+// Composite usage model weights are USD-per-1M-tokens.
+const COMPOSITE_Q_INPUT_WEIGHT: f64 = 1.75;
+const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.175;
+const COMPOSITE_Q_OUTPUT_WEIGHT: f64 = 14.0;
+const MINI_COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.25;
+const MINI_COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.025;
+const MINI_COMPOSITE_Q_OUTPUT_WEIGHT: f64 = 2.0;
+const TOKENS_PER_MILLION: f64 = 1_000_000.0;
+const MINI_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT: f64 = 0.15;
 const DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT: f64 = 0.85;
 const BYTE_WEIGHT_FIT_STEP: f64 = 0.01;
@@ -200,6 +208,35 @@ impl ByteWeights {
         Self {
             sent_weight: DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT,
             recv_weight: DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UsagePriceWeights {
+    input: f64,
+    cached_input: f64,
+    output: f64,
+}
+
+impl UsagePriceWeights {
+    fn defaults() -> Self {
+        Self {
+            input: COMPOSITE_Q_INPUT_WEIGHT / TOKENS_PER_MILLION,
+            cached_input: COMPOSITE_Q_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
+            output: COMPOSITE_Q_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
+        }
+    }
+
+    fn for_model(model_slug: Option<&str>) -> Self {
+        if model_slug == Some(MINI_MODEL_SLUG) {
+            Self {
+                input: MINI_COMPOSITE_Q_INPUT_WEIGHT / TOKENS_PER_MILLION,
+                cached_input: MINI_COMPOSITE_Q_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
+                output: MINI_COMPOSITE_Q_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
+            }
+        } else {
+            Self::defaults()
         }
     }
 }
@@ -307,6 +344,8 @@ WHERE provider = ?
         let row = sqlx::query(
             r#"
 SELECT
+    total_usage_usd,
+    total_usage_usd_with_prewarm,
     total_tokens,
     input_tokens,
     cached_input_tokens,
@@ -361,6 +400,8 @@ WHERE account_id = ? AND provider = ?
             return Ok(None);
         };
         Ok(Some(AccountUsageSnapshot {
+            total_usage_usd: row.try_get("total_usage_usd")?,
+            total_usage_usd_with_prewarm: row.try_get("total_usage_usd_with_prewarm")?,
             total_tokens: row.try_get("total_tokens")?,
             input_tokens: row.try_get("input_tokens")?,
             cached_input_tokens: row.try_get("cached_input_tokens")?,
@@ -657,6 +698,13 @@ LIMIT 200
         let input_tokens = normalized_usage.input_tokens.max(0);
         let cached_input_tokens = normalized_usage.cached_input_tokens.max(0);
         let output_tokens = normalized_usage.output_tokens.max(0);
+        let usage_usd = composite_q_tokens_with_weights(
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            UsagePriceWeights::for_model(meta.model_slug),
+        );
+        let usage_usd_excluding_prewarm = if meta.is_prewarm { 0.0 } else { usage_usd };
         let reasoning_output_tokens = normalized_usage.reasoning_output_tokens.max(0);
         let min_total_cached_output_tokens = total_tokens.min(cached_input_tokens + output_tokens);
         let sent = meta.sent_bytes.unwrap_or(0).max(0);
@@ -684,6 +732,8 @@ LIMIT 200
 INSERT INTO account_usage (
     account_id,
     provider,
+    total_usage_usd,
+    total_usage_usd_with_prewarm,
     total_tokens,
     input_tokens,
     cached_input_tokens,
@@ -698,8 +748,10 @@ INSERT INTO account_usage (
     prewarm_recv_bytes,
     prewarm_sent_recv_bytes,
     updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id, provider) DO UPDATE SET
+    total_usage_usd = total_usage_usd + excluded.total_usage_usd,
+    total_usage_usd_with_prewarm = total_usage_usd_with_prewarm + excluded.total_usage_usd_with_prewarm,
     total_tokens = total_tokens + excluded.total_tokens,
     input_tokens = input_tokens + excluded.input_tokens,
     cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
@@ -718,6 +770,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         )
         .bind(account_id)
         .bind(self.default_provider.as_str())
+        .bind(usage_usd_excluding_prewarm)
+        .bind(usage_usd)
         .bind(total_tokens)
         .bind(input_tokens)
         .bind(cached_input_tokens)
@@ -1339,6 +1393,8 @@ WHERE account_id = ? AND provider = ?
                 r#"
 UPDATE account_usage
 SET
+    total_usage_usd = 0,
+    total_usage_usd_with_prewarm = 0,
     total_tokens = 0,
     input_tokens = 0,
     cached_input_tokens = 0,
@@ -1986,6 +2042,8 @@ WHERE account_id = ? AND provider = ?
             r#"
 UPDATE account_usage
 SET
+    total_usage_usd = 0,
+    total_usage_usd_with_prewarm = 0,
     total_tokens = 0,
     input_tokens = 0,
     cached_input_tokens = 0,
@@ -2808,9 +2866,9 @@ fn min_input_cached_output_tokens(
 }
 
 fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> f64 {
-    output_tokens.max(0) as f64
-        + COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
+    COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
         + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
+        + COMPOSITE_Q_OUTPUT_WEIGHT * output_tokens.max(0) as f64
 }
 
 fn composite_q_bytes(sent_bytes: i64, recv_bytes: i64, weights: ByteWeights) -> f64 {
