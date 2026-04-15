@@ -30,6 +30,19 @@ BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH
 PATCHED_VERSION_SUFFIX=""
 BUILD_VERSION_SUFFIX_FIXED="${CODEX_BUILD_VERSION_SUFFIX_FIXED:-}"
 
+terminate_child_processes() {
+  pkill -TERM -P "$$" >/dev/null 2>&1 || true
+  sleep 0.2
+  pkill -KILL -P "$$" >/dev/null 2>&1 || true
+}
+
+handle_interrupt() {
+  echo "Interrupt received; terminating armv7 child processes..." >&2
+  terminate_child_processes
+  exit 130
+}
+trap handle_interrupt INT TERM
+
 usage() {
   cat <<'EOF'
 Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
@@ -397,6 +410,7 @@ run_in_docker_buster() {
   local -a forwarded_args docker_cmd
   local container_image="${DOCKER_BUSTER_IMAGE}"
   local container_rusty_v8_path=""
+  local container_cargo_target_dir
   local docker_cargo_home="${ARMV7_CACHE_DIR}/docker-cargo-home"
   local docker_rustup_home="${ARMV7_CACHE_DIR}/docker-rustup-home"
   local version artifact_version artifact_base artifact_dir
@@ -460,6 +474,16 @@ run_in_docker_buster() {
     forwarded_args+=("--rusty-v8-local-path=${RUSTY_V8_LOCAL_PATH}")
   fi
 
+  container_cargo_target_dir="${CARGO_TARGET_DIR}"
+  if [[ "${container_cargo_target_dir}" == "${RUST_WORKSPACE_DIR}/"* ]]; then
+    container_cargo_target_dir="/work/codex/codex-rs/${container_cargo_target_dir#"${RUST_WORKSPACE_DIR}/"}"
+  elif [[ "${container_cargo_target_dir}" == "${REPO_DIR}/"* ]]; then
+    container_cargo_target_dir="/work/codex/${container_cargo_target_dir#"${REPO_DIR}/"}"
+  fi
+  if [[ "${container_cargo_target_dir}" != /work/codex/* ]]; then
+    container_cargo_target_dir="/work/codex/codex-rs/target.armv7"
+  fi
+
   echo "Building in Debian buster container for Pi-compatible glibc/OpenSSL ABI..."
   docker_cmd=(
     docker run --rm -t
@@ -468,6 +492,7 @@ run_in_docker_buster() {
     -e CODEX_ARMV7_IN_DOCKER=1
     -e CODEX_BUILD_COMMIT_SHORT="${BUILD_COMMIT_SHORT}"
     -e CODEX_BUILD_VERSION_SUFFIX_FIXED="${BUILD_VERSION_SUFFIX_FIXED}"
+    -e CARGO_TARGET_DIR="${container_cargo_target_dir}"
     "${maybe_cache_mount[@]}"
     -v "${REPO_DIR}:/work/codex"
     "${maybe_mount[@]}"
@@ -826,6 +851,13 @@ BUILD_COMMIT_SHORT="$(resolve_build_commit_short)"
 if [[ -z "${BUILD_VERSION_SUFFIX_FIXED}" ]]; then
   BUILD_VERSION_SUFFIX_FIXED="$(date +%Y%m%d%H%M)-${BUILD_COMMIT_SHORT}"
 fi
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  CARGO_TARGET_DIR="${RUST_WORKSPACE_DIR}/target.armv7"
+  export CARGO_TARGET_DIR
+  echo "Using default CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+else
+  echo "Using pre-set CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+fi
 
 host_arch="$(uname -m)"
 if [[ ! "${host_arch}" =~ ^(armv7|armv6|armhf|arm)$ ]]; then
@@ -901,9 +933,10 @@ cleanup() {
   if [[ -f "${tmp_lock_backup:-}" ]]; then
     cp "${tmp_lock_backup}" "${CARGO_LOCK_PATH}"
   fi
+  terminate_child_processes
   rm -rf "${tmp_dir}"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
 
 tmp_lock_backup="$(mktemp)"
 cp "${CARGO_LOCK_PATH}" "${tmp_lock_backup}"
