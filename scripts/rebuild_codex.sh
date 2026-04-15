@@ -1316,7 +1316,7 @@ Options:
              Build Debian 12 codex target and exit (cross-build friendly, no local install)
   --debian12-target=<triple>
              Override Debian 12 target triple (default: i686-unknown-linux-gnu)
-  --armv7-build-env=<auto|host|docker-buster>
+  --armv7-build-env=<auto|docker-buster>
              Forward armv7 build environment mode (default: auto)
   --armv7-ephemeral
              Forward ephemeral Docker mode to armv7 build
@@ -1391,6 +1391,10 @@ if [[ "${PREFLIGHT_ONLY}" == "true" && "${CI_PREFLIGHT}" == "false" ]]; then
 fi
 if [[ "${FAST_GATE}" == "true" && "${MODE}" == "release" ]]; then
   echo "--fast-gate cannot be combined with --release." >&2
+  exit 1
+fi
+if [[ "${ARMV7_BUILD_ENV}" == "host" ]]; then
+  echo "--armv7-build-env=host has been removed; use auto or docker-buster." >&2
   exit 1
 fi
 
