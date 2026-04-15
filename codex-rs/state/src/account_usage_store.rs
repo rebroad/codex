@@ -2466,29 +2466,36 @@ WHERE account_id = ? AND provider = ?
                 String::new()
             }
         };
-        if let Some(mut file) = open_usage_log_file(&account_display) {
+        if let Some(path) = usage_log_path(&account_display) {
             let suffix = if message.is_empty() {
                 String::new()
             } else {
                 format!(" {message}")
             };
-            if is_token_usage_event {
-                let _ = writeln!(file, "{ts} {pid_label}{pid}{usage_pct_suffix}{suffix}");
+            let line_suffix = if is_token_usage_event {
+                format!("{usage_pct_suffix}{suffix}")
             } else {
                 let percent_display =
                     percent_display.unwrap_or_else(|| "percent=unknown".to_string());
                 if is_backend_delta_event {
-                    let _ = writeln!(
-                        file,
-                        "{ts} {pid_label}{pid} {percent_display}{usage_pct_suffix}{suffix}"
-                    );
+                    format!(" {percent_display}{usage_pct_suffix}{suffix}")
                 } else {
                     let sample_count = sample_count.unwrap_or(0);
-                    let _ = writeln!(
-                        file,
-                        "{ts} {pid_label}{pid} {percent_display} samples={sample_count}{usage_pct_suffix}{suffix}",
-                    );
+                    format!(" {percent_display} samples={sample_count}{usage_pct_suffix}{suffix}")
                 }
+            };
+            if message.contains("stale_backend_regression_ignored=1")
+                && let Ok(raw) = std::fs::read_to_string(&path)
+                && raw
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .is_some_and(|last_line| last_line.ends_with(&line_suffix))
+            {
+                return;
+            }
+            if let Some(mut file) = open_usage_log_file_path(path) {
+                let _ = writeln!(file, "{ts} {pid_label}{pid}{line_suffix}");
             }
         }
     }
@@ -2609,11 +2616,6 @@ fn usage_log_filename(account_display: &str) -> String {
 
 fn usage_log_path(account_display: &str) -> Option<PathBuf> {
     Some(usage_log_root_dir()?.join(usage_log_filename(account_display)))
-}
-
-fn open_usage_log_file(account_display: &str) -> Option<std::fs::File> {
-    let path = usage_log_path(account_display)?;
-    open_usage_log_file_path(path)
 }
 
 fn usage_named_log_path(filename: &str) -> Option<PathBuf> {
