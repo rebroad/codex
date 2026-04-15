@@ -69,6 +69,19 @@ restore_cargo_lock_if_needed() {
 }
 trap restore_cargo_lock_if_needed EXIT
 
+terminate_child_processes() {
+  pkill -TERM -P "$$" >/dev/null 2>&1 || true
+  sleep 0.2
+  pkill -KILL -P "$$" >/dev/null 2>&1 || true
+}
+
+handle_interrupt() {
+  echo "Interrupt received; terminating rebuild child processes..." >&2
+  terminate_child_processes
+  exit 130
+}
+trap handle_interrupt INT TERM
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
