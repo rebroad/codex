@@ -104,18 +104,21 @@ pub(crate) async fn render_status_lines_for_cli(
             auth.get_account_email().as_deref(),
         )
     });
+    if let Some(auth) = auth.as_ref()
+        && let Some(account_id) = account_id.as_ref()
+        && let Some(store) = account_usage_store.as_ref()
+        && let Some(account_display) = account_usage_display(auth.get_account_email().as_deref())
+    {
+        store
+            .cache_account_display(account_id.as_str(), account_display)
+            .await;
+    }
 
     let mut usage_snapshot = None;
     if rate_limit_mode == CliStatusRateLimitMode::AllowCached
-        && let Some(auth) = auth.as_ref()
         && let Some(account_id) = account_id.as_ref()
         && let Some(store) = account_usage_store.as_ref()
     {
-        if let Some(account_display) = account_usage_display(auth.get_account_email().as_deref()) {
-            store
-                .cache_account_display(account_id.as_str(), account_display)
-                .await;
-        }
         usage_snapshot = store
             .get_account_usage(account_id.as_str())
             .await
