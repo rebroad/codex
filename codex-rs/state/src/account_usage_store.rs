@@ -175,6 +175,8 @@ struct SampleTokenDeltas {
 
 #[derive(Debug, Clone, Copy)]
 struct ThresholdUsageCounts {
+    total_usage_usd: f64,
+    total_usage_usd_with_prewarm: f64,
     input_tokens: i64,
     cached_input_tokens: i64,
     output_tokens: i64,
@@ -856,6 +858,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         let prior_usage = sqlx::query(
             r#"
 SELECT
+    total_usage_usd,
+    total_usage_usd_with_prewarm,
     total_tokens,
     input_tokens,
     cached_input_tokens,
@@ -1227,7 +1231,9 @@ WHERE account_id = ? AND provider = ?
         let should_reset = prior_usage.as_ref().is_some_and(|row| {
             let previous_percent: Option<f64> = row.try_get("last_backend_used_percent").ok();
             let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
-            let was_positive = previous_percent.unwrap_or(0.0) > 0.0;
+            let was_full = previous_percent
+                .filter(|value| value.is_finite())
+                .is_some_and(|value| value >= 100.0 - USED_PERCENT_REFUND_EPSILON);
             let now_zero = used_percent <= 0.0;
 
             let new_snapshot = previous_seen_at
@@ -1235,7 +1241,7 @@ WHERE account_id = ? AND provider = ?
                 .map(|(previous, current)| current >= previous)
                 .unwrap_or(true);
 
-            (new_snapshot || reset_time_changed) && was_positive && now_zero
+            (new_snapshot || reset_time_changed) && was_full && now_zero
         });
 
         let current_percent_int = used_percent.floor().max(0.0) as i64;
@@ -1252,6 +1258,8 @@ WHERE account_id = ? AND provider = ?
             .await;
         }
         let (
+            total_usage_usd_now,
+            total_usage_usd_with_prewarm_now,
             total_tokens_now,
             input_tokens_now,
             cached_input_tokens_now,
@@ -1292,6 +1300,9 @@ WHERE account_id = ? AND provider = ?
             window_start_prewarm_sent_recv_bytes,
         ) = if let Some(row) = prior_usage.as_ref() {
             (
+                row.try_get::<f64, _>("total_usage_usd").unwrap_or(0.0),
+                row.try_get::<f64, _>("total_usage_usd_with_prewarm")
+                    .unwrap_or(0.0),
                 row.try_get("total_tokens")?,
                 row.try_get("input_tokens")?,
                 row.try_get("cached_input_tokens")?,
@@ -1360,6 +1371,8 @@ WHERE account_id = ? AND provider = ?
             )
         } else {
             (
+                0.0_f64,
+                0.0_f64,
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
@@ -1947,6 +1960,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
             previous_backend_percent,
             used_percent,
             ThresholdUsageCounts {
+                total_usage_usd: total_usage_usd_now.max(0.0),
+                total_usage_usd_with_prewarm: total_usage_usd_with_prewarm_now.max(0.0),
                 input_tokens: input_tokens_now,
                 cached_input_tokens: cached_input_tokens_now,
                 output_tokens: output_tokens_now,
@@ -1966,6 +1981,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
             r#"
 SELECT
     last_backend_used_percent,
+    total_usage_usd,
+    total_usage_usd_with_prewarm,
     input_tokens,
     cached_input_tokens,
     output_tokens,
@@ -1988,8 +2005,6 @@ WHERE account_id = ? AND provider = ?
         if !first_threshold_crossing {
             return Ok(());
         }
-        let now = Utc::now().timestamp();
-
         self.log_usage_event(
             account_id,
             Some(101.0),
@@ -2001,6 +2016,14 @@ WHERE account_id = ? AND provider = ?
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("input_tokens").ok())
             .unwrap_or(0);
+        let total_usage_usd = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<f64, _>("total_usage_usd").ok())
+            .unwrap_or(0.0);
+        let total_usage_usd_with_prewarm = threshold_state
+            .as_ref()
+            .and_then(|row| row.try_get::<f64, _>("total_usage_usd_with_prewarm").ok())
+            .unwrap_or(0.0);
         let cached_input_tokens = threshold_state
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("cached_input_tokens").ok())
@@ -2030,6 +2053,8 @@ WHERE account_id = ? AND provider = ?
             previous_percent,
             101.0,
             ThresholdUsageCounts {
+                total_usage_usd: total_usage_usd.max(0.0),
+                total_usage_usd_with_prewarm: total_usage_usd_with_prewarm.max(0.0),
                 input_tokens,
                 cached_input_tokens,
                 output_tokens,
@@ -2040,62 +2065,6 @@ WHERE account_id = ? AND provider = ?
             },
         )
         .await;
-        sqlx::query(
-            r#"
-UPDATE account_usage
-SET
-    total_usage_usd = 0,
-    total_usage_usd_with_prewarm = 0,
-    total_tokens = 0,
-    input_tokens = 0,
-    cached_input_tokens = 0,
-    output_tokens = 0,
-    reasoning_output_tokens = 0,
-    context_total_tokens = 0,
-    min_total_cached_output_tokens = 0,
-    sent_bytes = 0,
-    recv_bytes = 0,
-    sent_recv_bytes = 0,
-    prewarm_sent_bytes = 0,
-    prewarm_recv_bytes = 0,
-    prewarm_sent_recv_bytes = 0,
-    updated_at = ?,
-    last_backend_used_percent = ?,
-    last_snapshot_total_tokens = 0,
-    last_snapshot_input_tokens = 0,
-    last_snapshot_cached_input_tokens = 0,
-    last_snapshot_output_tokens = 0,
-    last_snapshot_context_total_tokens = 0,
-    last_snapshot_min_total_cached_output_tokens = 0,
-    last_snapshot_sent_bytes = 0,
-    last_snapshot_recv_bytes = 0,
-    last_snapshot_sent_recv_bytes = 0,
-    last_snapshot_prewarm_sent_bytes = 0,
-    last_snapshot_prewarm_recv_bytes = 0,
-    last_snapshot_prewarm_sent_recv_bytes = 0,
-    last_snapshot_percent_int = 0,
-    window_start_percent_int = 0,
-    window_start_total_tokens = 0,
-    window_start_input_tokens = 0,
-    window_start_cached_input_tokens = 0,
-    window_start_output_tokens = 0,
-    window_start_context_total_tokens = 0,
-    window_start_min_total_cached_output_tokens = 0,
-    window_start_sent_bytes = 0,
-    window_start_recv_bytes = 0,
-    window_start_sent_recv_bytes = 0,
-    window_start_prewarm_sent_bytes = 0,
-    window_start_prewarm_recv_bytes = 0,
-    window_start_prewarm_sent_recv_bytes = 0
-WHERE account_id = ? AND provider = ?
-            "#,
-        )
-        .bind(now)
-        .bind(101.0_f64)
-        .bind(account_id)
-        .bind(self.default_provider.as_str())
-        .execute(self.pool.as_ref())
-        .await?;
 
         Ok(())
     }
@@ -2585,8 +2554,10 @@ WHERE account_id = ? AND provider = ?
                 let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
                 let _ = writeln!(
                     file,
-                    "{ts} account={} input={} cached_input={} output={} recv_bytes={} sent_bytes={} recv_bytes_including_warmups={} sent_bytes_including_warmups={}",
+                    "{ts} account={} usage_usd={} usage_usd_with_prewarm={} input={} cached_input={} output={} recv_bytes={} sent_bytes={} recv_bytes_including_warmups={} sent_bytes_including_warmups={}",
                     account_display,
+                    counts.total_usage_usd,
+                    counts.total_usage_usd_with_prewarm,
                     counts.input_tokens,
                     counts.cached_input_tokens,
                     counts.output_tokens,
