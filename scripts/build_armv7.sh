@@ -77,6 +77,24 @@ require_cmd() {
   fi
 }
 
+resolve_cargo_target_dir() {
+  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    echo "${CARGO_TARGET_DIR}"
+    return
+  fi
+
+  local target_dir
+  target_dir="$(
+    RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" metadata --no-deps --format-version=1 2>/dev/null \
+      | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' \
+      | head -n 1
+  )"
+  if [[ -z "${target_dir}" ]]; then
+    target_dir="${RUST_WORKSPACE_DIR}/target"
+  fi
+  echo "${target_dir}"
+}
+
 resolve_build_commit_short() {
   local commit parent_dir base_name candidate
 
@@ -948,7 +966,8 @@ if (( status != 0 )); then
 fi
 rm -f "${build_log}"
 
-bin_path="${RUST_WORKSPACE_DIR}/target/${TARGET}/${PROFILE}/codex"
+target_dir="$(resolve_cargo_target_dir)"
+bin_path="${target_dir}/${TARGET}/${PROFILE}/codex"
 if [[ ! -x "${bin_path}" ]]; then
   echo "Build completed but binary was not found at ${bin_path}" >&2
   exit 1
