@@ -467,7 +467,10 @@ WHERE account_id = ? AND provider = ?
         usage: &AccountUsageSnapshot,
     ) -> anyhow::Result<(Option<f64>, i64)> {
         if usage.cached_q_limit_for_updated_at == Some(usage.updated_at) {
-            return Ok((usage.cached_q_limit, usage.cached_q_limit_sample_count.unwrap_or(0)));
+            return Ok((
+                usage.cached_q_limit,
+                usage.cached_q_limit_sample_count.unwrap_or(0),
+            ));
         }
 
         let (cached_q_limit, cached_q_limit_sample_count) =
@@ -600,7 +603,10 @@ WHERE account_id = ? AND provider = ?
         });
         let recent_backend_percents = usage_row
             .as_ref()
-            .and_then(|row| row.try_get::<Option<String>, _>("backend_percent_history").ok())
+            .and_then(|row| {
+                row.try_get::<Option<String>, _>("backend_percent_history")
+                    .ok()
+            })
             .flatten()
             .as_deref()
             .map(parse_backend_percent_history)
@@ -675,14 +681,14 @@ LIMIT 200
             cached_input_limit: cumulative_estimate(current_cached_input_tokens as f64),
             output_limit: cumulative_estimate(current_output_tokens as f64),
             context_total_limit: cumulative_estimate(current_context_total_tokens as f64),
-            min_total_cached_output_limit: cumulative_estimate(current_min_total_cached_output_tokens as f64),
-            min_input_cached_output_limit: cumulative_estimate(
-                min_input_cached_output_tokens(
-                    current_input_tokens,
-                    current_cached_input_tokens,
-                    current_output_tokens,
-                ) as f64,
+            min_total_cached_output_limit: cumulative_estimate(
+                current_min_total_cached_output_tokens as f64,
             ),
+            min_input_cached_output_limit: cumulative_estimate(min_input_cached_output_tokens(
+                current_input_tokens,
+                current_cached_input_tokens,
+                current_output_tokens,
+            ) as f64),
             sent_limit: cumulative_estimate(current_sent_bytes as f64),
             recv_limit: cumulative_estimate(current_recv_bytes as f64),
             sent_recv_limit: cumulative_estimate(current_sent_recv_bytes as f64),
@@ -822,7 +828,7 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         self.log_usage_event(
             account_id,
             /*used_percent*/ None,
-            /*previous_percent*/ None,
+            /*reported_previous_percent_int*/ None,
             usage_message,
         )
         .await;
@@ -900,7 +906,8 @@ SELECT
     last_backend_resets_at,
     last_backend_window_minutes,
     last_backend_seen_at,
-    backend_percent_history
+    backend_percent_history,
+    last_reported_percent_int
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -913,26 +920,55 @@ WHERE account_id = ? AND provider = ?
         let previous_backend_percent = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
+        let previous_reported_percent_int = prior_usage
+            .as_ref()
+            .and_then(|row| {
+                row.try_get::<Option<i64>, _>("last_reported_percent_int")
+                    .ok()
+            })
+            .flatten();
+        let current_reported_percent_int = used_percent.floor().max(0.0) as i64;
+        let reported_percent_changed =
+            previous_reported_percent_int != Some(current_reported_percent_int);
+        if reported_percent_changed && prior_usage.is_some() {
+            sqlx::query(
+                r#"
+UPDATE account_usage
+SET
+    updated_at = ?,
+    last_reported_percent_int = ?
+WHERE account_id = ? AND provider = ?
+                "#,
+            )
+            .bind(now)
+            .bind(current_reported_percent_int)
+            .bind(account_id)
+            .bind(self.default_provider.as_str())
+            .execute(self.pool.as_ref())
+            .await?;
+        }
         let previous_backend_resets_at = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<Option<i64>, _>("last_backend_resets_at").ok())
             .flatten();
         let previous_backend_window_minutes = prior_usage
             .as_ref()
-            .and_then(|row| row.try_get::<Option<i64>, _>("last_backend_window_minutes").ok())
+            .and_then(|row| {
+                row.try_get::<Option<i64>, _>("last_backend_window_minutes")
+                    .ok()
+            })
             .flatten();
         let same_backend_window = (window_minutes.is_some() || resets_at.is_some())
             && previous_backend_window_minutes == window_minutes
             && previous_backend_resets_at == resets_at;
         let stale_regression_snapshot = same_backend_window
-            && previous_backend_percent.is_some_and(|previous| {
-                previous - used_percent > USED_PERCENT_REFUND_EPSILON
-            });
+            && previous_backend_percent
+                .is_some_and(|previous| previous - used_percent > USED_PERCENT_REFUND_EPSILON);
         if stale_regression_snapshot {
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_backend_percent,
+                /*reported_previous_percent_int*/ None,
                 format!(
                     "stale_backend_regression_ignored=1 delta_percent={}",
                     previous_backend_percent.map_or(0.0, |previous| used_percent - previous)
@@ -944,18 +980,26 @@ WHERE account_id = ? AND provider = ?
         let backend_percent_changed = previous_backend_percent
             .is_none_or(|previous| (previous - used_percent).abs() > USED_PERCENT_REFUND_EPSILON);
         if backend_percent_changed {
-            let delta_percent = previous_backend_percent.map_or(used_percent, |previous| used_percent - previous);
+            let delta_percent =
+                previous_backend_percent.map_or(used_percent, |previous| used_percent - previous);
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_backend_percent,
+                if reported_percent_changed {
+                    previous_reported_percent_int
+                } else {
+                    None
+                },
                 format!("backend_percent_changed=1 delta_percent={delta_percent}"),
             )
             .await;
         }
         let previous_backend_percent_history = prior_usage
             .as_ref()
-            .and_then(|row| row.try_get::<Option<String>, _>("backend_percent_history").ok())
+            .and_then(|row| {
+                row.try_get::<Option<String>, _>("backend_percent_history")
+                    .ok()
+            })
             .flatten();
         let previous_snapshot_percent = prior_usage
             .as_ref()
@@ -1025,7 +1069,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent_for_jump,
+                /*reported_previous_percent_int*/ None,
                 format!("{window_log}{sep}{reset_log}"),
             )
             .await;
@@ -1112,8 +1156,9 @@ WHERE account_id = ? AND provider = ?
                 let previous_window: Option<i64> = row.try_get("last_backend_window_minutes").ok();
                 previous_window == window_minutes
                     && previous_resets_at == resets_at
-                    && previous_backend_percent
-                        .is_some_and(|previous| (previous - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON)
+                    && previous_backend_percent.is_some_and(|previous| {
+                        (previous - used_percent).abs() <= USED_PERCENT_REFUND_EPSILON
+                    })
             });
             let mut pending_updates = self.pending_backend_updates.lock().await;
             let mut should_remove_pending = false;
@@ -1189,20 +1234,19 @@ WHERE account_id = ? AND provider = ?
                 .bind(self.default_provider.as_str())
                 .execute(self.pool.as_ref())
                 .await?;
-                self
-                    .persist_backend_percent_history(
-                        account_id,
-                        previous_backend_percent_history.as_deref(),
-                        used_percent,
-                    )
-                    .await?;
+                self.persist_backend_percent_history(
+                    account_id,
+                    previous_backend_percent_history.as_deref(),
+                    used_percent,
+                )
+                .await?;
                 // Suppress repeated "pending confirmations=1" logs when the backend
                 // candidate is unchanged from what we already persisted.
                 if confirmations > 1 || !same_candidate_as_db_pending {
                     self.log_usage_event(
                         account_id,
                         Some(used_percent),
-                        previous_backend_percent,
+                        /*reported_previous_percent_int*/ None,
                         format!(
                             "backend_change_pending=1 confirmations={confirmations} delta_percent={}",
                             delta_percent.unwrap_or(0.0)
@@ -1215,7 +1259,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_backend_percent,
+                /*reported_previous_percent_int*/ None,
                 format!(
                     "backend_change_confirmed=1 confirmations={} delta_percent={}",
                     BACKEND_CHANGE_CONFIRMATIONS_REQUIRED,
@@ -1244,12 +1288,12 @@ WHERE account_id = ? AND provider = ?
             (new_snapshot || reset_time_changed) && was_full && now_zero
         });
 
-        let current_percent_int = used_percent.floor().max(0.0) as i64;
+        let current_percent_int = current_reported_percent_int;
         if negative_jump {
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent_for_jump,
+                /*reported_previous_percent_int*/ None,
                 format!(
                     "refund_rewind_disabled=1 delta_percent={}",
                     delta_percent.unwrap_or(0.0)
@@ -1371,12 +1415,10 @@ WHERE account_id = ? AND provider = ?
             )
         } else {
             (
-                0.0_f64,
-                0.0_f64,
+                0.0_f64, 0.0_f64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
-                0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
-                0_i64, 0_i64,
+                0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
             )
         };
 
@@ -1456,6 +1498,8 @@ SET
     last_backend_resets_at = ?,
     last_backend_window_minutes = ?,
     last_backend_seen_at = ?
+    ,
+    last_reported_percent_int = ?
 WHERE account_id = ? AND provider = ?
                     "#,
             )
@@ -1495,22 +1539,22 @@ WHERE account_id = ? AND provider = ?
             .bind(resets_at)
             .bind(window_minutes)
             .bind(seen_at)
+            .bind(current_reported_percent_int)
             .bind(account_id)
             .bind(self.default_provider.as_str())
             .execute(self.pool.as_ref())
             .await?;
-            self
-                .persist_backend_percent_history(
-                    account_id,
-                    previous_backend_percent_history.as_deref(),
-                    used_percent,
-                )
-                .await?;
+            self.persist_backend_percent_history(
+                account_id,
+                previous_backend_percent_history.as_deref(),
+                used_percent,
+            )
+            .await?;
 
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent_for_jump,
+                /*reported_previous_percent_int*/ None,
                 format!(
                     "reset=1 reached_full_window={} samples_cleared={cleared_samples}",
                     if reached_full_window { 1 } else { 0 }
@@ -1675,7 +1719,7 @@ WHERE account_id = ? AND provider = ?
             self.log_usage_event(
                 account_id,
                 Some(used_percent),
-                previous_percent_for_jump,
+                /*reported_previous_percent_int*/ None,
                 log_message,
             )
             .await;
@@ -1860,7 +1904,9 @@ INSERT INTO account_usage (
     last_backend_resets_at,
     last_backend_window_minutes,
     last_backend_seen_at
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ,
+    last_reported_percent_int
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id, provider) DO UPDATE SET
     updated_at = excluded.updated_at,
     last_backend_limit_id = excluded.last_backend_limit_id,
@@ -1894,7 +1940,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
     window_start_prewarm_sent_recv_bytes = excluded.window_start_prewarm_sent_recv_bytes,
     last_backend_resets_at = excluded.last_backend_resets_at,
     last_backend_window_minutes = excluded.last_backend_window_minutes,
-    last_backend_seen_at = excluded.last_backend_seen_at
+    last_backend_seen_at = excluded.last_backend_seen_at,
+    last_reported_percent_int = excluded.last_reported_percent_int
             "#,
         )
         .bind(account_id)
@@ -1945,15 +1992,15 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(resets_at)
         .bind(window_minutes)
         .bind(seen_at)
+        .bind(current_reported_percent_int)
         .execute(self.pool.as_ref())
         .await?;
-        self
-            .persist_backend_percent_history(
-                account_id,
-                previous_backend_percent_history.as_deref(),
-                used_percent,
-            )
-            .await?;
+        self.persist_backend_percent_history(
+            account_id,
+            previous_backend_percent_history.as_deref(),
+            used_percent,
+        )
+        .await?;
 
         self.log_usage_limit_threshold_events(
             account_id,
@@ -2001,14 +2048,15 @@ WHERE account_id = ? AND provider = ?
         let previous_percent = threshold_state
             .as_ref()
             .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
-        let first_threshold_crossing = previous_percent.is_none_or(|value| !value.is_finite() || value < 101.0);
+        let first_threshold_crossing =
+            previous_percent.is_none_or(|value| !value.is_finite() || value < 101.0);
         if !first_threshold_crossing {
             return Ok(());
         }
         self.log_usage_event(
             account_id,
             Some(101.0),
-            previous_percent,
+            /*reported_previous_percent_int*/ None,
             "usage_limit_reached=1 synthetic_used_percent=101".to_string(),
         )
         .await;
@@ -2073,35 +2121,37 @@ WHERE account_id = ? AND provider = ?
         &self,
         account_id: &str,
         used_percent: Option<f64>,
-        previous_percent: Option<f64>,
+        reported_previous_percent_int: Option<i64>,
         message: String,
     ) {
         let is_token_usage_event = message.starts_with("total=");
         let is_backend_delta_event = message.contains("tokens_per_pct=")
             || message.contains("avg_tokens_per_pct=")
             || message.contains("avg_tpp=");
-        let used_percent = if used_percent.is_some() {
-            used_percent
-        } else {
-            let row = sqlx::query(
-                r#"
+        let percent_row = sqlx::query(
+            r#"
 SELECT
-    last_backend_used_percent
+    last_backend_used_percent,
+    backend_percent_history,
+    last_reported_percent_int
 FROM account_usage
 WHERE account_id = ? AND provider = ?
-                "#,
-            )
-            .bind(account_id)
-            .bind(self.default_provider.as_str())
-            .fetch_optional(self.pool.as_ref())
-            .await
-            .ok()
+            "#,
+        )
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .fetch_optional(self.pool.as_ref())
+        .await
+        .ok()
+        .flatten();
+        let canonical_backend_percent = percent_row
+            .as_ref()
+            .and_then(|row| {
+                row.try_get::<Option<f64>, _>("last_backend_used_percent")
+                    .ok()
+            })
             .flatten();
-            let last_used_percent = row
-                .as_ref()
-                .and_then(|row| row.try_get::<f64, _>("last_backend_used_percent").ok());
-            used_percent.or(last_used_percent)
-        };
+        let used_percent = used_percent.or(canonical_backend_percent);
 
         let sample_count = if is_token_usage_event {
             None
@@ -2116,24 +2166,24 @@ WHERE account_id = ? AND provider = ?
         let percent_display = if is_token_usage_event {
             None
         } else {
-            let backend_percent_history = sqlx::query(
-                r#"
-SELECT backend_percent_history
-FROM account_usage
-WHERE account_id = ? AND provider = ?
-                "#,
-            )
-            .bind(account_id)
-            .bind(self.default_provider.as_str())
-            .fetch_optional(self.pool.as_ref())
-            .await
-            .ok()
-            .flatten()
-            .and_then(|row| row.try_get::<Option<String>, _>("backend_percent_history").ok())
-            .flatten();
+            let backend_percent_history = percent_row
+                .as_ref()
+                .and_then(|row| {
+                    row.try_get::<Option<String>, _>("backend_percent_history")
+                        .ok()
+                })
+                .flatten();
+            let db_reported_percent_int = percent_row
+                .as_ref()
+                .and_then(|row| {
+                    row.try_get::<Option<i64>, _>("last_reported_percent_int")
+                        .ok()
+                })
+                .flatten();
             Some(format_percent_display(
-                previous_percent,
+                reported_previous_percent_int.or(db_reported_percent_int),
                 used_percent,
+                canonical_backend_percent,
                 backend_percent_history.as_deref(),
                 self.estimator_config,
             ))
@@ -2308,118 +2358,16 @@ WHERE account_id = ? AND provider = ?
                     let usage_pct_values = format_metric_values(
                         clamp_usage_pct_values(
                             [
-                            estimates.composite_q_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log_f64(
-                                    composite_q_tokens(
-                                        input_tokens_now,
-                                        cached_input_tokens_now,
-                                        output_tokens_now,
-                                    ),
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    composite_q_tokens(
-                                        window_start_input_tokens,
-                                        window_start_cached_input_tokens,
-                                        window_start_output_tokens,
-                                    ),
-                                    allowance,
-                                )
-                            }),
-                            estimates.composite_q_bytes_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log_f64(
-                                    composite_q_bytes(
-                                        sent_bytes_now + prewarm_sent_bytes_now,
-                                        recv_bytes_now + prewarm_recv_bytes_now,
-                                        estimates.byte_weights,
-                                    ),
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    composite_q_bytes(
-                                        window_start_sent_bytes + window_start_prewarm_sent_bytes,
-                                        window_start_recv_bytes + window_start_prewarm_recv_bytes,
-                                        estimates.byte_weights,
-                                    ),
-                                    allowance,
-                                )
-                            }),
-                            estimates
-                                .composite_q_bytes_no_prewarm_limit
-                                .and_then(|allowance| {
+                                estimates.composite_q_limit.and_then(|allowance| {
                                     estimate_account_usage_percent_for_log_f64(
-                                        composite_q_bytes(
-                                            sent_bytes_now,
-                                            recv_bytes_now,
-                                            estimates.byte_weights,
-                                        ),
-                                        backend_anchor_percent,
-                                        window_start_percent,
-                                        composite_q_bytes(
-                                            window_start_sent_bytes,
-                                            window_start_recv_bytes,
-                                            estimates.byte_weights,
-                                        ),
-                                        allowance,
-                                    )
-                                }),
-                            estimates.blended_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    total_tokens_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_total_tokens,
-                                    allowance,
-                                )
-                            }),
-                            estimates.cached_input_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    cached_input_tokens_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_cached_input_tokens,
-                                    allowance,
-                                )
-                            }),
-                            estimates.output_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    output_tokens_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_output_tokens,
-                                    allowance,
-                                )
-                            }),
-                            estimates.context_total_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    context_total_tokens_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_context_total_tokens,
-                                    allowance,
-                                )
-                            }),
-                            estimates
-                                .min_total_cached_output_limit
-                                .and_then(|allowance| {
-                                    estimate_account_usage_percent_for_log(
-                                        min_total_cached_output_tokens_now,
-                                        backend_anchor_percent,
-                                        window_start_percent,
-                                        window_start_min_total_cached_output_tokens,
-                                        allowance,
-                                    )
-                                }),
-                            estimates
-                                .min_input_cached_output_limit
-                                .and_then(|allowance| {
-                                    estimate_account_usage_percent_for_log(
-                                        min_input_cached_output_tokens(
+                                        composite_q_tokens(
                                             input_tokens_now,
                                             cached_input_tokens_now,
                                             output_tokens_now,
                                         ),
                                         backend_anchor_percent,
                                         window_start_percent,
-                                        min_input_cached_output_tokens(
+                                        composite_q_tokens(
                                             window_start_input_tokens,
                                             window_start_cached_input_tokens,
                                             window_start_output_tokens,
@@ -2427,33 +2375,137 @@ WHERE account_id = ? AND provider = ?
                                         allowance,
                                     )
                                 }),
-                            estimates.sent_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    sent_bytes_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_sent_bytes,
-                                    allowance,
-                                )
-                            }),
-                            estimates.recv_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    recv_bytes_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_recv_bytes,
-                                    allowance,
-                                )
-                            }),
-                            estimates.sent_recv_limit.and_then(|allowance| {
-                                estimate_account_usage_percent_for_log(
-                                    sent_recv_bytes_now,
-                                    backend_anchor_percent,
-                                    window_start_percent,
-                                    window_start_sent_recv_bytes,
-                                    allowance,
-                                )
-                            }),
+                                estimates.composite_q_bytes_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log_f64(
+                                        composite_q_bytes(
+                                            sent_bytes_now + prewarm_sent_bytes_now,
+                                            recv_bytes_now + prewarm_recv_bytes_now,
+                                            estimates.byte_weights,
+                                        ),
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        composite_q_bytes(
+                                            window_start_sent_bytes
+                                                + window_start_prewarm_sent_bytes,
+                                            window_start_recv_bytes
+                                                + window_start_prewarm_recv_bytes,
+                                            estimates.byte_weights,
+                                        ),
+                                        allowance,
+                                    )
+                                }),
+                                estimates.composite_q_bytes_no_prewarm_limit.and_then(
+                                    |allowance| {
+                                        estimate_account_usage_percent_for_log_f64(
+                                            composite_q_bytes(
+                                                sent_bytes_now,
+                                                recv_bytes_now,
+                                                estimates.byte_weights,
+                                            ),
+                                            backend_anchor_percent,
+                                            window_start_percent,
+                                            composite_q_bytes(
+                                                window_start_sent_bytes,
+                                                window_start_recv_bytes,
+                                                estimates.byte_weights,
+                                            ),
+                                            allowance,
+                                        )
+                                    },
+                                ),
+                                estimates.blended_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        total_tokens_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_total_tokens,
+                                        allowance,
+                                    )
+                                }),
+                                estimates.cached_input_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        cached_input_tokens_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_cached_input_tokens,
+                                        allowance,
+                                    )
+                                }),
+                                estimates.output_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        output_tokens_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_output_tokens,
+                                        allowance,
+                                    )
+                                }),
+                                estimates.context_total_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        context_total_tokens_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_context_total_tokens,
+                                        allowance,
+                                    )
+                                }),
+                                estimates
+                                    .min_total_cached_output_limit
+                                    .and_then(|allowance| {
+                                        estimate_account_usage_percent_for_log(
+                                            min_total_cached_output_tokens_now,
+                                            backend_anchor_percent,
+                                            window_start_percent,
+                                            window_start_min_total_cached_output_tokens,
+                                            allowance,
+                                        )
+                                    }),
+                                estimates
+                                    .min_input_cached_output_limit
+                                    .and_then(|allowance| {
+                                        estimate_account_usage_percent_for_log(
+                                            min_input_cached_output_tokens(
+                                                input_tokens_now,
+                                                cached_input_tokens_now,
+                                                output_tokens_now,
+                                            ),
+                                            backend_anchor_percent,
+                                            window_start_percent,
+                                            min_input_cached_output_tokens(
+                                                window_start_input_tokens,
+                                                window_start_cached_input_tokens,
+                                                window_start_output_tokens,
+                                            ),
+                                            allowance,
+                                        )
+                                    }),
+                                estimates.sent_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        sent_bytes_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_sent_bytes,
+                                        allowance,
+                                    )
+                                }),
+                                estimates.recv_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        recv_bytes_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_recv_bytes,
+                                        allowance,
+                                    )
+                                }),
+                                estimates.sent_recv_limit.and_then(|allowance| {
+                                    estimate_account_usage_percent_for_log(
+                                        sent_recv_bytes_now,
+                                        backend_anchor_percent,
+                                        window_start_percent,
+                                        window_start_sent_recv_bytes,
+                                        allowance,
+                                    )
+                                }),
                             ],
                             backend_anchor_percent,
                             self.estimator_config,
@@ -2637,7 +2689,11 @@ fn usage_log_root_dir() -> Option<PathBuf> {
     if let Some(value) = std::env::var_os(USAGE_LOG_DIR_ENV_VAR).filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(value));
     }
-    Some(dirs::home_dir()?.join(DEFAULT_CODEX_HOME_DIRNAME).join(USAGE_LOG_DIRNAME))
+    Some(
+        dirs::home_dir()?
+            .join(DEFAULT_CODEX_HOME_DIRNAME)
+            .join(USAGE_LOG_DIRNAME),
+    )
 }
 
 fn estimate_account_usage_percent_for_log(
@@ -2681,66 +2737,44 @@ fn estimate_account_usage_percent_for_log_f64(
 }
 
 fn format_percent_display(
-    previous_percent: Option<f64>,
+    reported_previous_percent_int: Option<i64>,
     used_percent: Option<f64>,
+    canonical_backend_percent: Option<f64>,
     backend_percent_history: Option<&str>,
     estimator_config: AccountUsageEstimatorConfig,
 ) -> String {
     let used_percent_int = used_percent.map(|value| value.floor() as i64);
-    let raw_display = match (previous_percent, used_percent_int) {
-        (Some(previous), Some(current)) => {
-            let previous_int = previous.floor() as i64;
-            if previous_int != current {
-                format!("percent={previous_int}->{current}")
-            } else {
-                format!("percent={current}")
-            }
+    let raw_display = match used_percent_int {
+        Some(current)
+            if reported_previous_percent_int.is_some_and(|previous| previous != current) =>
+        {
+            format!(
+                "percent={}->{}",
+                reported_previous_percent_int.unwrap_or(current),
+                current
+            )
         }
-        (None, Some(current)) => {
-            if current > 0 {
-                format!("percent=0->{current}")
-            } else {
-                format!("percent={current}")
-            }
-        }
+        Some(current) => format!("percent={current}"),
         _ => "percent=unknown".to_string(),
     };
 
     let history = backend_percent_history
         .map(parse_backend_percent_history)
         .unwrap_or_default();
-    let stabilized_previous =
-        stabilized_backend_percent(previous_percent, used_percent, &history, estimator_config);
-    let stabilized_current =
-        smooth_backend_used_percent(used_percent, history.as_slice(), estimator_config);
+    let stabilized_current = smooth_backend_used_percent(
+        canonical_backend_percent,
+        history.as_slice(),
+        estimator_config,
+    );
 
-    match (stabilized_previous, stabilized_current) {
-        (Some(previous), Some(current))
-            if (current - previous).abs() > USED_PERCENT_REFUND_EPSILON =>
+    match (stabilized_current, used_percent) {
+        (Some(stabilized), Some(observed))
+            if (stabilized - observed).abs() > USED_PERCENT_REFUND_EPSILON =>
         {
-            format!("{raw_display} stabilized_percent={previous:.2}->{current:.2}")
+            format!("{raw_display} stabilized_percent={stabilized:.2}")
         }
-        (_, Some(current)) => format!("{raw_display} stabilized_percent={current:.2}"),
         _ => raw_display,
     }
-}
-
-fn stabilized_backend_percent(
-    previous_percent: Option<f64>,
-    used_percent: Option<f64>,
-    backend_percent_history: &[f64],
-    estimator_config: AccountUsageEstimatorConfig,
-) -> Option<f64> {
-    let previous_percent = previous_percent?;
-    let mut history = backend_percent_history.to_vec();
-    if let Some(current_percent) = used_percent
-        && let Some(last) = history.last().copied()
-        && (last - current_percent).abs() <= USED_PERCENT_REFUND_EPSILON
-        && (previous_percent - current_percent).abs() > USED_PERCENT_REFUND_EPSILON
-    {
-        history.pop();
-    }
-    smooth_backend_used_percent(Some(previous_percent), history.as_slice(), estimator_config)
 }
 
 fn parse_backend_percent_history(raw: &str) -> Vec<f64> {
@@ -2899,8 +2933,8 @@ fn fit_byte_weights(
             if *delta_percent_int <= 0 {
                 continue;
             }
-            let sample_weighted =
-                sent_weight * (*sample_sent).max(0) as f64 + recv_weight * (*sample_recv).max(0) as f64;
+            let sample_weighted = sent_weight * (*sample_sent).max(0) as f64
+                + recv_weight * (*sample_recv).max(0) as f64;
             if sample_weighted <= 0.0 {
                 continue;
             }
@@ -2962,8 +2996,7 @@ fn format_account_limit_estimates(estimates: &AccountLimitEstimates) -> String {
     ]);
     format!(
         "avg_tpp={avg} est_allow={allowance} byte_weights={:.2}/{:.2}",
-        estimates.byte_weights.sent_weight,
-        estimates.byte_weights.recv_weight
+        estimates.byte_weights.sent_weight, estimates.byte_weights.recv_weight
     )
 }
 
@@ -2989,14 +3022,12 @@ fn clamp_usage_pct_values(
     estimator_config: AccountUsageEstimatorConfig,
 ) -> [Option<f64>; 12] {
     let configured_cap = estimator_config.max_usage_pct_display_percent_before_full;
-    let max_percent = if backend_anchor_percent < 100.0
-        && configured_cap.is_finite()
-        && configured_cap > 0.0
-    {
-        Some(configured_cap)
-    } else {
-        None
-    };
+    let max_percent =
+        if backend_anchor_percent < 100.0 && configured_cap.is_finite() && configured_cap > 0.0 {
+            Some(configured_cap)
+        } else {
+            None
+        };
     values.map(|entry| {
         entry.and_then(|value| {
             if value.is_finite() {
@@ -3162,9 +3193,10 @@ mod tests {
     #[tokio::test]
     async fn prewarm_network_bytes_do_not_increment_default_sent_recv_counters() {
         let home = tempfile::tempdir().expect("tempdir");
-        let runtime = AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
-            .await
-            .expect("init");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
 
         let usage = TokenUsage {
             total_tokens: 0,
@@ -3875,7 +3907,8 @@ WHERE account_id = ? AND provider = ?
             r#"
 SELECT
     total_tokens,
-    last_backend_used_percent
+    last_backend_used_percent,
+    last_reported_percent_int
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -3889,7 +3922,11 @@ WHERE account_id = ? AND provider = ?
         let last_backend_used_percent_before: f64 = row_before
             .try_get("last_backend_used_percent")
             .expect("last_backend_used_percent");
+        let last_reported_percent_int_before: i64 = row_before
+            .try_get("last_reported_percent_int")
+            .expect("last_reported_percent_int");
         assert_eq!(last_backend_used_percent_before, 2.0);
+        assert_eq!(last_reported_percent_int_before, 2);
 
         let refund_snapshot = RateLimitSnapshot {
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
@@ -3908,7 +3945,8 @@ WHERE account_id = ? AND provider = ?
             r#"
 SELECT
     total_tokens,
-    last_backend_used_percent
+    last_backend_used_percent,
+    last_reported_percent_int
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -3924,8 +3962,12 @@ WHERE account_id = ? AND provider = ?
         let last_backend_used_percent_after_first_drop: f64 = row_after_first_drop
             .try_get("last_backend_used_percent")
             .expect("last_backend_used_percent");
+        let last_reported_percent_after_first_drop: i64 = row_after_first_drop
+            .try_get("last_reported_percent_int")
+            .expect("last_reported_percent_int");
         assert_eq!(total_tokens_after_first_drop, total_tokens_before);
         assert_eq!(last_backend_used_percent_after_first_drop, 2.0);
+        assert_eq!(last_reported_percent_after_first_drop, 1);
 
         runtime
             .record_account_backend_rate_limit("account-1", &refund_snapshot)
@@ -3936,7 +3978,8 @@ WHERE account_id = ? AND provider = ?
             r#"
 SELECT
     total_tokens,
-    last_backend_used_percent
+    last_backend_used_percent,
+    last_reported_percent_int
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -3952,9 +3995,13 @@ WHERE account_id = ? AND provider = ?
         let last_backend_used_percent_after_confirmation: f64 = row_after_confirmation
             .try_get("last_backend_used_percent")
             .expect("last_backend_used_percent");
+        let last_reported_percent_after_confirmation: i64 = row_after_confirmation
+            .try_get("last_reported_percent_int")
+            .expect("last_reported_percent_int");
 
         assert_eq!(total_tokens_after_confirmation, total_tokens_before);
         assert_eq!(last_backend_used_percent_after_confirmation, 2.0);
+        assert_eq!(last_reported_percent_after_confirmation, 1);
     }
 
     #[tokio::test]
@@ -4015,7 +4062,8 @@ WHERE account_id = ? AND provider = ?
             r#"
 SELECT
     last_backend_used_percent,
-    last_snapshot_percent_int
+    last_snapshot_percent_int,
+    last_reported_percent_int
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -4031,8 +4079,12 @@ WHERE account_id = ? AND provider = ?
         let last_snapshot_percent_after_pending: i64 = row_after_pending
             .try_get("last_snapshot_percent_int")
             .expect("last_snapshot_percent_int");
+        let last_reported_percent_after_pending: i64 = row_after_pending
+            .try_get("last_reported_percent_int")
+            .expect("last_reported_percent_int");
         assert_eq!(last_backend_used_percent_after_pending, 59.0);
         assert_eq!(last_snapshot_percent_after_pending, 50);
+        assert_eq!(last_reported_percent_after_pending, 59);
 
         let runtime_reinit =
             AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
@@ -4047,7 +4099,8 @@ WHERE account_id = ? AND provider = ?
             r#"
 SELECT
     last_backend_used_percent,
-    last_snapshot_percent_int
+    last_snapshot_percent_int,
+    last_reported_percent_int
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -4063,8 +4116,12 @@ WHERE account_id = ? AND provider = ?
         let last_snapshot_percent_after_confirm: i64 = row_after_confirm
             .try_get("last_snapshot_percent_int")
             .expect("last_snapshot_percent_int");
+        let last_reported_percent_after_confirm: i64 = row_after_confirm
+            .try_get("last_reported_percent_int")
+            .expect("last_reported_percent_int");
         assert_eq!(last_backend_used_percent_after_confirm, 59.0);
         assert_eq!(last_snapshot_percent_after_confirm, 59);
+        assert_eq!(last_reported_percent_after_confirm, 59);
     }
 
     #[test]
@@ -4077,6 +4134,42 @@ WHERE account_id = ? AND provider = ?
             /*estimated_limit*/ 1_000.0,
         );
         assert_eq!(usage_pct, Some(195.2));
+    }
+
+    #[test]
+    fn format_percent_display_uses_reported_cursor_for_transition() {
+        let rendered = format_percent_display(
+            Some(83),
+            Some(84.2),
+            Some(84.2),
+            Some("80,81,82,83,84"),
+            AccountUsageEstimatorConfig::default(),
+        );
+        assert_eq!(rendered, "percent=83->84");
+    }
+
+    #[test]
+    fn format_percent_display_is_stable_when_reported_cursor_matches() {
+        let rendered = format_percent_display(
+            Some(84),
+            Some(84.9),
+            Some(84.9),
+            Some("80,81,82,83,84"),
+            AccountUsageEstimatorConfig::default(),
+        );
+        assert_eq!(rendered, "percent=84");
+    }
+
+    #[test]
+    fn format_percent_display_shows_stabilized_only_when_different_from_observed() {
+        let rendered = format_percent_display(
+            /*reported_previous_percent_int*/ None,
+            Some(84.2),
+            Some(86.0),
+            Some("86,86,86,86,86"),
+            AccountUsageEstimatorConfig::default(),
+        );
+        assert_eq!(rendered, "percent=84 stabilized_percent=86.00");
     }
 
     #[test]
