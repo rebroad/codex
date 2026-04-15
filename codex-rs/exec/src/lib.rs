@@ -2018,7 +2018,14 @@ async fn run_direct_request(
         .and_then(|auth| account_usage_display(auth.get_account_email().as_deref()))
         .or_else(|| Some(format!("direct-{}", config.model_provider_id)));
 
-    consume_direct_stream(&mut stream, usage_store, account_key, account_display).await
+    consume_direct_stream(
+        &mut stream,
+        usage_store,
+        account_key,
+        account_display,
+        config.model.as_deref(),
+    )
+    .await
 }
 
 fn build_direct_prompt_inputs(system_prompt: Option<&str>, prompt_text: &str) -> Vec<ResponseItem> {
@@ -2051,6 +2058,7 @@ async fn consume_direct_stream(
     usage_store: Option<std::sync::Arc<AccountUsageStore>>,
     account_key: Option<String>,
     account_display: Option<String>,
+    model_slug: Option<&str>,
 ) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
@@ -2150,6 +2158,7 @@ async fn consume_direct_stream(
                                 &usage,
                                 AccountUsageEventMeta {
                                     query_id: capture_id.as_deref(),
+                                    model_slug,
                                     sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
                                     recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
                                     is_prewarm: false,

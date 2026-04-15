@@ -3938,6 +3938,7 @@ impl Session {
                             token_usage,
                             AccountUsageEventMeta {
                                 query_id,
+                                model_slug: Some(turn_context.model_info.slug.as_str()),
                                 sent_bytes: transport_bytes.map(|value| value.sent),
                                 recv_bytes: transport_bytes.map(|value| value.recv),
                                 is_prewarm: false,
@@ -3979,6 +3980,7 @@ impl Session {
                 &token_usage,
                 AccountUsageEventMeta {
                     query_id: completion.capture_id.as_deref(),
+                    model_slug: None,
                     sent_bytes: completion.transport_bytes.as_ref().map(|value| value.sent),
                     recv_bytes: completion.transport_bytes.as_ref().map(|value| value.recv),
                     is_prewarm: true,

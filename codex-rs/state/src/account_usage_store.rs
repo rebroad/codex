@@ -113,6 +113,7 @@ pub struct AccountUsageSnapshot {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AccountUsageEventMeta<'a> {
     pub query_id: Option<&'a str>,
+    pub model_slug: Option<&'a str>,
     pub sent_bytes: Option<i64>,
     pub recv_bytes: Option<i64>,
     pub is_prewarm: bool,
@@ -519,6 +520,7 @@ WHERE account_id = ? AND provider = ?
         let usage_row = sqlx::query(
             r#"
 SELECT
+    total_usage_usd,
     total_tokens,
     input_tokens,
     cached_input_tokens,
@@ -541,6 +543,10 @@ WHERE account_id = ? AND provider = ?
         .bind(self.default_provider.as_str())
         .fetch_optional(self.pool.as_ref())
         .await?;
+        let current_total_usage_usd = usage_row
+            .as_ref()
+            .and_then(|row| row.try_get::<f64, _>("total_usage_usd").ok())
+            .unwrap_or(0.0);
         let current_total_tokens = usage_row
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("total_tokens").ok())
@@ -652,11 +658,7 @@ LIMIT 200
 
         Ok(AccountLimitEstimates {
             byte_weights,
-            composite_q_limit: cumulative_estimate(composite_q_tokens(
-                current_input_tokens,
-                current_cached_input_tokens,
-                current_output_tokens,
-            )),
+            composite_q_limit: cumulative_estimate(current_total_usage_usd),
             composite_q_bytes_limit: cumulative_estimate(composite_q_bytes(
                 current_sent_bytes + current_prewarm_sent_bytes,
                 current_recv_bytes + current_prewarm_recv_bytes,
@@ -2866,9 +2868,23 @@ fn min_input_cached_output_tokens(
 }
 
 fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> f64 {
-    COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
-        + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
-        + COMPOSITE_Q_OUTPUT_WEIGHT * output_tokens.max(0) as f64
+    composite_q_tokens_with_weights(
+        input_tokens,
+        cached_input_tokens,
+        output_tokens,
+        UsagePriceWeights::defaults(),
+    )
+}
+
+fn composite_q_tokens_with_weights(
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+    weights: UsagePriceWeights,
+) -> f64 {
+    weights.input * input_tokens.max(0) as f64
+        + weights.cached_input * cached_input_tokens.max(0) as f64
+        + weights.output * output_tokens.max(0) as f64
 }
 
 fn composite_q_bytes(sent_bytes: i64, recv_bytes: i64, weights: ByteWeights) -> f64 {

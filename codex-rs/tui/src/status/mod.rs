@@ -63,9 +63,6 @@ pub(crate) struct AccountUsageDisplay {
 
 const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
 const BACKEND_PERCENT_EPSILON: f64 = 0.0001;
-const COMPOSITE_Q_INPUT_WEIGHT: f64 = 1.72;
-const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.175;
-const COMPOSITE_Q_OUTPUT_WEIGHT: f64 = 14.0;
 const UNKNOWN_COMPACT_STATUS_TIMESTAMP: &str = "??????????????";
 const UNKNOWN_COMPACT_STATUS_PERCENT: &str = "???%";
 
@@ -758,11 +755,7 @@ fn build_account_usage_display(
     }
     .or(usage.last_backend_used_percent);
     AccountUsageDisplay {
-        usage_usd: composite_q_tokens(
-            usage.input_tokens,
-            usage.cached_input_tokens,
-            usage.output_tokens,
-        ),
+        usage_usd: usage.total_usage_usd,
         estimated_percent,
         sample_count: Some(sample_count).filter(|count| *count > 0),
     }
@@ -776,30 +769,7 @@ fn estimate_account_usage_percent(
     if estimated_limit <= 0.0 || !estimated_limit.is_finite() {
         return None;
     }
-    let base_percent = usage.window_start_percent_int.unwrap_or(0) as f64;
-    let window_start_q_tokens = composite_q_tokens(
-        usage.window_start_input_tokens.unwrap_or(0),
-        usage.window_start_cached_input_tokens.unwrap_or(0),
-        usage.window_start_output_tokens.unwrap_or(0),
-    );
-    let q_tokens = composite_q_tokens(
-        usage.input_tokens,
-        usage.cached_input_tokens,
-        usage.output_tokens,
-    );
-    let delta_tokens = (q_tokens - window_start_q_tokens).max(0.0);
-    let avg_tokens_per_pct = estimated_limit / 100.0;
-    if avg_tokens_per_pct <= 0.0 || !avg_tokens_per_pct.is_finite() {
-        return None;
-    }
-    let percent = delta_tokens / avg_tokens_per_pct;
-    Some(base_percent + percent)
-}
-
-fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> f64 {
-    COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
-        + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
-        + COMPOSITE_Q_OUTPUT_WEIGHT * output_tokens.max(0) as f64
+    Some(usage.total_usage_usd.max(0.0) * 100.0 / estimated_limit)
 }
 
 fn line_to_ansi(line: &ratatui::text::Line<'_>) -> String {
