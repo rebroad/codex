@@ -1128,7 +1128,7 @@ NPM_VENDOR_DIR=""
 RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
 RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 NPM_PUBLISH_DRY_RUN="false"
-SCHEMA_HASH_FILE="${REPO_DIR}/codex-rs/target/app-server-schema.hash"
+SCHEMA_HASH_FILE=""
 MAIN_WORKTREE_DIR="$(resolve_main_worktree_dir)"
 SHARED_TMP_DIR="${MAIN_WORKTREE_DIR}/tmp"
 TRIAGE_STATE_FILE="${MAIN_WORKTREE_DIR}/${TRIAGE_STATE_FILE_DEFAULT}"
@@ -1425,6 +1425,7 @@ if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
 else
   echo "Using pre-set CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
 fi
+SCHEMA_HASH_FILE="${CARGO_TARGET_DIR}/app-server-schema.hash"
 
 schema_should_run="false"
 if [[ "${REGEN_SCHEMA}" == "true" ]]; then
