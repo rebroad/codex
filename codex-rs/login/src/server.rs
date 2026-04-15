@@ -521,8 +521,7 @@ pub async fn complete_oauth_login_with_callback_url(
     expected_state: &str,
     pkce: &PkceCodes,
 ) -> io::Result<()> {
-    let parsed_callback_url = url::Url::parse(callback_url)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid callback URL: {err}")))?;
+    let parsed_callback_url = parse_manual_callback_url(callback_url)?;
     let parsed_redirect_uri = url::Url::parse(redirect_uri).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -542,7 +541,11 @@ pub async fn complete_oauth_login_with_callback_url(
         parsed_redirect_uri.port_or_known_default(),
         parsed_redirect_uri.path(),
     );
-    if callback_origin != expected_origin {
+    if callback_origin.0 != expected_origin.0
+        || !hosts_match_for_loopback(callback_origin.1, expected_origin.1)
+        || callback_origin.2 != expected_origin.2
+        || callback_origin.3 != expected_origin.3
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -599,6 +602,37 @@ pub async fn complete_oauth_login_with_callback_url(
         opts.cli_auth_credentials_store_mode,
     )
     .await
+}
+
+fn parse_manual_callback_url(callback_url: &str) -> io::Result<url::Url> {
+    let trimmed = callback_url.trim();
+    if let Ok(parsed) = url::Url::parse(trimmed) {
+        return Ok(parsed);
+    }
+
+    let with_default_scheme = format!("http://{trimmed}");
+    url::Url::parse(&with_default_scheme).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid callback URL: {err}"),
+        )
+    })
+}
+
+fn hosts_match_for_loopback(actual: Option<&str>, expected: Option<&str>) -> bool {
+    if actual == expected {
+        return true;
+    }
+
+    matches!(
+        (actual, expected),
+        (Some("localhost"), Some("127.0.0.1"))
+            | (Some("127.0.0.1"), Some("localhost"))
+            | (Some("localhost"), Some("::1"))
+            | (Some("::1"), Some("localhost"))
+            | (Some("127.0.0.1"), Some("::1"))
+            | (Some("::1"), Some("127.0.0.1"))
+    )
 }
 
 fn send_cancel_request(port: u16) -> io::Result<()> {
@@ -1184,6 +1218,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::TokenEndpointErrorDetail;
+    use super::parse_manual_callback_url;
     use super::html_escape;
     use super::is_missing_codex_entitlement_error;
     use super::parse_token_endpoint_error;
@@ -1323,5 +1358,16 @@ mod tests {
         assert!(body.contains("You do not have access to Codex"));
         assert!(body.contains("Contact your workspace administrator"));
         assert!(!body.contains("missing_codex_entitlement"));
+    }
+
+    #[test]
+    fn parse_manual_callback_url_accepts_url_without_scheme() {
+        let parsed = parse_manual_callback_url("localhost:1455/auth/callback?code=test&state=s1")
+            .expect("callback url should parse with default scheme");
+
+        assert_eq!(parsed.scheme(), "http");
+        assert_eq!(parsed.host_str(), Some("localhost"));
+        assert_eq!(parsed.port_or_known_default(), Some(1455));
+        assert_eq!(parsed.path(), "/auth/callback");
     }
 }
