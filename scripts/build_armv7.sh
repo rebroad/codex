@@ -45,7 +45,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -57,7 +57,6 @@ Options:
   --target=<triple>     Override target triple (default: armv7-unknown-linux-gnueabihf)
   --build-env=<mode>    Build environment mode:
                         auto (default): use docker-buster for armv7 unless host is buster
-                        host: always build on current host
                         docker-buster: force Debian buster container build
   --ephemeral           One-off Docker build: do not reuse cached image/toolchain/cargo.
                         Also removes existing local armv7 Docker image/cache before running.
@@ -206,6 +205,13 @@ ensure_rusty_v8_source_repo_for_version() {
   local ref cache_repo remote_url
   ref="v${version}"
 
+  # Docker builds operate on bind-mounted host paths that may be owned by a
+  # different uid/gid than the in-container user. Mark these repos safe so
+  # git -C checks don't fail with "dubious ownership".
+  if [[ -d "${requested_repo_path}/.git" ]]; then
+    git config --global --add safe.directory "${requested_repo_path}" >/dev/null 2>&1 || true
+  fi
+
   if [[ -d "${requested_repo_path}/.git" ]] \
     && git -C "${requested_repo_path}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
     echo "${requested_repo_path}"
@@ -215,10 +221,14 @@ ensure_rusty_v8_source_repo_for_version() {
   cache_repo="${ARMV7_CACHE_DIR}/rusty_v8-source-cache"
   remote_url="https://github.com/${RUSTY_V8_RELEASE_REPO}.git"
   mkdir -p "${ARMV7_CACHE_DIR}"
+  if [[ -d "${cache_repo}/.git" ]]; then
+    git config --global --add safe.directory "${cache_repo}" >/dev/null 2>&1 || true
+  fi
 
   if [[ ! -d "${cache_repo}/.git" ]]; then
     echo "Local rusty_v8 checkout lacks ${ref}; cloning ${remote_url} into cache..." >&2
     git clone --filter=blob:none "${remote_url}" "${cache_repo}" >/dev/null
+    git config --global --add safe.directory "${cache_repo}" >/dev/null 2>&1 || true
   fi
 
   if ! git -C "${cache_repo}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
@@ -364,7 +374,8 @@ should_use_docker_buster() {
   fi
   case "${BUILD_ENV}" in
     host)
-      return 1
+      echo "build-env=host has been removed; use auto or docker-buster." >&2
+      exit 1
       ;;
     docker-buster)
       return 0
@@ -376,7 +387,7 @@ should_use_docker_buster() {
       return 0
       ;;
     *)
-      echo "Invalid --build-env value: ${BUILD_ENV} (expected auto|host|docker-buster)" >&2
+      echo "Invalid --build-env value: ${BUILD_ENV} (expected auto|docker-buster)" >&2
       exit 1
       ;;
   esac
@@ -438,7 +449,7 @@ run_in_docker_buster() {
   forwarded_args=(
     "--${PROFILE}"
     "--target=${TARGET}"
-    "--build-env=host"
+    "--build-env=auto"
     "--rusty-v8-release-repo=${RUSTY_V8_RELEASE_REPO}"
   )
   if [[ -n "${RUSTY_V8_RELEASE_TAG}" ]]; then
