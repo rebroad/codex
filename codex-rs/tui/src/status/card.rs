@@ -215,6 +215,14 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
 }
 
 impl StatusHistoryCell {
+    fn format_usage_usd(usage_usd: f64) -> String {
+        if usage_usd.is_finite() {
+            format!("{usage_usd:.2} usd")
+        } else {
+            "0.00 usd".to_string()
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
@@ -531,13 +539,13 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
         let account_usage = self.account_usage.as_ref().map(|usage| {
-            let total_fmt = format_tokens_compact(usage.total_tokens);
+            let usage_usd = Self::format_usage_usd(usage.usage_usd);
             let mut spans = Vec::new();
             match usage.estimated_percent {
                 Some(percent) => {
-                    spans.push(Span::from(format!("usage {total_fmt} ({percent:.2}%)")))
+                    spans.push(Span::from(format!("usage {usage_usd} ({percent:.2}%)")))
                 }
-                None => spans.push(Span::from(format!("usage {total_fmt}"))),
+                None => spans.push(Span::from(format!("usage {usage_usd}"))),
             }
             if let Some(sample_count) = usage.sample_count
                 && (1..64).contains(&sample_count)

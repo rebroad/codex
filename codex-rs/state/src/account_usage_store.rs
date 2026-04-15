@@ -182,8 +182,9 @@ struct ThresholdUsageCounts {
 }
 
 // Composite usage model calibrated from local/backend usage logs.
-const COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.006;
-const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.003;
+const COMPOSITE_Q_INPUT_WEIGHT: f64 = 1.75;
+const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.175;
+const COMPOSITE_Q_OUTPUT_WEIGHT: f64 = 14.0;
 const DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT: f64 = 0.15;
 const DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT: f64 = 0.85;
 const BYTE_WEIGHT_FIT_STEP: f64 = 0.01;
@@ -2808,9 +2809,9 @@ fn min_input_cached_output_tokens(
 }
 
 fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> f64 {
-    output_tokens.max(0) as f64
-        + COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
+    COMPOSITE_Q_INPUT_WEIGHT * input_tokens.max(0) as f64
         + COMPOSITE_Q_CACHED_INPUT_WEIGHT * cached_input_tokens.max(0) as f64
+        + COMPOSITE_Q_OUTPUT_WEIGHT * output_tokens.max(0) as f64
 }
 
 fn composite_q_bytes(sent_bytes: i64, recv_bytes: i64, weights: ByteWeights) -> f64 {
