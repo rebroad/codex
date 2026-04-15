@@ -14,6 +14,7 @@ PNPM_VERSION_DEFAULT="10.29.3"
 NPM_VENDOR_DIR_DEFAULT="dist/npm-vendor"
 NPM_X64_TARGET="x86_64-unknown-linux-musl"
 NPM_ARMV7_TARGET="armv7-unknown-linux-gnueabihf"
+DEBIAN12_TARGET_DEFAULT="i686-unknown-linux-gnu"
 ARGUMENT_COMMENT_LINT_LOCAL="false"
 SCRIPT_START_SECONDS="${SECONDS}"
 BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
@@ -131,6 +132,16 @@ resolve_cargo_target_dir() {
     target_dir="${RUST_WORKSPACE_DIR}/target"
   fi
   echo "${target_dir}"
+}
+
+resolve_default_cargo_target_dir() {
+  local target_dir_suffix="native"
+  if [[ "${ARMV7_ONLY}" == "true" ]]; then
+    target_dir_suffix="armv7"
+  elif [[ "${DEBIAN12_ONLY}" == "true" ]]; then
+    target_dir_suffix="debian12"
+  fi
+  echo "${RUST_WORKSPACE_DIR}/target.${target_dir_suffix}"
 }
 
 is_only_cargo_lock_dirty() {
@@ -458,6 +469,35 @@ run_armv7_build() {
   "${armv7_cmd[@]}"
 }
 
+run_debian12_build() {
+  local mode="$1"
+  local target="${DEBIAN12_TARGET}"
+  local profile
+  local target_dir
+  local bin_path
+
+  if [[ "${mode}" == "release" ]]; then
+    profile="release"
+  else
+    profile="debug"
+  fi
+
+  echo "Building Debian 12 target ${target} (${mode})..."
+  if ! rustup target list --toolchain "${TOOLCHAIN}" --installed | grep -Fxq "${target}"; then
+    rustup target add --toolchain "${TOOLCHAIN}" "${target}"
+  fi
+
+  run_target_build_with_locked_fallback "${target}" "${mode}"
+  target_dir="$(resolve_cargo_target_dir)"
+  bin_path="${target_dir}/${target}/${profile}/codex"
+  if [[ ! -x "${bin_path}" ]]; then
+    echo "Build completed but binary was not found at ${bin_path}" >&2
+    exit 1
+  fi
+  echo "Debian 12 build complete."
+  echo "Binary: ${bin_path}"
+}
+
 prepare_npm_vendor_rg_binary() {
   local vendor_root="$1"
   local target="$2"
@@ -514,9 +554,10 @@ stage_npm_vendor_from_binaries() {
   local version="$1"
   local vendor_root="$2"
   local profile="$3"
-  local x64_bin armv7_bin
-  x64_bin="${RUST_WORKSPACE_DIR}/target/${NPM_X64_TARGET}/${profile}/codex"
-  armv7_bin="${RUST_WORKSPACE_DIR}/target/${NPM_ARMV7_TARGET}/${profile}/codex"
+  local target_dir x64_bin armv7_bin
+  target_dir="$(resolve_cargo_target_dir)"
+  x64_bin="${target_dir}/${NPM_X64_TARGET}/${profile}/codex"
+  armv7_bin="${target_dir}/${NPM_ARMV7_TARGET}/${profile}/codex"
 
   if [[ ! -x "${x64_bin}" || ! -x "${armv7_bin}" ]]; then
     echo "Missing required release binaries for npm vendor staging." >&2
@@ -1069,6 +1110,8 @@ ARMV7_GITHUB_RELEASE_REPO=""
 ARMV7_GITHUB_RELEASE_TAG=""
 ARMV7_STRIP="true"
 ARMV7_BINARY_ONLY="true"
+DEBIAN12_ONLY="false"
+DEBIAN12_TARGET="${DEBIAN12_TARGET_DEFAULT}"
 REGEN_SCHEMA="auto"
 CI_PREFLIGHT="auto"
 FORCE_TAG="true"
@@ -1145,6 +1188,12 @@ for arg in "$@"; do
       ;;
     --armv7)
       ARMV7_ONLY="true"
+      ;;
+    --debian12)
+      DEBIAN12_ONLY="true"
+      ;;
+    --debian12-target=*)
+      DEBIAN12_TARGET="${arg#*=}"
       ;;
     --armv7-build-env=*)
       ARMV7_BUILD_ENV="${arg#*=}"
@@ -1250,6 +1299,10 @@ Options:
              Skip preflight checks even when publishing
   --armv7
              Build armv7 codex via scripts/build_armv7.sh and exit (reuses armv7 script behavior)
+  --debian12
+             Build Debian 12 codex target and exit (cross-build friendly, no local install)
+  --debian12-target=<triple>
+             Override Debian 12 target triple (default: i686-unknown-linux-gnu)
   --armv7-build-env=<auto|host|docker-buster>
              Forward armv7 build environment mode (default: auto)
   --armv7-ephemeral
@@ -1329,6 +1382,10 @@ if [[ "${FAST_GATE}" == "true" && "${MODE}" == "release" ]]; then
 fi
 
 cd "${REPO_DIR}"
+if [[ "${ARMV7_ONLY}" == "true" && "${DEBIAN12_ONLY}" == "true" ]]; then
+  echo "--armv7 and --debian12 cannot be combined." >&2
+  exit 1
+fi
 if [[ "${ARMV7_ONLY}" == "true" && "${PREFLIGHT_ONLY}" == "true" ]]; then
   echo "--armv7 cannot be combined with --preflight-only." >&2
   exit 1
@@ -1344,6 +1401,29 @@ if [[ "${ARMV7_ONLY}" == "true" ]]; then
   # In armv7-only mode, consume --publish for armv7 artifact upload and skip
   # main release/tag workflow logic.
   PUBLISH="false"
+fi
+if [[ "${DEBIAN12_ONLY}" == "true" && "${PREFLIGHT_ONLY}" == "true" ]]; then
+  echo "--debian12 cannot be combined with --preflight-only." >&2
+  exit 1
+fi
+if [[ "${DEBIAN12_ONLY}" == "true" ]]; then
+  if [[ "${PUBLISH}" == "true" ]]; then
+    echo "--publish is not supported with --debian12." >&2
+    exit 1
+  fi
+  if [[ "${PUBLISH_MODE}" == "npm" ]]; then
+    echo "--publish-npm cannot be combined with --debian12." >&2
+    exit 1
+  fi
+  PUBLISH="false"
+fi
+
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  CARGO_TARGET_DIR="$(resolve_default_cargo_target_dir)"
+  export CARGO_TARGET_DIR
+  echo "Using default CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+else
+  echo "Using pre-set CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
 fi
 
 schema_should_run="false"
@@ -1523,6 +1603,10 @@ if [[ "${ARMV7_ONLY}" == "true" ]]; then
   run_armv7_build "${MODE}"
   exit 0
 fi
+if [[ "${DEBIAN12_ONLY}" == "true" ]]; then
+  run_debian12_build "${MODE}"
+  exit 0
+fi
 
 if [[ "${MODE}" == "release" ]]; then
   echo "[2/4] Building release codex..."
@@ -1616,7 +1700,8 @@ if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
 fi
 
 echo "[4/4] Cleaning workspace codex binaries from target/..."
-rm -f "${RUST_WORKSPACE_DIR}/target/release/codex"
+CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
+rm -f "${CARGO_TARGET_DIR_RESOLVED}/release/codex"
 
 echo "Final version:"
 echo "- Installed: $("${INSTALL_BIN}" --version)"
