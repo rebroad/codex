@@ -119,6 +119,7 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
 fn account_usage_estimate_can_exceed_100_percent() {
     let usage = AccountUsageSnapshot {
         total_usage_usd: 2_950.0,
+        total_usage_usd_with_prewarm: 2_950.0,
         total_tokens: 2_500,
         input_tokens: 0,
         cached_input_tokens: 0,
