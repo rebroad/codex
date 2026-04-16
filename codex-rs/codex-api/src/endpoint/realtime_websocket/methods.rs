@@ -14,6 +14,8 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
+use crate::prompt_debug_http::backend_capture_append_event;
+use crate::prompt_debug_http::capture_headers_json;
 use crate::provider::Provider;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -330,6 +332,11 @@ impl RealtimeWebsocketWriter {
         let payload = serde_json::to_string(message)
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime request: {err}")))?;
         debug!(?message, "realtime websocket request");
+        backend_capture_append_event(serde_json::json!({
+            "kind": "websocket_outbound_message",
+            "transport": "realtime_websocket",
+            "payload": payload.clone(),
+        }));
         self.send_payload(payload).await
     }
 
@@ -373,6 +380,11 @@ impl RealtimeWebsocketEvents {
 
             match msg {
                 Message::Text(text) => {
+                    backend_capture_append_event(serde_json::json!({
+                        "kind": "websocket_inbound_message",
+                        "transport": "realtime_websocket",
+                        "payload": text.to_string(),
+                    }));
                     if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
                         debug!(?event, "realtime websocket parsed event");
@@ -381,6 +393,10 @@ impl RealtimeWebsocketEvents {
                     debug!("realtime websocket ignored unsupported text frame");
                 }
                 Message::Close(frame) => {
+                    backend_capture_append_event(serde_json::json!({
+                        "kind": "websocket_inbound_close",
+                        "transport": "realtime_websocket",
+                    }));
                     self.is_closed.store(true, Ordering::SeqCst);
                     info!(
                         "realtime websocket closed: code={:?} reason={:?}",
@@ -390,6 +406,10 @@ impl RealtimeWebsocketEvents {
                     return Ok(None);
                 }
                 Message::Binary(_) => {
+                    backend_capture_append_event(serde_json::json!({
+                        "kind": "websocket_inbound_binary",
+                        "transport": "realtime_websocket",
+                    }));
                     return Ok(Some(RealtimeEvent::Error(
                         "unexpected binary realtime websocket event".to_string(),
                     )));
@@ -475,6 +495,12 @@ impl RealtimeWebsocketClient {
             with_session_id_header(extra_headers, config.session_id.as_deref())?,
             default_headers,
         );
+        backend_capture_append_event(serde_json::json!({
+            "kind": "websocket_connect_request",
+            "transport": "realtime_websocket",
+            "url": ws_url.as_str(),
+            "headers": capture_headers_json(&headers),
+        }));
         request.headers_mut().extend(headers);
 
         info!("connecting realtime websocket: {ws_url}");
@@ -490,7 +516,22 @@ impl RealtimeWebsocketClient {
             connector,
         )
         .await
-        .map_err(|err| ApiError::Stream(format!("failed to connect realtime websocket: {err}")))?;
+        .map_err(|err| {
+            backend_capture_append_event(serde_json::json!({
+                "kind": "websocket_connect_error",
+                "transport": "realtime_websocket",
+                "url": ws_url.as_str(),
+                "error": err.to_string(),
+            }));
+            ApiError::Stream(format!("failed to connect realtime websocket: {err}"))
+        })?;
+        backend_capture_append_event(serde_json::json!({
+            "kind": "websocket_connect_response",
+            "transport": "realtime_websocket",
+            "url": ws_url.as_str(),
+            "status": response.status().as_u16(),
+            "headers": capture_headers_json(response.headers()),
+        }));
         info!(
             ws_url = %ws_url,
             status = %response.status(),
