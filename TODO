@@ -1,8 +1,8 @@
 =Pragmatic personality is still being injected - find out why
 =survival - `final` still being mentioned.
 =Too many skills being injected, e.g. openai-docs
-=Only reset usage stats when percentage goes from 100->0
 =Explore "encrypted_content" in "codex prompt debug".
+=`just argument-comment-lint` produces too much output (token wastage)
 =Explore "obfuscation" in "codex prompt debug".
 =Try to reduce repetition being send to the backend-api, e.g. "You are Codex".
 =See if we have a unique id per input/output/reasoning - if so display it can capture to files. Maybe use the id sent from the app-server client?
