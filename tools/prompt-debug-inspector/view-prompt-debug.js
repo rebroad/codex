@@ -15,7 +15,7 @@ function usage() {
 
 Arguments:
   target               Capture directory or *_input.ndjson file path.
-                       If omitted, uses latest /tmp/codex-prompt-debug.*.
+                       If omitted, uses latest codex-backend-capture.* from /var/tmp or /tmp.
 
 Options:
   --port <n>           Server port (default: 8788)
