@@ -103,6 +103,9 @@ pub struct AccountUsageSnapshot {
     pub last_backend_resets_at: Option<i64>,
     pub last_backend_window_minutes: Option<i64>,
     pub last_backend_seen_at: Option<i64>,
+    pub last_reported_percent_int: Option<i64>,
+    pub last_reported_usage_usd: Option<f64>,
+    pub usd_per_reported_percent: Option<f64>,
     pub backend_percent_history: Option<String>,
     pub cached_q_limit: Option<f64>,
     pub cached_q_limit_sample_count: Option<i64>,
@@ -385,6 +388,9 @@ SELECT
     last_backend_resets_at,
     last_backend_window_minutes,
     last_backend_seen_at,
+    last_reported_percent_int,
+    last_reported_usage_usd,
+    usd_per_reported_percent,
     backend_percent_history,
     cached_q_limit,
     cached_q_limit_sample_count,
@@ -437,6 +443,9 @@ WHERE account_id = ? AND provider = ?
             last_backend_resets_at: row.try_get("last_backend_resets_at")?,
             last_backend_window_minutes: row.try_get("last_backend_window_minutes")?,
             last_backend_seen_at: row.try_get("last_backend_seen_at")?,
+            last_reported_percent_int: row.try_get("last_reported_percent_int")?,
+            last_reported_usage_usd: row.try_get("last_reported_usage_usd")?,
+            usd_per_reported_percent: row.try_get("usd_per_reported_percent")?,
             backend_percent_history: row.try_get("backend_percent_history")?,
             cached_q_limit: row.try_get("cached_q_limit")?,
             cached_q_limit_sample_count: row.try_get("cached_q_limit_sample_count")?,
@@ -907,7 +916,9 @@ SELECT
     last_backend_window_minutes,
     last_backend_seen_at,
     backend_percent_history,
-    last_reported_percent_int
+    last_reported_percent_int,
+    last_reported_usage_usd,
+    usd_per_reported_percent
 FROM account_usage
 WHERE account_id = ? AND provider = ?
             "#,
@@ -927,21 +938,68 @@ WHERE account_id = ? AND provider = ?
                     .ok()
             })
             .flatten();
+        let current_total_usage_usd = prior_usage
+            .as_ref()
+            .and_then(|row| row.try_get::<f64, _>("total_usage_usd").ok())
+            .unwrap_or(0.0);
+        let previous_reported_usage_usd = prior_usage
+            .as_ref()
+            .and_then(|row| {
+                row.try_get::<Option<f64>, _>("last_reported_usage_usd")
+                    .ok()
+            })
+            .flatten();
+        let previous_usd_per_reported_percent = prior_usage
+            .as_ref()
+            .and_then(|row| {
+                row.try_get::<Option<f64>, _>("usd_per_reported_percent")
+                    .ok()
+            })
+            .flatten();
         let current_reported_percent_int = used_percent.floor().max(0.0) as i64;
         let reported_percent_changed =
             previous_reported_percent_int != Some(current_reported_percent_int);
-        if reported_percent_changed && prior_usage.is_some() {
+        let should_update_reported_state = prior_usage.is_some()
+            && (reported_percent_changed
+                || previous_reported_usage_usd.is_none()
+                || previous_usd_per_reported_percent.is_none());
+        if should_update_reported_state {
+            let mut usd_per_reported_percent = previous_usd_per_reported_percent.or_else(|| {
+                if current_reported_percent_int > 0 && current_total_usage_usd.is_finite() {
+                    Some(current_total_usage_usd / current_reported_percent_int as f64)
+                } else {
+                    None
+                }
+            });
+            if let (Some(previous_percent_int), Some(previous_usage_usd)) =
+                (previous_reported_percent_int, previous_reported_usage_usd)
+            {
+                let delta_percent = current_reported_percent_int - previous_percent_int;
+                let delta_usage_usd = current_total_usage_usd - previous_usage_usd;
+                if delta_percent > 0 && delta_usage_usd.is_finite() && delta_usage_usd > 0.0 {
+                    usd_per_reported_percent = Some(delta_usage_usd / delta_percent as f64);
+                }
+            }
+            let reported_usage_usd = if reported_percent_changed {
+                current_total_usage_usd
+            } else {
+                previous_reported_usage_usd.unwrap_or(current_total_usage_usd)
+            };
             sqlx::query(
                 r#"
 UPDATE account_usage
 SET
     updated_at = ?,
-    last_reported_percent_int = ?
+    last_reported_percent_int = ?,
+    last_reported_usage_usd = ?,
+    usd_per_reported_percent = ?
 WHERE account_id = ? AND provider = ?
                 "#,
             )
             .bind(now)
             .bind(current_reported_percent_int)
+            .bind(reported_usage_usd)
+            .bind(usd_per_reported_percent)
             .bind(account_id)
             .bind(self.default_provider.as_str())
             .execute(self.pool.as_ref())
@@ -1497,9 +1555,10 @@ SET
     window_start_prewarm_sent_recv_bytes = ?,
     last_backend_resets_at = ?,
     last_backend_window_minutes = ?,
-    last_backend_seen_at = ?
-    ,
-    last_reported_percent_int = ?
+    last_backend_seen_at = ?,
+    last_reported_percent_int = ?,
+    last_reported_usage_usd = ?,
+    usd_per_reported_percent = ?
 WHERE account_id = ? AND provider = ?
                     "#,
             )
@@ -1540,6 +1599,8 @@ WHERE account_id = ? AND provider = ?
             .bind(window_minutes)
             .bind(seen_at)
             .bind(current_reported_percent_int)
+            .bind(0.0_f64)
+            .bind(None::<f64>)
             .bind(account_id)
             .bind(self.default_provider.as_str())
             .execute(self.pool.as_ref())
@@ -1903,10 +1964,11 @@ INSERT INTO account_usage (
     window_start_prewarm_sent_recv_bytes,
     last_backend_resets_at,
     last_backend_window_minutes,
-    last_backend_seen_at
-    ,
-    last_reported_percent_int
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    last_backend_seen_at,
+    last_reported_percent_int,
+    last_reported_usage_usd,
+    usd_per_reported_percent
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id, provider) DO UPDATE SET
     updated_at = excluded.updated_at,
     last_backend_limit_id = excluded.last_backend_limit_id,
@@ -1993,6 +2055,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
         .bind(window_minutes)
         .bind(seen_at)
         .bind(current_reported_percent_int)
+        .bind(current_total_usage_usd)
+        .bind(previous_usd_per_reported_percent)
         .execute(self.pool.as_ref())
         .await?;
         self.persist_backend_percent_history(
@@ -2203,6 +2267,7 @@ WHERE account_id = ? AND provider = ?
                 r#"
 SELECT
     last_backend_used_percent,
+    total_usage_usd,
     window_start_percent_int,
     window_start_total_tokens,
     total_tokens,
@@ -2225,7 +2290,10 @@ SELECT
     window_start_prewarm_sent_bytes,
     prewarm_sent_bytes,
     window_start_prewarm_recv_bytes,
-    prewarm_recv_bytes
+    prewarm_recv_bytes,
+    last_reported_percent_int,
+    last_reported_usage_usd,
+    usd_per_reported_percent
 FROM account_usage
 WHERE account_id = ? AND provider = ?
                 "#,
@@ -2241,6 +2309,7 @@ WHERE account_id = ? AND provider = ?
                     .try_get::<Option<f64>, _>("last_backend_used_percent")
                     .ok()
                     .flatten();
+                let total_usage_usd_now = row.try_get::<f64, _>("total_usage_usd").ok();
                 let window_start_percent = row.try_get::<i64, _>("window_start_percent_int").ok();
                 let window_start_total_tokens =
                     row.try_get::<i64, _>("window_start_total_tokens").ok();
@@ -2279,8 +2348,21 @@ WHERE account_id = ? AND provider = ?
                     .try_get::<i64, _>("window_start_prewarm_recv_bytes")
                     .ok();
                 let prewarm_recv_bytes_now = row.try_get::<i64, _>("prewarm_recv_bytes").ok();
+                let last_reported_percent_int = row
+                    .try_get::<Option<i64>, _>("last_reported_percent_int")
+                    .ok()
+                    .flatten();
+                let last_reported_usage_usd = row
+                    .try_get::<Option<f64>, _>("last_reported_usage_usd")
+                    .ok()
+                    .flatten();
+                let usd_per_reported_percent = row
+                    .try_get::<Option<f64>, _>("usd_per_reported_percent")
+                    .ok()
+                    .flatten();
                 (
                     backend_anchor_percent,
+                    total_usage_usd_now,
                     window_start_percent,
                     window_start_total_tokens,
                     total_tokens_now,
@@ -2304,10 +2386,14 @@ WHERE account_id = ? AND provider = ?
                     prewarm_sent_bytes_now,
                     window_start_prewarm_recv_bytes,
                     prewarm_recv_bytes_now,
+                    last_reported_percent_int,
+                    last_reported_usage_usd,
+                    usd_per_reported_percent,
                 )
             });
             if let Some((
                 Some(backend_anchor_percent),
+                Some(total_usage_usd_now),
                 Some(window_start_percent),
                 Some(window_start_total_tokens),
                 Some(total_tokens_now),
@@ -2331,6 +2417,9 @@ WHERE account_id = ? AND provider = ?
                 Some(prewarm_sent_bytes_now),
                 Some(window_start_prewarm_recv_bytes),
                 Some(prewarm_recv_bytes_now),
+                last_reported_percent_int,
+                last_reported_usage_usd,
+                usd_per_reported_percent,
             )) = usage_row
             {
                 let estimates = self
@@ -2512,7 +2601,17 @@ WHERE account_id = ? AND provider = ?
                         ),
                         /*precision*/ 2,
                     );
-                    format!(" usage_pct[q/w/p/b/c/o/x/m/n/s/r/z]={usage_pct_values}%")
+                    let usage_pct_usd = estimate_account_usage_percent_from_reported_price_values(
+                        total_usage_usd_now,
+                        last_reported_percent_int,
+                        last_reported_usage_usd,
+                        usd_per_reported_percent,
+                    )
+                    .map(|value| format!("{value:.2}"))
+                    .unwrap_or_else(|| "-".to_string());
+                    format!(
+                        " usage_pct[q/w/p/b/c/o/x/m/n/s/r/z/u]={usage_pct_values}/{usage_pct_usd}%"
+                    )
                 }
             } else {
                 String::new()
@@ -2734,6 +2833,25 @@ fn estimate_account_usage_percent_for_log_f64(
     }
     let percent = delta_tokens / avg_tokens_per_pct;
     Some(base_percent + percent)
+}
+
+fn estimate_account_usage_percent_from_reported_price_values(
+    total_usage_usd: f64,
+    last_reported_percent_int: Option<i64>,
+    last_reported_usage_usd: Option<f64>,
+    usd_per_reported_percent: Option<f64>,
+) -> Option<f64> {
+    let reported_percent = last_reported_percent_int? as f64;
+    let reported_usage_usd = last_reported_usage_usd?;
+    let usd_per_percent = usd_per_reported_percent?;
+    if !total_usage_usd.is_finite()
+        || !reported_usage_usd.is_finite()
+        || !usd_per_percent.is_finite()
+        || usd_per_percent <= 0.0
+    {
+        return None;
+    }
+    Some((reported_percent + (total_usage_usd - reported_usage_usd) / usd_per_percent).max(0.0))
 }
 
 fn format_percent_display(
