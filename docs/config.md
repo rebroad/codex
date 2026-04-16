@@ -97,7 +97,7 @@ back to these environment variables.
 
 ## Backend Query Capture
 
-Set `[prompt_debug_http]` in `config.toml` to capture backend query payloads as files:
+Set `[prompt_debug_http]` in `config.toml` to capture backend traffic and query payloads as files:
 
 ```toml
 [prompt_debug_http]
@@ -112,7 +112,9 @@ If `enabled = true`, capture files are written under `capture_dir` (defaults to 
 The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`,
 `CODEX_BACKEND_CAPTURE_OUTPUT`, `CODEX_BACKEND_CAPTURE_REASONING`, and
 `CODEX_BACKEND_CAPTURE_DIR` can force-enable or override runtime capture settings.
-Capture file names include the query id, for example:
+Capture files include:
+- a full backend traffic stream: `backend_traffic.ndjson`
+- query-id scoped files, for example:
 `codex_backend_query_<query_id>.input.md`,
 `codex_backend_query_<query_id>.output.md`, and
 `codex_backend_query_<query_id>.reasoning.md`.

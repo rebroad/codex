@@ -7,7 +7,7 @@ Usage:
   scripts/render_prompt_captures.sh [options]
 
 Options:
-  --dir <path>           Capture directory (default: latest /tmp/codex-prompt-debug.*)
+  --dir <path>           Capture directory (default: latest /var/tmp or /tmp codex-backend-capture.*)
   --out <path>           Output directory (default: tmp/prompt-captures-md)
   --query-id <id>        Render only one query id
   --all                  Render all queries (default: compaction-only)
@@ -67,7 +67,11 @@ pick_capture_dir() {
     printf '%s\n' "$capture_dir"
     return 0
   fi
-  ls -1dt /tmp/codex-prompt-debug.* 2>/dev/null | head -n 1
+  ls -1dt \
+    /var/tmp/codex-backend-capture.* \
+    /tmp/codex-backend-capture.* \
+    /var/tmp/codex-prompt-debug.* \
+    /tmp/codex-prompt-debug.* 2>/dev/null | head -n 1
 }
 
 is_compaction_capture() {
