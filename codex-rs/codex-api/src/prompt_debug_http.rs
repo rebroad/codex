@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -18,6 +20,7 @@ const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT
 const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 const CODEX_BACKEND_CAPTURE_DIR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_DIR";
 const CODEX_PROMPT_DEBUG_HTTP_PREFIX: &str = "[codex backend capture]";
+const BACKEND_TRAFFIC_FILENAME: &str = "backend_traffic.ndjson";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PromptDebugHttpConfig {
@@ -62,6 +65,7 @@ static PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static PROMPT_DEBUG_HTTP_TOOL_USAGE: OnceLock<Mutex<HashMap<PathBuf, ToolUsageStats>>> =
     OnceLock::new();
 static CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
+static TRAFFIC_EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Default)]
 struct ToolUsageStats {
@@ -133,6 +137,10 @@ fn default_capture_dir() -> PathBuf {
     PathBuf::from("/tmp")
 }
 
+fn next_traffic_event_id() -> u64 {
+    TRAFFIC_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 fn next_capture_id() -> String {
     let seq = CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
     seq.to_string()
@@ -157,6 +165,63 @@ fn append_line(path: &Path, line: &str) {
 
 fn append_json_line(path: &Path, value: &serde_json::Value) {
     append_line(path, &value.to_string());
+}
+
+fn capture_traffic_path(dir: &Path) -> PathBuf {
+    dir.join(BACKEND_TRAFFIC_FILENAME)
+}
+
+fn now_unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+pub fn capture_headers_json(headers: &http::HeaderMap) -> serde_json::Value {
+    let mut entries = serde_json::Map::new();
+    for name in headers.keys() {
+        let values: Vec<String> = headers
+            .get_all(name)
+            .iter()
+            .map(|value| String::from_utf8_lossy(value.as_bytes()).to_string())
+            .collect();
+        entries.insert(name.to_string(), serde_json::json!(values));
+    }
+    serde_json::Value::Object(entries)
+}
+
+pub fn backend_capture_append_event(mut event: serde_json::Value) {
+    let config = active_prompt_debug_http_config();
+    if !config.enabled {
+        return;
+    }
+
+    let mut map = match event {
+        serde_json::Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("payload".to_string(), other);
+            map
+        }
+    };
+    map.insert(
+        "event_seq".to_string(),
+        serde_json::json!(next_traffic_event_id()),
+    );
+    map.insert(
+        "timestamp_unix_ms".to_string(),
+        serde_json::json!(now_unix_ms()),
+    );
+    event = serde_json::Value::Object(map);
+
+    let dir = config.capture_dir.unwrap_or_else(default_capture_dir);
+    if std::fs::create_dir_all(dir.as_path()).is_err() {
+        return;
+    }
+
+    let path = capture_traffic_path(dir.as_path());
+    append_json_line(path.as_path(), &event);
 }
 
 fn tool_name_from_call(map: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
