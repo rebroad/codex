@@ -746,13 +746,27 @@ fn build_account_usage_display(
     estimated_limit: (Option<f64>, i64),
 ) -> AccountUsageDisplay {
     let (limit, sample_count) = estimated_limit;
-    let estimated_percent =
-        estimate_account_usage_percent(usage, limit).or(usage.last_backend_used_percent);
+    let estimated_percent = estimate_account_usage_percent_from_reported_price(usage)
+        .or_else(|| estimate_account_usage_percent(usage, limit))
+        .or(usage.last_backend_used_percent);
     AccountUsageDisplay {
         usage_usd: usage.total_usage_usd,
         estimated_percent,
         sample_count: Some(sample_count).filter(|count| *count > 0),
     }
+}
+
+fn estimate_account_usage_percent_from_reported_price(usage: &AccountUsageSnapshot) -> Option<f64> {
+    let reported_percent = usage.last_reported_percent_int? as f64;
+    let reported_usage_usd = usage.last_reported_usage_usd?;
+    let usd_per_percent = usage.usd_per_reported_percent?;
+    if !reported_usage_usd.is_finite() || !usd_per_percent.is_finite() || usd_per_percent <= 0.0 {
+        return None;
+    }
+    Some(
+        (reported_percent + (usage.total_usage_usd - reported_usage_usd) / usd_per_percent)
+            .max(0.0),
+    )
 }
 
 fn estimate_account_usage_percent(
