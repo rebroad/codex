@@ -162,6 +162,52 @@ fn account_usage_estimate_can_exceed_100_percent() {
 }
 
 #[test]
+fn account_usage_display_prefers_fractional_estimate_over_backend_percent() {
+    let usage = AccountUsageSnapshot {
+        total_usage_usd: 1_250.0,
+        total_usage_usd_with_prewarm: 1_250.0,
+        total_tokens: 2_500,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        sent_bytes: 0,
+        recv_bytes: 0,
+        sent_recv_bytes: 0,
+        prewarm_sent_bytes: 0,
+        prewarm_recv_bytes: 0,
+        prewarm_sent_recv_bytes: 0,
+        updated_at: 0,
+        last_backend_limit_id: None,
+        last_backend_limit_name: None,
+        last_backend_used_percent: Some(100.0),
+        last_snapshot_total_tokens: None,
+        last_snapshot_percent_int: Some(100),
+        window_start_percent_int: Some(100),
+        window_start_total_tokens: Some(500),
+        window_start_input_tokens: Some(0),
+        window_start_cached_input_tokens: Some(0),
+        window_start_output_tokens: Some(500),
+        window_start_sent_bytes: Some(0),
+        window_start_recv_bytes: Some(0),
+        window_start_sent_recv_bytes: Some(0),
+        window_start_prewarm_sent_bytes: Some(0),
+        window_start_prewarm_recv_bytes: Some(0),
+        window_start_prewarm_sent_recv_bytes: Some(0),
+        last_backend_resets_at: None,
+        last_backend_window_minutes: None,
+        last_backend_seen_at: None,
+        backend_percent_history: Some("98,99,100".to_string()),
+        cached_q_limit: None,
+        cached_q_limit_sample_count: None,
+        cached_q_limit_computed_at: None,
+        cached_q_limit_for_updated_at: None,
+    };
+    let display = super::build_account_usage_display(&usage, (Some(1_000.0), 3));
+    assert_eq!(display.estimated_percent, Some(125.0));
+}
+
+#[test]
 fn compact_status_prefers_codex_weekly_window() {
     let snapshots = vec![
         RateLimitSnapshot {
