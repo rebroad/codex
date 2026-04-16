@@ -715,7 +715,7 @@ async fn fetch_rate_limits_for_cli(base_url: String, auth: CodexAuth) -> CliRate
 async fn fetch_account_usage_display(
     store: Option<&AccountUsageStore>,
     auth: Option<&CodexAuth>,
-    stable_distinct_window: i64,
+    _stable_distinct_window: i64,
 ) -> Option<AccountUsageDisplay> {
     let account_id = match auth.and_then(|auth| {
         account_usage_key(
@@ -738,25 +738,16 @@ async fn fetch_account_usage_display(
         .await
         .ok()
         .unwrap_or((None, 0));
-    Some(build_account_usage_display(
-        &usage,
-        estimated_limit,
-        is_backend_percent_stable_for_cli(&usage, stable_distinct_window),
-    ))
+    Some(build_account_usage_display(&usage, estimated_limit))
 }
 
 fn build_account_usage_display(
     usage: &AccountUsageSnapshot,
     estimated_limit: (Option<f64>, i64),
-    backend_percent_stable: bool,
 ) -> AccountUsageDisplay {
     let (limit, sample_count) = estimated_limit;
-    let estimated_percent = if backend_percent_stable {
-        estimate_account_usage_percent(usage, limit)
-    } else {
-        None
-    }
-    .or(usage.last_backend_used_percent);
+    let estimated_percent =
+        estimate_account_usage_percent(usage, limit).or(usage.last_backend_used_percent);
     AccountUsageDisplay {
         usage_usd: usage.total_usage_usd,
         estimated_percent,
