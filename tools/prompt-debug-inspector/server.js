@@ -82,27 +82,33 @@ function parseDefaultTarget(argv) {
 }
 
 async function latestCaptureDir() {
-  let entries;
-  try {
-    entries = await fs.readdir("/tmp", { withFileTypes: true });
-  } catch (_error) {
-    return null;
-  }
-
   const candidates = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    if (!entry.name.startsWith("codex-prompt-debug.")) {
-      continue;
-    }
-    const fullPath = path.join("/tmp", entry.name);
+  const roots = ["/var/tmp", "/tmp"];
+  for (const root of roots) {
+    let entries;
     try {
-      const stat = await fs.stat(fullPath);
-      candidates.push({ path: fullPath, mtimeMs: stat.mtimeMs });
+      entries = await fs.readdir(root, { withFileTypes: true });
     } catch (_error) {
-      // Ignore races while scanning /tmp.
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (
+        !entry.name.startsWith("codex-backend-capture.") &&
+        !entry.name.startsWith("codex-prompt-debug.")
+      ) {
+        continue;
+      }
+      const fullPath = path.join(root, entry.name);
+      try {
+        const stat = await fs.stat(fullPath);
+        candidates.push({ path: fullPath, mtimeMs: stat.mtimeMs });
+      } catch (_error) {
+        // Ignore races while scanning capture directories.
+      }
     }
   }
 
@@ -516,7 +522,8 @@ async function handleApi(res, urlObj, defaultTarget) {
   }
   if (!target) {
     json(res, 400, {
-      error: "missing target (and no /tmp/codex-prompt-debug.* directory found)",
+      error:
+        "missing target (and no codex-backend-capture.* or codex-prompt-debug.* directory found)",
     });
     return;
   }
@@ -584,7 +591,9 @@ async function main() {
     if (defaultTarget) {
       console.log(`default target: ${defaultTarget}`);
     } else {
-      console.log("default target: latest /tmp/codex-prompt-debug.*");
+      console.log(
+        "default target: latest /var/tmp or /tmp codex-backend-capture.* (legacy codex-prompt-debug.* also supported)",
+      );
     }
   });
 }

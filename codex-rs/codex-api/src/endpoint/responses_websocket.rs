@@ -5,6 +5,8 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::common::TransportByteStats;
 use crate::error::ApiError;
+use crate::prompt_debug_http::backend_capture_append_event;
+use crate::prompt_debug_http::capture_headers_json;
 use crate::prompt_debug_http::prompt_capture_append_input;
 use crate::prompt_debug_http::prompt_capture_append_output;
 use crate::prompt_debug_http::prompt_capture_append_reasoning;
@@ -359,6 +361,12 @@ async fn connect_websocket(
 ) -> Result<(WsStream, bool, Option<String>, Option<String>), ApiError> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
+    backend_capture_append_event(serde_json::json!({
+        "kind": "websocket_connect_request",
+        "transport": "responses_websocket",
+        "url": url.as_str(),
+        "headers": capture_headers_json(&headers),
+    }));
 
     let mut request = url
         .as_str()
@@ -387,10 +395,23 @@ async fn connect_websocket(
                 "successfully connected to websocket: {url}, headers: {:?}",
                 response.headers()
             );
+            backend_capture_append_event(serde_json::json!({
+                "kind": "websocket_connect_response",
+                "transport": "responses_websocket",
+                "url": url.as_str(),
+                "status": response.status().as_u16(),
+                "headers": capture_headers_json(response.headers()),
+            }));
             (stream, response)
         }
         Err(err) => {
             error!("failed to connect to websocket: {err}, url: {url}");
+            backend_capture_append_event(serde_json::json!({
+                "kind": "websocket_connect_error",
+                "transport": "responses_websocket",
+                "url": url.as_str(),
+                "error": err.to_string(),
+            }));
             return Err(map_ws_error(err, &url));
         }
     };
@@ -562,6 +583,11 @@ async fn run_websocket_response_stream(
         }
     };
     trace!("websocket request: {request_text}");
+    backend_capture_append_event(serde_json::json!({
+        "kind": "websocket_outbound_message",
+        "transport": "responses_websocket",
+        "payload": request_text.clone(),
+    }));
     let sent_bytes = request_text.len() as i64;
     let mut recv_bytes = 0_i64;
     if let Some(capture_session) = capture.as_ref() {
@@ -613,6 +639,11 @@ async fn run_websocket_response_stream(
                 if let Some(capture) = capture.as_ref() {
                     prompt_capture_append_output(capture, "responses_websocket", &text);
                 }
+                backend_capture_append_event(serde_json::json!({
+                    "kind": "websocket_inbound_message",
+                    "transport": "responses_websocket",
+                    "payload": text.to_string(),
+                }));
                 trace!("websocket event: {text}");
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
@@ -717,9 +748,17 @@ async fn run_websocket_response_stream(
                 }
             }
             Message::Binary(_) => {
+                backend_capture_append_event(serde_json::json!({
+                    "kind": "websocket_inbound_binary",
+                    "transport": "responses_websocket",
+                }));
                 return Err(ApiError::Stream("unexpected binary websocket event".into()));
             }
             Message::Close(_) => {
+                backend_capture_append_event(serde_json::json!({
+                    "kind": "websocket_inbound_close",
+                    "transport": "responses_websocket",
+                }));
                 return Err(ApiError::Stream(
                     "websocket closed by server before response.completed".into(),
                 ));

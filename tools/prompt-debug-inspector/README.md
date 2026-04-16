@@ -1,6 +1,6 @@
 # Prompt Debug Inspector
 
-Local browser viewer for `codex-prompt-debug.*` captures.
+Local browser viewer for backend capture directories (`codex-backend-capture.*`, with legacy `codex-prompt-debug.*` support).
 
 It renders per-query capture data in a human-readable layout:
 
@@ -22,13 +22,13 @@ node tools/prompt-debug-inspector/view-prompt-debug.js
 Open a specific capture directory:
 
 ```bash
-node tools/prompt-debug-inspector/view-prompt-debug.js /tmp/codex-prompt-debug.2770233
+node tools/prompt-debug-inspector/view-prompt-debug.js /var/tmp/codex-backend-capture.2770233
 ```
 
 Open a specific query input file:
 
 ```bash
-node tools/prompt-debug-inspector/view-prompt-debug.js /tmp/codex-prompt-debug.2770233/22_input.ndjson
+node tools/prompt-debug-inspector/view-prompt-debug.js /var/tmp/codex-backend-capture.2770233/22_input.ndjson
 ```
 
 Options:
@@ -40,7 +40,7 @@ Options:
 ## Manual server mode
 
 ```bash
-node tools/prompt-debug-inspector/server.js --port 8788 --target /tmp/codex-prompt-debug.2770233
+node tools/prompt-debug-inspector/server.js --port 8788 --target /var/tmp/codex-backend-capture.2770233
 ```
 
 Open:
@@ -49,5 +49,5 @@ Open:
 
 API:
 
-- `GET /api/queries?target=/tmp/codex-prompt-debug.2770233`
-- `GET /api/query?target=/tmp/codex-prompt-debug.2770233&queryId=22`
+- `GET /api/queries?target=/var/tmp/codex-backend-capture.2770233`
+- `GET /api/query?target=/var/tmp/codex-backend-capture.2770233&queryId=22`
