@@ -184,7 +184,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
     refreshing_rate_limits: bool,
 ) -> CompositeHistoryCell {
-    new_status_output_with_rate_limits_variant(
+    new_status_output_with_rate_limits_handle_variant(
         config,
         account_display,
         token_info,
@@ -206,7 +206,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn new_status_output_with_rate_limits_variant(
+fn new_status_output_with_rate_limits_handle_variant(
     config: &Config,
     account_display: Option<&StatusAccountDisplay>,
     token_info: Option<&TokenUsageInfo>,
@@ -248,7 +248,47 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
         CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
     } else {
         CompositeHistoryCell::new(vec![Box::new(card)])
-    }
+    };
+
+    (composite, handle)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_rate_limits_handle(
+    config: &Config,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    _plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    refreshing_rate_limits: bool,
+) -> (CompositeHistoryCell, StatusHistoryHandle) {
+    new_status_output_with_rate_limits_handle_variant(
+        config,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        account_usage,
+        rate_limits,
+        _plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        refreshing_rate_limits,
+        StatusCardVariant::Chat,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -269,7 +309,7 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
     variant: StatusCardVariant,
 ) -> CompositeHistoryCell {
-    new_status_output_with_rate_limits_handle(
+    new_status_output_with_rate_limits_handle_variant(
         config,
         account_display,
         token_info,
@@ -284,9 +324,10 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
-        /* refreshing_rate_limits */ false,
+        /*refreshing_rate_limits*/ false,
         variant,
     )
+    .0
 }
 
 impl StatusHistoryCell {
@@ -409,7 +450,6 @@ impl StatusHistoryCell {
         let rate_limit_state = Arc::new(RwLock::new(StatusRateLimitState {
             rate_limits,
             refreshing_rate_limits,
-            variant,
         }));
 
         (

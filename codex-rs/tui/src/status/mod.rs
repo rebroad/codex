@@ -16,7 +16,6 @@ use account::truncate_status_email_local_part;
 use crate::history_cell::HistoryCell;
 use crate::insert_history::write_spans;
 pub(crate) use account::StatusAccountDisplay;
-pub(crate) use card::StatusCardVariant;
 pub(crate) use card::StatusHistoryHandle;
 #[cfg(test)]
 pub(crate) use card::new_status_output;
