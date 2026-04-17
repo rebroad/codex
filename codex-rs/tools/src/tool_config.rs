@@ -14,6 +14,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -108,6 +109,8 @@ pub struct ToolsConfig {
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
+    pub builtin_enabled_tools: Option<HashSet<String>>,
+    pub builtin_disabled_tools: HashSet<String>,
     pub agent_type_description: String,
 }
 
@@ -222,6 +225,8 @@ impl ToolsConfig {
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
+            builtin_enabled_tools: None,
+            builtin_disabled_tools: HashSet::new(),
             agent_type_description: String::new(),
         }
     }
@@ -261,6 +266,16 @@ impl ToolsConfig {
 
     pub fn with_web_search_config(mut self, web_search_config: Option<WebSearchConfig>) -> Self {
         self.web_search_config = web_search_config;
+        self
+    }
+
+    pub fn with_builtin_tool_policy(
+        mut self,
+        builtin_enabled_tools: Option<Vec<String>>,
+        builtin_disabled_tools: Vec<String>,
+    ) -> Self {
+        self.builtin_enabled_tools = builtin_enabled_tools.map(|tools| tools.into_iter().collect());
+        self.builtin_disabled_tools = builtin_disabled_tools.into_iter().collect();
         self
     }
 

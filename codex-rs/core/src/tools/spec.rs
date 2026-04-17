@@ -70,7 +70,6 @@ use codex_tools::request_permissions_tool_description;
 use codex_tools::request_user_input_tool_description;
 use codex_tools::tool_spec_to_code_mode_tool_definition;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 pub use codex_tools::ShellCommandBackendConfig;
 pub use codex_tools::ToolsConfig;
@@ -117,6 +116,69 @@ fn push_tool_spec(
     } else {
         builder.push_spec(spec);
     }
+}
+
+fn canonical_builtin_tool_name(name: &str) -> Option<&str> {
+    match name {
+        "shell" | "local_shell" | "container.exec" | "shell_command" => Some("shell_command"),
+        "exec_command" => Some("exec_command"),
+        "write_stdin" => Some("write_stdin"),
+        "update_plan" => Some("update_plan"),
+        "request_user_input" => Some("request_user_input"),
+        "request_permissions" => Some("request_permissions"),
+        TOOL_SEARCH_TOOL_NAME => Some(TOOL_SEARCH_TOOL_NAME),
+        TOOL_SUGGEST_TOOL_NAME => Some(TOOL_SUGGEST_TOOL_NAME),
+        "apply_patch" => Some("apply_patch"),
+        "web_search" => Some("web_search"),
+        "image_generation" => Some("image_generation"),
+        "view_image" => Some("view_image"),
+        "spawn_agent" => Some("spawn_agent"),
+        "send_input" => Some("send_input"),
+        "send_message" => Some("send_message"),
+        "assign_task" => Some("assign_task"),
+        "resume_agent" => Some("resume_agent"),
+        "wait_agent" => Some("wait_agent"),
+        "close_agent" => Some("close_agent"),
+        "list_agents" => Some("list_agents"),
+        "spawn_agents_on_csv" => Some("spawn_agents_on_csv"),
+        "report_agent_job_result" => Some("report_agent_job_result"),
+        "list_mcp_resources" => Some("list_mcp_resources"),
+        "list_mcp_resource_templates" => Some("list_mcp_resource_templates"),
+        "read_mcp_resource" => Some("read_mcp_resource"),
+        "js_repl" => Some("js_repl"),
+        "js_repl_reset" => Some("js_repl_reset"),
+        "list_dir" => Some("list_dir"),
+        "test_sync_tool" => Some("test_sync_tool"),
+        PUBLIC_TOOL_NAME => Some(PUBLIC_TOOL_NAME),
+        WAIT_TOOL_NAME => Some(WAIT_TOOL_NAME),
+        _ => None,
+    }
+}
+
+fn builtin_tool_allowed(config: &ToolsConfig, canonical_name: &str) -> bool {
+    if let Some(enabled_tools) = config.builtin_enabled_tools.as_ref()
+        && !enabled_tools.contains(canonical_name)
+    {
+        return false;
+    }
+
+    !config.builtin_disabled_tools.contains(canonical_name)
+}
+
+fn apply_builtin_tool_policy(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
+    builder.retain_specs(|spec| {
+        let Some(canonical_name) = canonical_builtin_tool_name(spec.name()) else {
+            return true;
+        };
+        builtin_tool_allowed(config, canonical_name)
+    });
+
+    builder.retain_handlers(|name| {
+        let Some(canonical_name) = canonical_builtin_tool_name(name) else {
+            return true;
+        };
+        builtin_tool_allowed(config, canonical_name)
+    });
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
@@ -678,6 +740,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
     }
 
+    apply_builtin_tool_policy(&mut builder, config);
     builder
 }
 #[cfg(test)]
