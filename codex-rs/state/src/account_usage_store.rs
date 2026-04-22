@@ -189,15 +189,21 @@ struct ThresholdUsageCounts {
     recv_bytes_including_warmups: i64,
 }
 
-// Composite usage model weights are USD-per-1M-tokens.
-const COMPOSITE_Q_INPUT_WEIGHT: f64 = 1.75;
-const COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.175;
-const COMPOSITE_Q_OUTPUT_WEIGHT: f64 = 14.0;
-const MINI_COMPOSITE_Q_INPUT_WEIGHT: f64 = 0.25;
-const MINI_COMPOSITE_Q_CACHED_INPUT_WEIGHT: f64 = 0.025;
-const MINI_COMPOSITE_Q_OUTPUT_WEIGHT: f64 = 2.0;
+// Composite usage model weights are credits-per-1M-tokens.
+const GPT_5_4_INPUT_WEIGHT: f64 = 62.5;
+const GPT_5_4_CACHED_INPUT_WEIGHT: f64 = 6.25;
+const GPT_5_4_OUTPUT_WEIGHT: f64 = 375.0;
+const GPT_5_3_CODEX_INPUT_WEIGHT: f64 = 43.75;
+const GPT_5_3_CODEX_CACHED_INPUT_WEIGHT: f64 = 4.375;
+const GPT_5_3_CODEX_OUTPUT_WEIGHT: f64 = 350.0;
+const GPT_5_4_MINI_INPUT_WEIGHT: f64 = 18.75;
+const GPT_5_4_MINI_CACHED_INPUT_WEIGHT: f64 = 1.875;
+const GPT_5_4_MINI_OUTPUT_WEIGHT: f64 = 113.0;
 const TOKENS_PER_MILLION: f64 = 1_000_000.0;
-const MINI_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
+const GPT_5_4_MODEL_SLUG: &str = "gpt-5.4";
+const GPT_5_4_MINI_MODEL_SLUG: &str = "gpt-5.4-mini";
+const GPT_5_1_CODEX_MINI_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
+const GPT_5_CODEX_MINI_MODEL_SLUG: &str = "gpt-5-codex-mini";
 const DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT: f64 = 0.15;
 const DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT: f64 = 0.85;
 const BYTE_WEIGHT_FIT_STEP: f64 = 0.01;
@@ -228,21 +234,27 @@ struct UsagePriceWeights {
 impl UsagePriceWeights {
     fn defaults() -> Self {
         Self {
-            input: COMPOSITE_Q_INPUT_WEIGHT / TOKENS_PER_MILLION,
-            cached_input: COMPOSITE_Q_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
-            output: COMPOSITE_Q_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
+            input: GPT_5_3_CODEX_INPUT_WEIGHT / TOKENS_PER_MILLION,
+            cached_input: GPT_5_3_CODEX_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
+            output: GPT_5_3_CODEX_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
         }
     }
 
     fn for_model(model_slug: Option<&str>) -> Self {
-        if model_slug == Some(MINI_MODEL_SLUG) {
-            Self {
-                input: MINI_COMPOSITE_Q_INPUT_WEIGHT / TOKENS_PER_MILLION,
-                cached_input: MINI_COMPOSITE_Q_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
-                output: MINI_COMPOSITE_Q_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
+        match model_slug {
+            Some(GPT_5_4_MODEL_SLUG) => Self {
+                input: GPT_5_4_INPUT_WEIGHT / TOKENS_PER_MILLION,
+                cached_input: GPT_5_4_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
+                output: GPT_5_4_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
+            },
+            Some(GPT_5_4_MINI_MODEL_SLUG | GPT_5_1_CODEX_MINI_MODEL_SLUG | GPT_5_CODEX_MINI_MODEL_SLUG) => {
+                Self {
+                    input: GPT_5_4_MINI_INPUT_WEIGHT / TOKENS_PER_MILLION,
+                    cached_input: GPT_5_4_MINI_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
+                    output: GPT_5_4_MINI_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
+                }
             }
-        } else {
-            Self::defaults()
+            _ => Self::defaults(),
         }
     }
 }
@@ -2712,7 +2724,7 @@ WHERE account_id = ? AND provider = ?
                 let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
                 let _ = writeln!(
                     file,
-                    "{ts} account={} usage_usd={} usage_usd_with_prewarm={} input={} cached_input={} output={} recv_bytes={} sent_bytes={} recv_bytes_including_warmups={} sent_bytes_including_warmups={}",
+                    "{ts} account={} usage_credits={} usage_credits_with_prewarm={} input={} cached_input={} output={} recv_bytes={} sent_bytes={} recv_bytes_including_warmups={} sent_bytes_including_warmups={}",
                     account_display,
                     counts.total_usage_usd,
                     counts.total_usage_usd_with_prewarm,
@@ -3364,6 +3376,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn account_usage_uses_credit_rates_for_supported_models() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 1_000_000,
+            input_tokens: 1_000_000,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+        };
+
+        runtime
+            .record_account_token_usage(
+                "gpt-5.4-account",
+                &usage,
+                AccountUsageEventMeta {
+                    model_slug: Some("gpt-5.4"),
+                    ..AccountUsageEventMeta::default()
+                },
+            )
+            .await
+            .expect("record gpt-5.4 usage");
+        runtime
+            .record_account_token_usage(
+                "gpt-5.3-codex-account",
+                &usage,
+                AccountUsageEventMeta {
+                    model_slug: Some("gpt-5.3-codex"),
+                    ..AccountUsageEventMeta::default()
+                },
+            )
+            .await
+            .expect("record gpt-5.3-codex usage");
+        runtime
+            .record_account_token_usage(
+                "mini-account",
+                &usage,
+                AccountUsageEventMeta {
+                    model_slug: Some("gpt-5.1-codex-mini"),
+                    ..AccountUsageEventMeta::default()
+                },
+            )
+            .await
+            .expect("record mini usage");
+
+        let gpt_5_4 = runtime
+            .get_account_usage("gpt-5.4-account")
+            .await
+            .expect("read gpt-5.4")
+            .expect("gpt-5.4 row");
+        let gpt_5_3_codex = runtime
+            .get_account_usage("gpt-5.3-codex-account")
+            .await
+            .expect("read gpt-5.3-codex")
+            .expect("gpt-5.3-codex row");
+        let mini = runtime
+            .get_account_usage("mini-account")
+            .await
+            .expect("read mini")
+            .expect("mini row");
+
+        assert_eq!(gpt_5_4.total_usage_usd, 62.5);
+        assert_eq!(gpt_5_3_codex.total_usage_usd, 43.75);
+        assert_eq!(mini.total_usage_usd, 18.75);
+    }
+
+    #[tokio::test]
     async fn clear_usage_for_account_deletes_only_target_account_rows() {
         let home = tempfile::tempdir().expect("tempdir");
         let runtime =
@@ -3405,6 +3488,9 @@ mod tests {
                 sent_bytes: 0,
                 recv_bytes: 0,
                 sent_recv_bytes: 0,
+                prewarm_sent_bytes: 0,
+                prewarm_recv_bytes: 0,
+                prewarm_sent_recv_bytes: 0,
             },
             Some(60),
             Some(123),
@@ -3429,6 +3515,9 @@ mod tests {
                 sent_bytes: 0,
                 recv_bytes: 0,
                 sent_recv_bytes: 0,
+                prewarm_sent_bytes: 0,
+                prewarm_recv_bytes: 0,
+                prewarm_sent_recv_bytes: 0,
             },
             Some(60),
             Some(123),
