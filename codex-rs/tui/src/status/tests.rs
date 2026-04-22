@@ -215,6 +215,12 @@ fn account_usage_display_prefers_fractional_estimate_over_backend_percent() {
 }
 
 #[test]
+fn credits_are_converted_to_dollars_for_display() {
+    assert_eq!(super::credits_to_usd(2_500.0), 100.0);
+    assert_eq!(super::credits_to_usd(62.5), 2.5);
+}
+
+#[test]
 fn compact_status_prefers_codex_weekly_window() {
     let snapshots = vec![
         RateLimitSnapshot {

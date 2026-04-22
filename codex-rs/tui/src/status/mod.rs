@@ -58,9 +58,15 @@ mod tests;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AccountUsageDisplay {
-    pub usage_usd: f64,
+    pub usage_credits: f64,
     pub estimated_percent: Option<f64>,
     pub sample_count: Option<i64>,
+}
+
+const USD_PER_CREDIT: f64 = 100.0 / 2_500.0;
+
+pub(crate) fn credits_to_usd(credits: f64) -> f64 {
+    credits * USD_PER_CREDIT
 }
 
 const CLI_RATE_LIMIT_FETCH_TIMEOUT_SECS: u64 = 8;
@@ -752,7 +758,7 @@ fn build_account_usage_display(
         .or_else(|| estimate_account_usage_percent(usage, limit))
         .or(usage.last_backend_used_percent);
     AccountUsageDisplay {
-        usage_usd: usage.total_usage_usd,
+        usage_credits: usage.total_usage_usd,
         estimated_percent,
         sample_count: Some(sample_count).filter(|count| *count > 0),
     }

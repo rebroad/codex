@@ -25,6 +25,7 @@ use url::Url;
 
 use super::AccountUsageDisplay;
 use super::account::StatusAccountDisplay;
+use super::credits_to_usd;
 use super::format::FieldFormatter;
 use super::format::line_display_width;
 use super::format::push_label;
@@ -331,7 +332,8 @@ pub(crate) fn new_status_output_with_rate_limits_variant(
 }
 
 impl StatusHistoryCell {
-    fn format_usage_usd(usage_usd: f64) -> String {
+    fn format_usage_usd(usage_credits: f64) -> String {
+        let usage_usd = credits_to_usd(usage_credits);
         if usage_usd.is_finite() {
             format!("${usage_usd:.2}")
         } else {
@@ -690,7 +692,7 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
         let account_usage = self.account_usage.as_ref().map(|usage| {
-            let usage_usd = Self::format_usage_usd(usage.usage_usd);
+            let usage_usd = Self::format_usage_usd(usage.usage_credits);
             let mut spans = Vec::new();
             match usage.estimated_percent {
                 Some(percent) => {
