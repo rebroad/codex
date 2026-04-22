@@ -21,7 +21,6 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
-use crate::config::types::ExecPolicyRuleWriteScope;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 #[cfg(test)]
@@ -198,6 +197,7 @@ use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::types::ExecPolicyRuleWriteScope;
 use codex_config::types::McpServerConfig;
 use codex_config::types::ShellEnvironmentPolicy;
 
