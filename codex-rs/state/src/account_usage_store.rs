@@ -2647,14 +2647,7 @@ WHERE account_id = ? AND provider = ?
                     format!(" {percent_display} samples={sample_count}{usage_pct_suffix}{suffix}")
                 }
             };
-            if message.contains("stale_backend_regression_ignored=1")
-                && let Ok(raw) = std::fs::read_to_string(&path)
-                && raw
-                    .lines()
-                    .rev()
-                    .find(|line| !line.trim().is_empty())
-                    .is_some_and(|last_line| last_line.ends_with(&line_suffix))
-            {
+            if should_skip_duplicate_usage_log_line(&path, &line_suffix, &message) {
                 return;
             }
             if let Some(mut file) = open_usage_log_file_path(path) {
@@ -2783,6 +2776,21 @@ fn usage_log_path(account_display: &str) -> Option<PathBuf> {
 
 fn usage_named_log_path(filename: &str) -> Option<PathBuf> {
     Some(usage_log_root_dir()?.join(filename))
+}
+
+fn should_skip_duplicate_usage_log_line(path: &Path, line_suffix: &str, message: &str) -> bool {
+    let dedupe_repeated_line = message.contains("stale_backend_regression_ignored=1")
+        || message.contains("backend_change_pending=1 confirmations=1");
+    dedupe_repeated_line
+        && std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| {
+                raw.lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .is_some_and(|last_line| last_line.ends_with(line_suffix))
 }
 
 fn open_usage_log_file_by_name(filename: &str) -> Option<std::fs::File> {
@@ -3286,6 +3294,7 @@ WHERE id IN (
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[tokio::test]
     async fn account_usage_records_and_reads_tokens() {
@@ -4341,6 +4350,31 @@ WHERE account_id = ? AND provider = ?
             /*estimated_limit*/ 1_000.0,
         );
         assert_eq!(usage_pct, Some(195.2));
+    }
+
+    #[test]
+    fn suppresses_duplicate_pending_backend_confirmation_log_line() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("usage.log");
+        let line_suffix =
+            " percent=0 samples=200 backend_change_pending=1 confirmations=1 delta_percent=-100";
+
+        fs::write(
+            &path,
+            format!("2026-04-22T14:07:53Z pid:841908{line_suffix}\n"),
+        )
+        .expect("write log");
+
+        assert!(should_skip_duplicate_usage_log_line(
+            &path,
+            line_suffix,
+            "backend_change_pending=1 confirmations=1 delta_percent=-100"
+        ));
+        assert!(!should_skip_duplicate_usage_log_line(
+            &path,
+            line_suffix,
+            "backend_change_pending=1 confirmations=2 delta_percent=-100"
+        ));
     }
 
     #[test]
