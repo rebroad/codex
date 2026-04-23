@@ -935,6 +935,7 @@ WHERE account_id = ? AND provider = ?
                     .ok()
             })
             .flatten();
+        let prior_window_was_full = prior_usage.as_ref().is_some_and(prior_usage_was_full);
         let current_reported_percent_int = used_percent.floor().max(0.0) as i64;
         let reported_percent_changed =
             previous_reported_percent_int != Some(current_reported_percent_int);
@@ -1000,7 +1001,8 @@ WHERE account_id = ? AND provider = ?
             && previous_backend_resets_at == resets_at;
         let stale_regression_snapshot = same_backend_window
             && previous_backend_percent
-                .is_some_and(|previous| previous - used_percent > USED_PERCENT_REFUND_EPSILON);
+                .is_some_and(|previous| previous - used_percent > USED_PERCENT_REFUND_EPSILON)
+            && !(prior_window_was_full && used_percent <= 0.0);
         if stale_regression_snapshot {
             self.log_usage_event(
                 account_id,
@@ -1304,20 +1306,30 @@ WHERE account_id = ? AND provider = ?
                 ),
             )
             .await;
+            if prior_window_was_full && used_percent <= 0.0 {
+                self.reset_account_usage_window(
+                    account_id,
+                    &snapshot,
+                    now,
+                    used_percent,
+                    current_reported_percent_int,
+                    window_minutes,
+                    resets_at,
+                    seen_at,
+                    previous_backend_percent_history.as_deref(),
+                    previous_backend_percent.unwrap_or(0.0) as i64,
+                )
+                .await?;
+                return Ok(());
+            }
         } else {
             let mut pending_updates = self.pending_backend_updates.lock().await;
             pending_updates.remove(&(account_id.to_string(), self.default_provider.clone()));
         }
 
         let should_reset = prior_usage.as_ref().is_some_and(|row| {
-            let previous_percent: Option<f64> = row.try_get("last_backend_used_percent").ok();
-            let previous_snapshot_percent_int: Option<i64> =
-                row.try_get("last_snapshot_percent_int").ok();
             let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
-            let was_full = previous_percent
-                .filter(|value| value.is_finite())
-                .is_some_and(|value| value >= 100.0 - USED_PERCENT_REFUND_EPSILON)
-                || previous_snapshot_percent_int.is_some_and(|value| value >= 100);
+            let was_full = prior_usage_was_full(row);
             let now_zero = used_percent <= 0.0;
 
             let new_snapshot = previous_seen_at
@@ -1327,7 +1339,6 @@ WHERE account_id = ? AND provider = ?
 
             (new_snapshot || reset_time_changed) && was_full && now_zero
         });
-
         let current_percent_int = current_reported_percent_int;
         if negative_jump {
             self.log_usage_event(
@@ -1463,148 +1474,19 @@ WHERE account_id = ? AND provider = ?
         };
 
         if prior_usage.is_some() && should_reset {
-            let reached_full_window = last_sample_percent >= 100;
-            let cleared_samples = if reached_full_window {
-                sqlx::query(
-                    r#"
-DELETE FROM account_usage_samples
-WHERE account_id = ? AND provider = ?
-                    "#,
-                )
-                .bind(account_id)
-                .bind(self.default_provider.as_str())
-                .execute(self.pool.as_ref())
-                .await?
-                .rows_affected()
-            } else {
-                0
-            };
-            prune_account_usage_samples(
-                self.pool.as_ref(),
+            self.reset_account_usage_window(
                 account_id,
-                self.default_provider.as_str(),
-            )
-            .await?;
-
-            sqlx::query(
-                r#"
-UPDATE account_usage
-SET
-    total_usage_usd = 0,
-    total_usage_usd_with_prewarm = 0,
-    total_tokens = 0,
-    input_tokens = 0,
-    cached_input_tokens = 0,
-    output_tokens = 0,
-    reasoning_output_tokens = 0,
-    context_total_tokens = 0,
-    min_total_cached_output_tokens = 0,
-    sent_bytes = 0,
-    recv_bytes = 0,
-    sent_recv_bytes = 0,
-    prewarm_sent_bytes = 0,
-    prewarm_recv_bytes = 0,
-    prewarm_sent_recv_bytes = 0,
-    updated_at = ?,
-    last_backend_limit_id = ?,
-    last_backend_limit_name = ?,
-    last_backend_used_percent = ?,
-    last_snapshot_total_tokens = ?,
-    last_snapshot_input_tokens = ?,
-    last_snapshot_cached_input_tokens = ?,
-    last_snapshot_output_tokens = ?,
-    last_snapshot_context_total_tokens = ?,
-    last_snapshot_min_total_cached_output_tokens = ?,
-    last_snapshot_sent_bytes = ?,
-    last_snapshot_recv_bytes = ?,
-    last_snapshot_sent_recv_bytes = ?,
-    last_snapshot_prewarm_sent_bytes = ?,
-    last_snapshot_prewarm_recv_bytes = ?,
-    last_snapshot_prewarm_sent_recv_bytes = ?,
-    last_snapshot_percent_int = ?,
-    window_start_percent_int = ?,
-    window_start_total_tokens = ?,
-    window_start_input_tokens = ?,
-    window_start_cached_input_tokens = ?,
-    window_start_output_tokens = ?,
-    window_start_context_total_tokens = ?,
-    window_start_min_total_cached_output_tokens = ?,
-    window_start_sent_bytes = ?,
-    window_start_recv_bytes = ?,
-    window_start_sent_recv_bytes = ?,
-    window_start_prewarm_sent_bytes = ?,
-    window_start_prewarm_recv_bytes = ?,
-    window_start_prewarm_sent_recv_bytes = ?,
-    last_backend_resets_at = ?,
-    last_backend_window_minutes = ?,
-    last_backend_seen_at = ?,
-    last_reported_percent_int = ?,
-    last_reported_usage_usd = ?,
-    usd_per_reported_percent = ?
-WHERE account_id = ? AND provider = ?
-                    "#,
-            )
-            .bind(now)
-            .bind(snapshot.limit_id.as_deref())
-            .bind(snapshot.limit_name.as_deref())
-            .bind(used_percent)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(0_i64)
-            .bind(resets_at)
-            .bind(window_minutes)
-            .bind(seen_at)
-            .bind(current_reported_percent_int)
-            .bind(0.0_f64)
-            .bind(None::<f64>)
-            .bind(account_id)
-            .bind(self.default_provider.as_str())
-            .execute(self.pool.as_ref())
-            .await?;
-            self.persist_backend_percent_history(
-                account_id,
-                previous_backend_percent_history.as_deref(),
+                &snapshot,
+                now,
                 used_percent,
+                current_reported_percent_int,
+                window_minutes,
+                resets_at,
+                seen_at,
+                previous_backend_percent_history.as_deref(),
+                last_sample_percent,
             )
             .await?;
-
-            self.log_usage_event(
-                account_id,
-                Some(used_percent),
-                /*reported_previous_percent_int*/ None,
-                format!(
-                    "reset=1 reached_full_window={} samples_cleared={cleared_samples}",
-                    if reached_full_window { 1 } else { 0 }
-                ),
-            )
-            .await;
-
             return Ok(());
         }
 
@@ -2157,6 +2039,161 @@ WHERE account_id = ? AND provider = ?
                 sent_bytes_including_warmups: (sent_bytes_now + prewarm_sent_bytes).max(0),
                 recv_bytes_including_warmups: (recv_bytes_now + prewarm_recv_bytes).max(0),
             },
+        )
+        .await;
+
+        Ok(())
+    }
+
+    async fn reset_account_usage_window(
+        &self,
+        account_id: &str,
+        snapshot: &RateLimitSnapshot,
+        now: i64,
+        used_percent: f64,
+        current_reported_percent_int: i64,
+        window_minutes: Option<i64>,
+        resets_at: Option<i64>,
+        seen_at: Option<i64>,
+        previous_backend_percent_history: Option<&str>,
+        last_sample_percent: i64,
+    ) -> anyhow::Result<()> {
+        let reached_full_window = last_sample_percent >= 100;
+        let cleared_samples = if reached_full_window {
+            sqlx::query(
+                r#"
+DELETE FROM account_usage_samples
+WHERE account_id = ? AND provider = ?
+                "#,
+            )
+            .bind(account_id)
+            .bind(self.default_provider.as_str())
+            .execute(self.pool.as_ref())
+            .await?
+            .rows_affected()
+        } else {
+            0
+        };
+        prune_account_usage_samples(
+            self.pool.as_ref(),
+            account_id,
+            self.default_provider.as_str(),
+        )
+        .await?;
+
+        sqlx::query(
+            r#"
+UPDATE account_usage
+SET
+    total_usage_usd = 0,
+    total_usage_usd_with_prewarm = 0,
+    total_tokens = 0,
+    input_tokens = 0,
+    cached_input_tokens = 0,
+    output_tokens = 0,
+    reasoning_output_tokens = 0,
+    context_total_tokens = 0,
+    min_total_cached_output_tokens = 0,
+    sent_bytes = 0,
+    recv_bytes = 0,
+    sent_recv_bytes = 0,
+    prewarm_sent_bytes = 0,
+    prewarm_recv_bytes = 0,
+    prewarm_sent_recv_bytes = 0,
+    updated_at = ?,
+    last_backend_limit_id = ?,
+    last_backend_limit_name = ?,
+    last_backend_used_percent = ?,
+    last_snapshot_total_tokens = ?,
+    last_snapshot_input_tokens = ?,
+    last_snapshot_cached_input_tokens = ?,
+    last_snapshot_output_tokens = ?,
+    last_snapshot_context_total_tokens = ?,
+    last_snapshot_min_total_cached_output_tokens = ?,
+    last_snapshot_sent_bytes = ?,
+    last_snapshot_recv_bytes = ?,
+    last_snapshot_sent_recv_bytes = ?,
+    last_snapshot_prewarm_sent_bytes = ?,
+    last_snapshot_prewarm_recv_bytes = ?,
+    last_snapshot_prewarm_sent_recv_bytes = ?,
+    last_snapshot_percent_int = ?,
+    window_start_percent_int = ?,
+    window_start_total_tokens = ?,
+    window_start_input_tokens = ?,
+    window_start_cached_input_tokens = ?,
+    window_start_output_tokens = ?,
+    window_start_context_total_tokens = ?,
+    window_start_min_total_cached_output_tokens = ?,
+    window_start_sent_bytes = ?,
+    window_start_recv_bytes = ?,
+    window_start_sent_recv_bytes = ?,
+    window_start_prewarm_sent_bytes = ?,
+    window_start_prewarm_recv_bytes = ?,
+    window_start_prewarm_sent_recv_bytes = ?,
+    last_backend_resets_at = ?,
+    last_backend_window_minutes = ?,
+    last_backend_seen_at = ?,
+    last_reported_percent_int = ?,
+    last_reported_usage_usd = ?,
+    usd_per_reported_percent = ?
+WHERE account_id = ? AND provider = ?
+                "#,
+        )
+        .bind(now)
+        .bind(snapshot.limit_id.as_deref())
+        .bind(snapshot.limit_name.as_deref())
+        .bind(used_percent)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(resets_at)
+        .bind(window_minutes)
+        .bind(seen_at)
+        .bind(current_reported_percent_int)
+        .bind(0.0_f64)
+        .bind(None::<f64>)
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+        self.persist_backend_percent_history(
+            account_id,
+            previous_backend_percent_history,
+            used_percent,
+        )
+        .await?;
+
+        self.log_usage_event(
+            account_id,
+            Some(used_percent),
+            /*reported_previous_percent_int*/ None,
+            format!(
+                "reset=1 reached_full_window={} samples_cleared={cleared_samples}",
+                if reached_full_window { 1 } else { 0 }
+            ),
         )
         .await;
 
@@ -3004,6 +3041,16 @@ fn composite_q_tokens_with_weights(
 
 fn composite_q_bytes(sent_bytes: i64, recv_bytes: i64, weights: ByteWeights) -> f64 {
     weights.sent_weight * sent_bytes.max(0) as f64 + weights.recv_weight * recv_bytes.max(0) as f64
+}
+
+fn prior_usage_was_full(row: &sqlx::sqlite::SqliteRow) -> bool {
+    let previous_percent: Option<f64> = row.try_get("last_backend_used_percent").ok();
+    let previous_snapshot_percent_int: Option<i64> = row.try_get("last_snapshot_percent_int").ok();
+
+    previous_percent
+        .filter(|value| value.is_finite())
+        .is_some_and(|value| value >= 100.0 - USED_PERCENT_REFUND_EPSILON)
+        || previous_snapshot_percent_int.is_some_and(|value| value >= 100)
 }
 
 fn fit_byte_weights(
@@ -4363,6 +4410,40 @@ WHERE account_id = ? AND provider = ?
             .record_account_backend_rate_limit("account-1", &zero_snapshot)
             .await
             .expect("record zero snapshot pending");
+
+        let row_after_pending = sqlx::query(
+            r#"
+SELECT
+    total_usage_usd,
+    last_backend_used_percent,
+    last_snapshot_percent_int,
+    last_reported_percent_int
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("usage row after pending zero snapshot");
+        let total_usage_usd_after_pending: f64 = row_after_pending
+            .try_get("total_usage_usd")
+            .expect("total_usage_usd");
+        let last_backend_used_percent_after_pending: f64 = row_after_pending
+            .try_get("last_backend_used_percent")
+            .expect("last_backend_used_percent");
+        let last_snapshot_percent_int_after_pending: i64 = row_after_pending
+            .try_get("last_snapshot_percent_int")
+            .expect("last_snapshot_percent_int");
+        let last_reported_percent_int_after_pending: i64 = row_after_pending
+            .try_get("last_reported_percent_int")
+            .expect("last_reported_percent_int");
+        assert_eq!(total_usage_usd_after_pending, 0.0105);
+        assert_eq!(last_backend_used_percent_after_pending, 0.0);
+        assert_eq!(last_snapshot_percent_int_after_pending, 100);
+        assert_eq!(last_reported_percent_int_after_pending, 0);
+
         runtime
             .record_account_backend_rate_limit("account-1", &zero_snapshot)
             .await
