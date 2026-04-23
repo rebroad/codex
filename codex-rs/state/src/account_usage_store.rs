@@ -11,6 +11,9 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
+use crate::model_pricing::ModelPricingFile;
+use crate::model_pricing::UsagePriceWeights;
+use crate::model_pricing::load_model_pricing;
 use log::LevelFilter;
 use sqlx::ConnectOptions;
 use sqlx::Row;
@@ -21,6 +24,7 @@ use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
 use tokio::sync::Mutex;
+use tracing::warn;
 
 pub(crate) static USAGE_MIGRATOR: Migrator = sqlx::migrate!("./usage_migrations");
 
@@ -127,6 +131,7 @@ pub struct AccountUsageStore {
     sqlite_home: PathBuf,
     default_provider: String,
     estimator_config: AccountUsageEstimatorConfig,
+    model_pricing: ModelPricingFile,
     pool: Arc<SqlitePool>,
     pending_backend_updates:
         Arc<Mutex<std::collections::HashMap<(String, String), PendingBackendRateLimitUpdate>>>,
@@ -189,21 +194,6 @@ struct ThresholdUsageCounts {
     recv_bytes_including_warmups: i64,
 }
 
-// Composite usage model weights are credits-per-1M-tokens.
-const GPT_5_4_INPUT_WEIGHT: f64 = 62.5;
-const GPT_5_4_CACHED_INPUT_WEIGHT: f64 = 6.25;
-const GPT_5_4_OUTPUT_WEIGHT: f64 = 375.0;
-const GPT_5_3_CODEX_INPUT_WEIGHT: f64 = 43.75;
-const GPT_5_3_CODEX_CACHED_INPUT_WEIGHT: f64 = 4.375;
-const GPT_5_3_CODEX_OUTPUT_WEIGHT: f64 = 350.0;
-const GPT_5_4_MINI_INPUT_WEIGHT: f64 = 18.75;
-const GPT_5_4_MINI_CACHED_INPUT_WEIGHT: f64 = 1.875;
-const GPT_5_4_MINI_OUTPUT_WEIGHT: f64 = 113.0;
-const TOKENS_PER_MILLION: f64 = 1_000_000.0;
-const GPT_5_4_MODEL_SLUG: &str = "gpt-5.4";
-const GPT_5_4_MINI_MODEL_SLUG: &str = "gpt-5.4-mini";
-const GPT_5_1_CODEX_MINI_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
-const GPT_5_CODEX_MINI_MODEL_SLUG: &str = "gpt-5-codex-mini";
 const DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT: f64 = 0.15;
 const DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT: f64 = 0.85;
 const BYTE_WEIGHT_FIT_STEP: f64 = 0.01;
@@ -220,41 +210,6 @@ impl ByteWeights {
         Self {
             sent_weight: DEFAULT_COMPOSITE_Q_SENT_BYTES_WEIGHT,
             recv_weight: DEFAULT_COMPOSITE_Q_RECV_BYTES_WEIGHT,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UsagePriceWeights {
-    input: f64,
-    cached_input: f64,
-    output: f64,
-}
-
-impl UsagePriceWeights {
-    fn defaults() -> Self {
-        Self {
-            input: GPT_5_3_CODEX_INPUT_WEIGHT / TOKENS_PER_MILLION,
-            cached_input: GPT_5_3_CODEX_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
-            output: GPT_5_3_CODEX_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
-        }
-    }
-
-    fn for_model(model_slug: Option<&str>) -> Self {
-        match model_slug {
-            Some(GPT_5_4_MODEL_SLUG) => Self {
-                input: GPT_5_4_INPUT_WEIGHT / TOKENS_PER_MILLION,
-                cached_input: GPT_5_4_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
-                output: GPT_5_4_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
-            },
-            Some(GPT_5_4_MINI_MODEL_SLUG | GPT_5_1_CODEX_MINI_MODEL_SLUG | GPT_5_CODEX_MINI_MODEL_SLUG) => {
-                Self {
-                    input: GPT_5_4_MINI_INPUT_WEIGHT / TOKENS_PER_MILLION,
-                    cached_input: GPT_5_4_MINI_CACHED_INPUT_WEIGHT / TOKENS_PER_MILLION,
-                    output: GPT_5_4_MINI_OUTPUT_WEIGHT / TOKENS_PER_MILLION,
-                }
-            }
-            _ => Self::defaults(),
         }
     }
 }
@@ -277,10 +232,22 @@ impl AccountUsageStore {
         tokio::fs::create_dir_all(&sqlite_home).await?;
         let usage_path = usage_db_path(sqlite_home.as_path());
         let pool = open_sqlite(&usage_path).await?;
+        let model_pricing = match load_model_pricing(sqlite_home.as_path()) {
+            Ok(pricing) => pricing,
+            Err(err) => {
+                warn!(
+                    "failed to load model pricing from {}: {err}",
+                    sqlite_home.display()
+                );
+                ModelPricingFile::bundled_default()
+                    .context("load bundled fallback model pricing")?
+            }
+        };
         Ok(Arc::new(Self {
             sqlite_home,
             default_provider,
             estimator_config,
+            model_pricing,
             pool: Arc::new(pool),
             pending_backend_updates: Arc::new(Mutex::new(std::collections::HashMap::new())),
             account_displays: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -733,7 +700,7 @@ LIMIT 200
             input_tokens,
             cached_input_tokens,
             output_tokens,
-            UsagePriceWeights::for_model(meta.model_slug),
+            self.model_pricing.weights_for_model(meta.model_slug),
         );
         let usage_usd_excluding_prewarm = if meta.is_prewarm { 0.0 } else { usage_usd };
         let reasoning_output_tokens = normalized_usage.reasoning_output_tokens.max(0);
@@ -1344,10 +1311,13 @@ WHERE account_id = ? AND provider = ?
 
         let should_reset = prior_usage.as_ref().is_some_and(|row| {
             let previous_percent: Option<f64> = row.try_get("last_backend_used_percent").ok();
+            let previous_snapshot_percent_int: Option<i64> =
+                row.try_get("last_snapshot_percent_int").ok();
             let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
             let was_full = previous_percent
                 .filter(|value| value.is_finite())
-                .is_some_and(|value| value >= 100.0 - USED_PERCENT_REFUND_EPSILON);
+                .is_some_and(|value| value >= 100.0 - USED_PERCENT_REFUND_EPSILON)
+                || previous_snapshot_percent_int.is_some_and(|value| value >= 100);
             let now_zero = used_percent <= 0.0;
 
             let new_snapshot = previous_seen_at
@@ -3017,7 +2987,7 @@ fn composite_q_tokens(input_tokens: i64, cached_input_tokens: i64, output_tokens
         input_tokens,
         cached_input_tokens,
         output_tokens,
-        UsagePriceWeights::defaults(),
+        UsagePriceWeights::default(),
     )
 }
 
@@ -4338,6 +4308,112 @@ WHERE account_id = ? AND provider = ?
         assert_eq!(last_backend_used_percent_after_confirm, 59.0);
         assert_eq!(last_snapshot_percent_after_confirm, 59);
         assert_eq!(last_reported_percent_after_confirm, 59);
+    }
+
+    #[tokio::test]
+    async fn account_usage_resets_totals_after_confirmed_backend_drop_from_full_to_zero() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 100,
+            input_tokens: 80,
+            cached_input_tokens: 0,
+            output_tokens: 20,
+            reasoning_output_tokens: 0,
+        };
+        runtime
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
+            .await
+            .expect("record usage");
+
+        let full_snapshot = RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: Some("Weekly".to_string()),
+            primary: None,
+            secondary: Some(codex_protocol::protocol::RateLimitWindow {
+                used_percent: 100.0,
+                window_minutes: Some(10080),
+                resets_at: Some(12345),
+            }),
+            credits: None,
+            plan_type: None,
+        };
+        runtime
+            .record_account_backend_rate_limit("account-1", &full_snapshot)
+            .await
+            .expect("record full snapshot pending");
+        runtime
+            .record_account_backend_rate_limit("account-1", &full_snapshot)
+            .await
+            .expect("confirm full snapshot");
+
+        let zero_snapshot = RateLimitSnapshot {
+            secondary: Some(codex_protocol::protocol::RateLimitWindow {
+                used_percent: 0.0,
+                window_minutes: Some(10080),
+                resets_at: Some(12345),
+            }),
+            ..full_snapshot.clone()
+        };
+        runtime
+            .record_account_backend_rate_limit("account-1", &zero_snapshot)
+            .await
+            .expect("record zero snapshot pending");
+        runtime
+            .record_account_backend_rate_limit("account-1", &zero_snapshot)
+            .await
+            .expect("confirm zero snapshot");
+
+        let row = sqlx::query(
+            r#"
+SELECT
+    total_usage_usd,
+    total_usage_usd_with_prewarm,
+    total_tokens,
+    input_tokens,
+    output_tokens,
+    last_backend_used_percent,
+    last_snapshot_percent_int,
+    last_reported_percent_int
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("usage row after reset");
+
+        let total_usage_usd: f64 = row.try_get("total_usage_usd").expect("total_usage_usd");
+        let total_usage_usd_with_prewarm: f64 = row
+            .try_get("total_usage_usd_with_prewarm")
+            .expect("total_usage_usd_with_prewarm");
+        let total_tokens: i64 = row.try_get("total_tokens").expect("total_tokens");
+        let input_tokens: i64 = row.try_get("input_tokens").expect("input_tokens");
+        let output_tokens: i64 = row.try_get("output_tokens").expect("output_tokens");
+        let last_backend_used_percent: f64 = row
+            .try_get("last_backend_used_percent")
+            .expect("last_backend_used_percent");
+        let last_snapshot_percent_int: i64 = row
+            .try_get("last_snapshot_percent_int")
+            .expect("last_snapshot_percent_int");
+        let last_reported_percent_int: i64 = row
+            .try_get("last_reported_percent_int")
+            .expect("last_reported_percent_int");
+
+        assert_eq!(total_usage_usd, 0.0);
+        assert_eq!(total_usage_usd_with_prewarm, 0.0);
+        assert_eq!(total_tokens, 0);
+        assert_eq!(input_tokens, 0);
+        assert_eq!(output_tokens, 0);
+        assert_eq!(last_backend_used_percent, 0.0);
+        assert_eq!(last_snapshot_percent_int, 0);
+        assert_eq!(last_reported_percent_int, 0);
     }
 
     #[test]
