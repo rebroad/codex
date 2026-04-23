@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "default_model": "gpt-5.3-codex",
+  "source_url": "https://developers.openai.com/api/docs/pricing",
+  "updated_at": "2026-04-23T00:00:00Z",
+  "credits_per_usd": 25.0,
+  "models": {
+    "gpt-5.4": {
+      "input_credits_per_million": 62.5,
+      "cached_input_credits_per_million": 6.25,
+      "output_credits_per_million": 375.0
+    },
+    "gpt-5.4-mini": {
+      "input_credits_per_million": 18.75,
+      "cached_input_credits_per_million": 1.875,
+      "output_credits_per_million": 112.5
+    },
+    "gpt-5.3-codex": {
+      "input_credits_per_million": 43.75,
+      "cached_input_credits_per_million": 4.375,
+      "output_credits_per_million": 350.0
+    },
+    "gpt-5-codex": {
+      "input_credits_per_million": 31.25,
+      "cached_input_credits_per_million": 3.125,
+      "output_credits_per_million": 250.0
+    }
+  },
+  "aliases": {
+    "gpt-5.2-codex": "gpt-5.3-codex",
+    "gpt-5.2": "gpt-5.3-codex",
+    "gpt-5.1-codex-mini": "gpt-5.4-mini",
+    "gpt-5-codex-mini": "gpt-5.4-mini"
+  }
+}
