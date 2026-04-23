@@ -7,6 +7,6 @@ In the `codex-rs` folder where the Rust code lives:
 - If you add compile-time file reads (for example `include_str!`, `include_bytes!`, `sqlx::migrate!`), update the crate `BUILD.bazel` `data` attributes so Bazel builds continue to work.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` before tests to keep `codex-rs/core/config.schema.json` in sync.
 - If you change Rust dependencies (`Cargo.toml` or `Cargo.lock`), run `just bazel-lock-update` at repo root, include `MODULE.bazel.lock` in the same change, then run `just bazel-lock-check`.
-- For Cargo commands that support it, prefer `--locked` (for example `cargo build --locked`, `cargo clippy --locked`, `cargo test --locked`) to avoid incidental lockfile rewrites.
+- For Cargo commands that support it, prefer `--locked` (for example `cargo build --locked`, `cargo clippy --locked`, `cargo test --locked`) to avoid incidental lockfile rewrites. Also, escalated shell access is needed for cargo (due to sccache).
 - Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness.
 - `codex-rs/Cargo.lock` may already be dirty from normal local Cargo usage; do not treat that alone as a blocker.
