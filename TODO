@@ -1,5 +1,6 @@
+=Samples are being taken on every `codex status`! They should only be taken when the backend value changes!
 =Pragmatic personality is still being injected - find out why
-=survival - `final` still being mentioned.
+=survival -> persistent - avoid mention of "final"
 =Too many skills being injected, e.g. openai-docs
 =Explore "encrypted_content" in "codex prompt debug".
 =`just argument-comment-lint` produces too much output (token wastage)
