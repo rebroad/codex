@@ -3,5 +3,7 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "state",
     crate_name = "codex_state",
-    compile_data = glob(["logs_migrations/**", "migrations/**", "usage_migrations/**"]),
+    compile_data = glob(
+        ["logs_migrations/**", "migrations/**", "usage_migrations/**"],
+    ) + ["src/default_model_pricing.json"],
 )
