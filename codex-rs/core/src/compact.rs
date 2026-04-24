@@ -1,4 +1,9 @@
 use std::sync::Arc;
+use std::fs;
+use std::path::PathBuf;
+use std::process;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::ModelProviderInfo;
 use crate::Prompt;
@@ -33,10 +38,40 @@ pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_pref
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 pub(crate) fn maybe_capture_compaction_payload(
     _sess: &Session,
-    _source: &str,
-    _body: &str,
+    source: &str,
+    body: &str,
 ) -> Option<String> {
-    None
+    let mut dir = PathBuf::from("/var/tmp");
+    dir.push("codex-compaction-summaries");
+    if fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+
+    let sanitized_source: String = source
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let filename = format!(
+        "{timestamp}-pid{}-{sanitized_source}.txt",
+        process::id()
+    );
+    let path = dir.join(filename);
+    if fs::write(&path, body).is_ok() {
+        Some(path.display().to_string())
+    } else {
+        None
+    }
 }
 
 /// Controls whether compaction replacement history must include initial context.
@@ -203,8 +238,11 @@ async fn run_compact_task_inner(
     } else {
         format!("{SUMMARY_PREFIX}\n{summary_suffix}")
     };
-    let _ =
-        maybe_capture_compaction_payload(sess.as_ref(), "local_compaction_summary", &summary_text);
+    if let Some(path) =
+        maybe_capture_compaction_payload(sess.as_ref(), "local_compaction_summary", &summary_text)
+    {
+        tracing::info!(summary_path = %path, "captured local compaction summary");
+    }
     let user_messages = collect_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
