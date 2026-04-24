@@ -3628,6 +3628,11 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) {
+        let replacement_items = compacted_item
+            .replacement_history
+            .as_ref()
+            .map(|history| history.len())
+            .unwrap_or(0);
         self.replace_history(items, reference_context_item.clone())
             .await;
 
@@ -3637,6 +3642,16 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
         }
+
+        let rollout_path = self.current_rollout_path().await;
+        info!(
+            conversation_id = %self.conversation_id,
+            rollout_path = ?rollout_path,
+            retired_rollout_path = ?rollout_path,
+            replacement_rollout_path = ?rollout_path,
+            compacted_items = replacement_items,
+            "compacted conversation history in place"
+        );
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
