@@ -1078,7 +1078,11 @@ fn thread_start_params_from_config(
         config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
         personality: config.personality,
-        base_instructions: bare_prompt.then(String::new),
+        base_instructions: if bare_prompt {
+            Some(String::new())
+        } else {
+            config.base_instructions.clone()
+        },
         developer_instructions: if bare_prompt {
             Some(bare_prompt_developer_instructions.unwrap_or_default())
         } else {
@@ -1104,7 +1108,11 @@ fn thread_resume_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config, bare_prompt),
         personality: config.personality,
-        base_instructions: bare_prompt.then(String::new),
+        base_instructions: if bare_prompt {
+            Some(String::new())
+        } else {
+            config.base_instructions.clone()
+        },
         developer_instructions: if bare_prompt {
             Some(bare_prompt_developer_instructions.unwrap_or_default())
         } else {
@@ -2616,6 +2624,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
+                base_instructions: Some("shared base".to_string()),
                 personality: Some(Personality::Pragmatic),
                 ..Default::default()
             })
@@ -2627,6 +2636,7 @@ mod tests {
         let start_params = thread_start_params_from_config(
             &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
         );
+        assert_eq!(start_params.base_instructions.as_deref(), Some("shared base"));
         assert_eq!(start_params.personality, Some(Personality::Pragmatic));
 
         let resume_params = thread_resume_params_from_config(
@@ -2635,6 +2645,7 @@ mod tests {
             /*bare_prompt*/ false,
             /*bare_prompt_developer_instructions*/ None,
         );
+        assert_eq!(resume_params.base_instructions.as_deref(), Some("shared base"));
         assert_eq!(resume_params.personality, Some(Personality::Pragmatic));
     }
 
