@@ -18,6 +18,8 @@ RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
 RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
 ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-${REPO_DIR}/tmp/armv7-cache}"
 DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:2}"
+# Docker's default bridge DNS has been flaky here; host networking keeps apt/rustup working.
+DOCKER_NETWORK_MODE="${DOCKER_NETWORK_MODE:-host}"
 PUBLISH_GITHUB="false"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
@@ -399,7 +401,7 @@ ensure_docker_buster_image() {
   fi
 
   echo "Creating cached Docker builder image ${DOCKER_BUSTER_IMAGE} (one-time setup)..."
-  docker build -t "${DOCKER_BUSTER_IMAGE}" - <<'DOCKERFILE'
+  docker build --network="${DOCKER_NETWORK_MODE}" -t "${DOCKER_BUSTER_IMAGE}" - <<'DOCKERFILE'
 FROM debian:buster
 ENV DEBIAN_FRONTEND=noninteractive
 RUN printf '%s\n' \
@@ -498,6 +500,7 @@ run_in_docker_buster() {
   echo "Building in Debian buster container for Pi-compatible glibc/OpenSSL ABI..."
   docker_cmd=(
     docker run --rm -t
+    --network="${DOCKER_NETWORK_MODE}"
     --platform linux/amd64
     -e DEBIAN_FRONTEND=noninteractive
     -e CODEX_ARMV7_IN_DOCKER=1
