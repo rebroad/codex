@@ -879,14 +879,20 @@ with bin_path.open("r+b") as f:
             count += 1
             start = idx + len(needle)
 
-        # Fallback for binaries compiled with an unexpected source timestamp.
-        if count == 0:
-            pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{7,40})?")
-            for match in pattern.finditer(mm):
-                if (match.end() - match.start()) != len(replacement):
-                    continue
-                mm[match.start() : match.end()] = replacement
-                count += 1
+        # Normalize any other embedded version strings with matching width.
+        # Some binaries can carry both placeholder + stale real suffixes; if we
+        # only patch one family, `--version` may still report an old value.
+        # Commit suffixes in this script are always 12 hex chars; matching a
+        # fixed width avoids accidentally swallowing adjacent hex bytes.
+        pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{12})?")
+        for match in pattern.finditer(mm):
+            if (match.end() - match.start()) != len(replacement):
+                continue
+            current = mm[match.start() : match.end()]
+            if current == replacement:
+                continue
+            mm[match.start() : match.end()] = replacement
+            count += 1
 
         if count == 0:
             print(f"No embedded version string found in {bin_path}", file=sys.stderr)
