@@ -599,7 +599,17 @@ WHERE account_id = ? AND provider = ?
             .as_deref()
             .map(parse_backend_percent_history)
             .unwrap_or_default();
-        let sample_count = recent_backend_percents.len() as i64;
+        let sample_count: i64 = sqlx::query_scalar(
+            r#"
+SELECT COUNT(*)
+FROM account_usage_samples
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .fetch_one(self.pool.as_ref())
+        .await?;
         let smoothed_backend_percent = smooth_backend_used_percent(
             current_backend_used_percent,
             recent_backend_percents.as_slice(),
@@ -3938,6 +3948,12 @@ WHERE account_id = ? AND provider = ?
         .await
         .expect("count samples");
         assert_eq!(sample_count, 1);
+
+        let (_, estimated_sample_count) = runtime
+            .estimate_account_limit_tokens("account-1")
+            .await
+            .expect("estimate");
+        assert_eq!(estimated_sample_count, 1);
     }
 
     #[tokio::test]
