@@ -1561,12 +1561,6 @@ WHERE account_id = ? AND provider = ?
             .and_then(|row| row.try_get::<i64, _>("last_snapshot_percent_int").ok())
             .unwrap_or(current_percent_int);
 
-        let last_sample_percent = if previous_backend_percent.is_none() {
-            0
-        } else {
-            last_sample_percent
-        };
-
         if current_percent_int != last_sample_percent {
             let delta_percent = (current_percent_int - last_sample_percent).max(0);
             let sample_deltas = SampleTokenDeltas {
@@ -3875,6 +3869,75 @@ WHERE account_id = ? AND provider = ?
         // 150 tokens across a 2% increase implies a 7,500 token allowance.
         let expected_limit = 150.0 / (2.0 / 100.0);
         assert!((limit - expected_limit).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn account_usage_does_not_resample_when_backend_percent_is_queried_unchanged() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 100,
+            input_tokens: 80,
+            cached_input_tokens: 0,
+            output_tokens: 20,
+            reasoning_output_tokens: 0,
+        };
+        runtime
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
+            .await
+            .expect("record usage");
+
+        let snapshot = RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: Some("Weekly".to_string()),
+            primary: None,
+            secondary: Some(codex_protocol::protocol::RateLimitWindow {
+                used_percent: 1.2,
+                window_minutes: Some(10080),
+                resets_at: Some(12345),
+            }),
+            credits: None,
+            plan_type: None,
+        };
+        runtime
+            .record_account_backend_rate_limit("account-1", &snapshot)
+            .await
+            .expect("record snapshot");
+
+        sqlx::query(
+            r#"
+UPDATE account_usage
+SET last_backend_used_percent = NULL
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("clear backend percent");
+
+        runtime
+            .record_account_backend_rate_limit("account-1", &snapshot)
+            .await
+            .expect("record unchanged snapshot");
+
+        let sample_count: i64 = sqlx::query_scalar(
+            r#"
+SELECT COUNT(*) FROM account_usage_samples
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count samples");
+        assert_eq!(sample_count, 1);
     }
 
     #[tokio::test]
