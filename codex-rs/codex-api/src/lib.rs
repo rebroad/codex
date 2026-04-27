@@ -51,6 +51,7 @@ pub use crate::prompt_debug_http::prompt_capture_append_reasoning;
 pub use crate::prompt_debug_http::prompt_capture_write_output_json;
 pub use crate::prompt_debug_http::prompt_debug_http_enabled;
 pub use crate::prompt_debug_http::prompt_debug_http_log;
+pub use crate::prompt_debug_http::set_prompt_debug_http_account_email;
 pub use crate::prompt_debug_http::start_prompt_capture;
 pub use crate::provider::Provider;
 pub use crate::provider::is_azure_responses_wire_base_url;

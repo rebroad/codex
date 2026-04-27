@@ -105,7 +105,7 @@ enabled = true
 capture_input = true
 capture_output = true
 capture_reasoning = true
-capture_dir = "/tmp"
+capture_dir = "/var/tmp/codex-prompt-debug-$EMAIL"
 ```
 
 If `enabled = true`, capture files are written under `capture_dir` (defaults to `/tmp`).
@@ -115,11 +115,15 @@ The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`
 Capture files include:
 - a full backend traffic stream: `backend_traffic.ndjson`
 - query-id scoped files, for example:
-`codex_backend_query_<query_id>.input.md`,
-`codex_backend_query_<query_id>.output.md`, and
-`codex_backend_query_<query_id>.reasoning.md`.
+`<query_id>_input.ndjson`,
+`<query_id>_output.ndjson`, and
+`<query_id>_reasoning.ndjson`.
 If the `capture_dir` path contains `$$`, Codex replaces it with the current
 process PID.
+If the `capture_dir` path contains `$EMAIL`, Codex replaces it with the
+OpenAI account email used for usage logging. In that mode, prompt-debug
+captures use a per-directory persistent incrementing `query_id`, stored in
+`.query_id_counter`, so query IDs continue increasing across process restarts.
 
 For a one-off run, `codex exec --debug "..."`
 force-enables capture for that invocation using the same backend capture settings
