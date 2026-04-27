@@ -424,12 +424,16 @@ run_in_docker_buster() {
   local container_image="${DOCKER_BUSTER_IMAGE}"
   local container_rusty_v8_path=""
   local container_cargo_target_dir
+  local container_uid container_gid
   local docker_cargo_home="${ARMV7_CACHE_DIR}/docker-cargo-home"
   local docker_rustup_home="${ARMV7_CACHE_DIR}/docker-rustup-home"
   local version artifact_version artifact_base artifact_dir
-  local -a maybe_mount maybe_cache_mount
+  local -a maybe_mount maybe_cache_mount maybe_user_args
   maybe_mount=()
   maybe_cache_mount=()
+  maybe_user_args=()
+  container_uid="$(id -u)"
+  container_gid="$(id -g)"
 
   require_cmd docker
   if [[ "${EPHEMERAL}" == "true" ]]; then
@@ -441,11 +445,15 @@ run_in_docker_buster() {
     ensure_docker_buster_image
     mkdir -p "${docker_cargo_home}" "${docker_rustup_home}"
     maybe_cache_mount=(
+      -e HOME=/cargo-home
+      -e USER="$(id -un)"
+      -e LOGNAME="$(id -un)"
       -e CARGO_HOME=/cargo-home
       -e RUSTUP_HOME=/rustup-home
       -v "${docker_cargo_home}:/cargo-home"
       -v "${docker_rustup_home}:/rustup-home"
     )
+    maybe_user_args=(--user "${container_uid}:${container_gid}")
   fi
 
   forwarded_args=(
@@ -503,6 +511,7 @@ run_in_docker_buster() {
     --network="${DOCKER_NETWORK_MODE}"
     --platform linux/amd64
     -e DEBIAN_FRONTEND=noninteractive
+    "${maybe_user_args[@]}"
     -e CODEX_ARMV7_IN_DOCKER=1
     -e CODEX_BUILD_COMMIT_SHORT="${BUILD_COMMIT_SHORT}"
     -e CODEX_BUILD_VERSION_SUFFIX_FIXED="${BUILD_VERSION_SUFFIX_FIXED}"
@@ -523,8 +532,17 @@ run_in_docker_buster() {
         apt-get -o Acquire::Check-Valid-Until=false update -y; \
         apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
-      if [[ ! -x \"\${CARGO_HOME:-/root/.cargo}/bin/rustup\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
-      source \"\${CARGO_HOME:-/root/.cargo}/env\"; \
+      cargo_home=\"\${CARGO_HOME:-/root/.cargo}\"; \
+      if [[ ! -x \"\${cargo_home}/bin/rustup\" || ! -x \"\${cargo_home}/bin/cargo\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
+      if [[ -f \"\${cargo_home}/env\" ]]; then \
+        source \"\${cargo_home}/env\"; \
+      elif [[ -d \"\${cargo_home}/bin\" ]]; then \
+        echo \"Rust cache at \${cargo_home} is missing env; falling back to PATH bootstrap.\" >&2; \
+        export PATH=\"\${cargo_home}/bin:\${PATH}\"; \
+      else \
+        echo \"Rust bootstrap is incomplete in \${cargo_home}; missing both env and bin/.\" >&2; \
+        exit 1; \
+      fi; \
       ${script_in_container} ${forwarded_args[*]}"
   )
   "${docker_cmd[@]}"
