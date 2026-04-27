@@ -11,6 +11,7 @@ mod migrations;
 mod model;
 mod model_pricing;
 mod paths;
+mod rollout_snapshot;
 mod runtime;
 
 pub use model::LogEntry;
@@ -63,6 +64,8 @@ pub use model_pricing::ModelPricingFile;
 pub use model_pricing::load_model_pricing;
 pub use model_pricing::model_pricing_path;
 pub use model_pricing::write_model_pricing;
+pub use rollout_snapshot::RolloutThreadSnapshot;
+pub use rollout_snapshot::read_rollout_thread_snapshot;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
 pub use runtime::state_db_filename;
