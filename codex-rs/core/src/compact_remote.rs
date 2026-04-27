@@ -14,6 +14,7 @@ use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::context_manager::is_codex_generated_item;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use codex_api::common::ToolChoice;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
@@ -116,6 +117,7 @@ async fn run_remote_compact_task_inner_impl(
     let prompt = Prompt {
         input: prompt_input,
         tools,
+        tool_choice: ToolChoice::auto(),
         parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,
