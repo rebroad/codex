@@ -1,10 +1,12 @@
 use codex_api::ResponsesApiRequest;
 use codex_api::common::OpenAiVerbosity;
 use codex_api::common::TextControls;
+use codex_api::common::ToolChoice;
 use codex_api::create_text_param_for_request;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::*;
 
@@ -17,7 +19,7 @@ fn serializes_text_verbosity_when_set() {
         instructions: "i".to_string(),
         input,
         tools,
-        tool_choice: "auto".to_string(),
+        tool_choice: ToolChoice::auto(),
         parallel_tool_calls: true,
         reasoning: None,
         store: false,
@@ -60,7 +62,7 @@ fn serializes_text_schema_with_strict_format() {
         instructions: "i".to_string(),
         input,
         tools,
-        tool_choice: "auto".to_string(),
+        tool_choice: ToolChoice::auto(),
         parallel_tool_calls: true,
         reasoning: None,
         store: false,
@@ -97,7 +99,7 @@ fn omits_text_when_not_set() {
         instructions: "i".to_string(),
         input,
         tools,
-        tool_choice: "auto".to_string(),
+        tool_choice: ToolChoice::auto(),
         parallel_tool_calls: true,
         reasoning: None,
         store: false,
@@ -119,7 +121,7 @@ fn serializes_flex_service_tier_when_set() {
         instructions: "i".to_string(),
         input: vec![],
         tools: vec![],
-        tool_choice: "auto".to_string(),
+        tool_choice: ToolChoice::auto(),
         parallel_tool_calls: true,
         reasoning: None,
         store: false,
@@ -134,6 +136,39 @@ fn serializes_flex_service_tier_when_set() {
     assert_eq!(
         v.get("service_tier").and_then(|tier| tier.as_str()),
         Some("flex")
+    );
+}
+
+#[test]
+fn serializes_allowed_tools_tool_choice_object() {
+    let req = ResponsesApiRequest {
+        model: "gpt-5.1".to_string(),
+        instructions: "i".to_string(),
+        input: vec![],
+        tools: vec![],
+        tool_choice: ToolChoice::allowed_tools(
+            "auto",
+            vec![json!({"type": "function", "name": "shell"})],
+        ),
+        parallel_tool_calls: true,
+        reasoning: None,
+        store: false,
+        stream: true,
+        include: vec![],
+        prompt_cache_key: None,
+        service_tier: None,
+        text: None,
+    };
+
+    let v = serde_json::to_value(&req).expect("json");
+    assert_eq!(v.get("tool_choice").and_then(|value| value.get("type")), Some(&json!("allowed_tools")));
+    assert_eq!(v.get("tool_choice").and_then(|value| value.get("mode")), Some(&json!("auto")));
+    assert_eq!(
+        v.get("tool_choice")
+            .and_then(|value| value.get("tools"))
+            .and_then(|value| value.as_array())
+            .map(|tools| tools.len()),
+        Some(1)
     );
 }
 
