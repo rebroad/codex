@@ -21,6 +21,8 @@ const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REA
 const CODEX_BACKEND_CAPTURE_DIR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_DIR";
 const CODEX_PROMPT_DEBUG_HTTP_PREFIX: &str = "[codex backend capture]";
 const BACKEND_TRAFFIC_FILENAME: &str = "backend_traffic.ndjson";
+const EMAIL_PLACEHOLDER: &str = "$EMAIL";
+const QUERY_ID_COUNTER_FILENAME: &str = ".query_id_counter";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PromptDebugHttpConfig {
@@ -61,6 +63,7 @@ impl PromptCaptureSession {
 }
 
 static PROMPT_DEBUG_HTTP_CONFIG: OnceLock<RwLock<PromptDebugHttpConfig>> = OnceLock::new();
+static PROMPT_DEBUG_HTTP_ACCOUNT_EMAIL: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 static PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static PROMPT_DEBUG_HTTP_TOOL_USAGE: OnceLock<Mutex<HashMap<PathBuf, ToolUsageStats>>> =
     OnceLock::new();
@@ -81,9 +84,19 @@ fn tool_usage_lock() -> &'static Mutex<HashMap<PathBuf, ToolUsageStats>> {
     PROMPT_DEBUG_HTTP_TOOL_USAGE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn account_email_lock() -> &'static RwLock<Option<String>> {
+    PROMPT_DEBUG_HTTP_ACCOUNT_EMAIL.get_or_init(|| RwLock::new(None))
+}
+
 pub fn configure_prompt_debug_http(config: PromptDebugHttpConfig) {
     if let Ok(mut guard) = config_lock().write() {
         *guard = config;
+    }
+}
+
+pub fn set_prompt_debug_http_account_email(account_email: Option<String>) {
+    if let Ok(mut guard) = account_email_lock().write() {
+        *guard = account_email;
     }
 }
 
@@ -144,6 +157,38 @@ fn next_traffic_event_id() -> u64 {
 fn next_capture_id() -> String {
     let seq = CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
     seq.to_string()
+}
+
+fn configured_account_email() -> Option<String> {
+    account_email_lock()
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+fn resolve_capture_dir(path: PathBuf) -> (PathBuf, bool) {
+    let path_str = path.to_string_lossy();
+    if !path_str.contains(EMAIL_PLACEHOLDER) {
+        return (path, false);
+    }
+    let Some(account_email) = configured_account_email() else {
+        return (path, false);
+    };
+    (
+        PathBuf::from(path_str.replace(EMAIL_PLACEHOLDER, account_email.as_str())),
+        true,
+    )
+}
+
+fn next_persistent_query_id(dir: &Path) -> Option<String> {
+    let counter_path = dir.join(QUERY_ID_COUNTER_FILENAME);
+    let current = std::fs::read_to_string(counter_path.as_path())
+        .ok()
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    let next = current.checked_add(1)?;
+    std::fs::write(counter_path, format!("{next}\n")).ok()?;
+    Some(next.to_string())
 }
 
 fn append_line(path: &Path, line: &str) {
@@ -356,11 +401,20 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
         return None;
     }
 
-    let id = next_capture_id();
-    let dir = config.capture_dir.unwrap_or_else(default_capture_dir);
+    let (dir, email_scoped_query_ids) =
+        resolve_capture_dir(config.capture_dir.unwrap_or_else(default_capture_dir));
     if std::fs::create_dir_all(dir.as_path()).is_err() {
         return None;
     }
+    let write_lock = PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
+    let Ok(_write_guard) = write_lock.lock() else {
+        return None;
+    };
+    let id = if email_scoped_query_ids {
+        next_persistent_query_id(dir.as_path())?
+    } else {
+        next_capture_id()
+    };
 
     let input_path = dir.join(format!("{id}_input.ndjson"));
     let output_path = dir.join(format!("{id}_output.ndjson"));
@@ -369,10 +423,7 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
     // Ensure a stats file exists for this capture directory even before first tool call.
     let stats_path = dir.join("tool_usage_stats.json");
     {
-        let write_lock = PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
-        if let Ok(_write_guard) = write_lock.lock()
-            && let Ok(mut usage_guard) = tool_usage_lock().lock()
-        {
+        if let Ok(mut usage_guard) = tool_usage_lock().lock() {
             let stats = usage_guard
                 .entry(stats_path.clone())
                 .or_insert_with(ToolUsageStats::default);
@@ -494,7 +545,8 @@ pub fn capture_dir() -> Option<PathBuf> {
     if !config.enabled {
         return None;
     }
-    Some(config.capture_dir.unwrap_or_else(default_capture_dir))
+    let (dir, _) = resolve_capture_dir(config.capture_dir.unwrap_or_else(default_capture_dir));
+    Some(dir)
 }
 
 pub fn prompt_debug_http_log(message: impl AsRef<str>) {
@@ -548,5 +600,35 @@ mod tests {
         let mut calls = Vec::new();
         collect_tool_calls(&payload, &mut calls);
         assert_eq!(calls, vec![("web_search".to_string(), Some("ws_123".to_string()))]);
+    }
+
+    #[test]
+    fn resolve_capture_dir_expands_email_placeholder_when_account_email_is_available() {
+        set_prompt_debug_http_account_email(Some("user@example.com".to_string()));
+        let (dir, email_scoped) =
+            resolve_capture_dir(PathBuf::from("/var/tmp/prompt-debug-$EMAIL"));
+        assert_eq!(
+            dir,
+            PathBuf::from("/var/tmp/prompt-debug-user@example.com")
+        );
+        assert!(email_scoped);
+    }
+
+    #[test]
+    fn next_persistent_query_id_increments_from_counter_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "codex-prompt-debug-http-test-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        std::fs::create_dir_all(dir.as_path()).expect("create temp dir");
+        let first = next_persistent_query_id(dir.as_path()).expect("first query id");
+        let second = next_persistent_query_id(dir.as_path()).expect("second query id");
+        let counter = std::fs::read_to_string(dir.join(QUERY_ID_COUNTER_FILENAME))
+            .expect("counter file");
+        assert_eq!(first, "1");
+        assert_eq!(second, "2");
+        assert_eq!(counter.trim(), "2");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

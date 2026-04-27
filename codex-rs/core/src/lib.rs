@@ -187,3 +187,7 @@ pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;
 pub mod memory_trace;
 pub mod otel_init;
+
+pub fn set_prompt_debug_http_account_email(account_email: Option<String>) {
+    codex_api::set_prompt_debug_http_account_email(account_email);
+}

@@ -45,10 +45,15 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod status_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::status_cmd::ThreadStatusOutputFormat;
+use crate::status_cmd::ThreadStatusSelector;
+use crate::status_cmd::load_thread_status_snapshot;
+use crate::status_cmd::render_thread_status;
 
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
@@ -192,6 +197,22 @@ struct StatusCommand {
     /// Use locally cached usage/rate-limit values when available.
     #[arg(long, default_value_t = false)]
     cached: bool,
+
+    /// Inspect a specific interactive thread.
+    #[arg(long, value_name = "THREAD_ID", conflicts_with = "last")]
+    thread_id: Option<String>,
+
+    /// Inspect the most recently updated interactive thread.
+    #[arg(long, default_value_t = false, conflicts_with = "thread_id")]
+    last: bool,
+
+    /// Emit the thread-aware status as JSON.
+    #[arg(long, default_value_t = false, conflicts_with = "telegram")]
+    json: bool,
+
+    /// Emit a compact Telegram-friendly thread status.
+    #[arg(long, default_value_t = false, conflicts_with = "json")]
+    telegram: bool,
 
     /// Extra arguments accepted after `--` for machine-readable output mode.
     #[arg(last = true, allow_hyphen_values = true, value_name = "ARG")]
@@ -874,11 +895,32 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             } else {
                 CliStatusRateLimitMode::LiveOnly
             };
-            let status_options = parse_status_invocation_options(
+            let mut status_options = parse_status_invocation_options(
                 &raw_argv,
                 default_rate_limit_mode,
                 &status_command.trailing_args,
             )?;
+            if (status_command.json || status_command.telegram)
+                && status_command.thread_id.is_none()
+                && !status_command.last
+            {
+                anyhow::bail!(
+                    "`codex status --json` and `codex status --telegram` require `--thread-id <id>` or `--last`."
+                );
+            }
+            if status_command.thread_id.is_some() || status_command.last {
+                status_options.output_mode.thread_selector = Some(ThreadStatusSelector {
+                    thread_id: status_command.thread_id.clone(),
+                    last: status_command.last,
+                });
+                status_options.output_mode.thread_output = Some(if status_command.json {
+                    ThreadStatusOutputFormat::Json
+                } else if status_command.telegram {
+                    ThreadStatusOutputFormat::Telegram
+                } else {
+                    ThreadStatusOutputFormat::Human
+                });
+            }
             if let Some(auth_file_override) = status_options.auth_file_override {
                 codex_login::set_auth_file_override(Some(auth_file_override));
             }
@@ -1691,10 +1733,12 @@ async fn print_resume_sessions_non_interactive(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StatusOutputMode {
     compact: bool,
     utc: bool,
+    thread_output: Option<ThreadStatusOutputFormat>,
+    thread_selector: Option<ThreadStatusSelector>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -1736,6 +1780,8 @@ fn parse_status_invocation_options(
         output_mode: StatusOutputMode {
             compact: true,
             utc: false,
+            thread_output: None,
+            thread_selector: None,
         },
         auth_file_override: None,
         rate_limit_mode: default_rate_limit_mode,
@@ -1791,6 +1837,17 @@ async fn run_status_command(
     };
     let config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    if let Some(selector) = status_output_mode.thread_selector.as_ref() {
+        let format = status_output_mode
+            .thread_output
+            .unwrap_or(ThreadStatusOutputFormat::Human);
+        let snapshot = load_thread_status_snapshot(&config, selector).await?;
+        let lines = render_thread_status(&snapshot, format)?;
+        for line in lines {
+            println!("{line}");
+        }
+        return Ok(());
+    }
     let auth_manager = std::sync::Arc::new(AuthManager::new(
         config.codex_home.clone(),
         /*enable_codex_api_key_env*/ false,
@@ -2251,7 +2308,9 @@ mod tests {
             options.output_mode,
             StatusOutputMode {
                 compact: true,
-                utc: false
+                utc: false,
+                thread_output: None,
+                thread_selector: None,
             }
         );
         assert_eq!(options.auth_file_override, None);
@@ -2275,7 +2334,9 @@ mod tests {
             options.output_mode,
             StatusOutputMode {
                 compact: true,
-                utc: true
+                utc: true,
+                thread_output: None,
+                thread_selector: None,
             }
         );
         assert_eq!(options.auth_file_override, None);
@@ -2303,7 +2364,9 @@ mod tests {
             options.output_mode,
             StatusOutputMode {
                 compact: true,
-                utc: true
+                utc: true,
+                thread_output: None,
+                thread_selector: None,
             }
         );
         assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
@@ -2365,12 +2428,20 @@ mod tests {
         let cli = MultitoolCli::try_parse_from(["codex", "status", "--", "--utc"]).expect("parse");
         let Some(Subcommand::Status(StatusCommand {
             cached,
+            thread_id,
+            last,
+            json,
+            telegram,
             trailing_args,
         })) = cli.subcommand
         else {
             panic!("expected status subcommand");
         };
         assert_eq!(cached, false);
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(!json);
+        assert!(!telegram);
         assert_eq!(trailing_args, vec!["--utc".to_string()]);
     }
 
@@ -2379,13 +2450,90 @@ mod tests {
         let cli = MultitoolCli::try_parse_from(["codex", "status", "--cached"]).expect("parse");
         let Some(Subcommand::Status(StatusCommand {
             cached,
+            thread_id,
+            last,
+            json,
+            telegram,
             trailing_args,
         })) = cli.subcommand
         else {
             panic!("expected status subcommand");
         };
         assert_eq!(cached, true);
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(!json);
+        assert!(!telegram);
         assert_eq!(trailing_args, Vec::<String>::new());
+    }
+
+    #[test]
+    fn status_subcommand_accepts_thread_id_and_json() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "status",
+            "--thread-id",
+            "thread_123",
+            "--json",
+        ])
+        .expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            cached,
+            thread_id,
+            last,
+            json,
+            telegram,
+            trailing_args,
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert!(!cached);
+        assert_eq!(thread_id.as_deref(), Some("thread_123"));
+        assert!(!last);
+        assert!(json);
+        assert!(!telegram);
+        assert_eq!(trailing_args, Vec::<String>::new());
+    }
+
+    #[test]
+    fn status_subcommand_accepts_last_and_telegram() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "status",
+            "--last",
+            "--telegram",
+        ])
+        .expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            thread_id,
+            last,
+            json,
+            telegram,
+            ..
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert_eq!(thread_id, None);
+        assert!(last);
+        assert!(!json);
+        assert!(telegram);
+    }
+
+    #[test]
+    fn status_subcommand_rejects_thread_id_with_last() {
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "status",
+            "--thread-id",
+            "thread_123",
+            "--last",
+        ])
+        .expect_err("parse should fail");
+        let message = err.to_string();
+        assert!(message.contains("--thread-id"));
+        assert!(message.contains("--last"));
     }
 
     #[test]

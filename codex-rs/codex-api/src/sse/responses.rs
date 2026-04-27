@@ -1271,5 +1271,51 @@ mod tests {
         assert_eq!(delay, Some(Duration::from_secs(35)));
     }
 
+    #[test]
+    fn response_completed_usage_maps_cached_tokens_without_double_counting() {
+        let usage = ResponseCompletedUsage {
+            input_tokens: 100,
+            input_tokens_details: Some(ResponseCompletedInputTokensDetails { cached_tokens: 25 }),
+            output_tokens: 40,
+            output_tokens_details: Some(ResponseCompletedOutputTokensDetails {
+                reasoning_tokens: 10,
+            }),
+            total_tokens: 140,
+        };
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 25,
+                output_tokens: 40,
+                reasoning_output_tokens: 10,
+                total_tokens: 140,
+            }
+        );
+    }
+
+    #[test]
+    fn response_completed_usage_defaults_cached_tokens_to_zero() {
+        let usage = ResponseCompletedUsage {
+            input_tokens: 12,
+            input_tokens_details: None,
+            output_tokens: 3,
+            output_tokens_details: None,
+            total_tokens: 15,
+        };
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 12,
+                cached_input_tokens: 0,
+                output_tokens: 3,
+                reasoning_output_tokens: 0,
+                total_tokens: 15,
+            }
+        );
+    }
+
     const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
 }
