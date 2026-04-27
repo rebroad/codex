@@ -28,6 +28,7 @@ use codex_state::StateRuntime;
 use codex_state::account_usage_key;
 use codex_state::state_db_path;
 use codex_state::usage_db_path;
+use codex_tui::render_status_for_cli;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::CliStatusRateLimitMode;
@@ -36,6 +37,7 @@ use codex_tui::update_action::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -44,10 +46,15 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod status_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::status_cmd::ThreadStatusOutputFormat;
+use crate::status_cmd::ThreadStatusSelector;
+use crate::status_cmd::load_thread_status_snapshot;
+use crate::status_cmd::render_thread_status;
 
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
@@ -192,6 +199,18 @@ struct StatusCommand {
     /// Use locally cached usage/rate-limit values when available.
     #[arg(long, default_value_t = false)]
     cached: bool,
+
+    /// Inspect a specific interactive thread.
+    #[arg(long, value_name = "THREAD_ID", conflicts_with = "last")]
+    thread_id: Option<String>,
+
+    /// Inspect the most recently updated interactive thread.
+    #[arg(long, default_value_t = false, conflicts_with = "thread_id")]
+    last: bool,
+
+    /// Emit a compact Telegram-friendly thread status.
+    #[arg(long, default_value_t = false)]
+    telegram: bool,
 
     /// Extra arguments accepted after `--` for machine-readable output mode.
     #[arg(last = true, allow_hyphen_values = true, value_name = "ARG")]
@@ -874,11 +893,22 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             } else {
                 CliStatusRateLimitMode::LiveOnly
             };
-            let status_options = parse_status_invocation_options(
+            let mut status_options = parse_status_invocation_options(
                 &raw_argv,
                 default_rate_limit_mode,
                 &status_command.trailing_args,
             )?;
+            if status_command.thread_id.is_some() || status_command.last || status_command.telegram {
+                status_options.output_mode.thread_selector = Some(ThreadStatusSelector {
+                    thread_id: status_command.thread_id.clone(),
+                    last: status_command.last || status_command.telegram,
+                });
+                status_options.output_mode.thread_output = Some(if status_command.telegram {
+                    ThreadStatusOutputFormat::Telegram
+                } else {
+                    ThreadStatusOutputFormat::Human
+                });
+            }
             if let Some(auth_file_override) = status_options.auth_file_override {
                 codex_login::set_auth_file_override(Some(auth_file_override));
             }
@@ -1646,6 +1676,8 @@ async fn print_resume_sessions_non_interactive(
         Some(config.cwd.as_path())
     };
 
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
     let mut cursor = None;
     loop {
         let page = RolloutRecorder::list_threads(
@@ -1679,7 +1711,10 @@ async fn print_resume_sessions_non_interactive(
                 .map(|cwd| cwd.display().to_string())
                 .unwrap_or_else(|| "-".to_string());
             let preview = item.first_user_message.unwrap_or_else(|| "-".to_string());
-            println!("{thread}\t{updated_at}\t{cwd}\t{preview}");
+            if !write_stdout_line(&mut stdout, &format!("{thread}\t{updated_at}\t{cwd}\t{preview}"))?
+            {
+                return Ok(());
+            }
         }
 
         if page.next_cursor.is_none() {
@@ -1691,10 +1726,90 @@ async fn print_resume_sessions_non_interactive(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+fn write_stdout_line(stdout: &mut impl Write, line: &str) -> anyhow::Result<bool> {
+    match writeln!(stdout, "{line}") {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn write_stdout_lines(lines: &[String]) -> anyhow::Result<()> {
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    for line in lines {
+        if !write_stdout_line(&mut stdout, line)? {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn strip_ansi_escape_codes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            while let Some(next) = chars.next() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn sanitize_status_line_for_telegram(line: &str) -> Option<String> {
+    let line = strip_ansi_escape_codes(line);
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('╭') || trimmed.starts_with('╰') {
+        return None;
+    }
+
+    let content = trimmed
+        .trim_start_matches('│')
+        .trim_end_matches('│')
+        .trim()
+        .to_string();
+    (!content.is_empty()).then_some(content)
+}
+
+async fn render_telegram_status_lines(
+    config: &Config,
+    auth: Option<&codex_login::CodexAuth>,
+    rate_limit_mode: CliStatusRateLimitMode,
+    snapshot: &status_cmd::ThreadStatusSnapshot,
+) -> Vec<String> {
+    let model_name = config.model.as_deref().unwrap_or("<unknown>");
+    let mut lines = render_status_for_cli(
+        config,
+        auth.cloned(),
+        model_name,
+        /*width*/ 80,
+        rate_limit_mode,
+    )
+    .await
+    .into_iter()
+    .filter_map(|line| sanitize_status_line_for_telegram(&line))
+    .collect::<Vec<_>>();
+    let context_usage = snapshot
+        .used_percent
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(|| "n/a".to_string());
+    lines.push(format!("Context window: {context_usage} used"));
+    lines
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StatusOutputMode {
     compact: bool,
     utc: bool,
+    thread_output: Option<ThreadStatusOutputFormat>,
+    thread_selector: Option<ThreadStatusSelector>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -1736,6 +1851,8 @@ fn parse_status_invocation_options(
         output_mode: StatusOutputMode {
             compact: true,
             utc: false,
+            thread_output: None,
+            thread_selector: None,
         },
         auth_file_override: None,
         rate_limit_mode: default_rate_limit_mode,
@@ -1791,6 +1908,18 @@ async fn run_status_command(
     };
     let config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let thread_snapshot = if let Some(selector) = status_output_mode.thread_selector.as_ref() {
+        Some(load_thread_status_snapshot(&config, selector).await?)
+    } else {
+        None
+    };
+    if let Some(snapshot) = thread_snapshot.as_ref()
+        && status_output_mode.thread_output == Some(ThreadStatusOutputFormat::Human)
+    {
+        let lines = render_thread_status(snapshot, ThreadStatusOutputFormat::Human)?;
+        write_stdout_lines(&lines)?;
+        return Ok(());
+    }
     let auth_manager = std::sync::Arc::new(AuthManager::new(
         config.codex_home.clone(),
         /*enable_codex_api_key_env*/ false,
@@ -1808,6 +1937,14 @@ async fn run_status_command(
             (auth_manager.auth_cached(), compact_mode)
         }
     };
+    if let Some(snapshot) = thread_snapshot.as_ref()
+        && status_output_mode.thread_output == Some(ThreadStatusOutputFormat::Telegram)
+    {
+        let lines =
+            render_telegram_status_lines(&config, auth.as_ref(), rate_limit_mode, snapshot).await;
+        write_stdout_lines(&lines)?;
+        return Ok(());
+    }
     if status_output_mode.compact {
         let compact_line = codex_tui::render_compact_status_for_cli(
             &config,
@@ -1817,12 +1954,12 @@ async fn run_status_command(
             rate_limit_mode,
         )
         .await;
-        println!("{compact_line}");
+        write_stdout_lines(&[compact_line])?;
         return Ok(());
     }
 
     let model_name = config.model.as_deref().unwrap_or("<unknown>");
-    let lines = codex_tui::render_status_for_cli(
+    let lines = render_status_for_cli(
         &config,
         auth,
         model_name,
@@ -1830,9 +1967,7 @@ async fn run_status_command(
         rate_limit_mode,
     )
     .await;
-    for line in lines {
-        println!("{line}");
-    }
+    write_stdout_lines(&lines)?;
     Ok(())
 }
 
@@ -2251,7 +2386,9 @@ mod tests {
             options.output_mode,
             StatusOutputMode {
                 compact: true,
-                utc: false
+                utc: false,
+                thread_output: None,
+                thread_selector: None,
             }
         );
         assert_eq!(options.auth_file_override, None);
@@ -2275,7 +2412,9 @@ mod tests {
             options.output_mode,
             StatusOutputMode {
                 compact: true,
-                utc: true
+                utc: true,
+                thread_output: None,
+                thread_selector: None,
             }
         );
         assert_eq!(options.auth_file_override, None);
@@ -2303,7 +2442,9 @@ mod tests {
             options.output_mode,
             StatusOutputMode {
                 compact: true,
-                utc: true
+                utc: true,
+                thread_output: None,
+                thread_selector: None,
             }
         );
         assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
@@ -2365,12 +2506,18 @@ mod tests {
         let cli = MultitoolCli::try_parse_from(["codex", "status", "--", "--utc"]).expect("parse");
         let Some(Subcommand::Status(StatusCommand {
             cached,
+            thread_id,
+            last,
+            telegram,
             trailing_args,
         })) = cli.subcommand
         else {
             panic!("expected status subcommand");
         };
         assert_eq!(cached, false);
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(!telegram);
         assert_eq!(trailing_args, vec!["--utc".to_string()]);
     }
 
@@ -2379,13 +2526,96 @@ mod tests {
         let cli = MultitoolCli::try_parse_from(["codex", "status", "--cached"]).expect("parse");
         let Some(Subcommand::Status(StatusCommand {
             cached,
+            thread_id,
+            last,
+            telegram,
             trailing_args,
         })) = cli.subcommand
         else {
             panic!("expected status subcommand");
         };
         assert_eq!(cached, true);
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(!telegram);
         assert_eq!(trailing_args, Vec::<String>::new());
+    }
+
+    #[test]
+    fn status_subcommand_accepts_thread_id_and_telegram() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "status",
+            "--thread-id",
+            "thread_123",
+            "--telegram",
+        ])
+        .expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            cached,
+            thread_id,
+            last,
+            telegram,
+            trailing_args,
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert!(!cached);
+        assert_eq!(thread_id.as_deref(), Some("thread_123"));
+        assert!(!last);
+        assert!(telegram);
+        assert_eq!(trailing_args, Vec::<String>::new());
+    }
+
+    #[test]
+    fn status_subcommand_accepts_telegram_without_last() {
+        let cli = MultitoolCli::try_parse_from(["codex", "status", "--telegram"]).expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            thread_id,
+            last,
+            telegram,
+            ..
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(telegram);
+    }
+
+    #[test]
+    fn sanitize_status_line_for_telegram_drops_borders_and_trims_content() {
+        assert_eq!(
+            sanitize_status_line_for_telegram("│  Model: gpt-5.4-mini                           │"),
+            Some("Model: gpt-5.4-mini".to_string())
+        );
+        assert_eq!(sanitize_status_line_for_telegram("╭────────────╮"), None);
+        assert_eq!(sanitize_status_line_for_telegram("│                                              │"), None);
+    }
+
+    #[test]
+    fn strip_ansi_escape_codes_removes_sgr_sequences() {
+        assert_eq!(
+            strip_ansi_escape_codes("\u{1b}[32mgreen\u{1b}[0m text"),
+            "green text"
+        );
+    }
+
+    #[test]
+    fn status_subcommand_rejects_thread_id_with_last() {
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "status",
+            "--thread-id",
+            "thread_123",
+            "--last",
+        ])
+        .expect_err("parse should fail");
+        let message = err.to_string();
+        assert!(message.contains("--thread-id"));
+        assert!(message.contains("--last"));
     }
 
     #[test]
