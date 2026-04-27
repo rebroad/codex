@@ -54,6 +54,7 @@ use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
+use codex_api::common::ToolChoice;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -4773,6 +4774,34 @@ async fn steer_input_without_rejection_does_not_mark_sampling_restart() {
         .expect("steer should be accepted");
 
     assert!(!sess.take_sampling_restart_after_steer(&tc.sub_id).await);
+}
+
+#[tokio::test]
+async fn build_prompt_keeps_tool_specs_when_calls_are_temporarily_blocked() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let router = ToolRouter::from_config(
+        &turn_context.tools_config,
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: None,
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
+    );
+
+    let prompt = build_prompt(
+        Vec::new(),
+        &router,
+        &turn_context,
+        BaseInstructions {
+            text: "base".to_string(),
+        },
+        /*tool_calls_blocked_pending_steer*/ true,
+    );
+
+    assert!(!prompt.tools.is_empty(), "tool list should stay stable for caching");
+    assert_eq!(prompt.parallel_tool_calls, false);
+    assert_eq!(prompt.tool_choice, ToolChoice::none());
 }
 
 #[tokio::test]
