@@ -143,6 +143,7 @@ use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
 use codex_utils_stream_parser::extract_proposed_plan_text;
 use codex_utils_stream_parser::strip_citations;
+use codex_api::common::ToolChoice;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
@@ -6841,7 +6842,7 @@ pub(crate) fn build_prompt(
         .filter(|tool| tool.defer_loading)
         .map(|tool| tool.name.as_str())
         .collect::<HashSet<_>>();
-    let tools = if turn_context.config.bare_prompt || tool_calls_blocked_pending_steer {
+    let tools = if turn_context.config.bare_prompt {
         Vec::new()
     } else if deferred_dynamic_tools.is_empty() {
         router.model_visible_specs()
@@ -6855,6 +6856,13 @@ pub(crate) fn build_prompt(
     let parallel_tool_calls = !turn_context.config.bare_prompt
         && !tool_calls_blocked_pending_steer
         && turn_context.model_info.supports_parallel_tool_calls;
+    let tool_choice = if turn_context.config.bare_prompt {
+        ToolChoice::none()
+    } else if tool_calls_blocked_pending_steer {
+        ToolChoice::none()
+    } else {
+        ToolChoice::auto()
+    };
     if turn_context.config.bare_prompt {
         base_instructions.text.clear();
     }
@@ -6862,6 +6870,7 @@ pub(crate) fn build_prompt(
     Prompt {
         input,
         tools,
+        tool_choice,
         parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,

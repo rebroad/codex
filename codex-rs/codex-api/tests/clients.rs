@@ -8,6 +8,7 @@ use bytes::Bytes;
 use codex_api::AuthProvider;
 use codex_api::Provider;
 use codex_api::ResponsesApiRequest;
+use codex_api::common::ToolChoice;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
 use codex_api::requests::responses::Compression;
@@ -271,7 +272,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         instructions: "Say hi".into(),
         input: Vec::new(),
         tools: Vec::new(),
-        tool_choice: "auto".into(),
+        tool_choice: ToolChoice::auto(),
         parallel_tool_calls: false,
         reasoning: None,
         store: false,
@@ -313,7 +314,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
             phase: None,
         }],
         tools: Vec::new(),
-        tool_choice: "auto".into(),
+        tool_choice: ToolChoice::auto(),
         parallel_tool_calls: false,
         reasoning: None,
         store: true,
