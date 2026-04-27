@@ -1916,6 +1916,11 @@ async fn run_direct_request(
         CollaborationModesConfig::default(),
     );
     let auth_snapshot = auth_manager.auth().await;
+    codex_core::set_prompt_debug_http_account_email(
+        auth_snapshot
+            .as_ref()
+            .and_then(CodexAuth::get_account_email),
+    );
     let provider = config.model_provider.clone();
     let conversation_id = ThreadId::new();
     let model = models_manager

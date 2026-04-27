@@ -251,6 +251,31 @@ capture_dir = "/tmp/prompt-debug-$$"
         }
     );
 
+    let prompt_debug_http_with_email = r#"
+[prompt_debug_http]
+enabled = true
+capture_input = true
+capture_output = true
+capture_reasoning = true
+capture_dir = "/var/tmp/prompt-debug-$EMAIL"
+"#;
+    let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_email)
+        .expect("TOML deserialization should succeed");
+    let prompt_debug_http_effective: PromptDebugHttpConfig = prompt_debug_http_cfg
+        .prompt_debug_http
+        .expect("prompt_debug_http should be set")
+        .into();
+    assert_eq!(
+        prompt_debug_http_effective,
+        PromptDebugHttpConfig {
+            enabled: true,
+            capture_input: true,
+            capture_output: true,
+            capture_reasoning: true,
+            capture_dir: Some("/var/tmp/prompt-debug-$EMAIL".into()),
+        }
+    );
+
     let exec_policy_project = r#"exec_policy_rule_write_scope = "project""#;
     let exec_policy_project_cfg = toml::from_str::<ConfigToml>(exec_policy_project)
         .expect("TOML deserialization should succeed");
