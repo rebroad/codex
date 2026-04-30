@@ -463,7 +463,7 @@ pub async fn run_tlogin_start(
     }
 
     let opts = ServerOptions::new(
-        config.codex_home.clone(),
+        config.codex_home.clone().to_path_buf(),
         CLIENT_ID.to_string(),
         config.forced_chatgpt_workspace_id.clone(),
         config.cli_auth_credentials_store_mode,
@@ -528,7 +528,7 @@ pub async fn run_tlogin_complete(
         serde_json::from_value(pending["device_code"].clone()).map_err(std::io::Error::other)?;
 
     let mut opts = ServerOptions::new(
-        config.codex_home.clone(),
+        config.codex_home.clone().to_path_buf(),
         client_id.to_string(),
         forced_workspace,
         config.cli_auth_credentials_store_mode,
