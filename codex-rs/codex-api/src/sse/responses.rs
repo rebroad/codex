@@ -4,7 +4,7 @@ use crate::common::TransportByteStats;
 use crate::error::ApiError;
 use crate::prompt_debug_http::PromptCaptureSession;
 use crate::prompt_debug_http::prompt_capture_append_output;
-use crate::prompt_debug_http::prompt_capture_append_reasoning;
+use crate::prompt_debug_http::prompt_capture_append_reasoning_entry;
 use crate::prompt_debug_http::prompt_capture_write_output_json;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
@@ -431,12 +431,6 @@ pub async fn process_sse(
                 continue;
             }
         };
-        if let Some(capture) = capture.as_ref()
-            && event_contains_reasoning_payload(&event)
-        {
-            prompt_capture_append_reasoning(capture, "responses_sse", &sse.data);
-        }
-
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
         {
@@ -468,13 +462,45 @@ pub async fn process_sse(
                     ResponseEvent::OutputItemDone(item) => {
                         maybe_capture_response_item(capture.as_ref(), "Output item done", item);
                     }
-                    ResponseEvent::ReasoningSummaryDelta { delta, .. }
-                    | ResponseEvent::ReasoningContentDelta { delta, .. } => {
+                    ResponseEvent::ReasoningSummaryDelta {
+                        delta,
+                        summary_index,
+                    } => {
                         if let Some(capture) = capture.as_ref() {
-                            prompt_capture_append_reasoning(
+                            prompt_capture_append_reasoning_entry(
                                 capture,
-                                "responses_sse_reasoning_delta",
-                                delta,
+                                "responses_sse",
+                                "reasoning_summary_text_delta",
+                                Some(delta),
+                                Some(*summary_index),
+                                None,
+                            );
+                        }
+                    }
+                    ResponseEvent::ReasoningContentDelta {
+                        delta,
+                        content_index,
+                    } => {
+                        if let Some(capture) = capture.as_ref() {
+                            prompt_capture_append_reasoning_entry(
+                                capture,
+                                "responses_sse",
+                                "reasoning_text_delta",
+                                Some(delta),
+                                None,
+                                Some(*content_index),
+                            );
+                        }
+                    }
+                    ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                        if let Some(capture) = capture.as_ref() {
+                            prompt_capture_append_reasoning_entry(
+                                capture,
+                                "responses_sse",
+                                "reasoning_summary_part_added",
+                                None,
+                                Some(*summary_index),
+                                None,
                             );
                         }
                     }
@@ -495,7 +521,6 @@ pub async fn process_sse(
                     ResponseEvent::Created
                     | ResponseEvent::ServerModel(_)
                     | ResponseEvent::ServerReasoningIncluded(_)
-                    | ResponseEvent::ReasoningSummaryPartAdded { .. }
                     | ResponseEvent::RateLimits(_)
                     | ResponseEvent::ModelsEtag(_) => {}
                 }
@@ -529,10 +554,13 @@ fn maybe_capture_response_item(
         prompt_capture_append_output(capture, "responses_sse_output_text", output_text.as_str());
     }
     if let Some(reasoning_text) = reasoning_text {
-        prompt_capture_append_reasoning(
+        prompt_capture_append_reasoning_entry(
             capture,
-            "responses_sse_reasoning_text",
-            reasoning_text.as_str(),
+            "responses_sse",
+            "reasoning_item_text",
+            Some(reasoning_text.as_str()),
+            None,
+            None,
         );
     }
 
@@ -598,23 +626,6 @@ pub(crate) fn capture_sections_from_response_item(
         }
         _ => (None, None),
     }
-}
-
-pub(crate) fn event_contains_reasoning_payload(event: &ResponsesStreamEvent) -> bool {
-    if event.kind.starts_with("response.reasoning_") {
-        return true;
-    }
-
-    if event.kind == "response.output_item.added" || event.kind == "response.output_item.done" {
-        return event
-            .item
-            .as_ref()
-            .and_then(|item| item.get("type"))
-            .and_then(Value::as_str)
-            == Some("reasoning");
-    }
-
-    false
 }
 
 fn try_parse_retry_after(err: &Error) -> Option<Duration> {
