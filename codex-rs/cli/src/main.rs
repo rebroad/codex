@@ -1853,10 +1853,10 @@ async fn run_status_command(
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     ));
-    let (auth, compact_output_mode) = match auth_manager.auth_with_refresh_if_expired_strict().await
-    {
+    let (auth, compact_output_mode) = match auth_manager.auth_with_refresh_if_expired_strict().await {
         Ok(auth) => (auth, codex_tui::CompactStatusOutputMode::Normal),
         Err(err) => {
+            eprintln!("proactive auth refresh failed: {err}");
             tracing::warn!("proactive auth refresh failed: {err}");
             let compact_mode = match err {
                 RefreshTokenError::Permanent(_) => codex_tui::CompactStatusOutputMode::UnknownUsage,
