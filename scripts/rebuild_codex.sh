@@ -69,6 +69,10 @@ restore_cargo_lock_if_needed() {
 }
 trap restore_cargo_lock_if_needed EXIT
 
+is_workspace_unclean() {
+  [[ -n "$(git -C "${REPO_DIR}" status --porcelain 2>/dev/null || true)" ]]
+}
+
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
   sleep 0.2
@@ -823,7 +827,7 @@ resolve_publish_version() {
   version="$(read_workspace_version)"
   if [[ -z "${version}" ]]; then
     version_from_codex="$("${INSTALL_BIN}" --version | awk '{print $2}')"
-    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})(-[0-9a-f]{7,40})?$ ]]; then
+    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})(-[0-9a-f]{7,40}\+?)?$ ]]; then
       version="${BASH_REMATCH[1]}"
     else
       version="${version_from_codex}"
@@ -884,7 +888,7 @@ with bin_path.open("r+b") as f:
         # only patch one family, `--version` may still report an old value.
         # Commit suffixes in this script are always 12 hex chars; matching a
         # fixed width avoids accidentally swallowing adjacent hex bytes.
-        pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{12})?")
+        pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{12}\+?)?")
         for match in pattern.finditer(mm):
             if (match.end() - match.start()) != len(replacement):
                 continue
@@ -939,7 +943,7 @@ offer_duplicate_cleanup_for_installed_binaries() {
   for bin_path in "${INSTALL_BIN_DIR}"/codex-*; do
     [[ -f "${bin_path}" ]] || continue
     name="$(basename "${bin_path}")"
-    if [[ ! "${name}" =~ ^codex-(.+)-([0-9]{12})(-[0-9a-f]{7,40})?$ ]]; then
+    if [[ ! "${name}" =~ ^codex-(.+)-([0-9]{12})(-[0-9a-f]{7,40}\+?)?$ ]]; then
       continue
     fi
     size="$(stat -c %s "${bin_path}" 2>/dev/null || true)"
@@ -1537,7 +1541,12 @@ if [[ "${PREFLIGHT_ONLY}" == "true" && "${should_publish}" == "true" ]]; then
 fi
 
 BUILD_COMMIT_SHORT="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD)"
-if [[ "${MODE}" == "release" || "${should_publish}" == "true" || "${REFRESH_BUILD_INFO}" == "true" ]]; then
+WORKSPACE_UNCLEAN="false"
+if is_workspace_unclean; then
+  WORKSPACE_UNCLEAN="true"
+  BUILD_COMMIT_SHORT+="+"
+fi
+if [[ "${WORKSPACE_UNCLEAN}" == "true" || "${MODE}" == "release" || "${should_publish}" == "true" || "${REFRESH_BUILD_INFO}" == "true" ]]; then
   BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP}-${BUILD_COMMIT_SHORT}"
 fi
 
