@@ -48,6 +48,7 @@ pub use crate::prompt_debug_http::capture_output_enabled;
 pub use crate::prompt_debug_http::configure_prompt_debug_http;
 pub use crate::prompt_debug_http::prompt_capture_append_output;
 pub use crate::prompt_debug_http::prompt_capture_append_reasoning;
+pub use crate::prompt_debug_http::prompt_capture_append_reasoning_entry;
 pub use crate::prompt_debug_http::prompt_capture_write_output_json;
 pub use crate::prompt_debug_http::prompt_debug_http_enabled;
 pub use crate::prompt_debug_http::prompt_debug_http_log;
