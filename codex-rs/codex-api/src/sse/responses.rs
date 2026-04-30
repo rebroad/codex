@@ -563,6 +563,16 @@ fn maybe_capture_response_item(
             None,
         );
     }
+    if let Some(marker_text) = capture_reasoning_summary_marker_from_response_item(item) {
+        prompt_capture_append_reasoning_entry(
+            capture,
+            "responses_sse",
+            "reasoning_summary_missing",
+            Some(marker_text.as_str()),
+            None,
+            None,
+        );
+    }
 
     if let Ok(item_json) = serde_json::to_value(item) {
         prompt_capture_write_output_json(Some(capture), label, &item_json);
@@ -625,6 +635,23 @@ pub(crate) fn capture_sections_from_response_item(
             }
         }
         _ => (None, None),
+    }
+}
+
+pub(crate) fn capture_reasoning_summary_marker_from_response_item(
+    item: &ResponseItem,
+) -> Option<String> {
+    match item {
+        ResponseItem::Reasoning {
+            summary,
+            encrypted_content,
+            ..
+        } if summary.is_empty() => Some(if encrypted_content.as_ref().is_some_and(|s| !s.is_empty()) {
+            "Reasoning item emitted without a human-readable summary; encrypted reasoning content was present.".to_string()
+        } else {
+            "Reasoning item emitted without a human-readable summary.".to_string()
+        }),
+        _ => None,
     }
 }
 
