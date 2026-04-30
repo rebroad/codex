@@ -516,6 +516,30 @@ pub fn prompt_capture_append_reasoning(
     );
 }
 
+pub fn prompt_capture_append_reasoning_entry(
+    session: &PromptCaptureSession,
+    transport: &str,
+    kind: &str,
+    text: Option<&str>,
+    summary_index: Option<i64>,
+    content_index: Option<i64>,
+) {
+    if !session.capture_reasoning {
+        return;
+    }
+    append_json_line(
+        session.reasoning_path(),
+        &serde_json::json!({
+            "query_id": session.id(),
+            "transport": transport,
+            "kind": kind,
+            "text": text,
+            "summary_index": summary_index,
+            "content_index": content_index,
+        }),
+    );
+}
+
 pub fn prompt_capture_write_output_json(
     session: Option<&PromptCaptureSession>,
     label: &str,
@@ -635,6 +659,50 @@ mod tests {
         assert_eq!(first, "1");
         assert_eq!(second, "2");
         assert_eq!(counter.trim(), "2");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prompt_capture_append_reasoning_entry_writes_human_readable_ndjson() {
+        let dir = PathBuf::from(format!(
+            "/var/tmp/codex-prompt-debug-http-test-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        std::fs::create_dir_all(dir.as_path()).expect("create temp dir");
+        let reasoning_path = dir.join("7_reasoning.ndjson");
+        let session = PromptCaptureSession {
+            id: "7".to_string(),
+            capture_input: false,
+            capture_output: false,
+            capture_reasoning: true,
+            input_path: dir.join("7_input.ndjson"),
+            output_path: dir.join("7_output.ndjson"),
+            reasoning_path: reasoning_path.clone(),
+        };
+
+        prompt_capture_append_reasoning_entry(
+            &session,
+            "responses_websocket",
+            "reasoning_summary_text_delta",
+            Some("Plan: inspect the request"),
+            Some(0),
+            None,
+        );
+
+        let captured = std::fs::read_to_string(reasoning_path).expect("read reasoning file");
+        let value: serde_json::Value =
+            serde_json::from_str(captured.trim()).expect("parse reasoning json");
+        assert_eq!(value.get("query_id"), Some(&serde_json::json!("7")));
+        assert_eq!(
+            value.get("kind"),
+            Some(&serde_json::json!("reasoning_summary_text_delta"))
+        );
+        assert_eq!(
+            value.get("text"),
+            Some(&serde_json::json!("Plan: inspect the request"))
+        );
+        assert_eq!(value.get("summary_index"), Some(&serde_json::json!(0)));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
