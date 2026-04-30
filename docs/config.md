@@ -118,6 +118,10 @@ Capture files include:
 `<query_id>_input.ndjson`,
 `<query_id>_output.ndjson`, and
 `<query_id>_reasoning.ndjson`.
+The reasoning file is intended to capture human-readable reasoning material:
+summary deltas, summary-part markers, and any readable reasoning text emitted
+by the model. Encrypted reasoning blobs may still appear in structured output
+captures, but are not the primary contents of `<query_id>_reasoning.ndjson`.
 If the `capture_dir` path contains `$$`, Codex replaces it with the current
 process PID.
 If the `capture_dir` path contains `$EMAIL`, Codex replaces it with the
