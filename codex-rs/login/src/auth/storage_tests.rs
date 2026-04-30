@@ -540,3 +540,61 @@ fn auto_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn create_auth_storage_with_override_updates_keyring_in_auto_mode() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let override_file = codex_home.path().join("auth.json.d").join("profile@example.com");
+    set_auth_file_override(Some(override_file.clone()));
+
+    let result = (|| -> anyhow::Result<()> {
+        let mock_keyring = MockKeyringStore::default();
+        std::fs::create_dir_all(override_file.parent().expect("override parent"))?;
+        std::fs::write(&override_file, "sentinel")?;
+        let storage = create_auth_storage_with_keyring_store(
+            codex_home.path().to_path_buf(),
+            AuthCredentialsStoreMode::Auto,
+            Arc::new(mock_keyring.clone()),
+        );
+
+        let auth = auth_with_prefix("override-auto");
+        storage.save(&auth)?;
+
+        let key = compute_store_key(codex_home.path())?;
+        assert_eq!(mock_keyring.saved_value(&key), Some(serde_json::to_string(&auth)?));
+        assert_eq!(std::fs::read_to_string(&override_file)?, "sentinel");
+        Ok(())
+    })();
+
+    set_auth_file_override(None);
+    result
+}
+
+#[test]
+fn create_auth_storage_with_override_updates_keyring_in_keyring_mode() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let override_file = codex_home.path().join("auth.json.d").join("profile@example.com");
+    set_auth_file_override(Some(override_file.clone()));
+
+    let result = (|| -> anyhow::Result<()> {
+        let mock_keyring = MockKeyringStore::default();
+        std::fs::create_dir_all(override_file.parent().expect("override parent"))?;
+        std::fs::write(&override_file, "sentinel")?;
+        let storage = create_auth_storage_with_keyring_store(
+            codex_home.path().to_path_buf(),
+            AuthCredentialsStoreMode::Keyring,
+            Arc::new(mock_keyring.clone()),
+        );
+
+        let auth = auth_with_prefix("override-keyring");
+        storage.save(&auth)?;
+
+        let key = compute_store_key(codex_home.path())?;
+        assert_eq!(mock_keyring.saved_value(&key), Some(serde_json::to_string(&auth)?));
+        assert_eq!(std::fs::read_to_string(&override_file)?, "sentinel");
+        Ok(())
+    })();
+
+    set_auth_file_override(None);
+    result
+}
