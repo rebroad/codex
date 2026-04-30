@@ -29,7 +29,9 @@ use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
 use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
+use codex_state::account_usage_key;
 use codex_state::state_db_path;
+use codex_state::usage_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
@@ -47,11 +49,16 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
+mod status_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use crate::status_cmd::ThreadStatusOutputFormat;
+use crate::status_cmd::ThreadStatusSelector;
+use crate::status_cmd::load_thread_status_snapshot;
+use crate::status_cmd::render_thread_status;
 
 use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
@@ -133,6 +140,12 @@ enum Subcommand {
     /// Start Codex as an MCP server (stdio).
     McpServer,
 
+    /// Show local session configuration status and exit.
+    Status(StatusCommand),
+
+    /// Manage local account usage tracking data.
+    Usage(UsageCommand),
+
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
@@ -199,10 +212,75 @@ enum PluginSubcommand {
 }
 
 #[derive(Debug, Parser)]
+struct StatusCommand {
+    /// Use locally cached usage/rate-limit values when available.
+    #[arg(long, default_value_t = false)]
+    cached: bool,
+
+    /// Inspect a specific interactive thread.
+    #[arg(long, value_name = "THREAD_ID", conflicts_with = "last")]
+    thread_id: Option<String>,
+
+    /// Inspect the most recently updated interactive thread.
+    #[arg(long, default_value_t = false, conflicts_with = "thread_id")]
+    last: bool,
+
+    /// Emit the thread-aware status as JSON.
+    #[arg(long, default_value_t = false, conflicts_with = "telegram")]
+    json: bool,
+
+    /// Emit a compact Telegram-friendly thread status.
+    #[arg(long, default_value_t = false, conflicts_with = "json")]
+    telegram: bool,
+
+    /// Extra arguments accepted after `--` for machine-readable output mode.
+    #[arg(last = true, allow_hyphen_values = true, value_name = "ARG")]
+    trailing_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct StatusOutputMode {
+    compact: bool,
+    utc: bool,
+    thread_output: Option<ThreadStatusOutputFormat>,
+    thread_selector: Option<ThreadStatusSelector>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StatusInvocationOptions {
+    output_mode: StatusOutputMode,
+    auth_file_override: Option<PathBuf>,
+    cached: bool,
+}
+
+#[derive(Debug, Parser)]
 struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct UsageCommand {
+    #[command(subcommand)]
+    subcommand: UsageSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum UsageSubcommand {
+    /// Clear locally tracked account usage samples and totals.
+    Clear(UsageClearCommand),
+}
+
+#[derive(Debug, Parser)]
+struct UsageClearCommand {
+    /// Clear usage for all locally tracked accounts on the active provider.
+    #[arg(long = "all-accounts", default_value_t = false)]
+    all_accounts: bool,
+
+    /// Skip the interactive confirmation prompt.
+    #[arg(long = "yes", short = 'y', default_value_t = false)]
+    yes: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -1062,6 +1140,53 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             );
             run_logout(logout_cli.config_overrides).await;
         }
+        Some(Subcommand::Status(status_command)) => {
+            let raw_argv: Vec<String> = std::env::args().collect();
+            let mut status_options = parse_status_invocation_options(
+                &raw_argv,
+                status_command.cached,
+                &status_command.trailing_args,
+            )?;
+            if (status_command.json || status_command.telegram)
+                && status_command.thread_id.is_none()
+                && !status_command.last
+            {
+                anyhow::bail!(
+                    "`codex status --json` and `codex status --telegram` require `--thread-id <id>` or `--last`."
+                );
+            }
+            if status_command.thread_id.is_some() || status_command.last {
+                status_options.output_mode.thread_selector = Some(ThreadStatusSelector {
+                    thread_id: status_command.thread_id.clone(),
+                    last: status_command.last,
+                });
+                status_options.output_mode.thread_output = Some(if status_command.json {
+                    ThreadStatusOutputFormat::Json
+                } else if status_command.telegram {
+                    ThreadStatusOutputFormat::Telegram
+                } else {
+                    ThreadStatusOutputFormat::Human
+                });
+            }
+            if let Some(auth_file_override) = status_options.auth_file_override {
+                codex_login::set_auth_file_override(Some(auth_file_override));
+            }
+            run_status_command(&root_config_overrides, &interactive, status_options.output_mode)
+                .await?;
+        }
+        Some(Subcommand::Usage(usage_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "usage",
+            )?;
+            match usage_cli.subcommand {
+                UsageSubcommand::Clear(clear_command) => {
+                    run_usage_clear_command(&root_config_overrides, &interactive, clear_command)
+                        .await?;
+                }
+            }
+        }
         Some(Subcommand::Completion(completion_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1575,6 +1700,320 @@ where
 fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<String> {
     read_remote_auth_token_from_env_var_with(env_var_name, |name| std::env::var(name))
 }
+
+fn parse_status_invocation_options(
+    raw_argv: &[String],
+    default_cached: bool,
+    trailing_args: &[String],
+) -> anyhow::Result<StatusInvocationOptions> {
+    let Some(status_index) = raw_argv.iter().position(|arg| arg == "status") else {
+        if trailing_args.is_empty() {
+            return Ok(StatusInvocationOptions {
+                cached: default_cached,
+                ..StatusInvocationOptions::default()
+            });
+        }
+        anyhow::bail!("Unknown arguments for `codex status`.");
+    };
+    let has_double_dash = raw_argv[status_index + 1..].iter().any(|arg| arg == "--");
+    if !has_double_dash {
+        if trailing_args.is_empty() {
+            return Ok(StatusInvocationOptions {
+                cached: default_cached,
+                ..StatusInvocationOptions::default()
+            });
+        }
+        let provided = trailing_args.join(" ");
+        anyhow::bail!(
+            "Unknown arguments for `codex status`: {provided}. Use `codex status [--cached]` or `codex status -- [--utc] [--cached]`."
+        );
+    }
+
+    let mut options = StatusInvocationOptions {
+        output_mode: StatusOutputMode {
+            compact: true,
+            utc: false,
+            thread_output: None,
+            thread_selector: None,
+        },
+        auth_file_override: None,
+        cached: default_cached,
+    };
+    let mut i = 0usize;
+    while i < trailing_args.len() {
+        match trailing_args[i].as_str() {
+            "--utc" => options.output_mode.utc = true,
+            "--cached" => options.cached = true,
+            flag if flag.starts_with("--auth-file=") => {
+                let value = flag.trim_start_matches("--auth-file=");
+                if !value.is_empty() {
+                    options.auth_file_override = Some(PathBuf::from(value));
+                }
+            }
+            "--auth-file" => {
+                if let Some(value) = trailing_args.get(i + 1) {
+                    options.auth_file_override = Some(PathBuf::from(value));
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    Ok(options)
+}
+
+fn format_status_timestamp(ts: i64, use_utc: bool) -> String {
+    if let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) {
+        if use_utc {
+            dt.naive_utc().format("%Y-%m-%d %H:%M:%S UTC").to_string()
+        } else {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S %Z")
+                .to_string()
+        }
+    } else {
+        ts.to_string()
+    }
+}
+
+fn render_account_usage_lines(
+    snapshot: &codex_state::AccountUsageSnapshot,
+    use_utc: bool,
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("Usage USD: {:.6}", snapshot.total_usage_usd),
+        format!(
+            "Usage USD (with prewarm): {:.6}",
+            snapshot.total_usage_usd_with_prewarm
+        ),
+        format!(
+            "Usage tokens: total={} input={} cached_input={} output={} reasoning={}",
+            snapshot.total_tokens,
+            snapshot.input_tokens,
+            snapshot.cached_input_tokens,
+            snapshot.output_tokens,
+            snapshot.reasoning_output_tokens
+        ),
+    ];
+    if let Some(percent) = snapshot.last_backend_used_percent {
+        lines.push(format!("Backend used percent: {:.1}", percent));
+    }
+    if let Some(limit_name) = snapshot.last_backend_limit_name.as_deref() {
+        lines.push(format!("Backend limit: {limit_name}"));
+    }
+    lines.push(format!(
+        "Usage updated: {}",
+        format_status_timestamp(snapshot.updated_at, use_utc)
+    ));
+    lines
+}
+
+async fn run_status_command(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+    status_output_mode: StatusOutputMode,
+) -> anyhow::Result<()> {
+    let mut cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    if interactive.web_search {
+        cli_kv_overrides.push((
+            "web_search".to_string(),
+            toml::Value::String("live".to_string()),
+        ));
+    }
+
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        ..Default::default()
+    };
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    if let Some(selector) = status_output_mode.thread_selector.as_ref() {
+        let format = status_output_mode
+            .thread_output
+            .unwrap_or(ThreadStatusOutputFormat::Human);
+        let snapshot = load_thread_status_snapshot(&config, selector).await?;
+        let lines = render_thread_status(&snapshot, format)?;
+        for line in lines {
+            println!("{line}");
+        }
+        return Ok(());
+    }
+
+    let auth_manager = AuthManager::new(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let auth = auth_manager.auth().await;
+    let account_id = auth.as_ref().and_then(|auth| {
+        account_usage_key(
+            auth.get_account_id().as_deref(),
+            auth.get_account_email().as_deref(),
+        )
+    });
+    let usage_store =
+        codex_state::AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+            .await?;
+    let usage_snapshot = if let Some(account_id) = account_id.as_deref() {
+        usage_store.get_account_usage(account_id).await?
+    } else {
+        None
+    };
+
+    if status_output_mode.compact {
+        let mut parts = vec![format!("model={}", config.model.as_deref().unwrap_or("<unknown>"))];
+        parts.push(format!("provider={}", config.model_provider_id));
+        if let Some(auth) = auth.as_ref() {
+            parts.push(format!("auth={:?}", auth.auth_mode()));
+            if let Some(email) = auth.get_account_email() {
+                parts.push(format!("account={email}"));
+            }
+            if let Some(plan) = auth.account_plan_type() {
+                parts.push(format!("plan={plan:?}"));
+            }
+        } else {
+            parts.push("auth=none".to_string());
+        }
+        if let Some(snapshot) = usage_snapshot.as_ref() {
+            parts.push(format!("usage_usd={:.6}", snapshot.total_usage_usd));
+            if let Some(percent) = snapshot.last_backend_used_percent {
+                parts.push(format!("backend_pct={:.1}", percent));
+            }
+        }
+        println!("{}", parts.join(" "));
+        return Ok(());
+    }
+
+    println!("Model: {}", config.model.as_deref().unwrap_or("<unknown>"));
+    println!("Provider: {}", config.model_provider_id);
+    println!("CODEX_HOME: {}", config.codex_home.display());
+    println!("State DB: {}", state_db_path(config.sqlite_home.as_path()).display());
+    println!("Usage DB: {}", usage_db_path(config.sqlite_home.as_path()).display());
+    if let Some(auth) = auth.as_ref() {
+        println!("Auth mode: {:?}", auth.auth_mode());
+        if let Some(email) = auth.get_account_email() {
+            println!("Account: {email}");
+        }
+        if let Some(plan) = auth.account_plan_type() {
+            println!("Plan: {:?}", plan);
+        }
+    } else {
+        println!("Auth mode: none");
+    }
+    if let Some(snapshot) = usage_snapshot.as_ref() {
+        for line in render_account_usage_lines(snapshot, status_output_mode.utc) {
+            println!("{line}");
+        }
+    } else {
+        println!("Usage: no local usage snapshot for current account");
+    }
+    Ok(())
+}
+
+async fn run_usage_clear_command(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+    clear_command: UsageClearCommand,
+) -> anyhow::Result<()> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        ..Default::default()
+    };
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let usage_path = usage_db_path(config.sqlite_home.as_path());
+    let current_account = if clear_command.all_accounts {
+        None
+    } else {
+        let auth_manager = AuthManager::new(
+            config.codex_home.clone(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let auth = auth_manager.auth().await;
+        let account_id = auth
+            .as_ref()
+            .and_then(|auth| {
+                account_usage_key(
+                    auth.get_account_id().as_deref(),
+                    auth.get_account_email().as_deref(),
+                )
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No current account ID could be resolved from active credentials. Use `codex usage clear --all-accounts` to clear all locally tracked accounts."
+                )
+            })?;
+        let account_email = auth.as_ref().and_then(|auth| auth.get_account_email());
+        Some((account_id, account_email))
+    };
+
+    if !clear_command.yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "Refusing to clear usage data without confirmation in a non-interactive shell. Re-run with `--yes`."
+            );
+        }
+
+        let scope = if clear_command.all_accounts {
+            "all accounts".to_string()
+        } else if let Some((_, Some(account_email))) = current_account.as_ref() {
+            format!("the account `{account_email}`")
+        } else {
+            "the current account".to_string()
+        };
+        let provider = config.model_provider_id.as_str();
+        let prompt = format!(
+            "This will clear local usage tracking for {scope} on provider `{provider}` from {}. Continue? [y/N]: ",
+            usage_path.display()
+        );
+        if !confirm(&prompt)? {
+            eprintln!("Usage clear aborted.");
+            return Ok(());
+        }
+    }
+
+    let usage_store =
+        codex_state::AccountUsageStore::init(config.sqlite_home.clone(), config.model_provider_id)
+            .await?;
+
+    let (usage_rows_deleted, sample_rows_deleted, scope) = if clear_command.all_accounts {
+        let (usage_rows_deleted, sample_rows_deleted) =
+            usage_store.clear_usage_for_all_accounts().await?;
+        (
+            usage_rows_deleted,
+            sample_rows_deleted,
+            "all accounts".to_string(),
+        )
+    } else {
+        let (account_id, account_email) = current_account
+            .ok_or_else(|| anyhow::anyhow!("Missing current account resolution state."))?;
+        let (usage_rows_deleted, sample_rows_deleted) = usage_store
+            .clear_usage_for_account(account_id.as_str())
+            .await?;
+        let scope = if let Some(account_email) = account_email {
+            format!("account `{account_email}`")
+        } else {
+            format!("account `{account_id}`")
+        };
+        (usage_rows_deleted, sample_rows_deleted, scope)
+    };
+
+    println!(
+        "Cleared usage tracking for {scope} from {} (account_usage rows: {usage_rows_deleted}, account_usage_samples rows: {sample_rows_deleted}).",
+        usage_path.display()
+    );
+
+    Ok(())
+}
+
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     remote: Option<String>,
