@@ -1013,26 +1013,10 @@ offer_duplicate_cleanup_for_installed_binaries() {
     echo "- Delete: ${delete_names[i]}"
   done
 
-  if [[ ! -t 0 ]]; then
-    echo "Skipping duplicate cleanup prompt in non-interactive mode."
-    return 0
-  fi
-
-  local reply
-  if [[ -r /dev/tty && -w /dev/tty ]]; then
-    printf 'Delete duplicate binaries now and keep only the latest of each batch? [y/N] ' > /dev/tty
-    read -r reply < /dev/tty
-  else
-    read -r -p "Delete duplicate binaries now and keep only the latest of each batch? [y/N] " reply
-  fi
-  if [[ "${reply}" =~ ^[Yy]$ ]]; then
-    for name in "${delete_names[@]}"; do
-      rm -f "${INSTALL_BIN_DIR}/${name}"
-    done
-    echo "Deleted ${#delete_names[@]} duplicate binaries from ${INSTALL_BIN_DIR}."
-  else
-    echo "Duplicate cleanup skipped."
-  fi
+  for name in "${delete_names[@]}"; do
+    rm -f "${INSTALL_BIN_DIR}/${name}"
+  done
+  echo "Deleted ${#delete_names[@]} duplicate binaries from ${INSTALL_BIN_DIR}."
 }
 
 is_commit_preflight_passed() {
