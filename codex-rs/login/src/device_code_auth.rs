@@ -15,12 +15,12 @@ const ANSI_BLUE: &str = "\x1b[94m";
 const ANSI_GRAY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceCode {
     pub verification_url: String,
     pub user_code: String,
-    device_auth_id: String,
-    interval: u64,
+    pub device_auth_id: String,
+    pub interval: u64,
 }
 
 #[derive(Deserialize)]

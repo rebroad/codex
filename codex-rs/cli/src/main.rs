@@ -18,6 +18,8 @@ use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
 use codex_cli::run_logout;
+use codex_cli::run_tlogin_complete;
+use codex_cli::run_tlogin_start;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
@@ -115,6 +117,9 @@ enum Subcommand {
 
     /// Manage login.
     Login(LoginCommand),
+
+    /// Telegram-oriented two-phase login (for bot orchestration).
+    Tlogin(TloginCommand),
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
@@ -407,6 +412,37 @@ enum LoginSubcommand {
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct TloginCommand {
+    #[command(subcommand)]
+    action: TloginSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum TloginSubcommand {
+    /// Start a Telegram login flow and print the device verification details.
+    Start(TloginStartCommand),
+    /// Complete a Telegram login flow after the user approves device auth.
+    Complete(TloginCompleteCommand),
+}
+
+#[derive(Debug, Parser)]
+struct TloginStartCommand {
+    /// Stable bot user identifier for caching pending device auth state.
+    #[arg(long = "user-id", value_name = "USER_ID")]
+    user_id: String,
+    /// Emit machine-readable JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+struct TloginCompleteCommand {
+    /// Stable bot user identifier used during `tlogin start`.
+    #[arg(long = "user-id", value_name = "USER_ID")]
+    user_id: String,
 }
 
 #[derive(Debug, Parser)]
@@ -985,6 +1021,35 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
+        Some(Subcommand::Tlogin(tlogin_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "tlogin",
+            )?;
+            match tlogin_cli.action {
+                TloginSubcommand::Start(start) => {
+                    let result =
+                        run_tlogin_start(root_config_overrides.clone(), start.user_id).await?;
+                    if start.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "verificationUrl": result.verification_url,
+                                "userCode": result.user_code,
+                                "message": result.message,
+                            }))?
+                        );
+                    } else {
+                        println!("{}", result.message);
+                    }
+                }
+                TloginSubcommand::Complete(complete) => {
+                    run_tlogin_complete(root_config_overrides.clone(), complete.user_id).await?;
+                    eprintln!("Successfully logged in");
+                }
+            }
+        }
         Some(Subcommand::Logout(mut logout_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1510,7 +1575,6 @@ where
 fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<String> {
     read_remote_auth_token_from_env_var_with(env_var_name, |name| std::env::var(name))
 }
-
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     remote: Option<String>,
@@ -2447,6 +2511,62 @@ mod tests {
             "--allow-unauthenticated-non-loopback-ws",
         ]);
         assert!(parse_result.is_err());
+    }
+
+    fn usage_clear_parses_flags() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "usage", "clear", "--all-accounts", "--yes"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Usage(UsageCommand { subcommand })) = cli.subcommand else {
+            panic!("expected usage subcommand");
+        };
+        let UsageSubcommand::Clear(UsageClearCommand { all_accounts, yes }) = subcommand;
+        assert!(all_accounts);
+        assert!(yes);
+    }
+
+    #[test]
+    fn tlogin_start_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "start",
+            "--user-id",
+            "1234",
+            "--json",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Start(TloginStartCommand { user_id, json }) = action else {
+            panic!("expected tlogin start");
+        };
+        assert_eq!(user_id, "1234");
+        assert!(json);
+    }
+
+    #[test]
+    fn tlogin_complete_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "complete",
+            "--user-id",
+            "1234",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Complete(TloginCompleteCommand { user_id }) = action else {
+            panic!("expected tlogin complete");
+        };
+        assert_eq!(user_id, "1234");
     }
 
     #[test]
