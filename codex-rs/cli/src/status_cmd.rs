@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::SortDirection;
 use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::config::Config;
@@ -156,8 +157,10 @@ async fn select_thread_item(
             /*page_size*/ 1,
             None,
             ThreadSortKey::UpdatedAt,
+            SortDirection::Desc,
             INTERACTIVE_SESSION_SOURCES.as_slice(),
             /*model_providers*/ None,
+            /*cwd_filters*/ None,
             &config.model_provider_id,
             /*search_term*/ None,
         )
@@ -180,8 +183,10 @@ async fn select_thread_item(
             /*page_size*/ 100,
             cursor.as_ref(),
             ThreadSortKey::UpdatedAt,
+            SortDirection::Desc,
             INTERACTIVE_SESSION_SOURCES.as_slice(),
             /*model_providers*/ None,
+            /*cwd_filters*/ None,
             &config.model_provider_id,
             /*search_term*/ None,
         )

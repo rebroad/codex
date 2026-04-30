@@ -1844,10 +1844,12 @@ async fn run_status_command(
     }
 
     let auth_manager = AuthManager::new(
-        config.codex_home.clone(),
+        config.codex_home.clone().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
-    );
+        Some(config.chatgpt_base_url.clone()),
+    )
+    .await;
     let auth = auth_manager.auth().await;
     let account_id = auth.as_ref().and_then(|auth| {
         account_usage_key(
@@ -1933,10 +1935,12 @@ async fn run_usage_clear_command(
         None
     } else {
         let auth_manager = AuthManager::new(
-            config.codex_home.clone(),
+            config.codex_home.clone().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             config.cli_auth_credentials_store_mode,
-        );
+            Some(config.chatgpt_base_url.clone()),
+        )
+        .await;
         let auth = auth_manager.auth().await;
         let account_id = auth
             .as_ref()
