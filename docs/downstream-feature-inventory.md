@@ -33,7 +33,7 @@ Each feature should be marked during a rebase pass as one of:
 | `codex fork` | satisfied by upstream | Current upstream already has `codex fork` CLI support; downstream branch keeps the surface stable. |
 | `scripts/plot_usage_log.py` | reapplied downstream | Plotting tool continues to read current usage logs and produce output. |
 | Prompt customizations: emojis | intentionally deferred | Prompt-level customization still needs a clean carry-forward onto current upstream prompt assets. |
-| Prompt customizations: stronger `apply_patch` guidance | intentionally deferred | Prompt-level customization still needs a clean carry-forward onto current upstream prompt assets. |
+| Prompt customizations: stronger `apply_patch` guidance | reapplied downstream | Current prompt assets keep the downstream preference for `apply_patch` on direct file edits. |
 | `--bare-prompt` | intentionally deferred | CLI/config wiring and current upstream exec/TUI integration still need a targeted reimplementation. |
 | Delayed-decline / steer fix | intentionally deferred | Needs a fresh audit against current upstream steer behavior before carrying any downstream patch. |
 | Config reload on `SIGHUP` | intentionally deferred | Current upstream has reload primitives, but the signal-trigger wiring still needs a narrow downstream reimplementation. |
