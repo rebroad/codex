@@ -672,7 +672,6 @@ from_suffix = sys.argv[3].encode("utf-8")
 to_suffix = sys.argv[4].encode("utf-8")
 needle = base_version + b"-" + from_suffix
 replacement = base_version + b"-" + to_suffix
-
 if len(needle) != len(replacement):
     print("Internal error: needle/replacement lengths differ", file=sys.stderr)
     sys.exit(2)
@@ -691,7 +690,7 @@ with bin_path.open("r+b") as f:
             start = idx + len(needle)
 
         if count == 0:
-            pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{12})?")
+            pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{11,12}\+?)?")
             for match in pattern.finditer(mm):
                 if (match.end() - match.start()) != len(replacement):
                     continue
@@ -945,7 +944,7 @@ fi
 cd "${RUST_WORKSPACE_DIR}"
 
 export RUSTUP_DISABLE_SELF_UPDATE=1
-BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_SHORT}"
+BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH_PLACEHOLDER}"
 export CODEX_BUILD_TIMESTAMP="${BUILD_VERSION_SUFFIX_COMPILE}"
 
 resolved_v8_version="$(resolve_v8_crate_version)"
