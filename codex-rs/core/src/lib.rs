@@ -154,6 +154,7 @@ mod state;
 mod tasks;
 mod user_shell_command;
 pub mod util;
+pub mod version;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;

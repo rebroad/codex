@@ -67,11 +67,29 @@ resolve_main_worktree_dir() {
 restore_cargo_lock_if_needed() {
   git -C "${REPO_DIR}" checkout -- "./${CARGO_LOCK_REL}" >/dev/null 2>&1 || true
 }
+
+restore_cargo_lock_once() {
+  if [[ "${CARGO_LOCK_RESTORED}" != "true" ]]; then
+    restore_cargo_lock_if_needed
+    CARGO_LOCK_RESTORED="true"
+  fi
+}
+
 trap restore_cargo_lock_if_needed EXIT
 
 is_workspace_unclean() {
   [[ -n "$(git -C "${REPO_DIR}" status --porcelain 2>/dev/null || true)" ]]
 }
+
+mark_dirty_build_commit_short() {
+  BUILD_COMMIT_SHORT="${BUILD_COMMIT_SHORT:0:11}+"
+}
+
+CARGO_LOCK_RESTORED="false"
+WORKSPACE_UNCLEAN_AT_STARTUP="false"
+if is_workspace_unclean; then
+  WORKSPACE_UNCLEAN_AT_STARTUP="true"
+fi
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -865,7 +883,6 @@ from_suffix = sys.argv[3].encode("utf-8")
 to_suffix = sys.argv[4].encode("utf-8")
 needle = base_version + b"-" + from_suffix
 replacement = base_version + b"-" + to_suffix
-
 if len(needle) != len(replacement):
     print("Internal error: needle/replacement lengths differ", file=sys.stderr)
     sys.exit(2)
@@ -888,7 +905,7 @@ with bin_path.open("r+b") as f:
         # only patch one family, `--version` may still report an old value.
         # Commit suffixes in this script are always 12 hex chars; matching a
         # fixed width avoids accidentally swallowing adjacent hex bytes.
-        pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{12}\+?)?")
+        pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{11,12}\+?)?")
         for match in pattern.finditer(mm):
             if (match.end() - match.start()) != len(replacement):
                 continue
@@ -933,6 +950,24 @@ resolve_versioned_install_name_from_binary() {
   fi
 
   echo "codex-${normalized_version}"
+}
+
+install_built_codex_binary() {
+  local flavor="$1"
+  local bin_path="$2"
+  local install_tmp versioned_install_name versioned_install_bin
+
+  patch_installed_binary_version_timestamp "${bin_path}"
+  restore_cargo_lock_once
+
+  install_tmp="${INSTALL_BIN_DIR}/.codex.new.$$"
+  install -D -m 755 "${bin_path}" "${install_tmp}"
+  versioned_install_name="$(resolve_versioned_install_name_from_binary "${install_tmp}")"
+  versioned_install_bin="${INSTALL_BIN_DIR}/${versioned_install_name}"
+  echo "[3/4] Installing ${flavor} codex to ${versioned_install_bin} and linking ${INSTALL_BIN}..."
+  mv -f "${install_tmp}" "${versioned_install_bin}"
+  rm -f "${INSTALL_BIN}"
+  ln -s "${versioned_install_name}" "${INSTALL_BIN}"
 }
 
 offer_duplicate_cleanup_for_installed_binaries() {
@@ -1129,7 +1164,6 @@ BUILD_JOBS=""
 BISECT_MODE="false"
 FAST_RELEASE_BUILD="false"
 FAST_GATE="false"
-REFRESH_BUILD_INFO="false"
 BUILD_NPM_VENDOR="false"
 NPM_VENDOR_DIR=""
 RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
@@ -1248,9 +1282,6 @@ for arg in "$@"; do
       CI_PREFLIGHT="false"
       REGEN_SCHEMA="false"
       ;;
-    --refresh-build-info)
-      REFRESH_BUILD_INFO="true"
-      ;;
     --build-npm-vendor)
       BUILD_NPM_VENDOR="true"
       ;;
@@ -1350,8 +1381,6 @@ Options:
              Faster release compile (LTO=thin, codegen-units=16) with potential runtime perf tradeoff
   --fast-gate
              Fast local gate mode: debug build only, skip schema/preflight/publish, use cargo --locked offline
-  --refresh-build-info
-             Force `cargo clean -p codex-build-info` before debug build to refresh embedded timestamp
   --build-npm-vendor
              Build + stage npm vendor payload for linux x64 + armv7 using current mode (--debug or --release)
   --npm-vendor-dir=<path>
@@ -1526,14 +1555,10 @@ fi
 
 BUILD_COMMIT_SHORT="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD)"
 WORKSPACE_UNCLEAN="false"
-if is_workspace_unclean; then
+if [[ "${WORKSPACE_UNCLEAN_AT_STARTUP}" == "true" ]]; then
   WORKSPACE_UNCLEAN="true"
-  BUILD_COMMIT_SHORT+="+"
+  mark_dirty_build_commit_short
 fi
-if [[ "${WORKSPACE_UNCLEAN}" == "true" || "${MODE}" == "release" || "${should_publish}" == "true" || "${REFRESH_BUILD_INFO}" == "true" ]]; then
-  BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP}-${BUILD_COMMIT_SHORT}"
-fi
-
 if [[ "${publish_to_github}" == "true" ]]; then
   require_cmd gh
   require_cmd jq
@@ -1636,21 +1661,9 @@ if [[ "${MODE}" == "release" ]]; then
   run_release_build_with_locked_fallback
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex"
-  patch_installed_binary_version_timestamp "${release_bin}"
-  install_tmp="${INSTALL_BIN_DIR}/.codex.new.$$"
-  install -D -m 755 "${release_bin}" "${install_tmp}"
-  versioned_install_name="$(resolve_versioned_install_name_from_binary "${install_tmp}")"
-  versioned_install_bin="${INSTALL_BIN_DIR}/${versioned_install_name}"
-  echo "[3/4] Installing release codex to ${versioned_install_bin} and linking ${INSTALL_BIN}..."
-  mv -f "${install_tmp}" "${versioned_install_bin}"
-  rm -f "${INSTALL_BIN}"
-  ln -s "${versioned_install_name}" "${INSTALL_BIN}"
+  install_built_codex_binary "release" "${release_bin}"
 else
   echo "[2/4] Building debug codex..."
-  # Optional: force rebuild of codex-build-info so its build script reruns and embeds the current timestamp.
-  if [[ "${REFRESH_BUILD_INFO}" == "true" ]]; then
-    cargo +"${TOOLCHAIN}" clean -p codex-build-info
-  fi
   if [[ "${FAST_GATE}" == "true" ]]; then
     echo "[fast-gate] using offline locked debug build"
   fi
@@ -1684,15 +1697,7 @@ else
   fi
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
-  patch_installed_binary_version_timestamp "${debug_bin}"
-  install_tmp="${INSTALL_BIN_DIR}/.codex.new.$$"
-  install -D -m 755 "${debug_bin}" "${install_tmp}"
-  versioned_install_name="$(resolve_versioned_install_name_from_binary "${install_tmp}")"
-  versioned_install_bin="${INSTALL_BIN_DIR}/${versioned_install_name}"
-  echo "[3/4] Installing debug codex to ${versioned_install_bin} and linking ${INSTALL_BIN}..."
-  mv -f "${install_tmp}" "${versioned_install_bin}"
-  rm -f "${INSTALL_BIN}"
-  ln -s "${versioned_install_name}" "${INSTALL_BIN}"
+  install_built_codex_binary "debug" "${debug_bin}"
 fi
 
 offer_duplicate_cleanup_for_installed_binaries
