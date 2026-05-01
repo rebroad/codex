@@ -501,6 +501,9 @@ run_armv7_build() {
   else
     armv7_cmd+=(--full-artifacts)
   fi
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    armv7_cmd+=("--jobs=${BUILD_JOBS}")
+  fi
   "${armv7_cmd[@]}"
 }
 

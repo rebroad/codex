@@ -31,6 +31,7 @@ BUILD_COMMIT_SHORT="${BUILD_COMMIT_HASH_PLACEHOLDER}"
 BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH_PLACEHOLDER}"
 PATCHED_VERSION_SUFFIX=""
 BUILD_VERSION_SUFFIX_FIXED="${CODEX_BUILD_VERSION_SUFFIX_FIXED:-}"
+BUILD_JOBS="${CARGO_BUILD_JOBS:-}"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -47,7 +48,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -57,6 +58,7 @@ Options:
   --release             Build release profile (default)
   --debug               Build debug profile
   --target=<triple>     Override target triple (default: armv7-unknown-linux-gnueabihf)
+  --jobs=N              Set Cargo build parallelism (default: all detected CPUs)
   --build-env=<mode>    Build environment mode:
                         auto (default): use docker-buster for armv7 unless host is buster
                         docker-buster: force Debian buster container build
@@ -89,6 +91,20 @@ require_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+detect_build_jobs() {
+  local jobs=""
+  if command -v getconf >/dev/null 2>&1; then
+    jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  fi
+  if [[ -z "${jobs}" ]] && command -v nproc >/dev/null 2>&1; then
+    jobs="$(nproc 2>/dev/null || true)"
+  fi
+  if [[ -z "${jobs}" ]] || ! [[ "${jobs}" =~ ^[1-9][0-9]*$ ]]; then
+    jobs=1
+  fi
+  echo "${jobs}"
 }
 
 resolve_cargo_target_dir() {
@@ -475,6 +491,9 @@ run_in_docker_buster() {
   else
     forwarded_args+=(--full-artifacts)
   fi
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    forwarded_args+=("--jobs=${BUILD_JOBS}")
+  fi
   # Publish on host after Docker build; container image does not include gh.
   forwarded_args+=("--no-publish-github")
   if [[ -n "${GITHUB_RELEASE_REPO}" ]]; then
@@ -507,7 +526,7 @@ run_in_docker_buster() {
 
   echo "Building in Debian buster container for Pi-compatible glibc/OpenSSL ABI..."
   docker_cmd=(
-    docker run --rm -t
+    docker run --rm
     --network="${DOCKER_NETWORK_MODE}"
     --platform linux/amd64
     -e DEBIAN_FRONTEND=noninteractive
@@ -824,6 +843,9 @@ for arg in "$@"; do
     --target=*)
       TARGET="${arg#*=}"
       ;;
+    --jobs=*)
+      BUILD_JOBS="${arg#*=}"
+      ;;
     --build-env=*)
       BUILD_ENV="${arg#*=}"
       ;;
@@ -877,6 +899,14 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [[ -n "${BUILD_JOBS}" ]] && ! [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --jobs value: ${BUILD_JOBS} (must be a positive integer)." >&2
+  exit 1
+fi
+if [[ -z "${BUILD_JOBS}" ]]; then
+  BUILD_JOBS="$(detect_build_jobs)"
+fi
 
 BUILD_COMMIT_SHORT="$(resolve_build_commit_short)"
 if [[ -z "${BUILD_VERSION_SUFFIX_FIXED}" ]]; then
@@ -1004,9 +1034,10 @@ fi
 
 echo "Building codex-cli (${PROFILE}) for ${TARGET}..."
 echo "Using prebuilt rusty_v8 from ${RUSTY_V8_RELEASE_REPO} (${release_tag})"
+echo "Using Cargo build jobs: ${BUILD_JOBS}"
 build_log="$(mktemp)"
 set +e
-cargo "${cargo_args[@]}" 2>&1 | tee "${build_log}"
+env CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo "${cargo_args[@]}" 2>&1 | tee "${build_log}"
 status=${PIPESTATUS[0]}
 set -e
 if (( status != 0 )); then
@@ -1022,7 +1053,7 @@ if (( status != 0 )); then
         "patch.crates-io.v8.path=\"${patched_v8_dir}\""
       )
     fi
-    cargo "${cargo_args[@]}"
+    env CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo "${cargo_args[@]}"
   else
     rm -f "${build_log}"
     exit "${status}"
