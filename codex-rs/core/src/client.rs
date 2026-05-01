@@ -59,6 +59,7 @@ use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::prompt_debug_http_enabled;
 use codex_api::prompt_debug_http_log;
+use codex_api::set_prompt_debug_http_account_email;
 use codex_api::requests::responses::Compression;
 use codex_api::response_create_client_metadata;
 use codex_login::AuthManager;
@@ -551,6 +552,7 @@ impl ModelClient {
                 })?,
             None => None,
         };
+        set_prompt_debug_http_account_email(auth.as_ref().and_then(CodexAuth::get_account_email));
         let api_provider = self
             .state
             .provider
