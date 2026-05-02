@@ -482,6 +482,12 @@ impl CodexMessageProcessor {
         self.thread_manager.skills_manager().clear_cache();
     }
 
+    pub(crate) async fn maybe_rewarm_plugins_for_latest_config(&self) {
+        self.thread_manager
+            .plugins_manager()
+            .maybe_start_plugin_startup_tasks_for_config(&self.config, self.auth_manager.clone());
+    }
+
     pub(crate) async fn reload_user_config(&self) {
         let thread_ids = self.thread_manager.list_thread_ids().await;
         for thread_id in thread_ids {
@@ -522,8 +528,7 @@ impl CodexMessageProcessor {
         let auth_changed = self.reload_auth_and_notify().await;
         self.reload_user_config().await;
         self.clear_plugin_related_caches();
-        self.maybe_start_plugin_startup_tasks_for_latest_config()
-            .await;
+        self.maybe_rewarm_plugins_for_latest_config().await;
         auth_changed
     }
 
