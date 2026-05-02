@@ -4795,7 +4795,7 @@ async fn steer_input_without_rejection_does_not_mark_sampling_restart() {
 }
 
 #[tokio::test]
-async fn build_prompt_keeps_tool_specs_when_calls_are_temporarily_blocked() {
+async fn build_prompt_keeps_tool_specs_and_default_tool_choice() {
     let (_session, turn_context) = make_session_and_context().await;
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
@@ -4814,12 +4814,14 @@ async fn build_prompt_keeps_tool_specs_when_calls_are_temporarily_blocked() {
         BaseInstructions {
             text: "base".to_string(),
         },
-        /*tool_calls_blocked_pending_steer*/ true,
     );
 
     assert!(!prompt.tools.is_empty(), "tool list should stay stable for caching");
-    assert_eq!(prompt.parallel_tool_calls, false);
-    assert_eq!(prompt.tool_choice, ToolChoice::none());
+    assert_eq!(
+        prompt.parallel_tool_calls,
+        turn_context.model_info.supports_parallel_tool_calls
+    );
+    assert_eq!(prompt.tool_choice, ToolChoice::auto());
 }
 
 #[tokio::test]
