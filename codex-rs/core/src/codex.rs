@@ -6838,7 +6838,6 @@ pub(crate) fn build_prompt(
     router: &ToolRouter,
     turn_context: &TurnContext,
     mut base_instructions: BaseInstructions,
-    tool_calls_blocked_pending_steer: bool,
 ) -> Prompt {
     let deferred_dynamic_tools = turn_context
         .dynamic_tools
@@ -6857,12 +6856,9 @@ pub(crate) fn build_prompt(
             .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
             .collect()
     };
-    let parallel_tool_calls = !turn_context.config.bare_prompt
-        && !tool_calls_blocked_pending_steer
-        && turn_context.model_info.supports_parallel_tool_calls;
+    let parallel_tool_calls =
+        !turn_context.config.bare_prompt && turn_context.model_info.supports_parallel_tool_calls;
     let tool_choice = if turn_context.config.bare_prompt {
-        ToolChoice::none()
-    } else if tool_calls_blocked_pending_steer {
         ToolChoice::none()
     } else {
         ToolChoice::auto()
@@ -6917,13 +6913,16 @@ async fn run_sampling_request(
         .tool_calls_blocked_pending_steer(&turn_context.sub_id)
         .await;
 
-    let prompt = build_prompt(
+    let mut prompt = build_prompt(
         input,
         router.as_ref(),
         turn_context.as_ref(),
         base_instructions,
-        tool_calls_blocked_pending_steer,
     );
+    if tool_calls_blocked_pending_steer {
+        prompt.parallel_tool_calls = false;
+        prompt.tool_choice = ToolChoice::none();
+    }
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
