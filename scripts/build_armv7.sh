@@ -552,7 +552,7 @@ run_in_docker_buster() {
         apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
       cargo_home=\"\${CARGO_HOME:-/root/.cargo}\"; \
-      if [[ ! -x \"\${cargo_home}/bin/rustup\" || ! -x \"\${cargo_home}/bin/cargo\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y; fi; \
+      if [[ ! -x \"\${cargo_home}/bin/rustup\" || ! -x \"\${cargo_home}/bin/cargo\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain \"${TOOLCHAIN}\"; fi; \
       if [[ -f \"\${cargo_home}/env\" ]]; then \
         source \"\${cargo_home}/env\"; \
       elif [[ -d \"\${cargo_home}/bin\" ]]; then \
@@ -925,6 +925,12 @@ if [[ ! "${host_arch}" =~ ^(armv7|armv6|armhf|arm)$ ]]; then
   echo "Host architecture is ${host_arch}; using cross-compile mode for ${TARGET}."
 fi
 
+TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${TOOLCHAIN_FILE}")"
+if [[ -z "${TOOLCHAIN}" ]]; then
+  echo "Unable to read pinned Rust toolchain from ${TOOLCHAIN_FILE}" >&2
+  exit 1
+fi
+
 if should_use_docker_buster; then
   run_in_docker_buster
   exit 0
@@ -950,12 +956,6 @@ fi
 if [[ -f "${HOME}/.cargo/env" ]]; then
   # shellcheck disable=SC1090
   source "${HOME}/.cargo/env"
-fi
-
-TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${TOOLCHAIN_FILE}")"
-if [[ -z "${TOOLCHAIN}" ]]; then
-  echo "Unable to read pinned Rust toolchain from ${TOOLCHAIN_FILE}" >&2
-  exit 1
 fi
 
 if ! rustup toolchain list | grep -q "^${TOOLCHAIN}-"; then
