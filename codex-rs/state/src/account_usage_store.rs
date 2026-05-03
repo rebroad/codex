@@ -36,6 +36,7 @@ const BACKEND_CHANGE_CONFIRMATIONS_REQUIRED: u8 = 2;
 const BACKEND_CHANGE_PENDING_TTL_SECS: i64 = 120;
 const PLAUSIBLE_JUMP_MIN_MATCH_RATIO: f64 = 0.75;
 const PLAUSIBLE_JUMP_ABS_SLACK_PERCENT: f64 = 0.5;
+const BACKEND_RESET_JUMP_FOR_USAGE_RESET_SECS: i64 = 6 * 24 * 60 * 60;
 const USAGE_LOG_DIRNAME: &str = "log";
 const DEFAULT_CODEX_HOME_DIRNAME: &str = ".codex";
 const USAGE_LOG_DIR_ENV_VAR: &str = "CODEX_USAGE_LOG_DIR";
@@ -1050,6 +1051,31 @@ WHERE account_id = ? AND provider = ?
                     .ok()
             })
             .flatten();
+        let should_reset_now = prior_usage.as_ref().is_some_and(|row| {
+            let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
+            used_percent <= USED_PERCENT_REFUND_EPSILON
+                && backend_reset_jump_requires_usage_reset(previous_seen_at, resets_at)
+        });
+        if should_reset_now {
+            let mut pending_updates = self.pending_backend_updates.lock().await;
+            pending_updates.remove(&(account_id.to_string(), self.default_provider.clone()));
+            drop(pending_updates);
+
+            self.reset_account_usage_window(
+                account_id,
+                &snapshot,
+                now,
+                used_percent,
+                current_reported_percent_int,
+                window_minutes,
+                resets_at,
+                seen_at,
+                previous_backend_percent_history.as_deref(),
+                previous_backend_percent.unwrap_or(0.0) as i64,
+            )
+            .await?;
+            return Ok(());
+        }
         let previous_snapshot_percent = prior_usage
             .as_ref()
             .and_then(|row| row.try_get::<i64, _>("last_snapshot_percent_int").ok())
@@ -1316,39 +1342,11 @@ WHERE account_id = ? AND provider = ?
                 ),
             )
             .await;
-            if prior_window_was_full && used_percent <= 0.0 {
-                self.reset_account_usage_window(
-                    account_id,
-                    &snapshot,
-                    now,
-                    used_percent,
-                    current_reported_percent_int,
-                    window_minutes,
-                    resets_at,
-                    seen_at,
-                    previous_backend_percent_history.as_deref(),
-                    previous_backend_percent.unwrap_or(0.0) as i64,
-                )
-                .await?;
-                return Ok(());
-            }
         } else {
             let mut pending_updates = self.pending_backend_updates.lock().await;
             pending_updates.remove(&(account_id.to_string(), self.default_provider.clone()));
         }
 
-        let should_reset = prior_usage.as_ref().is_some_and(|row| {
-            let previous_seen_at: Option<i64> = row.try_get("last_backend_seen_at").ok();
-            let was_full = prior_usage_was_full(row);
-            let now_zero = used_percent <= 0.0;
-
-            let new_snapshot = previous_seen_at
-                .zip(seen_at)
-                .map(|(previous, current)| current >= previous)
-                .unwrap_or(true);
-
-            (new_snapshot || reset_time_changed) && was_full && now_zero
-        });
         let current_percent_int = current_reported_percent_int;
         if negative_jump {
             self.log_usage_event(
@@ -1482,23 +1480,6 @@ WHERE account_id = ? AND provider = ?
                 0_i64, 0_i64, 0_i64, 0_i64, 0_i64,
             )
         };
-
-        if prior_usage.is_some() && should_reset {
-            self.reset_account_usage_window(
-                account_id,
-                &snapshot,
-                now,
-                used_percent,
-                current_reported_percent_int,
-                window_minutes,
-                resets_at,
-                seen_at,
-                previous_backend_percent_history.as_deref(),
-                last_sample_percent,
-            )
-            .await?;
-            return Ok(());
-        }
 
         let mut snapshot_total_tokens = prior_usage
             .as_ref()
@@ -3057,6 +3038,17 @@ fn prior_usage_was_full(row: &sqlx::sqlite::SqliteRow) -> bool {
         || previous_snapshot_percent_int.is_some_and(|value| value >= 100)
 }
 
+fn backend_reset_jump_requires_usage_reset(
+    previous_seen_at: Option<i64>,
+    current_resets_at: Option<i64>,
+) -> bool {
+    previous_seen_at
+        .zip(current_resets_at)
+        .is_some_and(|(previous, current)| {
+            current.saturating_sub(previous) > BACKEND_RESET_JUMP_FOR_USAGE_RESET_SECS
+        })
+}
+
 fn fit_byte_weights(
     total_sent_bytes: i64,
     total_recv_bytes: i64,
@@ -3727,6 +3719,7 @@ WHERE provider = ?
             AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
                 .await
                 .expect("init");
+        let captured_at = Utc::now().timestamp();
 
         let usage = TokenUsage {
             total_tokens: 123,
@@ -3747,7 +3740,7 @@ WHERE provider = ?
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 12.0,
                 window_minutes: Some(10080),
-                resets_at: Some(12345),
+                resets_at: Some(captured_at),
             }),
             credits: None,
             plan_type: None,
@@ -3761,7 +3754,7 @@ WHERE provider = ?
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 0.0,
                 window_minutes: Some(10080),
-                resets_at: Some(67890),
+                resets_at: Some(captured_at + 7 * 24 * 60 * 60),
             }),
             ..snapshot
         };
@@ -3805,7 +3798,7 @@ WHERE account_id = ? AND provider = ?
         .expect("sample count")
         .try_get("count")
         .expect("count");
-        assert_eq!(remaining_samples, 1);
+        assert_eq!(remaining_samples, 0);
     }
 
     #[tokio::test]
@@ -4035,12 +4028,13 @@ WHERE account_id = ? AND provider = ?
     }
 
     #[tokio::test]
-    async fn account_usage_reset_clears_samples_only_after_hitting_100_percent() {
+    async fn account_usage_reset_clears_samples_on_backend_reset_date_jump() {
         let home = tempfile::tempdir().expect("tempdir");
         let runtime =
             AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
                 .await
                 .expect("init");
+        let captured_at = Utc::now().timestamp();
 
         let usage = TokenUsage {
             total_tokens: 200,
@@ -4061,7 +4055,7 @@ WHERE account_id = ? AND provider = ?
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 100.0,
                 window_minutes: Some(10080),
-                resets_at: Some(12345),
+                resets_at: Some(captured_at),
             }),
             credits: None,
             plan_type: None,
@@ -4085,13 +4079,13 @@ WHERE account_id = ? AND provider = ?
         .expect("sample count before reset")
         .try_get("count")
         .expect("count");
-        assert_eq!(samples_before_reset, 1);
+        assert_eq!(samples_before_reset, 0);
 
         let snapshot_reset = RateLimitSnapshot {
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 0.0,
                 window_minutes: Some(10080),
-                resets_at: Some(67890),
+                resets_at: Some(captured_at + 7 * 24 * 60 * 60),
             }),
             ..snapshot
         };
@@ -4437,7 +4431,7 @@ WHERE account_id = ? AND provider = ?
     }
 
     #[tokio::test]
-    async fn account_usage_resets_totals_after_confirmed_backend_drop_from_full_to_zero() {
+    async fn account_usage_does_not_reset_totals_on_full_to_zero_without_reset_date_jump() {
         let home = tempfile::tempdir().expect("tempdir");
         let runtime =
             AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
@@ -4547,7 +4541,7 @@ WHERE account_id = ? AND provider = ?
         .bind("test-provider")
         .fetch_one(runtime.pool.as_ref())
         .await
-        .expect("usage row after reset");
+        .expect("usage row after zero snapshot");
 
         let total_usage_usd: f64 = row.try_get("total_usage_usd").expect("total_usage_usd");
         let total_usage_usd_with_prewarm: f64 = row
@@ -4566,11 +4560,11 @@ WHERE account_id = ? AND provider = ?
             .try_get("last_reported_percent_int")
             .expect("last_reported_percent_int");
 
-        assert_eq!(total_usage_usd, 0.0);
-        assert_eq!(total_usage_usd_with_prewarm, 0.0);
-        assert_eq!(total_tokens, 0);
-        assert_eq!(input_tokens, 0);
-        assert_eq!(output_tokens, 0);
+        assert_eq!(total_usage_usd, 0.0105);
+        assert_eq!(total_usage_usd_with_prewarm, 0.0105);
+        assert_eq!(total_tokens, 100);
+        assert_eq!(input_tokens, 80);
+        assert_eq!(output_tokens, 20);
         assert_eq!(last_backend_used_percent, 0.0);
         assert_eq!(last_snapshot_percent_int, 0);
         assert_eq!(last_reported_percent_int, 0);
