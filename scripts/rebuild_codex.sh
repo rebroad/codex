@@ -151,6 +151,11 @@ append_build_timestamp_env() {
   cargo_env_ref+=(CODEX_BUILD_TIMESTAMP="${BUILD_VERSION_SUFFIX_COMPILE}")
 }
 
+log_needs_network_retry() {
+  local log_file="$1"
+  grep -Eq "failed to download|attempting to make an HTTP request, but --offline was specified|can't checkout from '|unable to update|failed to get " "${log_file}"
+}
+
 resolve_cargo_target_dir() {
   if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
     echo "${CARGO_TARGET_DIR}"
@@ -410,6 +415,45 @@ run_release_build_with_locked_fallback() {
   return "${status}"
 }
 
+run_debug_build_with_offline_fallback() {
+  local build_log
+  local -a cargo_env
+  cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1)
+  append_build_timestamp_env cargo_env
+  if [[ "${BISECT_MODE}" == "true" ]]; then
+    cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+    append_build_timestamp_env cargo_env
+  fi
+  append_default_build_accel_env cargo_env
+  if [[ -n "${BUILD_JOBS}" ]]; then
+    echo "Using Cargo build jobs: ${BUILD_JOBS}"
+    cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
+  fi
+
+  build_log="$(mktemp)"
+  set +e
+  env "${cargo_env[@]}" CARGO_NET_OFFLINE=true cargo +"${TOOLCHAIN}" build -p codex-cli 2>&1 | tee "${build_log}"
+  local status=${PIPESTATUS[0]}
+  set -e
+
+  if (( status == 0 )); then
+    rm -f "${build_log}"
+    return 0
+  fi
+
+  if log_needs_network_retry "${build_log}"; then
+    echo "Debug build needs registry/network access; retrying without --offline."
+    rm -f "${build_log}"
+    env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli 2>&1 | tee "${build_log}"
+    local retry_status=${PIPESTATUS[0]}
+    rm -f "${build_log}"
+    return "${retry_status}"
+  fi
+
+  rm -f "${build_log}"
+  return "${status}"
+}
+
 run_target_build_with_locked_fallback() {
   local target="$1"
   local profile="$2"
@@ -460,6 +504,48 @@ run_target_build_with_locked_fallback() {
 
   rm -f "${build_log}"
   return "${status}"
+}
+
+run_app_server_schema_with_fallback() {
+  local schema_log
+  schema_log="$(mktemp)"
+
+  set +e
+  env RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_NET_OFFLINE=true cargo +"${TOOLCHAIN}" run -p codex-app-server-protocol --bin write_schema_fixtures -- 2>&1 | tee "${schema_log}"
+  local status=${PIPESTATUS[0]}
+  set -e
+
+  if (( status == 0 )); then
+    rm -f "${schema_log}"
+    return 0
+  fi
+
+  if log_needs_network_retry "${schema_log}"; then
+    echo "Schema generation needs registry/network access; retrying without --offline."
+    rm -f "${schema_log}"
+    env RUSTUP_DISABLE_SELF_UPDATE=1 cargo +"${TOOLCHAIN}" run -p codex-app-server-protocol --bin write_schema_fixtures --
+    local retry_status=$?
+    rm -f "${schema_log}"
+    return "${retry_status}"
+  fi
+
+  rm -f "${schema_log}"
+  return "${status}"
+}
+
+compute_app_server_schema_hash() {
+  find \
+    "${RUST_WORKSPACE_DIR}/Cargo.toml" \
+    "${RUST_WORKSPACE_DIR}/Cargo.lock" \
+    "${RUST_WORKSPACE_DIR}/app-server/Cargo.toml" \
+    "${RUST_WORKSPACE_DIR}/app-server/src" \
+    "${RUST_WORKSPACE_DIR}/app-server-protocol/Cargo.toml" \
+    "${RUST_WORKSPACE_DIR}/app-server-protocol/src" \
+    -type f -print0 \
+    | LC_ALL=C sort -z \
+    | xargs -0 sha256sum \
+    | sha256sum \
+    | awk '{print $1}'
 }
 
 run_armv7_build() {
@@ -1470,41 +1556,6 @@ else
 fi
 SCHEMA_HASH_FILE="${CARGO_TARGET_DIR}/app-server-schema.hash"
 
-schema_should_run="false"
-if [[ "${REGEN_SCHEMA}" == "true" ]]; then
-  schema_should_run="true"
-elif [[ "${REGEN_SCHEMA}" != "false" ]]; then
-  schema_should_run="true"
-fi
-if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
-  schema_should_run="false"
-fi
-
-if [[ "${schema_should_run}" == "true" ]]; then
-  schema_hash="$(
-    find "${REPO_DIR}/codex-rs/app-server" "${REPO_DIR}/codex-rs/app-server-protocol" \
-      -type f -print0 \
-      | LC_ALL=C sort -z \
-      | xargs -0 sha256sum \
-      | sha256sum \
-      | awk '{print $1}'
-  )"
-  previous_hash=""
-  if [[ -f "${SCHEMA_HASH_FILE}" ]]; then
-    previous_hash="$(cat "${SCHEMA_HASH_FILE}")"
-  fi
-  if [[ -n "${schema_hash}" && "${schema_hash}" == "${previous_hash}" ]]; then
-    echo "[1/4] Skipping schema regeneration (no source changes detected)..."
-  else
-    echo "[1/4] Regenerating app-server schema..."
-    just write-app-server-schema
-    mkdir -p "$(dirname "${SCHEMA_HASH_FILE}")"
-    echo "${schema_hash}" > "${SCHEMA_HASH_FILE}"
-  fi
-else
-  echo "[1/4] Skipping schema regeneration (forced off)..."
-fi
-
 cd "${RUST_WORKSPACE_DIR}"
 if [[ -f "${HOME}/.cargo/env" ]]; then
   # Ensure rustup-managed cargo/rustc are available in this shell.
@@ -1516,6 +1567,37 @@ TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${TOOLCHAIN_FILE}")"
 if [[ -z "${TOOLCHAIN}" ]]; then
   echo "Unable to read pinned Rust toolchain from ${TOOLCHAIN_FILE}"
   exit 1
+fi
+
+schema_should_run="false"
+if [[ "${REGEN_SCHEMA}" == "true" ]]; then
+  schema_should_run="true"
+elif [[ "${REGEN_SCHEMA}" != "false" ]]; then
+  schema_should_run="true"
+fi
+if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+  schema_should_run="false"
+fi
+
+if [[ "${schema_should_run}" == "true" ]]; then
+  schema_hash="$(compute_app_server_schema_hash)"
+  previous_hash=""
+  if [[ -f "${SCHEMA_HASH_FILE}" ]]; then
+    previous_hash="$(cat "${SCHEMA_HASH_FILE}")"
+  fi
+  if [[ -n "${schema_hash}" && "${schema_hash}" == "${previous_hash}" ]]; then
+    echo "[1/4] Skipping schema regeneration (no source changes detected)..."
+  else
+    echo "[1/4] Regenerating app-server schema..."
+    (
+      cd "${RUST_WORKSPACE_DIR}"
+      run_app_server_schema_with_fallback
+    )
+    mkdir -p "$(dirname "${SCHEMA_HASH_FILE}")"
+    echo "${schema_hash}" > "${SCHEMA_HASH_FILE}"
+  fi
+else
+  echo "[1/4] Skipping schema regeneration (forced off)..."
 fi
 
 if ! rustup toolchain list | grep -q "^${TOOLCHAIN}-"; then
@@ -1669,34 +1751,29 @@ else
   echo "[2/4] Building debug codex..."
   if [[ "${FAST_GATE}" == "true" ]]; then
     echo "[fast-gate] using offline locked debug build"
-  fi
-  cargo_flags=(build -p codex-cli)
-  cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1)
-  append_build_timestamp_env cargo_env
-  if [[ "${BISECT_MODE}" == "true" ]]; then
-    cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
-    append_build_timestamp_env cargo_env
-  fi
-  if [[ "${FAST_GATE}" == "true" ]]; then
-    cargo_env+=(CARGO_NET_OFFLINE=true)
     cargo_flags=(build --locked -p codex-cli)
-  fi
-  append_default_build_accel_env cargo_env
-  if [[ -n "${BUILD_JOBS}" ]]; then
-    echo "Using Cargo build jobs: ${BUILD_JOBS}"
-    cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
-  else
-    :
-  fi
-  if ! env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" "${cargo_flags[@]}"; then
-    if [[ "${FAST_GATE}" == "true" ]]; then
+    cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1)
+    append_build_timestamp_env cargo_env
+    if [[ "${BISECT_MODE}" == "true" ]]; then
+      cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache)
+      append_build_timestamp_env cargo_env
+    fi
+    cargo_env+=(CARGO_NET_OFFLINE=true)
+    append_default_build_accel_env cargo_env
+    if [[ -n "${BUILD_JOBS}" ]]; then
+      echo "Using Cargo build jobs: ${BUILD_JOBS}"
+      cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
+    else
+      :
+    fi
+    if ! env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" "${cargo_flags[@]}"; then
       echo "[fast-gate] --locked failed; retrying offline without --locked"
       retry_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_NET_OFFLINE=true)
       append_build_timestamp_env retry_env
       env "${retry_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli
-    else
-      exit 1
     fi
+  else
+    run_debug_build_with_offline_fallback
   fi
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
