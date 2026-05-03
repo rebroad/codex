@@ -39,6 +39,7 @@ mod git_info_tests;
 mod guardian;
 mod hook_runtime;
 mod installation_id;
+pub use installation_id::resolve_installation_id;
 pub(crate) mod instructions;
 pub(crate) mod landlock;
 pub use landlock::spawn_command_under_linux_sandbox;
