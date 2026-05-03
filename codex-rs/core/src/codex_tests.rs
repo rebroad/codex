@@ -2336,6 +2336,20 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     }
 }
 
+#[test]
+fn resolve_session_base_instructions_uses_minimal_placeholder_for_bare_prompt() {
+    assert_eq!(
+        resolve_session_base_instructions(
+            None,
+            Some("history".to_string()),
+            "model".to_string(),
+            /*bare_prompt*/ true,
+            /*has_mempalace_server*/ true,
+        ),
+        Some("".to_string())
+    );
+}
+
 #[tokio::test]
 async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_only_update() {
     let mut session_configuration = make_session_configuration_for_tests().await;

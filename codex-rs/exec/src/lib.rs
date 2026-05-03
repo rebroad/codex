@@ -141,6 +141,7 @@ const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
 const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
 const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 const DEFAULT_DIRECT_SYSTEM_PROMPT: &str = "You are a helpful assistant. Respond directly to the user request without running tools or shell commands.";
+const MINIMAL_BARE_PROMPT_INSTRUCTIONS: &str = "Respond directly.";
 
 enum InitialOperation {
     UserTurn {
@@ -1897,7 +1898,7 @@ async fn run_direct_request(
     config: &Config,
     bare_prompt: bool,
     developer_instructions_override: Option<String>,
-    developer_instructions_cli_override: bool,
+    _developer_instructions_cli_override: bool,
 ) -> anyhow::Result<()> {
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
@@ -1954,13 +1955,7 @@ async fn run_direct_request(
     eprintln!("reasoning effort: {effective_reasoning_effort}");
 
     let effective_system_prompt = if bare_prompt {
-        developer_instructions_override.or_else(|| {
-            if developer_instructions_cli_override {
-                config.developer_instructions.clone()
-            } else {
-                None
-            }
-        })
+        None
     } else {
         developer_instructions_override
             .or_else(|| config.developer_instructions.clone())
@@ -1970,11 +1965,15 @@ async fn run_direct_request(
     let mut prompt = Prompt::default();
     prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
     prompt.personality = config.personality;
-    let base_instructions = config
-        .base_instructions
-        .clone()
-        .flatten()
-        .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+    let base_instructions = if bare_prompt {
+        MINIMAL_BARE_PROMPT_INSTRUCTIONS.to_string()
+    } else {
+        config
+            .base_instructions
+            .clone()
+            .flatten()
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality))
+    };
     prompt.base_instructions = Some(BaseInstructions {
         text: base_instructions,
     });

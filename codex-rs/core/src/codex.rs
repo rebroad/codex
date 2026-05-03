@@ -231,6 +231,22 @@ fn append_mempalace_memory_guidance(
     Some(format!("{base_instructions}\n\n{MEMPALACE_MEMORY_GUIDANCE}"))
 }
 
+fn resolve_session_base_instructions(
+    configured_base_instructions: Option<Option<String>>,
+    history_base_instructions: Option<String>,
+    model_base_instructions: String,
+    bare_prompt: bool,
+    has_mempalace_server: bool,
+) -> Option<String> {
+    if bare_prompt {
+        return Some("".to_string());
+    }
+
+    let base_instructions = configured_base_instructions
+        .unwrap_or_else(|| history_base_instructions.or(Some(model_base_instructions)));
+    append_mempalace_memory_guidance(base_instructions, bare_prompt, has_mempalace_server)
+}
+
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
@@ -626,18 +642,13 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let base_instructions = match config.base_instructions.clone() {
-            Some(base_instructions) => base_instructions,
-            None => conversation_history
-                .get_base_instructions()
-                .map(|base_instructions| {
-                    base_instructions.map(|base_instructions| base_instructions.text)
-                })
-                .unwrap_or_else(|| Some(model_info.get_model_instructions(config.personality))),
-        };
         let has_mempalace_server = config.mcp_servers.contains_key("mempalace");
-        let base_instructions = append_mempalace_memory_guidance(
-            base_instructions,
+        let base_instructions = resolve_session_base_instructions(
+            config.base_instructions.clone(),
+            conversation_history
+                .get_base_instructions()
+                .and_then(|base_instructions| base_instructions.map(|v| v.text)),
+            model_info.get_model_instructions(config.personality),
             config.bare_prompt,
             has_mempalace_server,
         );
