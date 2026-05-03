@@ -2537,7 +2537,7 @@ impl CodexMessageProcessor {
         personality: Option<Personality>,
     ) -> ConfigOverrides {
         ConfigOverrides {
-            model,
+            model: self.normalize_requested_model_override(model),
             model_provider,
             service_tier,
             cwd: cwd.map(PathBuf::from),
@@ -2564,6 +2564,14 @@ impl CodexMessageProcessor {
         instruction_override: Option<Option<String>>,
     ) -> Option<Option<String>> {
         instruction_override.flatten().map(Some)
+    }
+
+    fn normalize_requested_model_override(&self, model: Option<String>) -> Option<String> {
+        let is_chatgpt_auth = self
+            .auth_manager
+            .auth_cached()
+            .is_some_and(|auth| matches!(auth.auth_mode(), CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens));
+        model.map(|model| normalize_requested_model_for_chatgpt_auth(&model, is_chatgpt_auth))
     }
 
     async fn thread_archive(
@@ -6640,6 +6648,7 @@ impl CodexMessageProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) {
+        params.model = self.normalize_requested_model_override(params.model);
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.outgoing.send_error(request_id, error).await;
             return;
@@ -8173,6 +8182,16 @@ fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn)
     turns.push(active_turn);
 }
 
+fn normalize_requested_model_for_chatgpt_auth(model: &str, is_chatgpt_auth: bool) -> String {
+    if is_chatgpt_auth {
+        match model {
+            "gpt-5.1-codex-mini" | "gpt-5-codex-mini" => return "gpt-5.4-mini".to_string(),
+            _ => {}
+        }
+    }
+    model.to_string()
+}
+
 fn set_thread_status_and_interrupt_stale_turns(
     thread: &mut Thread,
     loaded_status: ThreadStatus,
@@ -9502,6 +9521,22 @@ mod tests {
                 "custom instructions".to_string()
             ))),
             Some(Some("custom instructions".to_string()))
+        );
+    }
+
+    #[test]
+    fn normalize_requested_model_for_chatgpt_auth_remaps_deprecated_mini_slug() {
+        assert_eq!(
+            normalize_requested_model_for_chatgpt_auth("gpt-5.1-codex-mini", true),
+            "gpt-5.4-mini"
+        );
+    }
+
+    #[test]
+    fn normalize_requested_model_for_chatgpt_auth_preserves_non_chatgpt_requests() {
+        assert_eq!(
+            normalize_requested_model_for_chatgpt_auth("gpt-5.1-codex-mini", false),
+            "gpt-5.1-codex-mini"
         );
     }
 
