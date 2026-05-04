@@ -59,7 +59,7 @@ if ! command -v cpto >/dev/null 2>&1; then
 fi
 
 cd "$repo_root"
-results_dir="${repo_root}/.bisect-test-results"
+results_dir="${build_root}/.bisect-test-results"
 mkdir -p "${results_dir}"
 summary_file="${results_dir}/summary.tsv"
 if [ ! -f "${summary_file}" ]; then
@@ -174,6 +174,23 @@ autostash_before_bisect_transition() {
       echo "created transient stash (kept): ${LAST_AUTOSTASH_REF}" | tee -a "$log_file"
     fi
   fi
+}
+
+resolve_equivalent_upstream_commit() {
+  local local_commit="$1"
+  local upstream_ref="upstream/latest-alpha-cli"
+  local equivalent=""
+
+  if ! command -v git-catchup >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if equivalent="$(git-catchup --print-upstream-equivalent --local "${local_commit}" "${upstream_ref}" 2>/dev/null)"; then
+    printf '%s\n' "${equivalent}"
+    return 0
+  fi
+
+  return 1
 }
 
 run_once() {
@@ -293,7 +310,12 @@ while [ -f "${bisect_start_file}" ]; do
     echo "bisect complete. summary: ${summary_file}"
     if bad_hash="$(printf '%s\n' "$last_bisect_output" | awk '/is the first bad commit/{print $1; exit}')"; then
       if [ -n "${bad_hash:-}" ]; then
-        echo "FIRST_BAD_COMMIT=${bad_hash}"
+        echo "FIRST_BAD_COMMIT = ${bad_hash}"
+        if upstream_hash="$(resolve_equivalent_upstream_commit "${bad_hash}")"; then
+          echo "UPSTREAM_EQUIVALENT = ${upstream_hash}"
+        else
+          echo "UPSTREAM_EQUIVALENT = <unavailable>"
+        fi
       fi
       if [ -n "${bad_hash:-}" ] && [ -f "${results_dir}/$(printf '%04d' "$step")_${bad_hash}.log" ]; then
         echo "first bad commit log: ${results_dir}/$(printf '%04d' "$step")_${bad_hash}.log"
