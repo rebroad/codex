@@ -2350,6 +2350,14 @@ fn resolve_session_base_instructions_uses_minimal_placeholder_for_bare_prompt() 
     );
 }
 
+#[test]
+fn should_skip_startup_prewarm_for_missing_or_empty_base_instructions() {
+    assert!(!super::should_schedule_startup_prewarm(None));
+    assert!(!super::should_schedule_startup_prewarm(Some("")));
+    assert!(!super::should_schedule_startup_prewarm(Some("   \n\t")));
+    assert!(super::should_schedule_startup_prewarm(Some("respond directly")));
+}
+
 #[tokio::test]
 async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_only_update() {
     let mut session_configuration = make_session_configuration_for_tests().await;

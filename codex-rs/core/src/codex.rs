@@ -969,6 +969,12 @@ pub(crate) struct TurnContext {
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
 }
+
+fn should_schedule_startup_prewarm(base_instructions: Option<&str>) -> bool {
+    base_instructions
+        .map(|base_instructions| !base_instructions.trim().is_empty())
+        .unwrap_or(false)
+}
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
@@ -2239,8 +2245,19 @@ impl Session {
                 ));
             }
         }
-        if let Some(base_instructions) = session_configuration.base_instructions.clone() {
-            sess.schedule_startup_prewarm(base_instructions).await;
+        if should_schedule_startup_prewarm(
+            session_configuration
+                .base_instructions
+                .as_ref()
+                .map(|base_instructions| base_instructions.as_str()),
+        ) {
+            sess.schedule_startup_prewarm(
+                session_configuration
+                    .base_instructions
+                    .clone()
+                    .expect("checked by should_schedule_startup_prewarm"),
+            )
+            .await;
         }
         let session_start_source = match &initial_history {
             InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,

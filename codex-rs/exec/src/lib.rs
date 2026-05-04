@@ -141,7 +141,6 @@ const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
 const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
 const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 const DEFAULT_DIRECT_SYSTEM_PROMPT: &str = "You are a helpful assistant. Respond directly to the user request without running tools or shell commands.";
-const MINIMAL_BARE_PROMPT_INSTRUCTIONS: &str = "Respond directly.";
 
 enum InitialOperation {
     UserTurn {
@@ -1966,7 +1965,7 @@ async fn run_direct_request(
     prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
     prompt.personality = config.personality;
     let base_instructions = if bare_prompt {
-        MINIMAL_BARE_PROMPT_INSTRUCTIONS.to_string()
+        "".to_string()
     } else {
         config
             .base_instructions
