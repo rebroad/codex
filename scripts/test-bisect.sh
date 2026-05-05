@@ -73,6 +73,11 @@ if [ ! -f "${summary_file}" ]; then
   printf "step\tcommit\ttest_exit\tbisect_decision\tlog_file\n" >"${summary_file}"
 fi
 
+using_cpto_sync=0
+if [ "$build_root" != "$repo_root" ]; then
+  using_cpto_sync=1
+fi
+
 cargo_args=()
 exact_tests=()
 custom_cmd=()
@@ -151,8 +156,8 @@ if [ -z "${bisect_start_file}" ] || [ ! -f "${bisect_start_file}" ]; then
 fi
 
 sync_build_tree() {
-  if [ "$build_root" = "$repo_root" ]; then
-    echo "already in build tree; skipping source sync"
+  if [ "$using_cpto_sync" -eq 0 ]; then
+    echo "already operating directly in the build tree; skipping source sync"
     return 0
   fi
   echo "syncing source tree into build tree: ${build_root}"
@@ -233,7 +238,7 @@ restore_tracked_worktree_changes() {
   return 0
 }
 
-autostash_before_bisect_transition() {
+snapshot_tracked_worktree_before_bisect_transition() {
   local log_file="$1"
   snapshot_tracked_worktree_changes "$log_file"
 }
@@ -290,7 +295,9 @@ run_once() {
   local log_file="$1"
 
   sync_build_tree || return $?
-  restore_tracked_worktree_changes "$log_file" || return $?
+  if [ "$using_cpto_sync" -eq 0 ]; then
+    restore_tracked_worktree_changes "$log_file" || return $?
+  fi
 
   if [ "${#custom_cmd[@]}" -gt 0 ]; then
     echo "running: ${custom_cmd[*]}"
@@ -349,7 +356,9 @@ apply_bisect_mark() {
   local log_file="$2"
   local message="$3"
 
-  autostash_before_bisect_transition "$log_file"
+  if [ "$using_cpto_sync" -eq 0 ]; then
+    snapshot_tracked_worktree_before_bisect_transition "$log_file"
+  fi
   echo "$message" | tee -a "$log_file"
   last_bisect_decision="$bisect_cmd"
   bisect_output="$(git bisect "$bisect_cmd" 2>&1)"
