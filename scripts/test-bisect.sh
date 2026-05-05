@@ -172,27 +172,74 @@ append_run_header() {
   fi
 }
 
-LAST_AUTOSTASH_REF=""
 tracked_worktree_has_changes() {
   ! git diff-index --quiet --ignore-submodules=dirty HEAD --
 }
 
+TRACKED_PATCH_FILE=""
+
+remove_tracked_patch_snapshot() {
+  if [ -n "$TRACKED_PATCH_FILE" ] && [ -f "$TRACKED_PATCH_FILE" ]; then
+    rm -f "$TRACKED_PATCH_FILE"
+  fi
+  TRACKED_PATCH_FILE=""
+}
+
+snapshot_tracked_worktree_changes() {
+  local log_file="$1"
+  local patch_file=""
+
+  if ! tracked_worktree_has_changes; then
+    return 0
+  fi
+
+  patch_file="$(mktemp /var/tmp/test-bisect-tracked.XXXXXX.patch)"
+  if ! git diff --binary --no-ext-diff --ignore-submodules=dirty HEAD -- >"$patch_file"; then
+    rm -f "$patch_file"
+    echo "error: failed to capture tracked-change patch snapshot" | tee -a "$log_file"
+    return 1
+  fi
+
+  if [ ! -s "$patch_file" ]; then
+    rm -f "$patch_file"
+    return 0
+  fi
+
+  remove_tracked_patch_snapshot
+  TRACKED_PATCH_FILE="$patch_file"
+  echo "captured tracked-change patch snapshot: ${TRACKED_PATCH_FILE}" | tee -a "$log_file"
+
+  if ! git reset --hard -q HEAD; then
+    echo "error: failed to reset worktree clean after capturing patch snapshot" | tee -a "$log_file"
+    return 1
+  fi
+
+  return 0
+}
+
+restore_tracked_worktree_changes() {
+  local log_file="$1"
+
+  if [ -z "$TRACKED_PATCH_FILE" ] || [ ! -s "$TRACKED_PATCH_FILE" ]; then
+    return 0
+  fi
+
+  echo "restoring tracked-change patch snapshot: ${TRACKED_PATCH_FILE}" | tee -a "$log_file"
+  if ! git apply --3way --whitespace=nowarn "$TRACKED_PATCH_FILE"; then
+    echo "error: failed to reapply tracked-change patch snapshot" | tee -a "$log_file"
+    return 1
+  fi
+
+  return 0
+}
+
 autostash_before_bisect_transition() {
   local log_file="$1"
-  LAST_AUTOSTASH_REF=""
-  if tracked_worktree_has_changes; then
-    local stash_message="test-bisect-autostash-step-${step}-$(date -u +'%Y%m%dT%H%M%SZ')"
-    echo "working tree dirty; creating transient stash before bisect transition: ${stash_message}" | tee -a "$log_file"
-    git stash push --include-untracked -m "$stash_message" >/dev/null
-    LAST_AUTOSTASH_REF="$(git stash list -n1 --pretty=%gd 2>/dev/null || true)"
-    if [ -n "${LAST_AUTOSTASH_REF}" ]; then
-      echo "created transient stash (kept): ${LAST_AUTOSTASH_REF}" | tee -a "$log_file"
-    fi
-  fi
+  snapshot_tracked_worktree_changes "$log_file"
 }
 
 current_worktree_is_clean() {
-  [ -z "$(git status --porcelain --untracked-files=normal)" ]
+  ! tracked_worktree_has_changes
 }
 
 known_bisect_command_for_commit() {
@@ -240,7 +287,10 @@ resolve_equivalent_upstream_commit() {
 }
 
 run_once() {
+  local log_file="$1"
+
   sync_build_tree || return $?
+  restore_tracked_worktree_changes "$log_file" || return $?
 
   if [ "${#custom_cmd[@]}" -gt 0 ]; then
     echo "running: ${custom_cmd[*]}"
@@ -373,7 +423,7 @@ while [ -f "${bisect_start_file}" ]; do
               run_header_written=0
               append_run_header "$final_log"
               echo "capturing final bad commit output: ${bad_hash}" | tee -a "$final_log"
-              run_once 2>&1 | tee -a "$final_log"
+              run_once "$final_log" 2>&1 | tee -a "$final_log"
               final_status=${PIPESTATUS[0]}
               printf "%s\t%s\t%s\t%s\t%s\n" \
                 "$((step + 1))" "$bad_hash" "$final_status" "final_bad_observation" "$final_log" >>"$summary_file"
@@ -400,7 +450,7 @@ while [ -f "${bisect_start_file}" ]; do
     fi
   fi
 
-  run_once 2>&1 | tee -a "$log_file"
+  run_once "$log_file" 2>&1 | tee -a "$log_file"
   test_status=${PIPESTATUS[0]}
   if [ "$test_status" -eq 141 ]; then
     echo "aborted by user (exit 141); exiting without marking bisect state." | tee -a "$log_file"
@@ -449,7 +499,7 @@ while [ -f "${bisect_start_file}" ]; do
           run_header_written=0
           append_run_header "$final_log"
           echo "capturing final bad commit output: ${bad_hash}" | tee -a "$final_log"
-          run_once 2>&1 | tee -a "$final_log"
+          run_once "$final_log" 2>&1 | tee -a "$final_log"
           final_status=${PIPESTATUS[0]}
           printf "%s\t%s\t%s\t%s\t%s\n" \
             "$((step + 1))" "$bad_hash" "$final_status" "final_bad_observation" "$final_log" >>"$summary_file"
