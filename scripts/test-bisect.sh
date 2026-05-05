@@ -37,13 +37,20 @@ repo_root="$(git rev-parse --show-toplevel)"
 repo_parent="$(dirname "$repo_root")"
 repo_name="$(basename "$repo_root")"
 
-build_root=""
-for candidate in "${repo_parent}/${repo_name}.build" "${repo_parent}/${repo_name}.make"; do
-  if [ -d "$candidate" ]; then
-    build_root="$candidate"
-    break
-  fi
-done
+case "$repo_name" in
+  *.build|*.make)
+    build_root="$repo_root"
+    ;;
+  *)
+    build_root=""
+    for candidate in "${repo_parent}/${repo_name}.build" "${repo_parent}/${repo_name}.make"; do
+      if [ -d "$candidate" ]; then
+        build_root="$candidate"
+        break
+      fi
+    done
+    ;;
+esac
 
 if [ -z "$build_root" ]; then
   echo "error: no sibling build tree found for ${repo_root}" >&2
@@ -144,6 +151,10 @@ if [ -z "${bisect_start_file}" ] || [ ! -f "${bisect_start_file}" ]; then
 fi
 
 sync_build_tree() {
+  if [ "$build_root" = "$repo_root" ]; then
+    echo "already in build tree; skipping source sync"
+    return 0
+  fi
   echo "syncing source tree into build tree: ${build_root}"
   cpto --lngit "${repo_root}" "${build_root}"
 }
@@ -174,6 +185,37 @@ autostash_before_bisect_transition() {
       echo "created transient stash (kept): ${LAST_AUTOSTASH_REF}" | tee -a "$log_file"
     fi
   fi
+}
+
+current_worktree_is_clean() {
+  [ -z "$(git status --porcelain --untracked-files=normal)" ]
+}
+
+known_bisect_command_for_commit() {
+  local commit_hash="$1"
+  local good_term
+  local bad_term
+
+  good_term="$(git bisect terms --term-good 2>/dev/null || true)"
+  bad_term="$(git bisect terms --term-bad 2>/dev/null || true)"
+  if [ -z "$good_term" ] || [ -z "$bad_term" ]; then
+    return 1
+  fi
+
+  git bisect log 2>/dev/null | awk -v commit="$commit_hash" -v good_term="$good_term" -v bad_term="$bad_term" '
+    $1 == "git" && $2 == "bisect" && $4 == commit {
+      if ($3 == good_term) {
+        status = "good";
+      } else if ($3 == bad_term) {
+        status = "bad";
+      }
+    }
+    END {
+      if (status != "") {
+        print status
+      }
+    }
+  '
 }
 
 resolve_equivalent_upstream_commit() {
@@ -249,21 +291,9 @@ run_once() {
 }
 
 apply_bisect_mark() {
-  local test_status="$1"
+  local bisect_cmd="$1"
   local log_file="$2"
-  local bisect_cmd
-  local message
-
-  if [ "$test_status" -eq 0 ]; then
-    bisect_cmd="good"
-    message="command succeeded -> git bisect good"
-  elif [ "$test_status" -eq 125 ]; then
-    bisect_cmd="skip"
-    message="command exited 125 -> git bisect skip"
-  else
-    bisect_cmd="bad"
-    message="command failed with exit ${test_status} -> git bisect bad"
-  fi
+  local message="$3"
 
   autostash_before_bisect_transition "$log_file"
   echo "$message" | tee -a "$log_file"
@@ -299,9 +329,91 @@ while [ -f "${bisect_start_file}" ]; do
 
   run_header_written=0
   append_run_header "$log_file"
+  test_status=""
+  if current_worktree_is_clean && known_bisect_cmd="$(known_bisect_command_for_commit "$commit_hash" 2>/dev/null || true)"; then
+    if [ -n "$known_bisect_cmd" ]; then
+      if [ "$known_bisect_cmd" = "good" ]; then
+        test_status=0
+      else
+        test_status=1
+      fi
+      apply_bisect_mark "$known_bisect_cmd" "$log_file" "commit ${commit_hash} is already marked ${known_bisect_cmd}; reapplying git bisect ${known_bisect_cmd}"
+      bisect_apply_status=$?
+      next_commit_hash="$(git rev-parse --verify HEAD)"
+      printf "%s\t%s\t%s\t%s\t%s\n" \
+        "$step" "$commit_hash" "$test_status" "${last_bisect_decision}" "$log_file" >>"$summary_file"
+      if [ "$bisect_apply_status" -eq 200 ]; then
+        echo "bisect complete. summary: ${summary_file}"
+        if bad_hash="$(printf '%s\n' "$last_bisect_output" | awk '/is the first bad commit/{print $1; exit}')"; then
+          if [ -n "${bad_hash:-}" ]; then
+            echo "FIRST_BAD_COMMIT = ${bad_hash}"
+            if upstream_hash="$(resolve_equivalent_upstream_commit "${bad_hash}")"; then
+              echo "UPSTREAM_EQUIVALENT = ${upstream_hash}"
+            else
+              echo "UPSTREAM_EQUIVALENT = <unavailable>"
+            fi
+          fi
+          if [ -n "${bad_hash:-}" ] && [ -f "${results_dir}/$(printf '%04d' "$step")_${bad_hash}.log" ]; then
+            echo "first bad commit log: ${results_dir}/$(printf '%04d' "$step")_${bad_hash}.log"
+          else
+            bad_log="$(ls "${results_dir}"/*_"${bad_hash}".log 2>/dev/null | tail -n1 || true)"
+            if [ -n "$bad_log" ]; then
+              echo "first bad commit log: ${bad_log}"
+            else
+              final_log="${results_dir}/final_${bad_hash}.log"
+              {
+                echo "final_commit: ${bad_hash}"
+                echo "time_utc: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+                echo
+              } >"$final_log"
+              run_header_written=0
+              append_run_header "$final_log"
+              echo "capturing final bad commit output: ${bad_hash}" | tee -a "$final_log"
+              run_once 2>&1 | tee -a "$final_log"
+              final_status=${PIPESTATUS[0]}
+              printf "%s\t%s\t%s\t%s\t%s\n" \
+                "$((step + 1))" "$bad_hash" "$final_status" "final_bad_observation" "$final_log" >>"$summary_file"
+              echo "first bad commit log: ${final_log}"
+            fi
+          fi
+        fi
+        exit 0
+      fi
+      if [ "$bisect_apply_status" -ne 0 ]; then
+        echo "bisect halted. summary: ${summary_file}"
+        if printf '%s' "$last_bisect_output" | grep -Fq "would be overwritten by checkout"; then
+          echo "bisect halted because checkout failed due to dirty tracked files."
+        fi
+        exit "$bisect_apply_status"
+      fi
+      if [ "$next_commit_hash" = "$commit_hash" ]; then
+        echo "bisect did not advance (still at ${commit_hash}); aborting to avoid an infinite loop."
+        echo "last decision: ${last_bisect_decision}"
+        echo "summary: ${summary_file}"
+        exit 3
+      fi
+      continue
+    fi
+  fi
+
   run_once 2>&1 | tee -a "$log_file"
   test_status=${PIPESTATUS[0]}
-  apply_bisect_mark "$test_status" "$log_file"
+  if [ "$test_status" -eq 141 ]; then
+    echo "aborted by user (exit 141); exiting without marking bisect state." | tee -a "$log_file"
+    exit 141
+  fi
+
+  bisect_cmd="$(case "$test_status" in
+    0) printf '%s' "good" ;;
+    125) printf '%s' "skip" ;;
+    *) printf '%s' "bad" ;;
+  esac)"
+  bisect_message="$(case "$test_status" in
+    0) printf '%s' "command succeeded at ${commit_hash} -> git bisect ${bisect_cmd}" ;;
+    125) printf '%s' "command exited 125 at ${commit_hash} -> git bisect ${bisect_cmd}" ;;
+    *) printf '%s' "command failed with exit ${test_status} at ${commit_hash} -> git bisect ${bisect_cmd}" ;;
+  esac)"
+  apply_bisect_mark "$bisect_cmd" "$log_file" "$bisect_message"
   bisect_apply_status=$?
   next_commit_hash="$(git rev-parse --verify HEAD)"
   printf "%s\t%s\t%s\t%s\t%s\n" \
@@ -344,6 +456,9 @@ while [ -f "${bisect_start_file}" ]; do
     exit 0
   fi
   if [ "$bisect_apply_status" -ne 0 ]; then
+    if [ "$bisect_apply_status" -eq 141 ]; then
+      exit 141
+    fi
     echo "bisect halted. summary: ${summary_file}"
     if printf '%s' "$last_bisect_output" | grep -Fq "would be overwritten by checkout"; then
       echo "bisect halted because checkout failed due to dirty tracked files."
