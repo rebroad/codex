@@ -173,10 +173,14 @@ append_run_header() {
 }
 
 LAST_AUTOSTASH_REF=""
+tracked_worktree_has_changes() {
+  ! git diff-index --quiet --ignore-submodules=dirty HEAD --
+}
+
 autostash_before_bisect_transition() {
   local log_file="$1"
   LAST_AUTOSTASH_REF=""
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  if tracked_worktree_has_changes; then
     local stash_message="test-bisect-autostash-step-${step}-$(date -u +'%Y%m%dT%H%M%SZ')"
     echo "working tree dirty; creating transient stash before bisect transition: ${stash_message}" | tee -a "$log_file"
     git stash push --include-untracked -m "$stash_message" >/dev/null
