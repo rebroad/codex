@@ -6,8 +6,8 @@ print_usage() {
 Usage: $(basename "$0") [--exact-test TEST_NAME]... [-- CARGO_TEST_ARGS...]
        $(basename "$0") --command COMMAND [ARG...]
 
-Drive an active git bisect by syncing the source repo into its sibling build tree
-and running a test/build command from there.
+Drive git bisect by syncing the source repo into its sibling build tree and
+running a test/build command from there.
 
 Options:
   --exact-test TEST_NAME  Run only the named exact cargo test. May be repeated.
@@ -148,11 +148,18 @@ else
 fi
 
 bisect_start_file="$(git rev-parse --git-path BISECT_START 2>/dev/null || true)"
-if [ -z "${bisect_start_file}" ] || [ ! -f "${bisect_start_file}" ]; then
-  echo "error: git bisect does not appear to be active" >&2
-  echo "start bisect first (e.g. git bisect start ...), then rerun this script" >&2
+if [ -z "${bisect_start_file}" ]; then
+  echo "error: could not determine git bisect state location" >&2
   print_usage >&2
   exit 2
+fi
+
+if [ ! -f "${bisect_start_file}" ]; then
+  echo "git bisect is not active; starting a new bisect session"
+  if ! git bisect start >/dev/null; then
+    echo "error: failed to start git bisect" >&2
+    exit 2
+  fi
 fi
 
 sync_build_tree() {
@@ -245,6 +252,10 @@ snapshot_tracked_worktree_before_bisect_transition() {
 
 current_worktree_is_clean() {
   ! tracked_worktree_has_changes
+}
+
+bisect_output_indicates_waiting() {
+  printf '%s' "$1" | grep -Eiq 'waiting for'
 }
 
 known_bisect_command_for_commit() {
@@ -450,6 +461,10 @@ while [ -f "${bisect_start_file}" ]; do
         exit "$bisect_apply_status"
       fi
       if [ "$next_commit_hash" = "$commit_hash" ]; then
+        if bisect_output_indicates_waiting "$last_bisect_output"; then
+          echo "bisect is waiting for the corresponding good/bad commit; summary: ${summary_file}"
+          exit 0
+        fi
         echo "bisect did not advance (still at ${commit_hash}); aborting to avoid an infinite loop."
         echo "last decision: ${last_bisect_decision}"
         echo "summary: ${summary_file}"
@@ -529,6 +544,10 @@ while [ -f "${bisect_start_file}" ]; do
     exit "$bisect_apply_status"
   fi
   if [ "$next_commit_hash" = "$commit_hash" ]; then
+    if bisect_output_indicates_waiting "$last_bisect_output"; then
+      echo "bisect is waiting for the corresponding good/bad commit; summary: ${summary_file}"
+      exit 0
+    fi
     echo "bisect did not advance (still at ${commit_hash}); aborting to avoid an infinite loop."
     echo "last decision: ${last_bisect_decision}"
     echo "summary: ${summary_file}"
