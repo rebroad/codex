@@ -102,7 +102,7 @@ fn test_invalid_suffix_is_sanitized() {
 
 #[test]
 fn test_invalid_suffix_is_sanitized2() {
-    format!("codex_cli_rs/{CODEX_BUILD_VERSION}");
+    let prefix = format!("codex_cli_rs/{CODEX_BUILD_VERSION}");
     let suffix = "bad\0suffix";
 
     assert_eq!(

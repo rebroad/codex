@@ -21,7 +21,7 @@ BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
 BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
 BUILD_COMMIT_HASH_PLACEHOLDER="000000000000"
 BUILD_COMMIT_SHORT="${BUILD_COMMIT_HASH_PLACEHOLDER}"
-BUILD_VERSION_SUFFIX_COMPILE="${BUILD_TIMESTAMP_PLACEHOLDER}-${BUILD_COMMIT_HASH_PLACEHOLDER}"
+BUILD_VERSION_SUFFIX_COMPILE="${BUILD_COMMIT_HASH_PLACEHOLDER}-${BUILD_TIMESTAMP_PLACEHOLDER}"
 
 RED=$'\033[31m'
 BOLD=$'\033[1m'
@@ -934,7 +934,7 @@ resolve_publish_version() {
   version="$(read_workspace_version)"
   if [[ -z "${version}" ]]; then
     version_from_codex="$("${INSTALL_BIN}" --version | awk '{print $2}')"
-    if [[ "${version_from_codex}" =~ ^(.+)-([0-9]{8,})(-[0-9a-f]{7,40}\+?)?$ ]]; then
+    if [[ "${version_from_codex}" =~ ^(.+)-([0-9a-f]{7,40}\+?)-([0-9]{8,})$ ]]; then
       version="${BASH_REMATCH[1]}"
     else
       version="${version_from_codex}"
@@ -955,7 +955,7 @@ patch_installed_binary_version_timestamp() {
     echo "Skipping embedded version timestamp patch; unable to resolve workspace version."
     return 0
   fi
-  now_suffix="$(date +%Y%m%d%H%M)-${BUILD_COMMIT_SHORT}"
+  now_suffix="${BUILD_COMMIT_SHORT}-$(date +%Y%m%d%H%M)"
   from_suffix="${BUILD_VERSION_SUFFIX_COMPILE}"
   if [[ "${from_suffix}" == "${now_suffix}" ]]; then
     return 0
@@ -994,7 +994,7 @@ with bin_path.open("r+b") as f:
         # only patch one family, `--version` may still report an old value.
         # Commit suffixes in this script are always 12 hex chars; matching a
         # fixed width avoids accidentally swallowing adjacent hex bytes.
-        pattern = re.compile(re.escape(base_version) + rb"-\d{12}(?:-[0-9a-f]{11,12}\+?)?")
+        pattern = re.compile(re.escape(base_version) + rb"-(?:[0-9a-f]{11,12}\+?)-\d{12}")
         for match in pattern.finditer(mm):
             if (match.end() - match.start()) != len(replacement):
                 continue
@@ -1067,7 +1067,7 @@ offer_duplicate_cleanup_for_installed_binaries() {
   for bin_path in "${INSTALL_BIN_DIR}"/codex-*; do
     [[ -f "${bin_path}" ]] || continue
     name="$(basename "${bin_path}")"
-    if [[ ! "${name}" =~ ^codex-(.+)-([0-9]{12})(-[0-9a-f]{7,40}\+?)?$ ]]; then
+    if [[ ! "${name}" =~ ^codex-(.+)-([0-9a-f]{7,40}\+?)-([0-9]{12})$ ]]; then
       continue
     fi
     size="$(stat -c %s "${bin_path}" 2>/dev/null || true)"
@@ -1075,7 +1075,7 @@ offer_duplicate_cleanup_for_installed_binaries() {
       continue
     fi
     series="${BASH_REMATCH[1]}"
-    timestamp="${BASH_REMATCH[2]}"
+    timestamp="${BASH_REMATCH[3]}"
     records+=("${series}|${timestamp}|${size}|${name}")
   done
   shopt -u nullglob
