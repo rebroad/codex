@@ -15,6 +15,9 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
+/// Shared build version placeholder embedded into binaries at compile time.
+const CODEX_BUILD_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-000000000000-000000000000");
+
 /// Set this to add a suffix to the User-Agent string.
 ///
 /// It is not ideal that we're using a global singleton for this.
@@ -129,7 +132,7 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    let build_version = CODEX_BUILD_VERSION;
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
