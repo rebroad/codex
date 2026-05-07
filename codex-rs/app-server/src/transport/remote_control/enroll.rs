@@ -2,6 +2,7 @@ use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
+use codex_core::version::CODEX_BUILD_VERSION;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -196,7 +197,7 @@ pub(super) async fn enroll_remote_control_server(
         name: server_name.clone(),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
-        app_server_version: env!("CARGO_PKG_VERSION"),
+        app_server_version: CODEX_BUILD_VERSION,
     };
     let client = build_reqwest_client();
     let http_request = client
