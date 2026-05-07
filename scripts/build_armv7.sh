@@ -910,7 +910,7 @@ fi
 
 BUILD_COMMIT_SHORT="$(resolve_build_commit_short)"
 if [[ -z "${BUILD_VERSION_SUFFIX_FIXED}" ]]; then
-  BUILD_VERSION_SUFFIX_FIXED="$(date +%Y%m%d%H%M)-${BUILD_COMMIT_SHORT}"
+  BUILD_VERSION_SUFFIX_FIXED="${BUILD_COMMIT_SHORT}-$(date +%Y%m%d%H%M)"
 fi
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
   CARGO_TARGET_DIR="${RUST_WORKSPACE_DIR}/target.armv7"

@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 fn test_get_codex_user_agent() {
     let user_agent = get_codex_user_agent();
     let originator = originator().value;
-    let prefix = format!("{originator}/");
+    let prefix = format!("{originator}/{}", env!("CARGO_PKG_VERSION"));
     assert!(user_agent.starts_with(&prefix));
 }
 
@@ -91,7 +91,7 @@ async fn test_create_client_sets_default_headers() {
 
 #[test]
 fn test_invalid_suffix_is_sanitized() {
-    let prefix = format!("codex_cli_rs/{CODEX_BUILD_VERSION}");
+    let prefix = format!("codex_cli_rs/{}", env!("CARGO_PKG_VERSION"));
     let suffix = "bad\rsuffix";
 
     assert_eq!(
@@ -102,7 +102,7 @@ fn test_invalid_suffix_is_sanitized() {
 
 #[test]
 fn test_invalid_suffix_is_sanitized2() {
-    let prefix = format!("codex_cli_rs/{CODEX_BUILD_VERSION}");
+    let prefix = format!("codex_cli_rs/{}", env!("CARGO_PKG_VERSION"));
     let suffix = "bad\0suffix";
 
     assert_eq!(
