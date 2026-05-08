@@ -8,12 +8,18 @@
     "gpt-5.4": {
       "input_credits_per_million": 62.5,
       "cached_input_credits_per_million": 6.25,
-      "output_credits_per_million": 375.0
+      "output_credits_per_million": 375.0,
+      "long_context_threshold_tokens": 272000,
+      "long_context_input_multiplier": 2.0,
+      "long_context_cached_input_multiplier": 2.0,
+      "long_context_output_multiplier": 1.5,
+      "regional_uplift_multiplier": 1.1
     },
     "gpt-5.4-mini": {
       "input_credits_per_million": 18.75,
       "cached_input_credits_per_million": 1.875,
-      "output_credits_per_million": 112.5
+      "output_credits_per_million": 112.5,
+      "regional_uplift_multiplier": 1.1
     },
     "gpt-5.3-codex": {
       "input_credits_per_million": 43.75,
