@@ -124,6 +124,7 @@ pub struct AccountUsageEventMeta<'a> {
     pub sent_bytes: Option<i64>,
     pub recv_bytes: Option<i64>,
     pub is_prewarm: bool,
+    pub is_regional_processing: bool,
 }
 
 #[derive(Clone)]
@@ -710,7 +711,13 @@ LIMIT 200
             input_tokens,
             cached_input_tokens,
             output_tokens,
-            self.model_pricing.weights_for_model(meta.model_slug),
+            self.model_pricing
+                .weights_for_model(
+                    meta.model_slug,
+                    Some(input_tokens),
+                    Some(cached_input_tokens),
+                    meta.is_regional_processing,
+                ),
         );
         let usage_usd_excluding_prewarm = if meta.is_prewarm { 0.0 } else { usage_usd };
         let reasoning_output_tokens = normalized_usage.reasoning_output_tokens.max(0);
