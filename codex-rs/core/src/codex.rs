@@ -72,6 +72,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
+use codex_login::default_client::default_client_residency_requirement;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
@@ -4025,6 +4026,7 @@ impl Session {
                                 sent_bytes: transport_bytes.map(|value| value.sent),
                                 recv_bytes: transport_bytes.map(|value| value.recv),
                                 is_prewarm: false,
+                                is_regional_processing: self.is_regional_processing_request().await,
                             },
                         )
                         .await
@@ -4067,12 +4069,19 @@ impl Session {
                     sent_bytes: completion.transport_bytes.as_ref().map(|value| value.sent),
                     recv_bytes: completion.transport_bytes.as_ref().map(|value| value.recv),
                     is_prewarm: true,
+                    is_regional_processing: self.is_regional_processing_request().await,
                 },
             )
             .await
         {
             warn!("failed to record startup prewarm usage: {err}");
         }
+    }
+
+    async fn is_regional_processing_request(&self) -> bool {
+        let state = self.state.lock().await;
+        state.session_configuration.provider.requires_openai_auth
+            && default_client_residency_requirement().is_some()
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {

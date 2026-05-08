@@ -2239,6 +2239,7 @@ async fn consume_direct_stream(
                                     sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
                                     recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
                                     is_prewarm: false,
+                                    is_regional_processing: false,
                                 },
                             )
                             .await

@@ -14,6 +14,13 @@ import urllib.request
 DEFAULT_URL = "https://developers.openai.com/api/docs/pricing"
 DEFAULT_OUTPUT = pathlib.Path.home() / ".codex" / "model_pricing.json"
 CREDITS_PER_USD = 25.0
+DEFAULT_BUNDLED_PRICING = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "codex-rs"
+    / "state"
+    / "src"
+    / "default_model_pricing.json"
+)
 
 
 class PricingHTMLTextExtractor(html.parser.HTMLParser):
@@ -101,6 +108,11 @@ def parse_models_from_text(text: str) -> dict[str, dict[str, float]]:
     return models
 
 
+def load_template_pricing(output_path: pathlib.Path) -> dict[str, object]:
+    template_path = output_path if output_path.exists() else DEFAULT_BUNDLED_PRICING
+    return json.loads(template_path.read_text(encoding="utf-8"))
+
+
 def looks_like_priced_model_token(token: str) -> bool:
     return token.startswith("gpt-") and all(
         char.isalnum() or char in {"-", "."} for char in token
@@ -144,20 +156,40 @@ def main() -> int:
         print("No pricing rows were parsed from the supplied HTML.", file=sys.stderr)
         return 1
 
+    output_path = pathlib.Path(args.output).expanduser()
+    template = load_template_pricing(output_path)
+    template_models = template.get("models", {})
+    template_aliases = template.get("aliases", {})
+    merged_models: dict[str, dict[str, float]] = {}
+    for model, parsed_entry in models.items():
+        merged_entry = {}
+        if isinstance(template_models, dict):
+            existing_entry = template_models.get(model)
+            if isinstance(existing_entry, dict):
+                merged_entry.update(existing_entry)
+        merged_entry.update(parsed_entry)
+        merged_models[model] = merged_entry
+
+    merged_aliases = compatibility_aliases(merged_models)
+    if isinstance(template_aliases, dict):
+        for alias, target in template_aliases.items():
+            if target not in merged_models or alias in merged_aliases:
+                continue
+            merged_aliases[alias] = target
+
     payload = {
         "version": 1,
         "default_model": "gpt-5.3-codex",
         "source_url": args.url,
         "updated_at": current_timestamp(),
         "credits_per_usd": CREDITS_PER_USD,
-        "models": models,
-        "aliases": compatibility_aliases(models),
+        "models": merged_models,
+        "aliases": merged_aliases,
     }
 
-    output_path = pathlib.Path(args.output).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"Wrote {len(models)} pricing rows to {output_path}")
+    print(f"Wrote {len(merged_models)} pricing rows to {output_path}")
     return 0
 
 

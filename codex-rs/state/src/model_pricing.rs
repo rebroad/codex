@@ -23,6 +23,16 @@ pub struct ModelPricingEntry {
     pub input_credits_per_million: f64,
     pub cached_input_credits_per_million: f64,
     pub output_credits_per_million: f64,
+    #[serde(default)]
+    pub long_context_threshold_tokens: Option<i64>,
+    #[serde(default)]
+    pub long_context_input_multiplier: Option<f64>,
+    #[serde(default)]
+    pub long_context_cached_input_multiplier: Option<f64>,
+    #[serde(default)]
+    pub long_context_output_multiplier: Option<f64>,
+    #[serde(default)]
+    pub regional_uplift_multiplier: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -56,6 +66,7 @@ impl ModelPricingFile {
         updated_at: &str,
     ) -> anyhow::Result<Self> {
         let normalized = normalize_html_for_pricing_parse(html);
+        let template = Self::bundled_default().ok();
         let mut models = BTreeMap::new();
         let tokens: Vec<&str> = normalized.split_whitespace().collect();
         for window in tokens.windows(4) {
@@ -87,8 +98,28 @@ impl ModelPricingFile {
                     input_credits_per_million: input_usd * CREDITS_PER_USD,
                     cached_input_credits_per_million: cached_input_usd * CREDITS_PER_USD,
                     output_credits_per_million: output_usd * CREDITS_PER_USD,
+                    long_context_threshold_tokens: None,
+                    long_context_input_multiplier: None,
+                    long_context_cached_input_multiplier: None,
+                    long_context_output_multiplier: None,
+                    regional_uplift_multiplier: None,
                 },
             );
+        }
+
+        if let Some(template) = template.as_ref() {
+            for (model, entry) in models.iter_mut() {
+                let Some(template_entry) = template.models.get(model.as_str()) else {
+                    continue;
+                };
+
+                entry.long_context_threshold_tokens = template_entry.long_context_threshold_tokens;
+                entry.long_context_input_multiplier = template_entry.long_context_input_multiplier;
+                entry.long_context_cached_input_multiplier =
+                    template_entry.long_context_cached_input_multiplier;
+                entry.long_context_output_multiplier = template_entry.long_context_output_multiplier;
+                entry.regional_uplift_multiplier = template_entry.regional_uplift_multiplier;
+            }
         }
 
         if models.is_empty() {
@@ -104,6 +135,15 @@ impl ModelPricingFile {
             aliases.insert("gpt-5.2-codex".to_string(), "gpt-5.3-codex".to_string());
             aliases.insert("gpt-5.2".to_string(), "gpt-5.3-codex".to_string());
         }
+        if let Some(template) = template.as_ref() {
+            for (alias, target) in &template.aliases {
+                if !models.contains_key(target) || aliases.contains_key(alias) {
+                    continue;
+                }
+
+                aliases.insert(alias.clone(), target.clone());
+            }
+        }
 
         Ok(Self {
             version: 1,
@@ -117,10 +157,16 @@ impl ModelPricingFile {
     }
 
     pub(crate) fn default_weights(&self) -> UsagePriceWeights {
-        self.weights_for_model(Some(self.default_model.as_str()))
+        self.weights_for_model(Some(self.default_model.as_str()), None, None, false)
     }
 
-    pub(crate) fn weights_for_model(&self, model_slug: Option<&str>) -> UsagePriceWeights {
+    pub(crate) fn weights_for_model(
+        &self,
+        model_slug: Option<&str>,
+        input_tokens: Option<i64>,
+        cached_input_tokens: Option<i64>,
+        regional_processing: bool,
+    ) -> UsagePriceWeights {
         let resolved_slug = model_slug
             .and_then(|slug| self.resolve_slug(slug))
             .unwrap_or(self.default_model.as_str());
@@ -128,7 +174,13 @@ impl ModelPricingFile {
         self.models
             .get(resolved_slug)
             .or_else(|| self.models.get(self.default_model.as_str()))
-            .map(UsagePriceWeights::from_entry)
+            .map(|entry| {
+                if should_use_long_context(entry, input_tokens, cached_input_tokens) {
+                    UsagePriceWeights::from_policy_entry(entry, true, regional_processing)
+                } else {
+                    UsagePriceWeights::from_policy_entry(entry, false, regional_processing)
+                }
+            })
             .unwrap_or_default()
     }
 
@@ -154,13 +206,59 @@ impl Default for UsagePriceWeights {
 }
 
 impl UsagePriceWeights {
-    fn from_entry(entry: &ModelPricingEntry) -> Self {
+    fn from_policy_entry(
+        entry: &ModelPricingEntry,
+        long_context: bool,
+        regional_processing: bool,
+    ) -> Self {
+        let input_multiplier = if long_context {
+            entry.long_context_input_multiplier.unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        let cached_input_multiplier = if long_context {
+            entry.long_context_cached_input_multiplier.unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        let output_multiplier = if long_context {
+            entry.long_context_output_multiplier.unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        let regional_uplift_multiplier = if regional_processing {
+            entry.regional_uplift_multiplier.unwrap_or(1.0)
+        } else {
+            1.0
+        };
         Self {
-            input: entry.input_credits_per_million / TOKENS_PER_MILLION,
-            cached_input: entry.cached_input_credits_per_million / TOKENS_PER_MILLION,
-            output: entry.output_credits_per_million / TOKENS_PER_MILLION,
+            input: entry.input_credits_per_million
+                * input_multiplier
+                * regional_uplift_multiplier
+                / TOKENS_PER_MILLION,
+            cached_input: entry.cached_input_credits_per_million
+                * cached_input_multiplier
+                * regional_uplift_multiplier
+                / TOKENS_PER_MILLION,
+            output: entry.output_credits_per_million
+                * output_multiplier
+                * regional_uplift_multiplier
+                / TOKENS_PER_MILLION,
         }
     }
+}
+
+fn should_use_long_context(
+    entry: &ModelPricingEntry,
+    input_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+) -> bool {
+    let Some(threshold) = entry.long_context_threshold_tokens else {
+        return false;
+    };
+    input_tokens
+        .zip(cached_input_tokens)
+        .is_some_and(|(input, cached)| input.max(0).saturating_add(cached.max(0)) > threshold)
 }
 
 pub fn model_pricing_path(codex_home: &Path) -> PathBuf {
@@ -170,8 +268,11 @@ pub fn model_pricing_path(codex_home: &Path) -> PathBuf {
 pub fn load_model_pricing(codex_home: &Path) -> anyhow::Result<ModelPricingFile> {
     let pricing_path = model_pricing_path(codex_home);
     match std::fs::read_to_string(&pricing_path) {
-        Ok(contents) => serde_json::from_str(&contents)
-            .with_context(|| format!("parse model pricing file at {}", pricing_path.display())),
+        Ok(contents) => {
+            let pricing: ModelPricingFile = serde_json::from_str(&contents)
+                .with_context(|| format!("parse model pricing file at {}", pricing_path.display()))?;
+            Ok(pricing)
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => ModelPricingFile::bundled_default(),
         Err(err) => Err(err)
             .with_context(|| format!("read model pricing file at {}", pricing_path.display())),
@@ -337,6 +438,11 @@ mod tests {
                     input_credits_per_million: 99.0,
                     cached_input_credits_per_million: 9.0,
                     output_credits_per_million: 999.0,
+                    long_context_threshold_tokens: None,
+                    long_context_input_multiplier: None,
+                    long_context_cached_input_multiplier: None,
+                    long_context_output_multiplier: None,
+                    regional_uplift_multiplier: None,
                 },
             )]),
             aliases: BTreeMap::new(),
@@ -344,10 +450,72 @@ mod tests {
         write_model_pricing(&pricing_path, &pricing).expect("write pricing");
 
         let loaded = load_model_pricing(tempdir.path()).expect("load pricing");
-        let weights = loaded.weights_for_model(Some("gpt-5.4"));
+        let weights = loaded.weights_for_model(Some("gpt-5.4"), Some(1), Some(0), false);
 
         assert_eq!(weights.input, 99.0 / TOKENS_PER_MILLION);
         assert_eq!(weights.cached_input, 9.0 / TOKENS_PER_MILLION);
         assert_eq!(weights.output, 999.0 / TOKENS_PER_MILLION);
+    }
+
+    #[test]
+    fn long_context_pricing_applies_for_gpt_5_4_over_threshold() {
+        let pricing = ModelPricingFile {
+            version: 1,
+            default_model: "gpt-5.4".to_string(),
+            source_url: None,
+            updated_at: None,
+            credits_per_usd: CREDITS_PER_USD,
+            models: BTreeMap::from([(
+                "gpt-5.4".to_string(),
+                ModelPricingEntry {
+                    input_credits_per_million: 100.0,
+                    cached_input_credits_per_million: 10.0,
+                    output_credits_per_million: 50.0,
+                    long_context_threshold_tokens: Some(272_000),
+                    long_context_input_multiplier: Some(2.0),
+                    long_context_cached_input_multiplier: Some(2.0),
+                    long_context_output_multiplier: Some(1.5),
+                    regional_uplift_multiplier: None,
+                },
+            )]),
+            aliases: BTreeMap::new(),
+        };
+
+        let weights = pricing.weights_for_model(Some("gpt-5.4"), Some(300_000), Some(0), false);
+
+        assert_eq!(weights.input, 200.0 / TOKENS_PER_MILLION);
+        assert_eq!(weights.cached_input, 20.0 / TOKENS_PER_MILLION);
+        assert_eq!(weights.output, 75.0 / TOKENS_PER_MILLION);
+    }
+
+    #[test]
+    fn regional_uplift_applies_when_enabled() {
+        let pricing = ModelPricingFile {
+            version: 1,
+            default_model: "gpt-5.4".to_string(),
+            source_url: None,
+            updated_at: None,
+            credits_per_usd: CREDITS_PER_USD,
+            models: BTreeMap::from([(
+                "gpt-5.4-mini".to_string(),
+                ModelPricingEntry {
+                    input_credits_per_million: 100.0,
+                    cached_input_credits_per_million: 10.0,
+                    output_credits_per_million: 50.0,
+                    long_context_threshold_tokens: None,
+                    long_context_input_multiplier: None,
+                    long_context_cached_input_multiplier: None,
+                    long_context_output_multiplier: None,
+                    regional_uplift_multiplier: Some(1.1),
+                },
+            )]),
+            aliases: BTreeMap::new(),
+        };
+
+        let weights = pricing.weights_for_model(Some("gpt-5.4-mini"), Some(1), Some(0), true);
+
+        assert!((weights.input - 110.0 / TOKENS_PER_MILLION).abs() < 1e-12);
+        assert!((weights.cached_input - 11.0 / TOKENS_PER_MILLION).abs() < 1e-12);
+        assert!((weights.output - 55.0 / TOKENS_PER_MILLION).abs() < 1e-12);
     }
 }
