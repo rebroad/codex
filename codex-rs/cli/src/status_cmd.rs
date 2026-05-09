@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -6,6 +7,7 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::config::Config;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
@@ -15,6 +17,7 @@ use codex_state::read_rollout_thread_snapshot;
 pub struct ThreadStatusSelector {
     pub thread_id: Option<String>,
     pub last: bool,
+    pub include_exec: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,13 +142,14 @@ async fn select_thread_item(
     config: &Config,
     selector: &ThreadStatusSelector,
 ) -> anyhow::Result<ThreadItem> {
+    let allowed_sources = allowed_session_sources(selector);
     if selector.last {
         let page = RolloutRecorder::list_threads(
             config,
             /*page_size*/ 1,
             None,
             ThreadSortKey::UpdatedAt,
-            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            allowed_sources.as_ref(),
             /*model_providers*/ None,
             &config.model_provider_id,
             /*search_term*/ None,
@@ -155,7 +159,7 @@ async fn select_thread_item(
             .items
             .into_iter()
             .next()
-            .context("no interactive threads found");
+            .context("no matching threads found");
     }
 
     let requested = selector
@@ -169,7 +173,7 @@ async fn select_thread_item(
             /*page_size*/ 100,
             cursor.as_ref(),
             ThreadSortKey::UpdatedAt,
-            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            allowed_sources.as_ref(),
             /*model_providers*/ None,
             &config.model_provider_id,
             /*search_term*/ None,
@@ -188,6 +192,16 @@ async fn select_thread_item(
         cursor = page.next_cursor;
     }
     anyhow::bail!("thread not found: {requested}")
+}
+
+fn allowed_session_sources(selector: &ThreadStatusSelector) -> Cow<'static, [SessionSource]> {
+    if selector.include_exec {
+        let mut sources = INTERACTIVE_SESSION_SOURCES.to_vec();
+        sources.push(SessionSource::Exec);
+        Cow::Owned(sources)
+    } else {
+        Cow::Borrowed(INTERACTIVE_SESSION_SOURCES.as_slice())
+    }
 }
 
 async fn context_used_percent_from_rollout(path: &std::path::Path) -> anyhow::Result<Option<i64>> {
@@ -318,5 +332,33 @@ mod tests {
         };
 
         assert_eq!(render_telegram_thread_status(&snapshot), vec!["14%"]);
+    }
+
+    #[test]
+    fn allowed_session_sources_includes_exec_for_telegram_style_selection() {
+        let selector = ThreadStatusSelector {
+            thread_id: None,
+            last: true,
+            include_exec: true,
+        };
+
+        let sources = allowed_session_sources(&selector);
+
+        assert!(sources.contains(&SessionSource::Exec));
+        assert!(sources.contains(&SessionSource::Cli));
+    }
+
+    #[test]
+    fn allowed_session_sources_keeps_interactive_only_by_default() {
+        let selector = ThreadStatusSelector {
+            thread_id: None,
+            last: true,
+            include_exec: false,
+        };
+
+        let sources = allowed_session_sources(&selector);
+
+        assert!(!sources.contains(&SessionSource::Exec));
+        assert!(sources.contains(&SessionSource::Cli));
     }
 }
