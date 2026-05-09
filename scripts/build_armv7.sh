@@ -36,6 +36,7 @@ PATCHED_VERSION_SUFFIX=""
 BUILD_VERSION_SUFFIX_FIXED="${CODEX_BUILD_VERSION_SUFFIX_FIXED:-}"
 BUILD_JOBS="${CARGO_BUILD_JOBS:-}"
 FAST_RELEASE_BUILD="${FAST_RELEASE_BUILD:-false}"
+REQUIRE_LLD="true"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -52,7 +53,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -90,6 +91,7 @@ Options:
   --no-deploy-remote    Skip default deploy to pi3:~/bin
   --deploy-host=<host>  Remote SSH host for post-build deploy (default: pi3)
   --deploy-dir=<path>   Remote install dir for versioned binary + symlink (default: ~/bin)
+  --allow-gnu-ld        Allow falling back to the slower non-lld linker
   -h, --help            Show this help
 EOF
 }
@@ -137,6 +139,9 @@ append_default_build_accel_env() {
         rustflags_value="${rustflags_value} "
       fi
       rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=lld"
+      if [[ -n "${BUILD_JOBS}" ]]; then
+        rustflags_value="${rustflags_value} -C link-arg=-Wl,--threads=${BUILD_JOBS}"
+      fi
       cargo_env_ref+=(RUSTFLAGS="${rustflags_value}")
     fi
   fi
@@ -167,6 +172,27 @@ EOF
 
   rm -f "${probe_src}" "${probe_bin}"
   return 1
+}
+
+ensure_preferred_linker() {
+  if [[ "${REQUIRE_LLD}" != "true" ]]; then
+    echo "LLD requirement disabled; allowing fallback to non-lld linker."
+    return 0
+  fi
+
+  if can_use_lld_linker; then
+    echo "Using ld.lld for armv7 linking."
+    return 0
+  fi
+
+  cat >&2 <<'EOF'
+armv7 builds require a working ld.lld toolchain, but the current environment
+cannot complete a probe link with -fuse-ld=lld.
+
+Fix the linker setup and re-run, or use --allow-gnu-ld if you intentionally
+want to fall back to the slower GNU ld path.
+EOF
+  exit 1
 }
 
 resolve_cargo_target_dir() {
@@ -977,6 +1003,9 @@ for arg in "$@"; do
     --fast-release-build)
       FAST_RELEASE_BUILD="true"
       ;;
+    --allow-gnu-ld)
+      REQUIRE_LLD="false"
+      ;;
     --no-deploy-remote)
       DEPLOY_REMOTE="false"
       ;;
@@ -1091,6 +1120,7 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
     exit 1
   fi
   setup_armv7_pkg_config_env
+  ensure_preferred_linker
 fi
 
 if [[ -f "${HOME}/.cargo/env" ]]; then
