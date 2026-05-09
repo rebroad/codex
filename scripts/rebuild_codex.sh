@@ -590,6 +590,9 @@ run_armv7_build() {
   if [[ -n "${BUILD_JOBS}" ]]; then
     armv7_cmd+=("--jobs=${BUILD_JOBS}")
   fi
+  if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
+    armv7_cmd+=(--fast-release-build)
+  fi
   "${armv7_cmd[@]}"
 }
 

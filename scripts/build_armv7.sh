@@ -17,7 +17,7 @@ RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
 RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
 ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-${REPO_DIR}/tmp/armv7-cache}"
-DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:2}"
+DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:3}"
 # Docker's default bridge DNS has been flaky here; host networking keeps apt/rustup working.
 DOCKER_NETWORK_MODE="${DOCKER_NETWORK_MODE:-host}"
 PUBLISH_GITHUB="false"
@@ -32,6 +32,7 @@ BUILD_VERSION_SUFFIX_COMPILE="${BUILD_COMMIT_HASH_PLACEHOLDER}-${BUILD_TIMESTAMP
 PATCHED_VERSION_SUFFIX=""
 BUILD_VERSION_SUFFIX_FIXED="${CODEX_BUILD_VERSION_SUFFIX_FIXED:-}"
 BUILD_JOBS="${CARGO_BUILD_JOBS:-}"
+FAST_RELEASE_BUILD="${FAST_RELEASE_BUILD:-false}"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -48,7 +49,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -59,6 +60,7 @@ Options:
   --debug               Build debug profile
   --target=<triple>     Override target triple (default: armv7-unknown-linux-gnueabihf)
   --jobs=N              Set Cargo build parallelism (default: all detected CPUs)
+  --fast-release-build  Use local faster release overrides (thin LTO, codegen-units=16)
   --build-env=<mode>    Build environment mode:
                         auto (default): use docker-buster for armv7 unless host is buster
                         docker-buster: force Debian buster container build
@@ -105,6 +107,33 @@ detect_build_jobs() {
     jobs=1
   fi
   echo "${jobs}"
+}
+
+array_has_env_key() {
+  local -n arr_ref="$1"
+  local key="$2"
+  local assignment
+  for assignment in "${arr_ref[@]}"; do
+    if [[ "${assignment}" == "${key}="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+append_default_build_accel_env() {
+  local -n cargo_env_ref="$1"
+
+  if ! array_has_env_key cargo_env_ref "RUSTFLAGS" && command -v ld.lld >/dev/null 2>&1; then
+    local rustflags_value="${RUSTFLAGS:-}"
+    if [[ "${rustflags_value}" != *"-fuse-ld=lld"* ]]; then
+      if [[ -n "${rustflags_value}" ]]; then
+        rustflags_value="${rustflags_value} "
+      fi
+      rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=lld"
+      cargo_env_ref+=(RUSTFLAGS="${rustflags_value}")
+    fi
+  fi
 }
 
 resolve_cargo_target_dir() {
@@ -272,6 +301,7 @@ ensure_armv7_cross_packages() {
     libcap-dev:armhf
     zlib1g-dev:armhf
     libbz2-dev:armhf
+    lld
     pkg-config
   )
 
@@ -429,6 +459,7 @@ RUN printf '%s\n' \
  && apt-get install -y --no-install-recommends \
     ca-certificates curl git python3 file pkg-config gcc g++ \
     gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+    lld \
     libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf \
  && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
@@ -485,6 +516,9 @@ run_in_docker_buster() {
     forwarded_args+=(--strip)
   else
     forwarded_args+=(--no-strip)
+  fi
+  if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
+    forwarded_args+=(--fast-release-build)
   fi
   if [[ "${BINARY_ONLY}" == "true" ]]; then
     forwarded_args+=(--binary-only)
@@ -549,7 +583,7 @@ run_in_docker_buster() {
           > /etc/apt/sources.list; \
         dpkg --add-architecture armhf; \
         apt-get -o Acquire::Check-Valid-Until=false update -y; \
-        apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
+        apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf lld libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
       cargo_home=\"\${CARGO_HOME:-/root/.cargo}\"; \
       if [[ ! -x \"\${cargo_home}/bin/rustup\" || ! -x \"\${cargo_home}/bin/cargo\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain \"${TOOLCHAIN}\"; fi; \
@@ -846,6 +880,9 @@ for arg in "$@"; do
     --jobs=*)
       BUILD_JOBS="${arg#*=}"
       ;;
+    --fast-release-build)
+      FAST_RELEASE_BUILD="true"
+      ;;
     --build-env=*)
       BUILD_ENV="${arg#*=}"
       ;;
@@ -1035,9 +1072,23 @@ fi
 echo "Building codex-cli (${PROFILE}) for ${TARGET}..."
 echo "Using prebuilt rusty_v8 from ${RUSTY_V8_RELEASE_REPO} (${release_tag})"
 echo "Using Cargo build jobs: ${BUILD_JOBS}"
+if [[ "${PROFILE}" == "release" && "${FAST_RELEASE_BUILD}" == "true" ]]; then
+  echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
+fi
 build_log="$(mktemp)"
+cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
+if [[ -n "${BUILD_JOBS}" ]]; then
+  cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
+fi
+if [[ "${PROFILE}" == "release" && "${FAST_RELEASE_BUILD}" == "true" ]]; then
+  cargo_env+=(
+    CARGO_PROFILE_RELEASE_LTO=thin
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+  )
+fi
+append_default_build_accel_env cargo_env
 set +e
-env CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo "${cargo_args[@]}" 2>&1 | tee "${build_log}"
+env "${cargo_env[@]}" cargo "${cargo_args[@]}" 2>&1 | tee "${build_log}"
 status=${PIPESTATUS[0]}
 set -e
 if (( status != 0 )); then
@@ -1053,7 +1104,7 @@ if (( status != 0 )); then
         "patch.crates-io.v8.path=\"${patched_v8_dir}\""
       )
     fi
-    env CARGO_BUILD_JOBS="${BUILD_JOBS}" cargo "${cargo_args[@]}"
+    env "${cargo_env[@]}" cargo "${cargo_args[@]}"
   else
     rm -f "${build_log}"
     exit "${status}"
