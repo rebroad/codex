@@ -25,6 +25,9 @@ GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
 STRIP_BINARY="true"
 BINARY_ONLY="true"
+DEPLOY_REMOTE="true"
+DEPLOY_HOST="${DEPLOY_HOST:-pi3}"
+DEPLOY_DIR="${DEPLOY_DIR:-~/bin}"
 BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
 BUILD_COMMIT_HASH_PLACEHOLDER="000000000000"
 BUILD_COMMIT_SHORT="${BUILD_COMMIT_HASH_PLACEHOLDER}"
@@ -49,7 +52,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -84,6 +87,9 @@ Options:
   --no-strip            Keep debug symbols in output binary
   --binary-only         Publish only the binary under dist/local-armv7 (default; skip tar.gz/.sha256/.json)
   --full-artifacts      Publish binary + tar.gz + sha256 + metadata
+  --no-deploy-remote    Skip default deploy to pi3:~/bin
+  --deploy-host=<host>  Remote SSH host for post-build deploy (default: pi3)
+  --deploy-dir=<path>   Remote install dir for versioned binary + symlink (default: ~/bin)
   -h, --help            Show this help
 EOF
 }
@@ -368,6 +374,25 @@ resolve_codex_version() {
   ' "${RUST_WORKSPACE_DIR}/Cargo.toml"
 }
 
+resolve_versioned_install_name_from_binary() {
+  local bin_path="$1"
+  local full_version normalized_version
+  full_version="$("${bin_path}" --version | awk '{print $2}')"
+  if [[ -z "${full_version}" ]]; then
+    echo "Unable to read version from ${bin_path}" >&2
+    return 1
+  fi
+
+  normalized_version="${full_version#v}"
+  normalized_version="${normalized_version#0.}"
+  if [[ -z "${normalized_version}" ]]; then
+    echo "Unable to normalize version '${full_version}' from ${bin_path}" >&2
+    return 1
+  fi
+
+  echo "codex-${normalized_version}"
+}
+
 resolve_v8_crate_version() {
   awk '
     BEGIN { in_pkg=0; name=""; ver=""; found=0 }
@@ -520,6 +545,7 @@ run_in_docker_buster() {
   if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
     forwarded_args+=(--fast-release-build)
   fi
+  forwarded_args+=(--no-deploy-remote)
   if [[ "${BINARY_ONLY}" == "true" ]]; then
     forwarded_args+=(--binary-only)
   else
@@ -599,6 +625,17 @@ run_in_docker_buster() {
       ${script_in_container} ${forwarded_args[*]}"
   )
   "${docker_cmd[@]}"
+
+  if [[ "${DEPLOY_REMOTE}" == "true" ]]; then
+    local host_target_dir host_bin_path
+    host_target_dir="$(resolve_cargo_target_dir)"
+    host_bin_path="${host_target_dir}/${TARGET}/${PROFILE}/codex"
+    if [[ -x "${host_bin_path}" ]]; then
+      deploy_remote_binary "${host_bin_path}" "${DEPLOY_HOST}" "${DEPLOY_DIR}"
+    else
+      echo "Skipping remote deploy; expected binary not found at ${host_bin_path}" >&2
+    fi
+  fi
 
   if [[ "${PUBLISH_GITHUB}" == "true" ]]; then
     version="$(resolve_codex_version)"
@@ -695,6 +732,33 @@ PY
   echo "- Tarball: ${tarball}"
   echo "- SHA256: ${checksum_file}"
   echo "- Metadata: ${metadata_file}"
+}
+
+deploy_remote_binary() {
+  local bin_path="$1"
+  local remote_host="$2"
+  local remote_dir="$3"
+  local versioned_install_name remote_versioned_bin remote_symlink remote_tmp
+
+  if [[ "${DEPLOY_REMOTE}" != "true" ]]; then
+    return 0
+  fi
+
+  require_cmd ssh
+  versioned_install_name="$(resolve_versioned_install_name_from_binary "${bin_path}")"
+  remote_versioned_bin="${remote_dir%/}/${versioned_install_name}"
+  remote_symlink="${remote_dir%/}/codex"
+  remote_tmp="${remote_dir%/}/.codex.new.$$"
+
+  echo "Deploying armv7 binary to ${remote_host}:${remote_versioned_bin}..."
+  ssh "${remote_host}" "mkdir -p ${remote_dir}"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -az --chmod=Du=rwx,Dgo=rx,Fu=rwx,Fgo=rx "${bin_path}" "${remote_host}:${remote_tmp}"
+  else
+    scp -C "${bin_path}" "${remote_host}:${remote_tmp}"
+  fi
+  ssh "${remote_host}" \
+    "mv -f ${remote_tmp} ${remote_versioned_bin} && ln -sfn ${versioned_install_name} ${remote_symlink}"
 }
 
 patch_binary_version_suffix() {
@@ -882,6 +946,15 @@ for arg in "$@"; do
       ;;
     --fast-release-build)
       FAST_RELEASE_BUILD="true"
+      ;;
+    --no-deploy-remote)
+      DEPLOY_REMOTE="false"
+      ;;
+    --deploy-host=*)
+      DEPLOY_HOST="${arg#*=}"
+      ;;
+    --deploy-dir=*)
+      DEPLOY_DIR="${arg#*=}"
       ;;
     --build-env=*)
       BUILD_ENV="${arg#*=}"
@@ -1141,6 +1214,7 @@ echo "Binary: ${bin_path}"
 echo "Description: ${bin_desc}"
 if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   validate_pi3_abi_compat "${bin_path}"
+  deploy_remote_binary "${bin_path}" "${DEPLOY_HOST}" "${DEPLOY_DIR}"
 fi
 
 artifact_version="${version}"
