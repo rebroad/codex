@@ -17,7 +17,7 @@ RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
 RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
 ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-${REPO_DIR}/tmp/armv7-cache}"
-DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:3}"
+DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:4}"
 # Docker's default bridge DNS has been flaky here; host networking keeps apt/rustup working.
 DOCKER_NETWORK_MODE="${DOCKER_NETWORK_MODE:-host}"
 PUBLISH_GITHUB="false"
@@ -130,7 +130,7 @@ array_has_env_key() {
 append_default_build_accel_env() {
   local -n cargo_env_ref="$1"
 
-  if ! array_has_env_key cargo_env_ref "RUSTFLAGS" && command -v ld.lld >/dev/null 2>&1; then
+  if ! array_has_env_key cargo_env_ref "RUSTFLAGS" && can_use_lld_linker; then
     local rustflags_value="${RUSTFLAGS:-}"
     if [[ "${rustflags_value}" != *"-fuse-ld=lld"* ]]; then
       if [[ -n "${rustflags_value}" ]]; then
@@ -140,6 +140,33 @@ append_default_build_accel_env() {
       cargo_env_ref+=(RUSTFLAGS="${rustflags_value}")
     fi
   fi
+}
+
+can_use_lld_linker() {
+  local probe_src probe_bin cc_cmd
+
+  if ! command -v ld.lld >/dev/null 2>&1; then
+    return 1
+  fi
+
+  cc_cmd="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
+  if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  probe_src="$(mktemp /var/tmp/codex-armv7-lld-probe-src.XXXXXX.c)"
+  probe_bin="$(mktemp /var/tmp/codex-armv7-lld-probe-bin.XXXXXX)"
+  cat > "${probe_src}" <<'EOF'
+int main(void) { return 0; }
+EOF
+
+  if "${cc_cmd}" -fuse-ld=lld "${probe_src}" -o "${probe_bin}" >/dev/null 2>&1; then
+    rm -f "${probe_src}" "${probe_bin}"
+    return 0
+  fi
+
+  rm -f "${probe_src}" "${probe_bin}"
+  return 1
 }
 
 resolve_cargo_target_dir() {
@@ -301,6 +328,8 @@ ensure_rusty_v8_source_repo_for_version() {
 ensure_armv7_cross_packages() {
   local -a packages
   packages=(
+    binutils
+    binutils-arm-linux-gnueabihf
     gcc-arm-linux-gnueabihf
     g++-arm-linux-gnueabihf
     libssl-dev:armhf
@@ -482,7 +511,8 @@ RUN printf '%s\n' \
  && dpkg --add-architecture armhf \
  && apt-get -o Acquire::Check-Valid-Until=false update -y \
  && apt-get install -y --no-install-recommends \
-    ca-certificates curl git python3 file pkg-config gcc g++ \
+    ca-certificates curl git python3 file pkg-config gcc g++ binutils \
+    binutils-arm-linux-gnueabihf \
     gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
     lld \
     libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf \
@@ -609,7 +639,7 @@ run_in_docker_buster() {
           > /etc/apt/sources.list; \
         dpkg --add-architecture armhf; \
         apt-get -o Acquire::Check-Valid-Until=false update -y; \
-        apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf lld libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
+        apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ binutils binutils-arm-linux-gnueabihf gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf lld libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
       cargo_home=\"\${CARGO_HOME:-/root/.cargo}\"; \
       if [[ ! -x \"\${cargo_home}/bin/rustup\" || ! -x \"\${cargo_home}/bin/cargo\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain \"${TOOLCHAIN}\"; fi; \
