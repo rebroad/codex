@@ -17,7 +17,7 @@ RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
 RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
 RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
 ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-${REPO_DIR}/tmp/armv7-cache}"
-DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:4}"
+DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:6}"
 # Docker's default bridge DNS has been flaky here; host networking keeps apt/rustup working.
 DOCKER_NETWORK_MODE="${DOCKER_NETWORK_MODE:-host}"
 PUBLISH_GITHUB="false"
@@ -36,12 +36,18 @@ PATCHED_VERSION_SUFFIX=""
 BUILD_VERSION_SUFFIX_FIXED="${CODEX_BUILD_VERSION_SUFFIX_FIXED:-}"
 BUILD_JOBS="${CARGO_BUILD_JOBS:-}"
 FAST_RELEASE_BUILD="${FAST_RELEASE_BUILD:-false}"
-REQUIRE_LLD="true"
+REQUIRE_NON_GNU_LINKER="true"
 BENCHMARK_LINKERS="false"
 BENCHMARK_REPETITIONS=1
+BENCHMARK_RUSTUP_HOME_OVERRIDE="${CODEX_ARMV7_BENCHMARK_RUSTUP_HOME:-}"
+BENCHMARK_CARGO_HOME_OVERRIDE="${CODEX_ARMV7_BENCHMARK_CARGO_HOME:-}"
 LINKER_CAPTURE_ONLY="${CODEX_ARMV7_LINKER_CAPTURE_ONLY:-false}"
 LINKER_CAPTURE_LOG="${ARMV7_CACHE_DIR}/linker-invocations.log"
 LINKER_CAPTURE_DONE_FILE="${ARMV7_CACHE_DIR}/linker-capture.done"
+LINKER_CAPTURE_SYSROOT_DIR="${ARMV7_CACHE_DIR}/benchmark-sysroot"
+MOLD_VERSION="${MOLD_VERSION:-2.37.1}"
+MOLD_BUNDLE_DIR="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux"
+MOLD_BUNDLE_URL="https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -98,7 +104,7 @@ Options:
   --no-deploy-remote    Skip default deploy to pi3:~/bin
   --deploy-host=<host>  Remote SSH host for post-build deploy (default: pi3)
   --deploy-dir=<path>   Remote install dir for versioned binary + symlink (default: ~/bin)
-  --allow-gnu-ld        Allow falling back to the slower non-lld linker
+  --allow-gnu-ld        Allow falling back to GNU ld if mold/lld are unavailable
   -h, --help            Show this help
 EOF
 }
@@ -106,6 +112,32 @@ EOF
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+ensure_bundled_mold() {
+  local archive_path extract_parent
+
+  if [[ -x "${MOLD_BUNDLE_DIR}/bin/mold" && -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
+    return 0
+  fi
+
+  require_cmd curl
+  require_cmd tar
+  mkdir -p "${ARMV7_CACHE_DIR}"
+  archive_path="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
+  extract_parent="${ARMV7_CACHE_DIR}"
+
+  if [[ ! -f "${archive_path}" ]]; then
+    echo "Fetching bundled mold ${MOLD_VERSION}..."
+    curl -L --fail --output "${archive_path}" "${MOLD_BUNDLE_URL}"
+  fi
+
+  rm -rf "${MOLD_BUNDLE_DIR}"
+  tar -xf "${archive_path}" -C "${extract_parent}"
+  if [[ ! -x "${MOLD_BUNDLE_DIR}/bin/mold" || ! -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
+    echo "Bundled mold extraction failed: ${MOLD_BUNDLE_DIR}/bin/mold missing." >&2
     exit 1
   fi
 }
@@ -138,20 +170,71 @@ array_has_env_key() {
 
 append_default_build_accel_env() {
   local -n cargo_env_ref="$1"
+  local preferred_linker
+  local mold_mode
 
-  if ! array_has_env_key cargo_env_ref "RUSTFLAGS" && can_use_lld_linker; then
-    local rustflags_value="${RUSTFLAGS:-}"
-    if [[ "${rustflags_value}" != *"-fuse-ld=lld"* ]]; then
-      if [[ -n "${rustflags_value}" ]]; then
-        rustflags_value="${rustflags_value} "
-      fi
-      rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=lld"
-      if [[ -n "${BUILD_JOBS}" ]]; then
-        rustflags_value="${rustflags_value} -C link-arg=-Wl,--threads=${BUILD_JOBS}"
-      fi
-      cargo_env_ref+=(RUSTFLAGS="${rustflags_value}")
-    fi
+  preferred_linker="$(select_preferred_linker)"
+  if [[ -z "${preferred_linker}" ]]; then
+    return 0
   fi
+
+  if ! array_has_env_key cargo_env_ref "RUSTFLAGS"; then
+    local rustflags_value="${RUSTFLAGS:-}"
+    if [[ "${preferred_linker}" == "mold" ]]; then
+      mold_mode="$(detect_mold_link_mode)"
+      if [[ "${rustflags_value}" == *"-fuse-ld=mold"* || "${rustflags_value}" == *"-B${mold_mode#b-prefix:}"* ]]; then
+        return 0
+      fi
+    elif [[ "${rustflags_value}" == *"-fuse-ld=${preferred_linker}"* ]]; then
+      return 0
+    fi
+
+    if [[ -n "${rustflags_value}" ]]; then
+      rustflags_value="${rustflags_value} "
+    fi
+    if [[ "${preferred_linker}" == "mold" ]]; then
+      case "${mold_mode}" in
+        fuse-ld)
+          rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=mold"
+          ;;
+        b-prefix:*)
+          rustflags_value="${rustflags_value}-C link-arg=-B${mold_mode#b-prefix:}"
+          ;;
+        *)
+          echo "Unexpected mold link mode: ${mold_mode}" >&2
+          exit 1
+          ;;
+      esac
+    else
+      rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=${preferred_linker}"
+    fi
+    if [[ "${preferred_linker}" == "lld" && -n "${BUILD_JOBS}" ]]; then
+      rustflags_value="${rustflags_value} -C link-arg=-Wl,--threads=${BUILD_JOBS}"
+    fi
+    cargo_env_ref+=(RUSTFLAGS="${rustflags_value}")
+  fi
+}
+
+select_preferred_linker() {
+  if can_use_mold_linker; then
+    echo "mold"
+    return 0
+  fi
+  if can_use_lld_linker; then
+    echo "lld"
+    return 0
+  fi
+  return 1
+}
+
+get_mold_root_dir() {
+  local mold_cmd mold_bin_dir
+  mold_cmd="$(command -v mold 2>/dev/null || true)"
+  if [[ -z "${mold_cmd}" ]]; then
+    return 1
+  fi
+  mold_bin_dir="$(cd -- "$(dirname -- "${mold_cmd}")" && pwd)"
+  cd -- "${mold_bin_dir}/.." && pwd
 }
 
 can_use_lld_linker() {
@@ -161,7 +244,7 @@ can_use_lld_linker() {
     return 1
   fi
 
-  cc_cmd="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
+  cc_cmd="${CODEX_ARMV7_REAL_LINKER:-${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}}"
   if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
     return 1
   fi
@@ -182,13 +265,17 @@ EOF
 }
 
 can_use_mold_linker() {
-  local probe_src probe_bin cc_cmd
+  detect_mold_link_mode >/dev/null 2>&1
+}
+
+detect_mold_link_mode() {
+  local probe_src probe_bin cc_cmd mold_root
 
   if ! command -v mold >/dev/null 2>&1; then
     return 1
   fi
 
-  cc_cmd="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
+  cc_cmd="${CODEX_ARMV7_REAL_LINKER:-${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}}"
   if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
     return 1
   fi
@@ -201,6 +288,15 @@ EOF
 
   if "${cc_cmd}" -fuse-ld=mold "${probe_src}" -o "${probe_bin}" >/dev/null 2>&1; then
     rm -f "${probe_src}" "${probe_bin}"
+    echo "fuse-ld"
+    return 0
+  fi
+
+  mold_root="$(get_mold_root_dir || true)"
+  if [[ -n "${mold_root}" && -x "${mold_root}/libexec/mold/ld" ]] \
+    && "${cc_cmd}" "-B${mold_root}/libexec/mold" "${probe_src}" -o "${probe_bin}" >/dev/null 2>&1; then
+    rm -f "${probe_src}" "${probe_bin}"
+    echo "b-prefix:${mold_root}/libexec/mold"
     return 0
   fi
 
@@ -209,24 +305,28 @@ EOF
 }
 
 ensure_preferred_linker() {
+  local preferred_linker
+
   if [[ "${BENCHMARK_LINKERS}" == "true" || "${LINKER_CAPTURE_ONLY}" == "true" ]]; then
-    echo "Linker benchmark mode enabled; skipping mandatory lld preflight for capture build."
+    echo "Linker benchmark mode enabled; skipping mandatory non-GNU linker preflight for capture build."
     return 0
   fi
 
-  if [[ "${REQUIRE_LLD}" != "true" ]]; then
-    echo "LLD requirement disabled; allowing fallback to non-lld linker."
+  if [[ "${REQUIRE_NON_GNU_LINKER}" != "true" ]]; then
+    echo "Non-GNU linker requirement disabled; allowing fallback to GNU ld."
     return 0
   fi
 
-  if can_use_lld_linker; then
-    echo "Using ld.lld for armv7 linking."
+  preferred_linker="$(select_preferred_linker || true)"
+  if [[ -n "${preferred_linker}" ]]; then
+    echo "Using ${preferred_linker} for armv7 linking."
     return 0
   fi
 
   cat >&2 <<'EOF'
-armv7 builds require a working ld.lld toolchain, but the current environment
-cannot complete a probe link with -fuse-ld=lld.
+armv7 builds require a working non-GNU linker toolchain, but the current
+environment cannot complete a probe link with either -fuse-ld=mold or
+-fuse-ld=lld.
 
 Fix the linker setup and re-run, or use --allow-gnu-ld if you intentionally
 want to fall back to the slower GNU ld path.
@@ -238,15 +338,49 @@ setup_linker_capture() {
   local actual_linker wrapper_path
 
   actual_linker="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
+  export CODEX_ARMV7_REAL_LINKER="${actual_linker}"
   mkdir -p "${ARMV7_CACHE_DIR}"
   : > "${LINKER_CAPTURE_LOG}"
   rm -f "${LINKER_CAPTURE_DONE_FILE}"
+  rm -rf "${LINKER_CAPTURE_SYSROOT_DIR}"
   wrapper_path="${ARMV7_CACHE_DIR}/capture-armv7-linker.sh"
   cat > "${wrapper_path}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+mkdir -p "${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf" "${LINKER_CAPTURE_SYSROOT_DIR}/lib/arm-linux-gnueabihf"
+logged_args=()
+for arg in "\$@"; do
+  if [[ "\${arg}" == /tmp/rustc*/symbols.o && -f "\${arg}" ]]; then
+    captured_symbols="${ARMV7_CACHE_DIR}/\$(basename "\$(dirname "\${arg}")")-symbols.o"
+    cp "\${arg}" "\${captured_symbols}"
+    logged_args+=("\${captured_symbols}")
+  elif [[ "\${arg}" == /tmp/rustc*/raw-dylibs ]]; then
+    captured_raw_dylibs="${ARMV7_CACHE_DIR}/\$(basename "\$(dirname "\${arg}")")-raw-dylibs"
+    rm -rf "\${captured_raw_dylibs}"
+    if [[ -d "\${arg}" ]]; then
+      cp -a "\${arg}" "\${captured_raw_dylibs}"
+    else
+      mkdir -p "\${captured_raw_dylibs}"
+    fi
+    logged_args+=("\${captured_raw_dylibs}")
+  elif [[ "\${arg}" == /usr/lib/arm-linux-gnueabihf || "\${arg}" == //usr/lib/arm-linux-gnueabihf ]]; then
+    cp -fL /usr/lib/arm-linux-gnueabihf/libcap.so "${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf/libcap.so" 2>/dev/null || true
+    cp -fL /usr/lib/arm-linux-gnueabihf/libz.so "${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf/libz.so" 2>/dev/null || true
+    cp -fL /usr/lib/arm-linux-gnueabihf/libssl.so "${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf/libssl.so" 2>/dev/null || true
+    cp -fL /usr/lib/arm-linux-gnueabihf/libcrypto.so "${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf/libcrypto.so" 2>/dev/null || true
+    cp -fL /usr/lib/arm-linux-gnueabihf/libssl.so.1.1 "${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf/libssl.so.1.1" 2>/dev/null || true
+    cp -fL /usr/lib/arm-linux-gnueabihf/libcrypto.so.1.1 "${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf/libcrypto.so.1.1" 2>/dev/null || true
+    logged_args+=("${LINKER_CAPTURE_SYSROOT_DIR}/usr/lib/arm-linux-gnueabihf")
+  elif [[ "\${arg}" == /lib/arm-linux-gnueabihf ]]; then
+    cp -fL /lib/arm-linux-gnueabihf/libcap.so.2 "${LINKER_CAPTURE_SYSROOT_DIR}/lib/arm-linux-gnueabihf/libcap.so.2" 2>/dev/null || true
+    cp -fL /lib/arm-linux-gnueabihf/libz.so.1 "${LINKER_CAPTURE_SYSROOT_DIR}/lib/arm-linux-gnueabihf/libz.so.1" 2>/dev/null || true
+    logged_args+=("${LINKER_CAPTURE_SYSROOT_DIR}/lib/arm-linux-gnueabihf")
+  else
+    logged_args+=("\${arg}")
+  fi
+done
 {
-  printf '%q ' "${actual_linker}" "\$@"
+  printf '%q ' "${actual_linker}" "\${logged_args[@]}"
   printf '\n'
 } >> "${LINKER_CAPTURE_LOG}"
 touch "${LINKER_CAPTURE_DONE_FILE}"
@@ -254,7 +388,7 @@ if [[ "${LINKER_CAPTURE_ONLY}" == "true" ]]; then
   echo "Captured final armv7 link command for benchmark; skipping actual link." >&2
   exit 86
 fi
-exec "${actual_linker}" "\$@"
+  exec "${actual_linker}" "\$@"
 EOF
   chmod +x "${wrapper_path}"
   export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="${wrapper_path}"
@@ -283,11 +417,23 @@ run_linker_benchmark_variant() {
     cmd_ref[output_idx]="${tmp_output}"
     local start_ns end_ns
     start_ns="$(date +%s%N)"
-    "${cmd_ref[@]}" >/dev/null 2>&1
+    set +e
+    local stderr_log
+    stderr_log="$(mktemp /var/tmp/codex-link-bench-${label}.stderr.XXXXXX)"
+    "${cmd_ref[@]}" >/dev/null 2>"${stderr_log}"
+    local status=$?
+    set -e
     end_ns="$(date +%s%N)"
+    if (( status != 0 )); then
+      echo "benchmark ${label} failed with status ${status}" >&2
+      sed -n '1,20p' "${stderr_log}" >&2
+      echo "Full benchmark stderr preserved at ${stderr_log}" >&2
+      rm -f "${tmp_output}"
+      return "${status}"
+    fi
     elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
     total_ms=$((total_ms + elapsed_ms))
-    rm -f "${tmp_output}"
+    rm -f "${tmp_output}" "${stderr_log}"
     echo "benchmark ${label} run ${run}/${runs}: ${elapsed_ms} ms"
   done
 
@@ -300,6 +446,7 @@ benchmark_linkers() {
   local arg
   local have_lld="false"
   local have_mold="false"
+  local mold_mode
 
   if [[ ! -s "${LINKER_CAPTURE_LOG}" ]]; then
     echo "Skipping linker benchmark; no captured link command at ${LINKER_CAPTURE_LOG}." >&2
@@ -315,10 +462,18 @@ benchmark_linkers() {
   for arg in "${!base_cmd[@]}"; do
     if [[ "${base_cmd[arg]}" == /work/codex/* ]]; then
       base_cmd[arg]="${REPO_DIR}${base_cmd[arg]#/work/codex}"
+    elif [[ "${base_cmd[arg]}" == -B/rustup-home/* ]]; then
+      base_cmd[arg]="-B${BENCHMARK_RUSTUP_HOME_OVERRIDE:-${RUSTUP_HOME:-${HOME}/.rustup}}${base_cmd[arg]#-B/rustup-home}"
+    elif [[ "${base_cmd[arg]}" == -L/rustup-home/* ]]; then
+      base_cmd[arg]="-L${BENCHMARK_RUSTUP_HOME_OVERRIDE:-${RUSTUP_HOME:-${HOME}/.rustup}}${base_cmd[arg]#-L/rustup-home}"
+    elif [[ "${base_cmd[arg]}" == -B/cargo-home/* ]]; then
+      base_cmd[arg]="-B${BENCHMARK_CARGO_HOME_OVERRIDE:-${CARGO_HOME:-${HOME}/.cargo}}${base_cmd[arg]#-B/cargo-home}"
+    elif [[ "${base_cmd[arg]}" == -L/cargo-home/* ]]; then
+      base_cmd[arg]="-L${BENCHMARK_CARGO_HOME_OVERRIDE:-${CARGO_HOME:-${HOME}/.cargo}}${base_cmd[arg]#-L/cargo-home}"
     elif [[ "${base_cmd[arg]}" == /rustup-home/* ]]; then
-      base_cmd[arg]="${RUSTUP_HOME:-${HOME}/.rustup}${base_cmd[arg]#/rustup-home}"
+      base_cmd[arg]="${BENCHMARK_RUSTUP_HOME_OVERRIDE:-${RUSTUP_HOME:-${HOME}/.rustup}}${base_cmd[arg]#/rustup-home}"
     elif [[ "${base_cmd[arg]}" == /cargo-home/* ]]; then
-      base_cmd[arg]="${CARGO_HOME:-${HOME}/.cargo}${base_cmd[arg]#/cargo-home}"
+      base_cmd[arg]="${BENCHMARK_CARGO_HOME_OVERRIDE:-${CARGO_HOME:-${HOME}/.cargo}}${base_cmd[arg]#/cargo-home}"
     fi
   done
 
@@ -347,7 +502,19 @@ benchmark_linkers() {
 
   if can_use_mold_linker; then
     have_mold="true"
-    mold_cmd+=(-fuse-ld=mold)
+    mold_mode="$(detect_mold_link_mode)"
+    case "${mold_mode}" in
+      fuse-ld)
+        mold_cmd+=(-fuse-ld=mold)
+        ;;
+      b-prefix:*)
+        mold_cmd+=("-B${mold_mode#b-prefix:}")
+        ;;
+      *)
+        echo "Unexpected mold link mode during benchmark: ${mold_mode}" >&2
+        return 1
+        ;;
+    esac
   fi
 
   echo "Benchmarking final link command from ${LINKER_CAPTURE_LOG}..."
@@ -749,6 +916,7 @@ run_in_docker_buster() {
   local -a forwarded_args docker_cmd
   local container_image="${DOCKER_BUSTER_IMAGE}"
   local container_rusty_v8_path=""
+  local container_mold_path="/opt/codex-mold"
   local container_cargo_target_dir
   local container_uid container_gid
   local docker_cargo_home="${ARMV7_CACHE_DIR}/docker-cargo-home"
@@ -781,6 +949,8 @@ run_in_docker_buster() {
     )
     maybe_user_args=(--user "${container_uid}:${container_gid}")
   fi
+
+  ensure_bundled_mold
 
   forwarded_args=(
     "--${PROFILE}"
@@ -857,6 +1027,7 @@ run_in_docker_buster() {
     -e CARGO_TARGET_DIR="${container_cargo_target_dir}"
     "${maybe_cache_mount[@]}"
     -v "${REPO_DIR}:/work/codex"
+    -v "${MOLD_BUNDLE_DIR}:${container_mold_path}:ro"
     "${maybe_mount[@]}"
     -w /work/codex
     "${container_image}"
@@ -871,6 +1042,7 @@ run_in_docker_buster() {
         apt-get -o Acquire::Check-Valid-Until=false update -y; \
         apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ binutils binutils-arm-linux-gnueabihf gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf lld libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
+      export PATH=\"${container_mold_path}/bin:\${PATH}\"; \
       cargo_home=\"\${CARGO_HOME:-/root/.cargo}\"; \
       if [[ ! -x \"\${cargo_home}/bin/rustup\" || ! -x \"\${cargo_home}/bin/cargo\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain \"${TOOLCHAIN}\"; fi; \
       if [[ -f \"\${cargo_home}/env\" ]]; then \
@@ -897,6 +1069,8 @@ run_in_docker_buster() {
     fi
   fi
   if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+    BENCHMARK_RUSTUP_HOME_OVERRIDE="${docker_rustup_home}"
+    BENCHMARK_CARGO_HOME_OVERRIDE="${docker_cargo_home}"
     benchmark_linkers
   fi
 
@@ -1224,7 +1398,7 @@ for arg in "$@"; do
       BENCHMARK_REPETITIONS="${arg#*=}"
       ;;
     --allow-gnu-ld)
-      REQUIRE_LLD="false"
+      REQUIRE_NON_GNU_LINKER="false"
       ;;
     --no-deploy-remote)
       DEPLOY_REMOTE="false"
@@ -1416,7 +1590,8 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
 fi
 
-cargo_args=(+"${TOOLCHAIN}" build -p codex-cli --locked --target "${TARGET}")
+cargo_use_locked="true"
+cargo_args=(+"${TOOLCHAIN}" build -p codex-cli --target "${TARGET}")
 if [[ "${PROFILE}" == "release" ]]; then
   cargo_args+=(--release)
 fi
@@ -1430,6 +1605,10 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
     --config
     "patch.crates-io.v8.path=\"${patched_v8_dir}\""
   )
+  cargo_use_locked="false"
+fi
+if [[ "${cargo_use_locked}" == "true" ]]; then
+  cargo_args+=(--locked)
 fi
 
 echo "Building codex-cli (${PROFILE}) for ${TARGET}..."
@@ -1438,7 +1617,7 @@ echo "Using Cargo build jobs: ${BUILD_JOBS}"
 if [[ "${PROFILE}" == "release" && "${FAST_RELEASE_BUILD}" == "true" ]]; then
   echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
 fi
-build_log="$(mktemp)"
+build_log="$(mktemp /var/tmp/build_armv7.cargo.XXXXXX)"
 cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
 if [[ -n "${BUILD_JOBS}" ]]; then
   cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
@@ -1451,8 +1630,13 @@ if [[ "${PROFILE}" == "release" && "${FAST_RELEASE_BUILD}" == "true" ]]; then
 fi
 append_default_build_accel_env cargo_env
 set +e
-env "${cargo_env[@]}" cargo "${cargo_args[@]}" 2>&1 | tee "${build_log}"
-status=${PIPESTATUS[0]}
+if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+  env "${cargo_env[@]}" cargo "${cargo_args[@]}" >"${build_log}" 2>&1
+  status=$?
+else
+  env "${cargo_env[@]}" cargo "${cargo_args[@]}" 2>&1 | tee "${build_log}"
+  status=${PIPESTATUS[0]}
+fi
 set -e
 if (( status != 0 )); then
   if [[ "${BENCHMARK_LINKERS}" == "true" && -f "${LINKER_CAPTURE_DONE_FILE}" ]]; then
@@ -1461,7 +1645,14 @@ if (( status != 0 )); then
     benchmark_linkers
     exit 0
   fi
-  if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
+  if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+    echo "Linker benchmark mode did not capture a final link command before failure." >&2
+    echo "Last 40 lines from ${build_log}:" >&2
+    tail -n 40 "${build_log}" >&2 || true
+    echo "Full Cargo log preserved at ${build_log}" >&2
+  fi
+  if [[ "${cargo_use_locked}" == "true" ]] \
+    && grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build failed; retrying without --locked..."
     cargo_args=(+"${TOOLCHAIN}" build -p codex-cli --target "${TARGET}")
     if [[ "${PROFILE}" == "release" ]]; then
@@ -1474,16 +1665,31 @@ if (( status != 0 )); then
       )
     fi
     set +e
-    env "${cargo_env[@]}" cargo "${cargo_args[@]}"
-    status=$?
+    if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+      env "${cargo_env[@]}" cargo "${cargo_args[@]}" >"${build_log}" 2>&1
+      status=$?
+    else
+      env "${cargo_env[@]}" cargo "${cargo_args[@]}"
+      status=$?
+    fi
     set -e
     if [[ "${BENCHMARK_LINKERS}" == "true" && -f "${LINKER_CAPTURE_DONE_FILE}" ]]; then
       echo "Captured final link command for benchmark; skipping artifact build."
       benchmark_linkers
       exit 0
     fi
+    if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+      echo "Linker benchmark mode did not capture a final link command before failure." >&2
+      echo "Last 40 lines from ${build_log}:" >&2
+      tail -n 40 "${build_log}" >&2 || true
+      echo "Full Cargo log preserved at ${build_log}" >&2
+    fi
   else
-    rm -f "${build_log}"
+    if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+      echo "Full Cargo log preserved at ${build_log}" >&2
+    else
+      rm -f "${build_log}"
+    fi
     exit "${status}"
   fi
 fi
