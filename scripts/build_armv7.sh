@@ -620,6 +620,32 @@ resolve_versioned_install_name_from_binary() {
   echo "codex-${normalized_version}"
 }
 
+normalize_version_for_install_name() {
+  local full_version="$1"
+  local normalized_version
+
+  normalized_version="${full_version#v}"
+  normalized_version="${normalized_version#0.}"
+  if [[ -z "${normalized_version}" ]]; then
+    echo "Unable to normalize version '${full_version}'" >&2
+    return 1
+  fi
+
+  echo "codex-${normalized_version}"
+}
+
+resolve_versioned_install_name_for_build() {
+  local version="$1"
+  local resolved_suffix="$2"
+  local full_version="${version}"
+
+  if [[ -n "${resolved_suffix}" ]]; then
+    full_version="${full_version}-${resolved_suffix}"
+  fi
+
+  normalize_version_for_install_name "${full_version}"
+}
+
 resolve_v8_crate_version() {
   awk '
     BEGIN { in_pkg=0; name=""; ver=""; found=0 }
@@ -860,7 +886,7 @@ run_in_docker_buster() {
   )
   "${docker_cmd[@]}"
 
-  if [[ "${DEPLOY_REMOTE}" == "true" ]]; then
+  if [[ "${DEPLOY_REMOTE}" == "true" && "${BENCHMARK_LINKERS}" != "true" ]]; then
     local host_target_dir host_bin_path
     host_target_dir="$(resolve_cargo_target_dir)"
     host_bin_path="${host_target_dir}/${TARGET}/${PROFILE}/codex"
@@ -976,13 +1002,19 @@ deploy_remote_binary() {
   local remote_host="$2"
   local remote_dir="$3"
   local versioned_install_name remote_versioned_bin remote_symlink remote_tmp
+  local version resolved_suffix
 
   if [[ "${DEPLOY_REMOTE}" != "true" ]]; then
     return 0
   fi
 
   require_cmd ssh
-  versioned_install_name="$(resolve_versioned_install_name_from_binary "${bin_path}")"
+  version="$(resolve_codex_version)"
+  resolved_suffix="${PATCHED_VERSION_SUFFIX}"
+  if [[ -z "${resolved_suffix}" ]]; then
+    resolved_suffix="${BUILD_VERSION_SUFFIX_FIXED}"
+  fi
+  versioned_install_name="$(resolve_versioned_install_name_for_build "${version}" "${resolved_suffix}")"
   remote_versioned_bin="${remote_dir%/}/${versioned_install_name}"
   remote_symlink="${remote_dir%/}/codex"
   remote_tmp="${remote_dir%/}/.codex.new.$$"
