@@ -37,6 +37,10 @@ BUILD_VERSION_SUFFIX_FIXED="${CODEX_BUILD_VERSION_SUFFIX_FIXED:-}"
 BUILD_JOBS="${CARGO_BUILD_JOBS:-}"
 FAST_RELEASE_BUILD="${FAST_RELEASE_BUILD:-false}"
 REQUIRE_LLD="true"
+BENCHMARK_LINKERS="false"
+BENCHMARK_REPETITIONS=1
+LINKER_CAPTURE_ONLY="${CODEX_ARMV7_LINKER_CAPTURE_ONLY:-false}"
+LINKER_CAPTURE_LOG="${ARMV7_CACHE_DIR}/linker-invocations.log"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -53,7 +57,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--benchmark-linkers[=N]] [--build-env=<auto|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
 
 Build codex-cli with the same core armv7 environment as release CI:
 - prebuilt rusty_v8 archive + binding
@@ -65,6 +69,8 @@ Options:
   --target=<triple>     Override target triple (default: armv7-unknown-linux-gnueabihf)
   --jobs=N              Set Cargo build parallelism (default: all detected CPUs)
   --fast-release-build  Use local faster release overrides (thin LTO, codegen-units=16)
+  --benchmark-linkers   Benchmark final codex link with lld and mold
+  --benchmark-linkers=N Repeat each linker benchmark N times (default: 1)
   --build-env=<mode>    Build environment mode:
                         auto (default): use docker-buster for armv7 unless host is buster
                         docker-buster: force Debian buster container build
@@ -174,6 +180,33 @@ EOF
   return 1
 }
 
+can_use_mold_linker() {
+  local probe_src probe_bin cc_cmd
+
+  if ! command -v mold >/dev/null 2>&1; then
+    return 1
+  fi
+
+  cc_cmd="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
+  if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  probe_src="$(mktemp /var/tmp/codex-armv7-mold-probe-src.XXXXXX.c)"
+  probe_bin="$(mktemp /var/tmp/codex-armv7-mold-probe-bin.XXXXXX)"
+  cat > "${probe_src}" <<'EOF'
+int main(void) { return 0; }
+EOF
+
+  if "${cc_cmd}" -fuse-ld=mold "${probe_src}" -o "${probe_bin}" >/dev/null 2>&1; then
+    rm -f "${probe_src}" "${probe_bin}"
+    return 0
+  fi
+
+  rm -f "${probe_src}" "${probe_bin}"
+  return 1
+}
+
 ensure_preferred_linker() {
   if [[ "${REQUIRE_LLD}" != "true" ]]; then
     echo "LLD requirement disabled; allowing fallback to non-lld linker."
@@ -193,6 +226,129 @@ Fix the linker setup and re-run, or use --allow-gnu-ld if you intentionally
 want to fall back to the slower GNU ld path.
 EOF
   exit 1
+}
+
+setup_linker_capture() {
+  local actual_linker wrapper_path
+
+  actual_linker="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
+  mkdir -p "${ARMV7_CACHE_DIR}"
+  : > "${LINKER_CAPTURE_LOG}"
+  wrapper_path="${ARMV7_CACHE_DIR}/capture-armv7-linker.sh"
+  cat > "${wrapper_path}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+{
+  printf '%q ' "${actual_linker}" "\$@"
+  printf '\n'
+} >> "${LINKER_CAPTURE_LOG}"
+exec "${actual_linker}" "\$@"
+EOF
+  chmod +x "${wrapper_path}"
+  export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="${wrapper_path}"
+}
+
+run_linker_benchmark_variant() {
+  local label="$1"
+  local -n cmd_ref="$2"
+  local runs="$3"
+  local total_ms=0
+  local run elapsed_ms tmp_output output_idx=-1
+
+  for ((run = 0; run < ${#cmd_ref[@]} - 1; run++)); do
+    if [[ "${cmd_ref[run]}" == "-o" ]]; then
+      output_idx=$((run + 1))
+      break
+    fi
+  done
+  if (( output_idx < 0 )); then
+    echo "Skipping ${label} benchmark; captured link command lacks -o output." >&2
+    return 1
+  fi
+
+  for ((run = 1; run <= runs; run++)); do
+    tmp_output="$(mktemp /var/tmp/codex-link-bench-${label}.XXXXXX)"
+    cmd_ref[output_idx]="${tmp_output}"
+    local start_ns end_ns
+    start_ns="$(date +%s%N)"
+    "${cmd_ref[@]}" >/dev/null 2>&1
+    end_ns="$(date +%s%N)"
+    elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+    total_ms=$((total_ms + elapsed_ms))
+    rm -f "${tmp_output}"
+    echo "benchmark ${label} run ${run}/${runs}: ${elapsed_ms} ms"
+  done
+
+  echo "benchmark ${label} avg: $((total_ms / runs)) ms"
+}
+
+benchmark_linkers() {
+  local command_line
+  local -a base_cmd lld_cmd mold_cmd
+  local arg
+  local have_lld="false"
+  local have_mold="false"
+
+  if [[ ! -s "${LINKER_CAPTURE_LOG}" ]]; then
+    echo "Skipping linker benchmark; no captured link command at ${LINKER_CAPTURE_LOG}." >&2
+    return 1
+  fi
+
+  command_line="$(tail -n 1 "${LINKER_CAPTURE_LOG}")"
+  eval "base_cmd=( ${command_line} )"
+  if [[ ${#base_cmd[@]} -eq 0 ]]; then
+    echo "Skipping linker benchmark; failed to parse captured link command." >&2
+    return 1
+  fi
+  for arg in "${!base_cmd[@]}"; do
+    if [[ "${base_cmd[arg]}" == /work/codex/* ]]; then
+      base_cmd[arg]="${REPO_DIR}${base_cmd[arg]#/work/codex}"
+    fi
+  done
+
+  lld_cmd=("${base_cmd[0]}")
+  mold_cmd=("${base_cmd[0]}")
+  for arg in "${base_cmd[@]:1}"; do
+    case "${arg}" in
+      -fuse-ld=*|-B*)
+        ;;
+      -Wl,--threads=*)
+        ;;
+      *)
+        lld_cmd+=("${arg}")
+        mold_cmd+=("${arg}")
+        ;;
+    esac
+  done
+
+  if can_use_lld_linker; then
+    have_lld="true"
+    lld_cmd+=(-fuse-ld=lld)
+    if [[ -n "${BUILD_JOBS}" ]]; then
+      lld_cmd+=("-Wl,--threads=${BUILD_JOBS}")
+    fi
+  fi
+
+  if can_use_mold_linker; then
+    have_mold="true"
+    mold_cmd+=(-fuse-ld=mold)
+  fi
+
+  echo "Benchmarking final link command from ${LINKER_CAPTURE_LOG}..."
+  if [[ "${CODEX_ARMV7_IN_DOCKER:-}" == "1" ]]; then
+    echo "Skipping linker benchmark inside Docker; outer host will replay the captured link command."
+    return 0
+  fi
+  if [[ "${have_lld}" == "true" ]]; then
+    run_linker_benchmark_variant "lld" lld_cmd "${BENCHMARK_REPETITIONS}"
+  else
+    echo "Skipping lld benchmark; lld is unavailable in this environment." >&2
+  fi
+  if [[ "${have_mold}" == "true" ]]; then
+    run_linker_benchmark_variant "mold" mold_cmd "${BENCHMARK_REPETITIONS}"
+  else
+    echo "Skipping mold benchmark; mold is unavailable in this environment." >&2
+  fi
 }
 
 resolve_cargo_target_dir() {
@@ -601,6 +757,9 @@ run_in_docker_buster() {
   if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
     forwarded_args+=(--fast-release-build)
   fi
+  if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+    forwarded_args+=("--benchmark-linkers=${BENCHMARK_REPETITIONS}")
+  fi
   forwarded_args+=(--no-deploy-remote)
   if [[ "${BINARY_ONLY}" == "true" ]]; then
     forwarded_args+=(--binary-only)
@@ -691,6 +850,9 @@ run_in_docker_buster() {
     else
       echo "Skipping remote deploy; expected binary not found at ${host_bin_path}" >&2
     fi
+  fi
+  if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+    benchmark_linkers
   fi
 
   if [[ "${PUBLISH_GITHUB}" == "true" ]]; then
@@ -1003,6 +1165,13 @@ for arg in "$@"; do
     --fast-release-build)
       FAST_RELEASE_BUILD="true"
       ;;
+    --benchmark-linkers)
+      BENCHMARK_LINKERS="true"
+      ;;
+    --benchmark-linkers=*)
+      BENCHMARK_LINKERS="true"
+      BENCHMARK_REPETITIONS="${arg#*=}"
+      ;;
     --allow-gnu-ld)
       REQUIRE_LLD="false"
       ;;
@@ -1073,6 +1242,10 @@ if [[ -n "${BUILD_JOBS}" ]] && ! [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --jobs value: ${BUILD_JOBS} (must be a positive integer)." >&2
   exit 1
 fi
+if [[ -n "${BENCHMARK_REPETITIONS}" ]] && ! [[ "${BENCHMARK_REPETITIONS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --benchmark-linkers value: ${BENCHMARK_REPETITIONS} (must be a positive integer)." >&2
+  exit 1
+fi
 if [[ -z "${BUILD_JOBS}" ]]; then
   BUILD_JOBS="$(detect_build_jobs)"
 fi
@@ -1121,6 +1294,9 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   fi
   setup_armv7_pkg_config_env
   ensure_preferred_linker
+  if [[ "${BENCHMARK_LINKERS}" == "true" || "${LINKER_CAPTURE_ONLY}" == "true" ]]; then
+    setup_linker_capture
+  fi
 fi
 
 if [[ -f "${HOME}/.cargo/env" ]]; then
@@ -1292,4 +1468,7 @@ if [[ -n "${artifact_version}" ]]; then
     artifact_dir="${REPO_DIR}/dist/local-armv7/${artifact_version}"
     publish_github_artifacts "${artifact_version}" "${PROFILE}" "${TARGET}" "${artifact_dir}" "${artifact_base}"
   fi
+fi
+if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+  benchmark_linkers
 fi
