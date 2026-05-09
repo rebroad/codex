@@ -873,3 +873,17 @@ fn bundled_models_json_roundtrips() {
         "bundled models.json should contain at least one model"
     );
 }
+
+#[test]
+fn bundled_models_include_gpt_5_4_nano() {
+    let response = crate::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+
+    assert!(
+        response
+            .models
+            .iter()
+            .any(|model| model.slug == "gpt-5.4-nano"),
+        "bundled model catalog should include gpt-5.4-nano"
+    );
+}
