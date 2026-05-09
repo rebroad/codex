@@ -41,6 +41,7 @@ BENCHMARK_LINKERS="false"
 BENCHMARK_REPETITIONS=1
 LINKER_CAPTURE_ONLY="${CODEX_ARMV7_LINKER_CAPTURE_ONLY:-false}"
 LINKER_CAPTURE_LOG="${ARMV7_CACHE_DIR}/linker-invocations.log"
+LINKER_CAPTURE_DONE_FILE="${ARMV7_CACHE_DIR}/linker-capture.done"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -208,6 +209,11 @@ EOF
 }
 
 ensure_preferred_linker() {
+  if [[ "${BENCHMARK_LINKERS}" == "true" || "${LINKER_CAPTURE_ONLY}" == "true" ]]; then
+    echo "Linker benchmark mode enabled; skipping mandatory lld preflight for capture build."
+    return 0
+  fi
+
   if [[ "${REQUIRE_LLD}" != "true" ]]; then
     echo "LLD requirement disabled; allowing fallback to non-lld linker."
     return 0
@@ -234,6 +240,7 @@ setup_linker_capture() {
   actual_linker="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
   mkdir -p "${ARMV7_CACHE_DIR}"
   : > "${LINKER_CAPTURE_LOG}"
+  rm -f "${LINKER_CAPTURE_DONE_FILE}"
   wrapper_path="${ARMV7_CACHE_DIR}/capture-armv7-linker.sh"
   cat > "${wrapper_path}" <<EOF
 #!/usr/bin/env bash
@@ -242,6 +249,11 @@ set -euo pipefail
   printf '%q ' "${actual_linker}" "\$@"
   printf '\n'
 } >> "${LINKER_CAPTURE_LOG}"
+touch "${LINKER_CAPTURE_DONE_FILE}"
+if [[ "${LINKER_CAPTURE_ONLY}" == "true" ]]; then
+  echo "Captured final armv7 link command for benchmark; skipping actual link." >&2
+  exit 86
+fi
 exec "${actual_linker}" "\$@"
 EOF
   chmod +x "${wrapper_path}"
@@ -303,6 +315,10 @@ benchmark_linkers() {
   for arg in "${!base_cmd[@]}"; do
     if [[ "${base_cmd[arg]}" == /work/codex/* ]]; then
       base_cmd[arg]="${REPO_DIR}${base_cmd[arg]#/work/codex}"
+    elif [[ "${base_cmd[arg]}" == /rustup-home/* ]]; then
+      base_cmd[arg]="${RUSTUP_HOME:-${HOME}/.rustup}${base_cmd[arg]#/rustup-home}"
+    elif [[ "${base_cmd[arg]}" == /cargo-home/* ]]; then
+      base_cmd[arg]="${CARGO_HOME:-${HOME}/.cargo}${base_cmd[arg]#/cargo-home}"
     fi
   done
 
@@ -759,6 +775,9 @@ run_in_docker_buster() {
   fi
   if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
     forwarded_args+=("--benchmark-linkers=${BENCHMARK_REPETITIONS}")
+  fi
+  if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+    forwarded_args+=("--allow-gnu-ld")
   fi
   forwarded_args+=(--no-deploy-remote)
   if [[ "${BINARY_ONLY}" == "true" ]]; then
@@ -1295,6 +1314,9 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   setup_armv7_pkg_config_env
   ensure_preferred_linker
   if [[ "${BENCHMARK_LINKERS}" == "true" || "${LINKER_CAPTURE_ONLY}" == "true" ]]; then
+    if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
+      LINKER_CAPTURE_ONLY="true"
+    fi
     setup_linker_capture
   fi
 fi
@@ -1401,6 +1423,12 @@ env "${cargo_env[@]}" cargo "${cargo_args[@]}" 2>&1 | tee "${build_log}"
 status=${PIPESTATUS[0]}
 set -e
 if (( status != 0 )); then
+  if [[ "${BENCHMARK_LINKERS}" == "true" && -f "${LINKER_CAPTURE_DONE_FILE}" ]]; then
+    echo "Captured final link command for benchmark; skipping artifact build."
+    rm -f "${build_log}"
+    benchmark_linkers
+    exit 0
+  fi
   if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build failed; retrying without --locked..."
     cargo_args=(+"${TOOLCHAIN}" build -p codex-cli --target "${TARGET}")
@@ -1413,7 +1441,15 @@ if (( status != 0 )); then
         "patch.crates-io.v8.path=\"${patched_v8_dir}\""
       )
     fi
+    set +e
     env "${cargo_env[@]}" cargo "${cargo_args[@]}"
+    status=$?
+    set -e
+    if [[ "${BENCHMARK_LINKERS}" == "true" && -f "${LINKER_CAPTURE_DONE_FILE}" ]]; then
+      echo "Captured final link command for benchmark; skipping artifact build."
+      benchmark_linkers
+      exit 0
+    fi
   else
     rm -f "${build_log}"
     exit "${status}"

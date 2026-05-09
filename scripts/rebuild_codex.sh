@@ -587,6 +587,13 @@ run_armv7_build() {
   else
     armv7_cmd+=(--full-artifacts)
   fi
+  if [[ -n "${ARMV7_BENCHMARK_LINKERS}" ]]; then
+    if [[ "${ARMV7_BENCHMARK_LINKERS}" == "true" ]]; then
+      armv7_cmd+=(--benchmark-linkers)
+    else
+      armv7_cmd+=("--benchmark-linkers=${ARMV7_BENCHMARK_LINKERS}")
+    fi
+  fi
   if [[ -n "${BUILD_JOBS}" ]]; then
     armv7_cmd+=("--jobs=${BUILD_JOBS}")
   fi
@@ -1244,6 +1251,7 @@ ARMV7_GITHUB_RELEASE_REPO=""
 ARMV7_GITHUB_RELEASE_TAG=""
 ARMV7_STRIP="true"
 ARMV7_BINARY_ONLY="true"
+ARMV7_BENCHMARK_LINKERS=""
 DEBIAN12_ONLY="false"
 DEBIAN12_TARGET="${DEBIAN12_TARGET_DEFAULT}"
 REGEN_SCHEMA="auto"
@@ -1355,6 +1363,12 @@ for arg in "$@"; do
     --armv7-full-artifacts)
       ARMV7_BINARY_ONLY="false"
       ;;
+    --armv7-benchmark-linkers)
+      ARMV7_BENCHMARK_LINKERS="true"
+      ;;
+    --armv7-benchmark-linkers=*)
+      ARMV7_BENCHMARK_LINKERS="${arg#*=}"
+      ;;
     --publish-timeout-minutes=*)
       PUBLISH_TIMEOUT_MINUTES="${arg#*=}"
       ;;
@@ -1451,6 +1465,9 @@ Options:
              Publish only armv7 binary artifact (default; skip tar.gz/.sha256/.json)
   --armv7-full-artifacts
              Publish full armv7 artifact set
+  --armv7-benchmark-linkers[=N]
+             Capture the real final armv7 link command and benchmark lld vs mold;
+             repeat N times (default: 3)
   --no-force-tag
              Do not replace existing tags (default is to replace)
   --fix
