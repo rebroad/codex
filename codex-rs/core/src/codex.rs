@@ -3999,8 +3999,12 @@ impl Session {
         transport_bytes: Option<&codex_api::TransportByteStats>,
     ) {
         if let Some(token_usage) = token_usage {
-            let mut state = self.state.lock().await;
-            state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
+            let is_regional_processing = {
+                let mut state = self.state.lock().await;
+                state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                state.session_configuration.provider.requires_openai_auth
+                    && default_client_residency_requirement().is_some()
+            };
             if let Some(state_db) = self.account_usage_store.as_ref() {
                 let auth = self.services.auth_manager.auth().await;
                 if let Some(auth) = auth
@@ -4026,7 +4030,7 @@ impl Session {
                                 sent_bytes: transport_bytes.map(|value| value.sent),
                                 recv_bytes: transport_bytes.map(|value| value.recv),
                                 is_prewarm: false,
-                                is_regional_processing: self.is_regional_processing_request().await,
+                                is_regional_processing,
                             },
                         )
                         .await
