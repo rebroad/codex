@@ -246,7 +246,7 @@ struct UsageClearCommand {
     #[arg(long = "all-accounts", default_value_t = false)]
     all_accounts: bool,
 
-    /// Skip the interactive confirmation prompt.
+    /// Accepted for compatibility; `usage clear` no longer prompts interactively.
     #[arg(long = "yes", short = 'y', default_value_t = false)]
     yes: bool,
 }
@@ -2111,31 +2111,6 @@ async fn run_usage_clear_command(
         let account_email = auth.as_ref().and_then(|auth| auth.get_account_email());
         Some((account_id, account_email))
     };
-
-    if !clear_command.yes {
-        if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "Refusing to clear usage data without confirmation in a non-interactive shell. Re-run with `--yes`."
-            );
-        }
-
-        let scope = if clear_command.all_accounts {
-            "all accounts".to_string()
-        } else if let Some((_, Some(account_email))) = current_account.as_ref() {
-            format!("the account `{account_email}`")
-        } else {
-            "the current account".to_string()
-        };
-        let provider = config.model_provider_id.as_str();
-        let prompt = format!(
-            "This will clear local usage tracking for {scope} on provider `{provider}` from {}. Continue? [y/N]: ",
-            usage_path.display()
-        );
-        if !confirm(&prompt)? {
-            eprintln!("Usage clear aborted.");
-            return Ok(());
-        }
-    }
 
     let usage_store = codex_state::AccountUsageStore::init_with_estimator_config(
         config.sqlite_home.clone(),

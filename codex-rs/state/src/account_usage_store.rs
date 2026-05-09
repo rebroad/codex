@@ -1016,10 +1016,15 @@ WHERE account_id = ? AND provider = ?
         let same_backend_window = (window_minutes.is_some() || resets_at.is_some())
             && previous_backend_window_minutes == window_minutes
             && previous_backend_resets_at == resets_at;
+        let reset_date_has_passed = previous_backend_resets_at
+            .is_some_and(|previous_resets_at| seen_at.unwrap_or(now) >= previous_resets_at);
+        let backend_percent_dropped = previous_backend_percent
+            .is_some_and(|previous| previous - used_percent > USED_PERCENT_REFUND_EPSILON);
+        let reset_due_to_elapsed_reset_date = reset_date_has_passed && backend_percent_dropped;
         let stale_regression_snapshot = same_backend_window
-            && previous_backend_percent
-                .is_some_and(|previous| previous - used_percent > USED_PERCENT_REFUND_EPSILON)
-            && !(prior_window_was_full && used_percent <= 0.0);
+            && backend_percent_dropped
+            && !(prior_window_was_full && used_percent <= 0.0)
+            && !reset_due_to_elapsed_reset_date;
         if stale_regression_snapshot {
             self.log_usage_event(
                 account_id,
@@ -1187,7 +1192,7 @@ WHERE account_id = ? AND provider = ?
         let suspicious_change = prior_usage.is_some()
             && (window_changed
                 || reset_time_changed
-                || negative_jump
+                || (negative_jump && !reset_due_to_elapsed_reset_date)
                 || (large_jump && !large_positive_jump_plausible));
         if suspicious_change {
             let backend_candidate_confirmed_from_db = prior_usage.as_ref().is_some_and(|row| {
@@ -1323,7 +1328,7 @@ WHERE account_id = ? AND provider = ?
                 ),
             )
             .await;
-            if prior_window_was_full && used_percent <= 0.0 {
+            if reset_due_to_elapsed_reset_date || (prior_window_was_full && used_percent <= 0.0) {
                 self.reset_account_usage_window(
                     account_id,
                     &snapshot,
@@ -1355,7 +1360,7 @@ WHERE account_id = ? AND provider = ?
                 .unwrap_or(true);
 
             (new_snapshot || reset_time_changed) && was_full && now_zero
-        });
+        }) || reset_due_to_elapsed_reset_date;
         let current_percent_int = current_reported_percent_int;
         if negative_jump {
             self.log_usage_event(
@@ -4187,7 +4192,7 @@ WHERE account_id = ? AND provider = ?
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 1.0,
                 window_minutes: Some(10080),
-                resets_at: Some(12345),
+                resets_at: Some(4_102_444_800),
             }),
             credits: None,
             plan_type: None,
@@ -4213,7 +4218,7 @@ WHERE account_id = ? AND provider = ?
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 2.0,
                 window_minutes: Some(10080),
-                resets_at: Some(12345),
+                resets_at: Some(4_102_444_800),
             }),
             ..snapshot.clone()
         };
@@ -4251,7 +4256,7 @@ WHERE account_id = ? AND provider = ?
             secondary: Some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 1.0,
                 window_minutes: Some(10080),
-                resets_at: Some(12345),
+                resets_at: Some(4_102_444_800),
             }),
             ..snapshot
         };
@@ -4321,6 +4326,80 @@ WHERE account_id = ? AND provider = ?
         assert_eq!(total_tokens_after_confirmation, total_tokens_before);
         assert_eq!(last_backend_used_percent_after_confirmation, 2.0);
         assert_eq!(last_reported_percent_after_confirmation, 1);
+    }
+
+    #[tokio::test]
+    async fn account_usage_resets_totals_when_backend_percent_drops_after_reset_date() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            AccountUsageStore::init(home.path().to_path_buf(), "test-provider".to_string())
+                .await
+                .expect("init");
+
+        let usage = TokenUsage {
+            total_tokens: 100,
+            input_tokens: 80,
+            cached_input_tokens: 0,
+            output_tokens: 20,
+            reasoning_output_tokens: 0,
+        };
+        runtime
+            .record_account_token_usage("account-1", &usage, AccountUsageEventMeta::default())
+            .await
+            .expect("record usage");
+
+        let snapshot = RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: Some("Weekly".to_string()),
+            primary: None,
+            secondary: Some(codex_protocol::protocol::RateLimitWindow {
+                used_percent: 50.0,
+                window_minutes: Some(10080),
+                resets_at: Some(12345),
+            }),
+            credits: None,
+            plan_type: None,
+        };
+        runtime
+            .record_account_backend_rate_limit("account-1", &snapshot)
+            .await
+            .expect("record baseline snapshot");
+
+        let reset_snapshot = RateLimitSnapshot {
+            secondary: Some(codex_protocol::protocol::RateLimitWindow {
+                used_percent: 40.0,
+                window_minutes: Some(10080),
+                resets_at: Some(12345),
+            }),
+            ..snapshot
+        };
+        runtime
+            .record_account_backend_rate_limit("account-1", &reset_snapshot)
+            .await
+            .expect("record reset snapshot");
+
+        let row = sqlx::query(
+            r#"
+SELECT
+    total_tokens,
+    last_backend_used_percent
+FROM account_usage
+WHERE account_id = ? AND provider = ?
+            "#,
+        )
+        .bind("account-1")
+        .bind("test-provider")
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("usage row after reset");
+
+        let total_tokens: i64 = row.try_get("total_tokens").expect("total_tokens");
+        let backend_used_percent: f64 = row
+            .try_get("last_backend_used_percent")
+            .expect("backend used");
+
+        assert_eq!(total_tokens, 0);
+        assert_eq!(backend_used_percent, 40.0);
     }
 
     #[tokio::test]
