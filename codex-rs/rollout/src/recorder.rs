@@ -58,9 +58,6 @@ use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path as path_utils;
 
-const CODEX_BUILD_VERSION: &str =
-    concat!(env!("CARGO_PKG_VERSION"), "-000000000000-000000000000");
-
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
 ///
@@ -405,7 +402,7 @@ impl RolloutRecorder {
                         timestamp,
                         cwd: config.cwd().to_path_buf(),
                         originator: originator().value,
-                        cli_version: CODEX_BUILD_VERSION.to_string(),
+                        cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         agent_nickname: source.get_nickname(),
                         agent_role: source.get_agent_role(),
                         agent_path: source.get_agent_path().map(Into::into),
