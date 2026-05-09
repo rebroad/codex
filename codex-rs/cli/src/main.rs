@@ -202,15 +202,17 @@ struct StatusCommand {
     #[arg(long, default_value_t = false)]
     cached: bool,
 
-    /// Inspect a specific interactive thread.
+    /// Inspect a specific thread.
     #[arg(long, value_name = "THREAD_ID", conflicts_with = "last")]
     thread_id: Option<String>,
 
-    /// Inspect the most recently updated interactive thread.
+    /// Inspect the most recently updated matching thread.
     #[arg(long, default_value_t = false, conflicts_with = "thread_id")]
     last: bool,
 
-    /// Emit a compact Telegram-friendly thread status.
+    /// Emit a compact Telegram-friendly thread status. When used without
+    /// `--thread-id`, this selects the most recently updated CLI/VSCode/exec
+    /// thread.
     #[arg(long, default_value_t = false)]
     telegram: bool,
 
@@ -919,6 +921,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 status_options.output_mode.thread_selector = Some(ThreadStatusSelector {
                     thread_id: status_command.thread_id.clone(),
                     last: status_command.last || status_command.telegram,
+                    include_exec: status_command.telegram,
                 });
                 status_options.output_mode.thread_output = Some(if status_command.telegram {
                     ThreadStatusOutputFormat::Telegram
