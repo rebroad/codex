@@ -43,7 +43,7 @@ async fn usage_clear_all_accounts_deletes_default_provider_rows() -> Result<()> 
         .await?;
 
     let mut cmd = codex_command(codex_home.path())?;
-    cmd.args(["usage", "clear", "--all-accounts", "--yes"])
+    cmd.args(["usage", "clear", "--all-accounts"])
         .assert()
         .success()
         .stdout(contains("Cleared usage tracking for all accounts"));
