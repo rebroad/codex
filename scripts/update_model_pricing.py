@@ -7,11 +7,13 @@ import datetime as dt
 import html.parser
 import json
 import pathlib
+import re
 import sys
 import urllib.request
 
 
 DEFAULT_URL = "https://developers.openai.com/api/docs/pricing"
+DEFAULT_MODELS_URL = "https://developers.openai.com/api/docs/models"
 DEFAULT_OUTPUT = pathlib.Path.home() / ".codex" / "model_pricing.json"
 CREDITS_PER_USD = 25.0
 DEFAULT_BUNDLED_PRICING = (
@@ -20,6 +22,11 @@ DEFAULT_BUNDLED_PRICING = (
     / "state"
     / "src"
     / "default_model_pricing.json"
+)
+MODEL_PAGE_URL_PREFIX = "https://developers.openai.com/api/docs/models/"
+MODEL_PAGE_PRICE_RE = re.compile(
+    r"Input\s+\$([0-9.]+)\s+Cached input\s+\$([0-9.]+)\s+Output\s+\$([0-9.]+)",
+    re.IGNORECASE,
 )
 
 
@@ -47,6 +54,22 @@ class PricingHTMLTextExtractor(html.parser.HTMLParser):
 
     def text(self) -> str:
         return " ".join(" ".join(self._parts).split())
+
+
+class ModelsLinkExtractor(html.parser.HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model_slugs: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        for key, value in attrs:
+            if key != "href" or not value:
+                continue
+            slug = model_slug_from_href(value)
+            if slug is not None:
+                self.model_slugs.add(slug)
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,6 +104,12 @@ def normalize_html(html: str) -> str:
     return parser.text()
 
 
+def discover_model_slugs(html: str) -> set[str]:
+    parser = ModelsLinkExtractor()
+    parser.feed(html)
+    return parser.model_slugs
+
+
 def parse_models_from_text(text: str) -> dict[str, dict[str, float]]:
     tokens = text.split()
     models: dict[str, dict[str, float]] = {}
@@ -108,6 +137,24 @@ def parse_models_from_text(text: str) -> dict[str, dict[str, float]]:
     return models
 
 
+def parse_model_page_pricing(text: str) -> dict[str, float] | None:
+    match = MODEL_PAGE_PRICE_RE.search(text)
+    if match is None:
+        return None
+
+    input_usd = parse_usd_token(f"${match.group(1)}")
+    cached_input_usd = parse_usd_token(f"${match.group(2)}")
+    output_usd = parse_usd_token(f"${match.group(3)}")
+    if input_usd is None or cached_input_usd is None or output_usd is None:
+        return None
+
+    return {
+        "input_credits_per_million": input_usd * CREDITS_PER_USD,
+        "cached_input_credits_per_million": cached_input_usd * CREDITS_PER_USD,
+        "output_credits_per_million": output_usd * CREDITS_PER_USD,
+    }
+
+
 def load_template_pricing(output_path: pathlib.Path) -> dict[str, object]:
     template_path = output_path if output_path.exists() else DEFAULT_BUNDLED_PRICING
     return json.loads(template_path.read_text(encoding="utf-8"))
@@ -126,6 +173,19 @@ def parse_usd_token(token: str) -> float | None:
         return float(token[1:])
     except ValueError:
         return None
+
+
+def model_slug_from_href(href: str) -> str | None:
+    if not href.startswith("/api/docs/models/"):
+        return None
+    path = href.removeprefix("/api/docs/models/")
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    path = path.rstrip("/")
+    if not path:
+        return None
+    if any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-." for char in path):
+        return None
+    return path
 
 
 def compatibility_aliases(models: dict[str, dict[str, float]]) -> dict[str, str]:
@@ -156,6 +216,12 @@ def main() -> int:
         print("No pricing rows were parsed from the supplied HTML.", file=sys.stderr)
         return 1
 
+    try:
+        models_html = fetch_html(DEFAULT_MODELS_URL)
+    except Exception as exc:  # pragma: no cover - network fallback path
+        print(f"warning: failed to fetch model catalog for fallback pricing: {exc}", file=sys.stderr)
+        models_html = ""
+
     output_path = pathlib.Path(args.output).expanduser()
     template = load_template_pricing(output_path)
     template_models = template.get("models", {})
@@ -169,6 +235,26 @@ def main() -> int:
                 merged_entry.update(existing_entry)
         merged_entry.update(parsed_entry)
         merged_models[model] = merged_entry
+
+    if models_html:
+        model_slugs = sorted(
+            slug
+            for slug in discover_model_slugs(models_html)
+            if slug.startswith("gpt-") and slug not in merged_models
+        )
+        for slug in model_slugs:
+            model_page_html = fetch_html(f"{MODEL_PAGE_URL_PREFIX}{slug}")
+            model_page_text = normalize_html(model_page_html)
+            parsed_entry = parse_model_page_pricing(model_page_text)
+            if parsed_entry is None:
+                continue
+            merged_entry = {}
+            if isinstance(template_models, dict):
+                existing_entry = template_models.get(slug)
+                if isinstance(existing_entry, dict):
+                    merged_entry.update(existing_entry)
+            merged_entry.update(parsed_entry)
+            merged_models[slug] = merged_entry
 
     merged_aliases = compatibility_aliases(merged_models)
     if isinstance(template_aliases, dict):

@@ -21,6 +21,12 @@
       "output_credits_per_million": 112.5,
       "regional_uplift_multiplier": 1.1
     },
+    "gpt-5.4-nano": {
+      "input_credits_per_million": 5.0,
+      "cached_input_credits_per_million": 0.5,
+      "output_credits_per_million": 31.25,
+      "regional_uplift_multiplier": 1.1
+    },
     "gpt-5.3-codex": {
       "input_credits_per_million": 43.75,
       "cached_input_credits_per_million": 4.375,
