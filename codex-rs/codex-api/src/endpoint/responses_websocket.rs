@@ -5,6 +5,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::common::TransportByteStats;
 use crate::error::ApiError;
+use crate::prompt_debug_http::PromptCaptureSession;
 use crate::prompt_debug_http::backend_capture_append_event;
 use crate::prompt_debug_http::capture_headers_json;
 use crate::prompt_debug_http::prompt_capture_append_input;
@@ -224,6 +225,7 @@ impl ResponsesWebsocketConnection {
         &self,
         request: ResponsesWsRequest,
         connection_reused: bool,
+        capture: Option<PromptCaptureSession>,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -238,7 +240,8 @@ impl ResponsesWebsocketConnection {
         })?;
         let request_json = serde_json::to_string_pretty(&request_body)
             .unwrap_or_else(|_| "<unable to serialize websocket payload>".to_string());
-        let capture = start_prompt_capture("responses_websocket", Some(request_json.as_str()));
+        let capture =
+            capture.or_else(|| start_prompt_capture("responses_websocket", Some(request_json.as_str())));
 
         let current_span = Span::current();
         tokio::spawn(
@@ -314,6 +317,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
+        capture: Option<&PromptCaptureSession>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
         let ws_url = self
@@ -326,7 +330,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         add_auth_headers_to_header_map(&self.auth, &mut headers);
 
         let (stream, server_reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url, headers, turn_state.clone()).await?;
+            connect_websocket(ws_url, headers, turn_state.clone(), capture).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
@@ -357,10 +361,11 @@ async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
+    capture: Option<&PromptCaptureSession>,
 ) -> Result<(WsStream, bool, Option<String>, Option<String>), ApiError> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
-    backend_capture_append_event(serde_json::json!({
+    backend_capture_append_event(capture, serde_json::json!({
         "kind": "websocket_connect_request",
         "transport": "responses_websocket",
         "url": url.as_str(),
@@ -394,7 +399,7 @@ async fn connect_websocket(
                 "successfully connected to websocket: {url}, headers: {:?}",
                 response.headers()
             );
-            backend_capture_append_event(serde_json::json!({
+            backend_capture_append_event(capture, serde_json::json!({
                 "kind": "websocket_connect_response",
                 "transport": "responses_websocket",
                 "url": url.as_str(),
@@ -405,7 +410,7 @@ async fn connect_websocket(
         }
         Err(err) => {
             error!("failed to connect to websocket: {err}, url: {url}");
-            backend_capture_append_event(serde_json::json!({
+            backend_capture_append_event(capture, serde_json::json!({
                 "kind": "websocket_connect_error",
                 "transport": "responses_websocket",
                 "url": url.as_str(),
@@ -582,7 +587,7 @@ async fn run_websocket_response_stream(
         }
     };
     trace!("websocket request: {request_text}");
-    backend_capture_append_event(serde_json::json!({
+    backend_capture_append_event(capture.as_ref(), serde_json::json!({
         "kind": "websocket_outbound_message",
         "transport": "responses_websocket",
         "payload": request_text.clone(),
@@ -638,7 +643,7 @@ async fn run_websocket_response_stream(
                 if let Some(capture) = capture.as_ref() {
                     prompt_capture_append_output(capture, "responses_websocket", &text);
                 }
-                backend_capture_append_event(serde_json::json!({
+                backend_capture_append_event(capture.as_ref(), serde_json::json!({
                     "kind": "websocket_inbound_message",
                     "transport": "responses_websocket",
                     "payload": text.to_string(),
@@ -773,14 +778,14 @@ async fn run_websocket_response_stream(
                 }
             }
             Message::Binary(_) => {
-                backend_capture_append_event(serde_json::json!({
+                backend_capture_append_event(capture.as_ref(), serde_json::json!({
                     "kind": "websocket_inbound_binary",
                     "transport": "responses_websocket",
                 }));
                 return Err(ApiError::Stream("unexpected binary websocket event".into()));
             }
             Message::Close(_) => {
-                backend_capture_append_event(serde_json::json!({
+                backend_capture_append_event(capture.as_ref(), serde_json::json!({
                     "kind": "websocket_inbound_close",
                     "transport": "responses_websocket",
                 }));
