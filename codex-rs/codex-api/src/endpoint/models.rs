@@ -49,6 +49,7 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
                 Self::path(),
                 extra_headers,
                 /*body*/ None,
+                None,
                 |req| {
                     Self::append_client_version_query(req, client_version);
                 },

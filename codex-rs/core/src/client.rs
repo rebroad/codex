@@ -52,6 +52,7 @@ use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::ResponsesWsRequest;
 use codex_api::SseTelemetry;
+use codex_api::PromptCaptureSession;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::build_conversation_headers;
@@ -59,6 +60,7 @@ use codex_api::create_text_param_for_request;
 use codex_api::prompt_debug_http_enabled;
 use codex_api::prompt_debug_http_log;
 use codex_api::set_prompt_debug_http_account_email;
+use codex_api::start_prompt_capture;
 use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
@@ -676,6 +678,7 @@ impl ModelClient {
         api_auth: CoreAuthProvider,
         turn_state: Option<Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
+        capture: Option<&PromptCaptureSession>,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
@@ -694,6 +697,7 @@ impl ModelClient {
                 headers,
                 codex_login::default_client::default_headers(),
                 turn_state,
+                capture,
                 Some(websocket_telemetry),
             ),
         )
@@ -1015,6 +1019,7 @@ impl ModelClientSession {
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
                 /*turn_metadata_header*/ None,
+                /*capture*/ None,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
@@ -1047,6 +1052,7 @@ impl ModelClientSession {
             api_auth,
             turn_metadata_header,
             options,
+            capture,
             auth_context,
             request_route_telemetry,
         } = params;
@@ -1070,6 +1076,7 @@ impl ModelClientSession {
                     api_auth,
                     Some(turn_state),
                     turn_metadata_header,
+                    capture,
                     auth_context,
                     request_route_telemetry,
                 )
@@ -1279,6 +1286,9 @@ impl ModelClientSession {
             if warmup {
                 ws_payload.generate = Some(false);
             }
+            let ws_request_json = serde_json::to_string_pretty(&ws_payload)
+                .unwrap_or_else(|_| "<unable to serialize websocket payload>".to_string());
+            let capture = start_prompt_capture("responses_websocket", Some(ws_request_json.as_str()));
 
             match self
                 .websocket_connection(WebsocketConnectParams {
@@ -1291,6 +1301,7 @@ impl ModelClientSession {
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
                         RESPONSES_ENDPOINT,
                     ),
+                    capture: capture.as_ref(),
                 })
                 .await
             {
@@ -1327,7 +1338,11 @@ impl ModelClientSession {
                 ))
             })?;
             let stream_result = stream_result
-                .stream_request(ws_request, self.websocket_session.connection_reused())
+                .stream_request(
+                    ws_request,
+                    self.websocket_session.connection_reused(),
+                    capture,
+                )
                 .await
                 .map_err(map_api_error)?;
             let (stream, last_request_rx) =
@@ -1726,6 +1741,7 @@ struct WebsocketConnectParams<'a> {
     api_auth: CoreAuthProvider,
     turn_metadata_header: Option<&'a str>,
     options: &'a ApiResponsesOptions,
+    capture: Option<&'a PromptCaptureSession>,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
 }

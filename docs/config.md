@@ -113,7 +113,7 @@ The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`
 `CODEX_BACKEND_CAPTURE_OUTPUT`, `CODEX_BACKEND_CAPTURE_REASONING`, and
 `CODEX_BACKEND_CAPTURE_DIR` can force-enable or override runtime capture settings.
 Capture files include:
-- a full backend traffic stream: `backend_traffic.ndjson`
+- a full backend traffic stream: `<query_id>_backend_traffic.ndjson`
 - query-id scoped files, for example:
 `<query_id>_input.ndjson`,
 `<query_id>_output.ndjson`, and
@@ -128,6 +128,8 @@ If the `capture_dir` path contains `$EMAIL`, Codex replaces it with the
 OpenAI account email used for usage logging. In that mode, prompt-debug
 captures use a per-directory persistent incrementing `query_id`, stored in
 `.query_id_counter`, so query IDs continue increasing across process restarts.
+Each prompt-debug capture is written to its own per-query files rather than
+appending to a shared backend traffic log.
 
 For a one-off run, `codex exec --debug "..."`
 force-enables capture for that invocation using the same backend capture settings
