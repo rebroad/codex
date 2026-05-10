@@ -45,7 +45,13 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         let capture = start_prompt_capture("responses_compact", Some(request_json.as_str()));
         let resp = self
             .session
-            .execute(Method::POST, Self::path(), extra_headers, Some(body))
+            .execute(
+                Method::POST,
+                Self::path(),
+                extra_headers,
+                Some(body),
+                capture.as_ref(),
+            )
             .await?;
         let response_json: serde_json::Value =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;

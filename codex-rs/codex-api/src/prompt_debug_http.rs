@@ -20,7 +20,6 @@ const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT
 const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 const CODEX_BACKEND_CAPTURE_DIR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_DIR";
 const CODEX_PROMPT_DEBUG_HTTP_PREFIX: &str = "[codex backend capture]";
-const BACKEND_TRAFFIC_FILENAME: &str = "backend_traffic.ndjson";
 const EMAIL_PLACEHOLDER: &str = "$EMAIL";
 const QUERY_ID_COUNTER_FILENAME: &str = ".query_id_counter";
 
@@ -39,6 +38,7 @@ pub struct PromptCaptureSession {
     capture_input: bool,
     capture_output: bool,
     capture_reasoning: bool,
+    backend_traffic_path: PathBuf,
     input_path: PathBuf,
     output_path: PathBuf,
     reasoning_path: PathBuf,
@@ -60,6 +60,10 @@ impl PromptCaptureSession {
     pub fn reasoning_path(&self) -> &Path {
         self.reasoning_path.as_path()
     }
+
+    pub fn backend_traffic_path(&self) -> &Path {
+        self.backend_traffic_path.as_path()
+    }
 }
 
 static PROMPT_DEBUG_HTTP_CONFIG: OnceLock<RwLock<PromptDebugHttpConfig>> = OnceLock::new();
@@ -67,7 +71,6 @@ static PROMPT_DEBUG_HTTP_ACCOUNT_EMAIL: OnceLock<RwLock<Option<String>>> = OnceL
 static PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static PROMPT_DEBUG_HTTP_TOOL_USAGE: OnceLock<Mutex<HashMap<PathBuf, ToolUsageStats>>> =
     OnceLock::new();
-static CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static TRAFFIC_EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Default)]
@@ -154,11 +157,6 @@ fn next_traffic_event_id() -> u64 {
     TRAFFIC_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-fn next_capture_id() -> String {
-    let seq = CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    seq.to_string()
-}
-
 fn configured_account_email() -> Option<String> {
     account_email_lock()
         .read()
@@ -166,18 +164,15 @@ fn configured_account_email() -> Option<String> {
         .and_then(|guard| guard.clone())
 }
 
-fn resolve_capture_dir(path: PathBuf) -> (PathBuf, bool) {
+fn resolve_capture_dir(path: PathBuf) -> PathBuf {
     let path_str = path.to_string_lossy();
     if !path_str.contains(EMAIL_PLACEHOLDER) {
-        return (path, false);
+        return path;
     }
     let Some(account_email) = configured_account_email() else {
-        return (path, false);
+        return path;
     };
-    (
-        PathBuf::from(path_str.replace(EMAIL_PLACEHOLDER, account_email.as_str())),
-        true,
-    )
+    PathBuf::from(path_str.replace(EMAIL_PLACEHOLDER, account_email.as_str()))
 }
 
 fn next_persistent_query_id(dir: &Path) -> Option<String> {
@@ -212,8 +207,8 @@ fn append_json_line(path: &Path, value: &serde_json::Value) {
     append_line(path, &value.to_string());
 }
 
-fn capture_traffic_path(dir: &Path) -> PathBuf {
-    dir.join(BACKEND_TRAFFIC_FILENAME)
+fn capture_traffic_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{id}_backend_traffic.ndjson"))
 }
 
 fn now_unix_ms() -> u128 {
@@ -236,11 +231,18 @@ pub fn capture_headers_json(headers: &http::HeaderMap) -> serde_json::Value {
     serde_json::Value::Object(entries)
 }
 
-pub fn backend_capture_append_event(mut event: serde_json::Value) {
+pub fn backend_capture_append_event(
+    session: Option<&PromptCaptureSession>,
+    mut event: serde_json::Value,
+) {
     let config = active_prompt_debug_http_config();
     if !config.enabled {
         return;
     }
+
+    let Some(session) = session else {
+        return;
+    };
 
     let mut map = match event {
         serde_json::Value::Object(map) => map,
@@ -260,13 +262,13 @@ pub fn backend_capture_append_event(mut event: serde_json::Value) {
     );
     event = serde_json::Value::Object(map);
 
-    let dir = config.capture_dir.unwrap_or_else(default_capture_dir);
-    if std::fs::create_dir_all(dir.as_path()).is_err() {
+    let path = session.backend_traffic_path();
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
         return;
     }
-
-    let path = capture_traffic_path(dir.as_path());
-    append_json_line(path.as_path(), &event);
+    append_json_line(path, &event);
 }
 
 fn tool_name_from_call(map: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
@@ -401,8 +403,7 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
         return None;
     }
 
-    let (dir, email_scoped_query_ids) =
-        resolve_capture_dir(config.capture_dir.unwrap_or_else(default_capture_dir));
+    let dir = resolve_capture_dir(config.capture_dir.unwrap_or_else(default_capture_dir));
     if std::fs::create_dir_all(dir.as_path()).is_err() {
         return None;
     }
@@ -411,16 +412,13 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
         let Ok(_write_guard) = write_lock.lock() else {
             return None;
         };
-        if email_scoped_query_ids {
-            next_persistent_query_id(dir.as_path())?
-        } else {
-            next_capture_id()
-        }
+        next_persistent_query_id(dir.as_path())?
     };
 
     let input_path = dir.join(format!("{id}_input.ndjson"));
     let output_path = dir.join(format!("{id}_output.ndjson"));
     let reasoning_path = dir.join(format!("{id}_reasoning.ndjson"));
+    let backend_traffic_path = capture_traffic_path(dir.as_path(), id.as_str());
 
     // Ensure a stats file exists for this capture directory even before first tool call.
     let stats_path = dir.join("tool_usage_stats.json");
@@ -456,6 +454,7 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
         capture_input: config.capture_input,
         capture_output: config.capture_output,
         capture_reasoning: config.capture_reasoning,
+        backend_traffic_path,
         input_path,
         output_path,
         reasoning_path,
@@ -575,7 +574,7 @@ pub fn capture_dir() -> Option<PathBuf> {
     if !config.enabled {
         return None;
     }
-    let (dir, _) = resolve_capture_dir(config.capture_dir.unwrap_or_else(default_capture_dir));
+    let dir = resolve_capture_dir(config.capture_dir.unwrap_or_else(default_capture_dir));
     Some(dir)
 }
 
@@ -635,13 +634,8 @@ mod tests {
     #[test]
     fn resolve_capture_dir_expands_email_placeholder_when_account_email_is_available() {
         set_prompt_debug_http_account_email(Some("user@example.com".to_string()));
-        let (dir, email_scoped) =
-            resolve_capture_dir(PathBuf::from("/var/tmp/prompt-debug-$EMAIL"));
-        assert_eq!(
-            dir,
-            PathBuf::from("/var/tmp/prompt-debug-user@example.com")
-        );
-        assert!(email_scoped);
+        let dir = resolve_capture_dir(PathBuf::from("/var/tmp/prompt-debug-$EMAIL"));
+        assert_eq!(dir, PathBuf::from("/var/tmp/prompt-debug-user@example.com"));
     }
 
     #[test]
@@ -663,6 +657,15 @@ mod tests {
     }
 
     #[test]
+    fn capture_traffic_path_uses_query_id_prefix() {
+        let path = capture_traffic_path(Path::new("/var/tmp/codex-prompt-debug"), "7");
+        assert_eq!(
+            path,
+            PathBuf::from("/var/tmp/codex-prompt-debug/7_backend_traffic.ndjson")
+        );
+    }
+
+    #[test]
     fn prompt_capture_append_reasoning_entry_writes_human_readable_ndjson() {
         let dir = PathBuf::from(format!(
             "/var/tmp/codex-prompt-debug-http-test-{}-{}",
@@ -676,6 +679,7 @@ mod tests {
             capture_input: false,
             capture_output: false,
             capture_reasoning: true,
+            backend_traffic_path: dir.join("7_backend_traffic.ndjson"),
             input_path: dir.join("7_input.ndjson"),
             output_path: dir.join("7_output.ndjson"),
             reasoning_path: reasoning_path.clone(),
