@@ -147,6 +147,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                 Self::path(),
                 extra_headers,
                 Some(body),
+                capture.as_ref(),
                 |req| {
                     req.headers.insert(
                         http::header::ACCEPT,

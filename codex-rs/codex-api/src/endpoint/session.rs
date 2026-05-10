@@ -1,6 +1,7 @@
 use crate::auth::AuthProvider;
 use crate::auth::add_auth_headers;
 use crate::error::ApiError;
+use crate::prompt_debug_http::PromptCaptureSession;
 use crate::prompt_debug_http::backend_capture_append_event;
 use crate::prompt_debug_http::capture_headers_json;
 use crate::provider::Provider;
@@ -79,8 +80,9 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         path: &str,
         extra_headers: HeaderMap,
         body: Option<Value>,
+        capture: Option<&PromptCaptureSession>,
     ) -> Result<Response, ApiError> {
-        self.execute_with(method, path, extra_headers, body, |_| {})
+        self.execute_with(method, path, extra_headers, body, capture, |_| {})
             .await
     }
 
@@ -96,6 +98,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         path: &str,
         extra_headers: HeaderMap,
         body: Option<Value>,
+        capture: Option<&PromptCaptureSession>,
         configure: C,
     ) -> Result<Response, ApiError>
     where
@@ -117,7 +120,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                 let attempt = attempt_counter.fetch_add(1, Ordering::Relaxed) + 1;
                 let path_for_request = path.clone();
                 let path_for_response = path.clone();
-                backend_capture_append_event(serde_json::json!({
+                backend_capture_append_event(capture, serde_json::json!({
                     "kind": "http_request",
                     "transport": "http",
                     "path": path_for_request,
@@ -134,7 +137,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                     match &result {
                         Ok(response) => {
                             let body_text = String::from_utf8_lossy(&response.body).to_string();
-                            backend_capture_append_event(serde_json::json!({
+                            backend_capture_append_event(capture, serde_json::json!({
                                 "kind": "http_response",
                                 "transport": "http",
                                 "path": path_for_response,
@@ -146,7 +149,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                             }));
                         }
                         Err(err) => {
-                            backend_capture_append_event(serde_json::json!({
+                            backend_capture_append_event(capture, serde_json::json!({
                                 "kind": "http_error",
                                 "transport": "http",
                                 "path": path_for_response,
@@ -176,6 +179,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         path: &str,
         extra_headers: HeaderMap,
         body: Option<Value>,
+        capture: Option<&PromptCaptureSession>,
         configure: C,
     ) -> Result<StreamResponse, ApiError>
     where
@@ -197,7 +201,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                 let attempt = attempt_counter.fetch_add(1, Ordering::Relaxed) + 1;
                 let path_for_request = path.clone();
                 let path_for_response = path.clone();
-                backend_capture_append_event(serde_json::json!({
+                backend_capture_append_event(capture, serde_json::json!({
                     "kind": "http_stream_request",
                     "transport": "http",
                     "path": path_for_request,
@@ -213,7 +217,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                     let result = self.transport.stream(req).await;
                     match &result {
                         Ok(response) => {
-                            backend_capture_append_event(serde_json::json!({
+                            backend_capture_append_event(capture, serde_json::json!({
                                 "kind": "http_stream_open",
                                 "transport": "http",
                                 "path": path_for_response,
@@ -223,7 +227,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
                             }));
                         }
                         Err(err) => {
-                            backend_capture_append_event(serde_json::json!({
+                            backend_capture_append_event(capture, serde_json::json!({
                                 "kind": "http_stream_error",
                                 "transport": "http",
                                 "path": path_for_response,

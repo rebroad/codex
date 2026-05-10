@@ -92,6 +92,7 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
                 Self::path(),
                 extra_headers,
                 /*body*/ None,
+                None,
                 |req| {
                     req.headers
                         .insert(CONTENT_TYPE, HeaderValue::from_static("application/sdp"));
@@ -124,7 +125,7 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime call: {err}")))?;
             let resp = self
                 .session
-                .execute(Method::POST, Self::path(), extra_headers, Some(body))
+                .execute(Method::POST, Self::path(), extra_headers, Some(body), None)
                 .await?;
             let sdp = decode_sdp_response(resp.body.as_ref())?;
             return Ok(RealtimeCallResponse { sdp });
@@ -153,6 +154,7 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
                 Self::path(),
                 extra_headers,
                 /*body*/ None,
+                None,
                 |req| {
                     req.headers.insert(
                         CONTENT_TYPE,
