@@ -162,6 +162,7 @@ fn serializes_allowed_tools_tool_choice_object() {
         prompt_cache_key: None,
         service_tier: None,
         text: None,
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
