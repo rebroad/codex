@@ -9,6 +9,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info::with_config_overrides;
 use codex_protocol::config_types::WebSearchMode;
@@ -600,7 +601,8 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
 #[test]
 fn builtin_tool_allowlist_filters_only_builtin_tools() {
     let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info =
+        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config.to_models_manager_config());
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
     let available_models = Vec::new();
@@ -636,11 +638,32 @@ fn builtin_tool_allowlist_filters_only_builtin_tools() {
     .build();
 
     assert_contains_tool_names(&tools, &["update_plan", "test_server/do_something_cool"]);
-    assert_lacks_tool_name(&tools, "exec_command");
-    assert_lacks_tool_name(&tools, "write_stdin");
-    assert_lacks_tool_name(&tools, "list_mcp_resources");
-    assert_lacks_tool_name(&tools, "list_mcp_resource_templates");
-    assert_lacks_tool_name(&tools, "read_mcp_resource");
+    let tool_names = tools
+        .iter()
+        .map(ConfiguredToolSpec::name)
+        .collect::<Vec<_>>();
+    assert!(
+        !tools.iter().any(|tool| tool.name() == "exec_command"),
+        "expected tool exec_command to be absent; had: {tool_names:?}"
+    );
+    assert!(
+        !tools.iter().any(|tool| tool.name() == "write_stdin"),
+        "expected tool write_stdin to be absent; had: {tool_names:?}"
+    );
+    assert!(
+        !tools.iter().any(|tool| tool.name() == "list_mcp_resources"),
+        "expected tool list_mcp_resources to be absent; had: {tool_names:?}"
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name() == "list_mcp_resource_templates"),
+        "expected tool list_mcp_resource_templates to be absent; had: {tool_names:?}"
+    );
+    assert!(
+        !tools.iter().any(|tool| tool.name() == "read_mcp_resource"),
+        "expected tool read_mcp_resource to be absent; had: {tool_names:?}"
+    );
 }
 
 #[test]
