@@ -50,6 +50,8 @@ use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_utils_output_truncation::approx_token_count;
+use tracing::info;
+use tracing::warn;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -135,14 +137,28 @@ impl UnifiedExecProcessManager {
         }
     }
 
-    pub(crate) async fn release_process_id(&self, process_id: i32) {
+    pub(crate) async fn release_process_id(&self, process_id: i32, reason: &'static str) {
         let removed = {
             let mut store = self.process_store.lock().await;
             store.remove(process_id)
         };
         if let Some(entry) = removed {
+            Self::log_process_removal(reason, &entry);
             Self::unregister_network_approval_for_entry(&entry).await;
         }
+    }
+
+    fn log_process_removal(reason: &'static str, entry: &ProcessEntry) {
+        info!(
+            process_id = entry.process_id,
+            call_id = %entry.call_id,
+            cwd = %entry.cwd.display(),
+            tty = entry.tty,
+            command = ?entry.command,
+            reason,
+            last_used_ms = entry.last_used.elapsed().as_millis(),
+            "removing unified exec process"
+        );
     }
 
     async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
@@ -175,7 +191,8 @@ impl UnifiedExecProcessManager {
                 (Arc::new(process), deferred_network_approval)
             }
             Err(err) => {
-                self.release_process_id(request.process_id).await;
+                self.release_process_id(request.process_id, "exec_command setup failed")
+                    .await;
                 return Err(err);
             }
         };
@@ -263,7 +280,8 @@ impl UnifiedExecProcessManager {
                 )
                 .await;
             }
-            self.release_process_id(request.process_id).await;
+            self.release_process_id(request.process_id, "exec_command completed")
+                .await;
             finish_deferred_network_approval(
                 context.session.as_ref(),
                 deferred_network_approval.take(),
@@ -284,6 +302,12 @@ impl UnifiedExecProcessManager {
                     (None, exit_code)
                 }
                 ProcessStatus::Unknown => {
+                    warn!(
+                        process_id,
+                        command = ?request.command,
+                        cwd = %cwd.display(),
+                        "exec_command lost tracking for unified exec process"
+                    );
                     return Err(UnifiedExecError::UnknownProcessId { process_id });
                 }
             }
@@ -307,7 +331,8 @@ impl UnifiedExecProcessManager {
             )
             .await;
 
-            self.release_process_id(request.process_id).await;
+            self.release_process_id(request.process_id, "exec_command completed")
+                .await;
             finish_deferred_network_approval(
                 context.session.as_ref(),
                 deferred_network_approval.take(),
@@ -370,7 +395,8 @@ impl UnifiedExecProcessManager {
                         status_after_write = Some(status);
                     } else if matches!(err, UnifiedExecError::ProcessFailed { .. }) {
                         process.terminate();
-                        self.release_process_id(process_id).await;
+                        self.release_process_id(process_id, "write_stdin observed process failure")
+                            .await;
                         return Err(err);
                     } else {
                         return Err(err);
@@ -407,7 +433,8 @@ impl UnifiedExecProcessManager {
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
         if let Some(message) = process.failure_message() {
-            self.release_process_id(process_id).await;
+            self.release_process_id(process_id, "write_stdin observed process failure")
+                .await;
             return Err(UnifiedExecError::process_failed(message));
         }
 
@@ -431,6 +458,11 @@ impl UnifiedExecProcessManager {
                 (None, exit_code, call_id)
             }
             ProcessStatus::Unknown => {
+                warn!(
+                    process_id,
+                    command = ?session_command,
+                    "write_stdin lost tracking for unified exec process"
+                );
                 return Err(UnifiedExecError::UnknownProcessId {
                     process_id: request.process_id,
                 });
@@ -456,6 +488,10 @@ impl UnifiedExecProcessManager {
         let status = {
             let mut store = self.process_store.lock().await;
             let Some(entry) = store.processes.get(&process_id) else {
+                warn!(
+                    process_id,
+                    "unified exec process is missing from store during refresh"
+                );
                 return ProcessStatus::Unknown;
             };
 
@@ -464,8 +500,13 @@ impl UnifiedExecProcessManager {
 
             if entry.process.has_exited() {
                 let Some(entry) = store.remove(process_id) else {
+                    warn!(
+                        process_id,
+                        "unified exec process disappeared while removing exited entry"
+                    );
                     return ProcessStatus::Unknown;
                 };
+                Self::log_process_removal("process exited", &entry);
                 ProcessStatus::Exited {
                     exit_code,
                     entry: Box::new(entry),
@@ -489,10 +530,16 @@ impl UnifiedExecProcessManager {
         process_id: i32,
     ) -> Result<PreparedProcessHandles, UnifiedExecError> {
         let mut store = self.process_store.lock().await;
-        let entry = store
-            .processes
-            .get_mut(&process_id)
-            .ok_or(UnifiedExecError::UnknownProcessId { process_id })?;
+        let entry = match store.processes.get_mut(&process_id) {
+            Some(entry) => entry,
+            None => {
+                warn!(
+                    process_id,
+                    "unified exec process is missing from store while preparing stdin handles"
+                );
+                return Err(UnifiedExecError::UnknownProcessId { process_id });
+            }
+        };
         entry.last_used = Instant::now();
         let OutputHandles {
             output_buffer,
@@ -538,6 +585,7 @@ impl UnifiedExecProcessManager {
             call_id: context.call_id.clone(),
             process_id,
             command: command.to_vec(),
+            cwd: cwd.clone(),
             tty,
             network_approval_id,
             session: Arc::downgrade(&context.session),
@@ -552,6 +600,7 @@ impl UnifiedExecProcessManager {
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
         if let Some(pruned_entry) = pruned_entry {
+            Self::log_process_removal("pruned due to process limit", &pruned_entry);
             Self::unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }

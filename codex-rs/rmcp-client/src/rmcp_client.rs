@@ -332,20 +332,25 @@ const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
 #[cfg(unix)]
 struct ProcessGroupGuard {
     process_group_id: u32,
+    source_label: String,
 }
 
 #[cfg(not(unix))]
 struct ProcessGroupGuard;
 
 impl ProcessGroupGuard {
-    fn new(process_group_id: u32) -> Self {
+    fn new(process_group_id: u32, source_label: String) -> Self {
         #[cfg(unix)]
         {
-            Self { process_group_id }
+            Self {
+                process_group_id,
+                source_label,
+            }
         }
         #[cfg(not(unix))]
         {
             let _ = process_group_id;
+            let _ = source_label;
             Self
         }
     }
@@ -353,11 +358,14 @@ impl ProcessGroupGuard {
     #[cfg(unix)]
     fn maybe_terminate_process_group(&self) {
         let process_group_id = self.process_group_id;
+        let source_label = self.source_label.clone();
         let should_escalate =
             match codex_utils_pty::process_group::terminate_process_group(process_group_id) {
                 Ok(exists) => exists,
                 Err(error) => {
-                    warn!("Failed to terminate MCP process group {process_group_id}: {error}");
+                    warn!(
+                        "Failed to terminate {source_label} process group {process_group_id}: {error}"
+                    );
                     false
                 }
             };
@@ -367,7 +375,9 @@ impl ProcessGroupGuard {
                 if let Err(error) =
                     codex_utils_pty::process_group::kill_process_group(process_group_id)
                 {
-                    warn!("Failed to kill MCP process group {process_group_id}: {error}");
+                    warn!(
+                        "Failed to kill {source_label} process group {process_group_id}: {error}"
+                    );
                 }
             });
         }
@@ -388,6 +398,7 @@ impl Drop for ProcessGroupGuard {
 #[derive(Clone)]
 enum TransportRecipe {
     Stdio {
+        source_label: String,
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
@@ -476,6 +487,7 @@ pub struct RmcpClient {
 
 impl RmcpClient {
     pub async fn new_stdio_client(
+        source_label: String,
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
@@ -483,6 +495,7 @@ impl RmcpClient {
         cwd: Option<PathBuf>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {
+            source_label,
             program,
             args,
             env,
@@ -856,6 +869,7 @@ impl RmcpClient {
     ) -> Result<PendingTransport> {
         match transport_recipe {
             TransportRecipe::Stdio {
+                source_label,
                 program,
                 args,
                 env,
@@ -883,7 +897,12 @@ impl RmcpClient {
                 let (transport, stderr) = TokioChildProcess::builder(command)
                     .stderr(Stdio::piped())
                     .spawn()?;
-                let process_group_guard = transport.id().map(ProcessGroupGuard::new);
+                let process_group_guard = transport.id().map(|process_group_id| {
+                    ProcessGroupGuard::new(
+                        process_group_id,
+                        format!("{source_label} (program `{program_name}`)"),
+                    )
+                });
 
                 if let Some(stderr) = stderr {
                     tokio::spawn(async move {

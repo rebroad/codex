@@ -112,6 +112,7 @@ async fn exec_command_with_tty(
             call_id: context.call_id.clone(),
             process_id,
             command: command.clone(),
+            cwd: request.cwd.clone(),
             tty,
             network_approval_id: None,
             session: Arc::downgrade(session),
@@ -150,7 +151,9 @@ async fn exec_command_with_tty(
     let response_process_id = if process_started_alive && !has_exited {
         Some(process_id)
     } else {
-        manager.release_process_id(process_id).await;
+        manager
+            .release_process_id(process_id, "test cleanup")
+            .await;
         None
     };
 

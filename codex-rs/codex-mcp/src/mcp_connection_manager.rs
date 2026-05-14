@@ -434,14 +434,27 @@ impl AsyncManagedClient {
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
+        let tool_plugin_provenance_for_fut = Arc::clone(&tool_plugin_provenance);
         let fut = async move {
             let outcome = async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
                 }
 
-                let client =
-                    Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+                let source_label = format_mcp_source_label(
+                    &server_name,
+                    tool_plugin_provenance_for_fut
+                        .plugin_display_names_for_mcp_server_name(&server_name),
+                );
+                let client = Arc::new(
+                    make_rmcp_client(
+                        &server_name,
+                        config.transport,
+                        store_mode,
+                        source_label,
+                    )
+                    .await?,
+                );
                 match start_server_task(
                     server_name,
                     client,
@@ -1427,6 +1440,7 @@ async fn make_rmcp_client(
     server_name: &str,
     transport: McpServerTransportConfig,
     store_mode: OAuthCredentialsStoreMode,
+    source_label: String,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     match transport {
         McpServerTransportConfig::Stdio {
@@ -1443,9 +1457,16 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd)
-                .await
-                .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
+            RmcpClient::new_stdio_client(
+                source_label,
+                command_os,
+                args_os,
+                env_os,
+                &env_vars,
+                cwd,
+            )
+            .await
+            .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
         }
         McpServerTransportConfig::StreamableHttp {
             url,
@@ -1469,6 +1490,21 @@ async fn make_rmcp_client(
             .await
             .map_err(StartupOutcomeError::from)
         }
+    }
+}
+
+fn format_mcp_source_label(server_name: &str, plugin_display_names: &[String]) -> String {
+    match plugin_display_names {
+        [] => format!("MCP server `{server_name}`"),
+        [plugin_name] => format!("MCP server `{server_name}` (plugin `{plugin_name}`)"),
+        plugin_names => format!(
+            "MCP server `{server_name}` (plugins {})",
+            plugin_names
+                .iter()
+                .map(|plugin_name| format!("`{plugin_name}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 

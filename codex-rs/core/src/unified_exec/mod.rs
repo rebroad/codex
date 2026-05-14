@@ -148,6 +148,7 @@ struct ProcessEntry {
     call_id: String,
     process_id: i32,
     command: Vec<String>,
+    cwd: PathBuf,
     tty: bool,
     network_approval_id: Option<String>,
     session: Weak<Session>,

@@ -65,6 +65,7 @@ async fn drop_kills_wrapper_process_group() -> Result<()> {
     let child_pid_file_str = child_pid_file.to_string_lossy().into_owned();
 
     let client = RmcpClient::new_stdio_client(
+        "test MCP server".to_string(),
         OsString::from("/bin/sh"),
         vec![
             OsString::from("-c"),
