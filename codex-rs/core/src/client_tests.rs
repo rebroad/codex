@@ -95,23 +95,6 @@ fn test_session_telemetry() -> SessionTelemetry {
     )
 }
 
-fn test_chatgpt_auth(email: &str) -> CodexAuth {
-    CodexAuth::ChatgptAuthTokens(AuthDotJson {
-        auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
-        openai_api_key: None,
-        tokens: Some(TokenData {
-            id_token: IdTokenInfo {
-                email: Some(email.to_string()),
-                ..Default::default()
-            },
-            access_token: "Access Token".to_string(),
-            refresh_token: "refresh-token".to_string(),
-            account_id: Some("account_id".to_string()),
-        }),
-        last_refresh: Some(Utc::now()),
-    })
-}
-
 fn stale_auth_dot_json(email: &str) -> AuthDotJson {
     AuthDotJson {
         auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
@@ -242,10 +225,20 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 async fn current_client_setup_refreshes_prompt_debug_email_from_reloaded_auth() {
     let tempdir = TempDir::new().expect("tempdir");
     let initial_auth = stale_auth_dot_json("old@example.com");
-    let auth_manager = AuthManager::from_auth_for_testing_with_home(
-        CodexAuth::ChatgptAuthTokens(initial_auth.clone()),
-        tempdir.path().to_path_buf(),
-    );
+    save_auth(
+        tempdir.path(),
+        &initial_auth,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("save stale auth");
+    let auth = CodexAuth::from_auth_storage(
+        tempdir.path(),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth present");
+    let auth_manager =
+        AuthManager::from_auth_for_testing_with_home(auth, tempdir.path().to_path_buf());
     save_auth(
         tempdir.path(),
         &fresh_auth_dot_json("new@example.com"),
@@ -265,9 +258,10 @@ async fn current_client_setup_refreshes_prompt_debug_email_from_reloaded_auth() 
     let client = ModelClient::new(
         Some(auth_manager),
         ThreadId::new(),
-        crate::model_provider_info::create_oss_provider_with_base_url(
+        "11111111-1111-4111-8111-111111111111".to_string(),
+        create_oss_provider_with_base_url(
             "https://example.com/v1",
-            crate::model_provider_info::WireApi::Responses,
+            WireApi::Responses,
         ),
         SessionSource::Cli,
         /*model_verbosity*/ None,
