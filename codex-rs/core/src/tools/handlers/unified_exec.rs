@@ -247,7 +247,9 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                 {
                     let approval_policy = context.turn.approval_policy.value();
-                    manager.release_process_id(process_id).await;
+                    manager
+                        .release_process_id(process_id, "exec_command rejected by approval policy")
+                        .await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
@@ -277,7 +279,9 @@ impl ToolHandler for UnifiedExecHandler {
                 ) {
                     Ok(normalized) => normalized,
                     Err(err) => {
-                        manager.release_process_id(process_id).await;
+                        manager
+                            .release_process_id(process_id, "exec_command path validation failed")
+                            .await;
                         return Err(FunctionCallError::RespondToModel(err));
                     }
                 };
@@ -285,7 +289,9 @@ impl ToolHandler for UnifiedExecHandler {
                 let apply_patch_cwd = match AbsolutePathBuf::from_absolute_path(&cwd) {
                     Ok(cwd) => cwd,
                     Err(err) => {
-                        manager.release_process_id(process_id).await;
+                        manager
+                            .release_process_id(process_id, "exec_command apply_patch intercepted")
+                            .await;
                         return Err(FunctionCallError::RespondToModel(format!(
                             "apply_patch verification failed: failed to resolve cwd: {err}"
                         )));
@@ -304,7 +310,9 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await?
                 {
-                    manager.release_process_id(process_id).await;
+                    manager
+                        .release_process_id(process_id, "exec_command completed without live process")
+                        .await;
                     return Ok(ExecCommandToolOutput {
                         event_call_id: String::new(),
                         chunk_id: String::new(),
