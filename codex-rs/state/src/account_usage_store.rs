@@ -1043,17 +1043,30 @@ WHERE account_id = ? AND provider = ?
         if backend_percent_changed {
             let delta_percent =
                 previous_backend_percent.map_or(used_percent, |previous| used_percent - previous);
-            self.log_usage_event(
-                account_id,
-                Some(used_percent),
-                if reported_percent_changed {
-                    previous_reported_percent_int
-                } else {
-                    None
-                },
-                format!("backend_percent_changed=1 delta_percent={delta_percent}"),
-            )
-            .await;
+            let transition_fingerprint = backend_transition_fingerprint(
+                current_reported_percent_int,
+                window_minutes,
+                resets_at,
+            );
+            if self
+                .claim_backend_transition_log(
+                    account_id,
+                    transition_fingerprint.as_str(),
+                )
+                .await
+            {
+                self.log_usage_event(
+                    account_id,
+                    Some(used_percent),
+                    if reported_percent_changed {
+                        previous_reported_percent_int
+                    } else {
+                        None
+                    },
+                    format!("backend_percent_changed=1 delta_percent={delta_percent}"),
+                )
+                .await;
+            }
         }
         let previous_backend_percent_history = prior_usage
             .as_ref()
@@ -2716,6 +2729,32 @@ WHERE account_id = ? AND provider = ?
         Ok(())
     }
 
+    async fn claim_backend_transition_log(
+        &self,
+        account_id: &str,
+        transition_fingerprint: &str,
+    ) -> bool {
+        sqlx::query(
+            r#"
+UPDATE account_usage
+SET last_backend_transition_fingerprint = ?
+WHERE account_id = ? AND provider = ?
+    AND (
+        last_backend_transition_fingerprint IS NULL
+        OR last_backend_transition_fingerprint != ?
+    )
+            "#,
+        )
+        .bind(transition_fingerprint)
+        .bind(account_id)
+        .bind(self.default_provider.as_str())
+        .bind(transition_fingerprint)
+        .execute(self.pool.as_ref())
+        .await
+        .map(|result| result.rows_affected() > 0)
+        .unwrap_or(false)
+    }
+
     async fn log_usage_limit_threshold_events(
         &self,
         account_id: &str,
@@ -2814,6 +2853,22 @@ fn should_skip_duplicate_usage_log_line(path: &Path, line_suffix: &str, message:
                     .map(str::to_owned)
             })
             .is_some_and(|last_line| last_line.ends_with(line_suffix))
+}
+
+fn backend_transition_fingerprint(
+    current_reported_percent_int: i64,
+    window_minutes: Option<i64>,
+    resets_at: Option<i64>,
+) -> String {
+    format!(
+        "{current_reported_percent_int}:{}:{}",
+        window_minutes
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        resets_at
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    )
 }
 
 fn open_usage_log_file_by_name(filename: &str) -> Option<std::fs::File> {
@@ -4733,6 +4788,15 @@ WHERE account_id = ? AND provider = ?
             AccountUsageEstimatorConfig::default(),
         );
         assert_eq!(rendered, "percent=84 stabilized_percent=86.00");
+    }
+
+    #[test]
+    fn backend_transition_fingerprint_includes_window_and_reset_identity() {
+        let base = backend_transition_fingerprint(35, Some(10080), Some(12345));
+        assert_eq!(base, "35:10080:12345");
+        assert_eq!(base, backend_transition_fingerprint(35, Some(10080), Some(12345)));
+        assert_ne!(base, backend_transition_fingerprint(35, Some(10080), Some(54321)));
+        assert_ne!(base, backend_transition_fingerprint(35, Some(60), Some(12345)));
     }
 
     #[test]
