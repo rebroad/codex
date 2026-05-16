@@ -103,6 +103,9 @@ use codex_state::AccountUsageEstimatorConfig;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
+use codex_state::estimate_usage_usd_for_model;
+use codex_state::load_model_pricing;
+use codex_state::ModelPricingFile;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -1988,6 +1991,13 @@ async fn run_direct_request(
     let model_info: ModelInfo = models_manager
         .get_model_info(&model, &models_manager_config)
         .await;
+    let model_pricing = load_model_pricing(config.codex_home.as_path()).unwrap_or_else(|err| {
+        eprintln!(
+            "failed to load model pricing from {}: {err}",
+            config.codex_home.display()
+        );
+        ModelPricingFile::bundled_default().expect("load bundled fallback model pricing")
+    });
     let telemetry_auth_mode = auth_snapshot
         .as_ref()
         .map(|auth| TelemetryAuthMode::from(auth.auth_mode()));
@@ -2101,6 +2111,8 @@ async fn run_direct_request(
         account_key,
         account_display,
         config.model.as_deref(),
+        &model_info.slug,
+        &model_pricing,
     )
     .await
 }
@@ -2136,6 +2148,8 @@ async fn consume_direct_stream(
     account_key: Option<String>,
     account_display: Option<String>,
     model_slug: Option<&str>,
+    display_model_slug: &str,
+    model_pricing: &ModelPricingFile,
 ) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
@@ -2217,7 +2231,7 @@ async fn consume_direct_stream(
                     printed_response = false;
                 }
                 if let Some(usage) = token_usage {
-                    print_token_usage(&usage);
+                    print_token_usage(&usage, display_model_slug, model_pricing);
                     if let (Some(usage_store), Some(account_key)) =
                         (usage_store.as_ref(), account_key.as_ref())
                     {
@@ -2281,10 +2295,21 @@ fn assistant_text(item: &ResponseItem) -> Option<String> {
     None
 }
 
-fn print_token_usage(usage: &codex_protocol::protocol::TokenUsage) {
+fn print_token_usage(
+    usage: &codex_protocol::protocol::TokenUsage,
+    model_slug: &str,
+    model_pricing: &ModelPricingFile,
+) {
+    let usage_usd = estimate_usage_usd_for_model(
+        model_pricing,
+        Some(model_slug),
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        /*regional_processing*/ false,
+    );
     eprintln!(
-        "Token usage: total={} input={} cached_input={} output={} reasoning_output={}",
-        usage.total_tokens,
+        "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}",
         usage.input_tokens,
         usage.cached_input_tokens,
         usage.output_tokens,
