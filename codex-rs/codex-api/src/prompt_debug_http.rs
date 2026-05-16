@@ -4,8 +4,6 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -13,6 +11,10 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+
+use codex_protocol::models::ResponseItem;
 
 const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
 const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
@@ -76,7 +78,10 @@ static TRAFFIC_EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Default)]
 struct ToolUsageStats {
     counts: BTreeMap<String, u64>,
+    failure_counts: BTreeMap<String, u64>,
     seen_call_ids: HashSet<String>,
+    seen_failure_call_ids: HashSet<String>,
+    tool_names_by_call_id: HashMap<String, String>,
 }
 
 fn config_lock() -> &'static RwLock<PromptDebugHttpConfig> {
@@ -293,6 +298,66 @@ fn tool_name_from_call(map: &serde_json::Map<String, serde_json::Value>) -> Opti
     Some(item_type.trim_end_matches("_call").to_string())
 }
 
+fn call_id_from_object(
+    map: &serde_json::Map<String, serde_json::Value>,
+    id_field: &str,
+) -> Option<String> {
+    map.get(id_field)
+        .or_else(|| map.get("call_id"))
+        .or_else(|| map.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+fn register_tool_call(
+    stats: &mut ToolUsageStats,
+    tool_name: String,
+    call_id: Option<String>,
+) -> bool {
+    let mut changed = false;
+
+    if let Some(call_id) = call_id {
+        stats
+            .tool_names_by_call_id
+            .entry(call_id.clone())
+            .or_insert_with(|| tool_name.clone());
+        if stats.seen_call_ids.insert(call_id) {
+            *stats.counts.entry(tool_name).or_insert(0) += 1;
+            changed = true;
+        }
+    } else {
+        *stats.counts.entry(tool_name).or_insert(0) += 1;
+        changed = true;
+    }
+
+    changed
+}
+
+fn register_tool_failure(
+    stats: &mut ToolUsageStats,
+    tool_name: Option<String>,
+    call_id: Option<String>,
+) -> bool {
+    let resolved_tool_name = match (tool_name, call_id.as_ref()) {
+        (Some(tool_name), _) => Some(tool_name),
+        (None, Some(call_id)) => stats.tool_names_by_call_id.get(call_id).cloned(),
+        (None, None) => None,
+    };
+    let Some(resolved_tool_name) = resolved_tool_name else {
+        return false;
+    };
+
+    if let Some(call_id) = call_id {
+        if !stats.seen_failure_call_ids.insert(call_id) {
+            return false;
+        }
+    }
+
+    *stats.failure_counts.entry(resolved_tool_name).or_insert(0) += 1;
+    true
+}
+
+#[cfg(test)]
 fn collect_tool_calls(value: &serde_json::Value, out: &mut Vec<(String, Option<String>)>) {
     match value {
         serde_json::Value::Array(items) => {
@@ -318,6 +383,113 @@ fn collect_tool_calls(value: &serde_json::Value, out: &mut Vec<(String, Option<S
     }
 }
 
+fn record_response_item_tool_usage(stats: &mut ToolUsageStats, item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::LocalShellCall { call_id, id, .. } => register_tool_call(
+            stats,
+            "local_shell".to_string(),
+            call_id.clone().or(id.clone()),
+        ),
+        ResponseItem::FunctionCall { name, call_id, .. } => {
+            register_tool_call(stats, name.clone(), Some(call_id.clone()))
+        }
+        ResponseItem::ToolSearchCall { call_id, .. } => {
+            register_tool_call(stats, "tool_search".to_string(), call_id.clone())
+        }
+        ResponseItem::CustomToolCall { name, call_id, .. } => {
+            register_tool_call(stats, name.clone(), Some(call_id.clone()))
+        }
+        ResponseItem::WebSearchCall { id, status, .. } => {
+            let mut changed = register_tool_call(stats, "web_search".to_string(), id.clone());
+            if status
+                .as_deref()
+                .is_some_and(|status| status != "completed")
+            {
+                changed |= register_tool_failure(stats, Some("web_search".to_string()), id.clone());
+            }
+            changed
+        }
+        ResponseItem::ImageGenerationCall { id, status, .. } => {
+            let mut changed =
+                register_tool_call(stats, "image_generation".to_string(), Some(id.clone()));
+            if status != "completed" {
+                changed |= register_tool_failure(
+                    stats,
+                    Some("image_generation".to_string()),
+                    Some(id.clone()),
+                );
+            }
+            changed
+        }
+        ResponseItem::FunctionCallOutput { call_id, output } => {
+            output.success.is_some_and(|success| !success)
+                && register_tool_failure(stats, None, Some(call_id.clone()))
+        }
+        ResponseItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => {
+            output.success.is_some_and(|success| !success)
+                && register_tool_failure(stats, name.clone(), Some(call_id.clone()))
+        }
+        ResponseItem::ToolSearchOutput {
+            call_id, status, ..
+        } => {
+            status != "completed"
+                && register_tool_failure(stats, Some("tool_search".to_string()), call_id.clone())
+        }
+        _ => false,
+    }
+}
+
+fn record_structured_tool_usage(stats: &mut ToolUsageStats, value: &serde_json::Value) -> bool {
+    match serde_json::from_value::<ResponseItem>(value.clone()) {
+        Ok(item) => record_response_item_tool_usage(stats, &item),
+        Err(_) => false,
+    }
+}
+
+fn record_payload_tool_usage(stats: &mut ToolUsageStats, payload: &serde_json::Value) -> bool {
+    let mut changed = false;
+
+    match payload {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                changed |= record_payload_tool_usage(stats, item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(tool_name) = tool_name_from_call(map) {
+                changed |=
+                    register_tool_call(stats, tool_name.clone(), call_id_from_object(map, "id"));
+            }
+
+            if let Some(item_type) = map.get("type").and_then(serde_json::Value::as_str) {
+                if item_type.ends_with("_call")
+                    && map
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|status| status != "completed")
+                {
+                    changed |= register_tool_failure(
+                        stats,
+                        tool_name_from_call(map),
+                        call_id_from_object(map, "id"),
+                    );
+                }
+            }
+
+            for child in map.values() {
+                changed |= record_payload_tool_usage(stats, child);
+            }
+        }
+        _ => {}
+    }
+
+    changed
+}
+
 fn stats_path_for_session(session: &PromptCaptureSession) -> Option<PathBuf> {
     session
         .output_path()
@@ -336,7 +508,9 @@ fn write_tool_usage_stats_file(stats_path: &Path, stats: &ToolUsageStats) {
         "total_calls": stats.counts.values().copied().sum::<u64>(),
         "distinct_tools": stats.counts.len(),
         "tool_counts": stats.counts,
+        "tool_failure_counts": stats.failure_counts,
         "dedupe": "call_id per process runtime",
+        "note": "rough aggregate; structured response/request items first, payload fallback second; directory-scoped",
     });
 
     let Ok(serialized) = serde_json::to_string_pretty(&payload) else {
@@ -353,16 +527,13 @@ fn write_tool_usage_stats_file(stats_path: &Path, stats: &ToolUsageStats) {
     }
 }
 
-fn record_tool_usage(session: &PromptCaptureSession, payload: &serde_json::Value) {
+fn update_tool_usage_stats<F>(session: &PromptCaptureSession, mut update: F)
+where
+    F: FnMut(&mut ToolUsageStats) -> bool,
+{
     let Some(stats_path) = stats_path_for_session(session) else {
         return;
     };
-
-    let mut calls = Vec::new();
-    collect_tool_calls(payload, &mut calls);
-    if calls.is_empty() {
-        return;
-    }
 
     let write_lock = PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
     let Ok(_write_guard) = write_lock.lock() else {
@@ -376,21 +547,38 @@ fn record_tool_usage(session: &PromptCaptureSession, payload: &serde_json::Value
     let stats = usage_guard
         .entry(stats_path.clone())
         .or_insert_with(ToolUsageStats::default);
-    let mut changed = false;
-
-    for (tool_name, call_id) in calls {
-        if let Some(call_id) = call_id
-            && !stats.seen_call_ids.insert(call_id)
-        {
-            continue;
-        }
-        *stats.counts.entry(tool_name).or_insert(0) += 1;
-        changed = true;
-    }
+    let changed = update(stats);
 
     if changed {
         write_tool_usage_stats_file(stats_path.as_path(), stats);
     }
+}
+
+fn record_tool_usage(session: &PromptCaptureSession, payload: &serde_json::Value) {
+    update_tool_usage_stats(session, |stats| {
+        if record_structured_tool_usage(stats, payload) {
+            true
+        } else {
+            record_payload_tool_usage(stats, payload)
+        }
+    });
+}
+
+pub fn prompt_capture_record_input_tool_usage(
+    session: Option<&PromptCaptureSession>,
+    items: &[ResponseItem],
+) {
+    let Some(session) = session else {
+        return;
+    };
+
+    update_tool_usage_stats(session, |stats| {
+        let mut changed = false;
+        for item in items {
+            changed |= record_response_item_tool_usage(stats, item);
+        }
+        changed
+    });
 }
 
 pub fn prompt_debug_http_enabled() -> bool {
@@ -493,7 +681,9 @@ pub fn prompt_capture_append_output(
     );
 
     if let Ok(json_payload) = serde_json::from_str::<serde_json::Value>(payload) {
-        record_tool_usage(session, &json_payload);
+        update_tool_usage_stats(session, |stats| {
+            record_payload_tool_usage(stats, &json_payload)
+        });
     }
 }
 
@@ -628,7 +818,122 @@ mod tests {
 
         let mut calls = Vec::new();
         collect_tool_calls(&payload, &mut calls);
-        assert_eq!(calls, vec![("web_search".to_string(), Some("ws_123".to_string()))]);
+        assert_eq!(
+            calls,
+            vec![("web_search".to_string(), Some("ws_123".to_string()))]
+        );
+    }
+
+    #[test]
+    fn structured_response_items_record_counts_and_failures() {
+        let dir = std::env::temp_dir().join(format!(
+            "codex-prompt-debug-http-structured-test-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        std::fs::create_dir_all(dir.as_path()).expect("create temp dir");
+        let session = PromptCaptureSession {
+            id: "9".to_string(),
+            capture_input: true,
+            capture_output: true,
+            capture_reasoning: false,
+            backend_traffic_path: dir.join("9_backend_traffic.ndjson"),
+            input_path: dir.join("9_input.ndjson"),
+            output_path: dir.join("9_output.ndjson"),
+            reasoning_path: dir.join("9_reasoning.ndjson"),
+        };
+
+        prompt_capture_record_input_tool_usage(
+            Some(&session),
+            &[
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "exec_command".to_string(),
+                    namespace: None,
+                    arguments: "{}".to_string(),
+                    call_id: "call_1".to_string(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "call_1".to_string(),
+                    output: codex_protocol::models::FunctionCallOutputPayload {
+                        body: codex_protocol::models::FunctionCallOutputBody::Text(
+                            "failed".to_string(),
+                        ),
+                        success: Some(false),
+                    },
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "exec_command".to_string(),
+                    namespace: None,
+                    arguments: "{}".to_string(),
+                    call_id: "call_1".to_string(),
+                },
+            ],
+        );
+
+        let stats_path = stats_path_for_session(&session).expect("stats path");
+        let payload = std::fs::read_to_string(stats_path).expect("read stats");
+        let json: serde_json::Value = serde_json::from_str(&payload).expect("parse stats");
+        assert_eq!(
+            json.get("tool_counts")
+                .and_then(|value| value.get("exec_command")),
+            Some(&serde_json::json!(1))
+        );
+        assert_eq!(
+            json.get("tool_failure_counts")
+                .and_then(|value| value.get("exec_command")),
+            Some(&serde_json::json!(1))
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn raw_payload_fallback_does_not_double_count_structured_call_ids() {
+        let dir = std::env::temp_dir().join(format!(
+            "codex-prompt-debug-http-fallback-test-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        std::fs::create_dir_all(dir.as_path()).expect("create temp dir");
+        let session = PromptCaptureSession {
+            id: "10".to_string(),
+            capture_input: true,
+            capture_output: true,
+            capture_reasoning: false,
+            backend_traffic_path: dir.join("10_backend_traffic.ndjson"),
+            input_path: dir.join("10_input.ndjson"),
+            output_path: dir.join("10_output.ndjson"),
+            reasoning_path: dir.join("10_reasoning.ndjson"),
+        };
+
+        prompt_capture_record_input_tool_usage(
+            Some(&session),
+            &[ResponseItem::FunctionCall {
+                id: None,
+                name: "exec_command".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call_2".to_string(),
+            }],
+        );
+        prompt_capture_append_output(
+            &session,
+            "responses_sse",
+            r#"{"type":"function_call","name":"exec_command","call_id":"call_2"}"#,
+        );
+
+        let stats_path = stats_path_for_session(&session).expect("stats path");
+        let payload = std::fs::read_to_string(stats_path).expect("read stats");
+        let json: serde_json::Value = serde_json::from_str(&payload).expect("parse stats");
+        assert_eq!(
+            json.get("tool_counts")
+                .and_then(|value| value.get("exec_command")),
+            Some(&serde_json::json!(1))
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -648,8 +953,8 @@ mod tests {
         std::fs::create_dir_all(dir.as_path()).expect("create temp dir");
         let first = next_persistent_query_id(dir.as_path()).expect("first query id");
         let second = next_persistent_query_id(dir.as_path()).expect("second query id");
-        let counter = std::fs::read_to_string(dir.join(QUERY_ID_COUNTER_FILENAME))
-            .expect("counter file");
+        let counter =
+            std::fs::read_to_string(dir.join(QUERY_ID_COUNTER_FILENAME)).expect("counter file");
         assert_eq!(first, "1");
         assert_eq!(second, "2");
         assert_eq!(counter.trim(), "2");
