@@ -193,6 +193,46 @@ impl ModelPricingFile {
     }
 }
 
+pub fn estimate_usage_credits_for_model(
+    pricing: &ModelPricingFile,
+    model_slug: Option<&str>,
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+    regional_processing: bool,
+) -> f64 {
+    let weights = pricing.weights_for_model(
+        model_slug,
+        Some(input_tokens),
+        Some(cached_input_tokens),
+        regional_processing,
+    );
+    weights.input * input_tokens.max(0) as f64
+        + weights.cached_input * cached_input_tokens.max(0) as f64
+        + weights.output * output_tokens.max(0) as f64
+}
+
+pub fn estimate_usage_usd_for_model(
+    pricing: &ModelPricingFile,
+    model_slug: Option<&str>,
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+    regional_processing: bool,
+) -> f64 {
+    if !pricing.credits_per_usd.is_finite() || pricing.credits_per_usd <= 0.0 {
+        return 0.0;
+    }
+    estimate_usage_credits_for_model(
+        pricing,
+        model_slug,
+        input_tokens,
+        cached_input_tokens,
+        output_tokens,
+        regional_processing,
+    ) / pricing.credits_per_usd
+}
+
 impl Default for UsagePriceWeights {
     fn default() -> Self {
         ModelPricingFile::bundled_default()
@@ -517,5 +557,37 @@ mod tests {
         assert!((weights.input - 110.0 / TOKENS_PER_MILLION).abs() < 1e-12);
         assert!((weights.cached_input - 11.0 / TOKENS_PER_MILLION).abs() < 1e-12);
         assert!((weights.output - 55.0 / TOKENS_PER_MILLION).abs() < 1e-12);
+    }
+
+    #[test]
+    fn estimate_usage_usd_for_model_uses_pricing_weights() {
+        let pricing = ModelPricingFile {
+            version: 1,
+            default_model: "gpt-5.4".to_string(),
+            source_url: None,
+            updated_at: None,
+            credits_per_usd: CREDITS_PER_USD,
+            models: BTreeMap::from([(
+                "gpt-5.4".to_string(),
+                ModelPricingEntry {
+                    input_credits_per_million: 100.0,
+                    cached_input_credits_per_million: 20.0,
+                    output_credits_per_million: 40.0,
+                    long_context_threshold_tokens: None,
+                    long_context_input_multiplier: None,
+                    long_context_cached_input_multiplier: None,
+                    long_context_output_multiplier: None,
+                    regional_uplift_multiplier: None,
+                },
+            )]),
+            aliases: BTreeMap::new(),
+        };
+
+        let credits =
+            estimate_usage_credits_for_model(&pricing, Some("gpt-5.4"), 1_000, 500, 250, false);
+        let usd = estimate_usage_usd_for_model(&pricing, Some("gpt-5.4"), 1_000, 500, 250, false);
+
+        assert!((credits - 0.12).abs() < 1e-12);
+        assert!((usd - 0.0048).abs() < 1e-12);
     }
 }
