@@ -154,6 +154,20 @@ fn mempalace_guidance_respects_bare_prompt() {
     assert_eq!(result, base);
 }
 
+#[test]
+fn previous_response_id_is_only_disabled_for_non_resumed_bare_prompts() {
+    let new_history = InitialHistory::New;
+    assert!(super::should_allow_previous_response_id(&new_history, false));
+    assert!(!super::should_allow_previous_response_id(&new_history, true));
+
+    let resumed_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: PathBuf::from("/var/tmp/codex-resume-test"),
+    });
+    assert!(super::should_allow_previous_response_id(&resumed_history, true));
+}
+
 struct InstructionsTestCase {
     slug: &'static str,
     expects_apply_patch_instructions: bool,

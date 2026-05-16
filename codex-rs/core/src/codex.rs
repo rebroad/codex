@@ -1619,6 +1619,10 @@ impl Session {
             session_configuration.provider
         );
         let forked_from_id = initial_history.forked_from_id();
+        let allow_previous_response_id = should_allow_previous_response_id(
+            &initial_history,
+            session_configuration.original_config_do_not_use.bare_prompt,
+        );
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -1628,7 +1632,7 @@ impl Session {
                     RolloutRecorderParams::new(
                         conversation_id,
                         forked_from_id,
-                        session_source,
+                        session_source.clone(),
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
                         },
@@ -2056,6 +2060,9 @@ impl Session {
             ),
             environment,
         };
+        services
+            .model_client
+            .set_previous_response_id_allowed(allow_previous_response_id);
         services
             .model_client
             .set_window_generation(window_generation);
@@ -6947,6 +6954,13 @@ fn filter_codex_apps_mcp_tools(
         })
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
+}
+
+fn should_allow_previous_response_id(
+    initial_history: &InitialHistory,
+    bare_prompt: bool,
+) -> bool {
+    !bare_prompt || matches!(initial_history, InitialHistory::Resumed(_))
 }
 
 fn codex_apps_connector_id(tool: &McpToolInfo) -> Option<&str> {
