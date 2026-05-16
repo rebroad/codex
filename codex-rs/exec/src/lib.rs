@@ -2594,6 +2594,7 @@ mod tests {
     fn turn_items_for_thread_returns_matching_turn_items() {
         let thread = AppServerThread {
             id: "thread-1".to_string(),
+            forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
             model_provider: "openai".to_string(),
@@ -2619,6 +2620,9 @@ mod tests {
                     }],
                     status: codex_app_server_protocol::TurnStatus::Completed,
                     error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
                 },
                 codex_app_server_protocol::Turn {
                     id: "turn-2".to_string(),
@@ -2628,6 +2632,9 @@ mod tests {
                     }],
                     status: codex_app_server_protocol::TurnStatus::Completed,
                     error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
                 },
             ],
         };
@@ -2748,6 +2755,7 @@ mod tests {
         let response = ThreadStartResponse {
             thread: codex_app_server_protocol::Thread {
                 id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                forked_from_id: None,
                 preview: String::new(),
                 ephemeral: false,
                 model_provider: "openai".to_string(),
