@@ -44,6 +44,7 @@ const USAGE_LOG_FILENAME_SUFFIX: &str = ".log";
 const USAGE_LIMIT_100_LOG_FILENAME: &str = "usage-limit-100.log";
 const USAGE_LIMIT_101_LOG_FILENAME: &str = "usage-limit-101.log";
 const STABILIZED_BACKEND_MEDIAN_WINDOW_SAMPLES: usize = 5;
+const USD_PER_CREDIT: f64 = 100.0 / 2_500.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AccountUsageEstimatorConfig {
@@ -809,8 +810,8 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
             .map(|value| format!(" query_id={value}"))
             .unwrap_or_default();
         let mut usage_fields = Vec::with_capacity(10);
+        usage_fields.push(format!("${:.3}", credits_to_usd(usage_usd_excluding_prewarm)));
         for (name, value) in [
-            ("total", total_tokens),
             ("input", input_tokens),
             ("cached_input", cached_input_tokens),
             ("output", output_tokens),
@@ -2236,7 +2237,7 @@ WHERE account_id = ? AND provider = ?
         reported_previous_percent_int: Option<i64>,
         message: String,
     ) {
-        let is_token_usage_event = message.starts_with("total=");
+        let is_token_usage_event = message.starts_with('$') || message.starts_with("total=");
         let is_backend_delta_event = message.contains("tokens_per_pct=")
             || message.contains("avg_tokens_per_pct=")
             || message.contains("avg_tpp=");
@@ -2874,6 +2875,10 @@ fn backend_transition_fingerprint(
 fn open_usage_log_file_by_name(filename: &str) -> Option<std::fs::File> {
     let path = usage_named_log_path(filename)?;
     open_usage_log_file_path(path)
+}
+
+fn credits_to_usd(credits: f64) -> f64 {
+    credits * USD_PER_CREDIT
 }
 
 fn open_usage_log_file_path(path: PathBuf) -> Option<std::fs::File> {
@@ -4752,6 +4757,12 @@ WHERE account_id = ? AND provider = ?
             line_suffix,
             "backend_change_pending=1 confirmations=2 delta_percent=-100"
         ));
+    }
+
+    #[test]
+    fn credits_to_usd_matches_status_display_conversion() {
+        assert_eq!(credits_to_usd(62.5), 2.5);
+        assert_eq!(credits_to_usd(0.0), 0.0);
     }
 
     #[test]
