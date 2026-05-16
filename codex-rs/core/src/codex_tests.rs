@@ -50,13 +50,13 @@ use crate::tools::handlers::UnifiedExecHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_api::ToolChoice;
 use codex_app_server_protocol::AppInfo;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
-use codex_api::ToolChoice;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -119,6 +119,40 @@ use std::time::Duration as StdDuration;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
+
+#[test]
+fn mempalace_guidance_is_added_only_when_visible_tools_include_mempalace() {
+    let base = "Base instructions".to_string();
+    let mempalace_tool = "mcp__mempalace__mempalace_status".to_string();
+    let other_tool = "mcp__other__search".to_string();
+
+    let with_guidance = append_mempalace_memory_guidance(
+        base.clone(),
+        /*bare_prompt*/ false,
+        has_visible_mempalace_tools([&mempalace_tool]),
+    );
+    assert!(with_guidance.contains("Use MemPalace MCP tools"));
+
+    let without_guidance = append_mempalace_memory_guidance(
+        base.clone(),
+        /*bare_prompt*/ false,
+        has_visible_mempalace_tools([&other_tool]),
+    );
+    assert_eq!(without_guidance, base);
+}
+
+#[test]
+fn mempalace_guidance_respects_bare_prompt() {
+    let base = "Base instructions".to_string();
+    let mempalace_tool = "mcp__mempalace__search".to_string();
+
+    let result = append_mempalace_memory_guidance(
+        base.clone(),
+        /*bare_prompt*/ true,
+        has_visible_mempalace_tools([&mempalace_tool]),
+    );
+    assert_eq!(result, base);
+}
 
 struct InstructionsTestCase {
     slug: &'static str,
@@ -4877,7 +4911,10 @@ async fn build_prompt_keeps_tool_specs_and_default_tool_choice() {
         },
     );
 
-    assert!(!prompt.tools.is_empty(), "tool list should stay stable for caching");
+    assert!(
+        !prompt.tools.is_empty(),
+        "tool list should stay stable for caching"
+    );
     assert_eq!(
         prompt.parallel_tool_calls,
         turn_context.model_info.supports_parallel_tool_calls

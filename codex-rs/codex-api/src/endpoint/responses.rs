@@ -4,6 +4,7 @@ use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::prompt_debug_http::prompt_capture_append_input;
+use crate::prompt_debug_http::prompt_capture_record_input_tool_usage;
 use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use crate::requests::Compression;
@@ -76,6 +77,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         let request_json = serde_json::to_string_pretty(&request)
             .unwrap_or_else(|_| "<unable to serialize payload>".to_string());
         let capture = start_prompt_capture("responses_http", Some(request_json.as_str()));
+        prompt_capture_record_input_tool_usage(capture.as_ref(), &request.input);
 
         let ResponsesOptions {
             conversation_id,

@@ -53,6 +53,7 @@ use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::build_track_events_context;
+use codex_api::ToolChoice;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -135,8 +136,8 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
-use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageEstimatorConfig;
+use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
 use codex_state::account_usage_display;
 use codex_state::account_usage_key;
@@ -148,7 +149,6 @@ use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
 use codex_utils_stream_parser::extract_proposed_plan_text;
 use codex_utils_stream_parser::strip_citations;
-use codex_api::ToolChoice;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
@@ -227,6 +227,12 @@ fn append_mempalace_memory_guidance(
         return base_instructions;
     }
     format!("{base_instructions}\n\n{MEMPALACE_MEMORY_GUIDANCE}")
+}
+
+fn has_visible_mempalace_tools<'a>(tool_names: impl IntoIterator<Item = &'a String>) -> bool {
+    tool_names
+        .into_iter()
+        .any(|tool_name| tool_name.starts_with("mcp__mempalace__"))
 }
 
 #[derive(Debug, PartialEq)]
@@ -594,9 +600,7 @@ impl Codex {
             .auth_with_refresh_if_expired_strict()
             .await
             .map_err(|err| match err {
-                RefreshTokenError::Permanent(failed) => {
-                    CodexErr::RefreshTokenFailed(failed)
-                }
+                RefreshTokenError::Permanent(failed) => CodexErr::RefreshTokenFailed(failed),
                 RefreshTokenError::Transient(other) => CodexErr::Io(other),
             })?;
         let refresh_strategy = match session_source {
@@ -627,13 +631,6 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        let has_mempalace_server = config.mcp_servers.contains_key("mempalace");
-        let base_instructions = append_mempalace_memory_guidance(
-            base_instructions,
-            config.bare_prompt,
-            has_mempalace_server,
-        );
-
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
         let persisted_tools = if dynamic_tools.is_empty() {
@@ -2191,6 +2188,23 @@ impl Session {
                 cancel_token.cancel();
             }
             *cancel_guard = cancel_token;
+        }
+        {
+            let visible_mcp_tools = sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .await;
+            let updated_base_instructions = append_mempalace_memory_guidance(
+                session_configuration.base_instructions.clone(),
+                config.bare_prompt,
+                has_visible_mempalace_tools(visible_mcp_tools.keys()),
+            );
+            session_configuration.base_instructions = updated_base_instructions.clone();
+            let mut state = sess.state.lock().await;
+            state.session_configuration.base_instructions = updated_base_instructions;
         }
         if !required_mcp_servers.is_empty() {
             let failures = sess
@@ -4001,7 +4015,8 @@ impl Session {
         if let Some(token_usage) = token_usage {
             let is_regional_processing = {
                 let mut state = self.state.lock().await;
-                state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                state
+                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
                 state.session_configuration.provider.requires_openai_auth
                     && default_client_residency_requirement().is_some()
             };
