@@ -99,6 +99,27 @@ write-app-server-schema *args:
 write-hooks-schema:
     cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
+# Keep graphify focused on codex-rs and wire the Codex hook integration.
+[no-cd]
+graphify-setup:
+    cd "{{ justfile_directory() }}" && "${GRAPHIFY_BIN:-graphify}" codex install && "${GRAPHIFY_BIN:-graphify}" hook install && just graphify-link
+
+[no-cd]
+graphify-link:
+    ln -sfn "{{ justfile_directory() }}.build/codex-rs/graphify-out" "{{ justfile_directory() }}/graphify-out"
+
+[no-cd]
+graphify-update:
+    "${GRAPHIFY_BIN:-graphify}" update "{{ justfile_directory() }}.build/codex-rs"
+
+[no-cd]
+graphify-query question:
+    "${GRAPHIFY_BIN:-graphify}" query "{{question}}" --graph "{{ justfile_directory() }}.build/codex-rs/graphify-out/graph.json"
+
+[no-cd]
+graphify-watch:
+    "${GRAPHIFY_BIN:-graphify}" watch "{{ justfile_directory() }}.build/codex-rs"
+
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
 argument-comment-lint *args:
