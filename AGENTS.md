@@ -11,3 +11,15 @@ In the `codex-rs` folder where the Rust code lives:
 - Escalated shell access may be needed for cargo (due to sccache).
 - Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness.
 - `codex-rs/Cargo.lock` may already be dirty from normal local Cargo usage; do not treat that alone as a blocker.
+
+## graphify
+
+This project keeps its knowledge graph under codex.build/codex-rs/graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when codex.build/codex-rs/graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If codex.build/codex-rs/graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read codex.build/codex-rs/graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
