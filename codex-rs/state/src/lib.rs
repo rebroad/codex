@@ -59,6 +59,8 @@ pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
 pub use model_pricing::CREDITS_PER_USD;
 pub use model_pricing::MODEL_PRICING_FILENAME;
+pub use model_pricing::estimate_usage_credits_for_model;
+pub use model_pricing::estimate_usage_usd_for_model;
 pub use model_pricing::ModelPricingEntry;
 pub use model_pricing::ModelPricingFile;
 pub use model_pricing::load_model_pricing;

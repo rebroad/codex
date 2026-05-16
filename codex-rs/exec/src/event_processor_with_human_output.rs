@@ -13,6 +13,9 @@ use codex_core::version::CODEX_BUILD_VERSION;
 use codex_model_provider_info::WireApi;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_state::estimate_usage_usd_for_model;
+use codex_state::load_model_pricing;
+use codex_state::ModelPricingFile;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 
@@ -36,6 +39,8 @@ pub(crate) struct EventProcessorWithHumanOutput {
     final_message_rendered: bool,
     emit_final_message_on_shutdown: bool,
     last_total_token_usage: Option<ThreadTokenUsage>,
+    model_slug: Option<String>,
+    model_pricing: ModelPricingFile,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -44,6 +49,8 @@ impl EventProcessorWithHumanOutput {
         config: &Config,
         last_message_path: Option<PathBuf>,
     ) -> Self {
+        let model_pricing = load_model_pricing(config.codex_home.as_path())
+            .unwrap_or_else(|_| ModelPricingFile::bundled_default().expect("bundled pricing"));
         let style = |styled: Style, plain: Style| if with_ansi { styled } else { plain };
         Self {
             bold: style(Style::new().bold(), Style::new()),
@@ -61,6 +68,8 @@ impl EventProcessorWithHumanOutput {
             final_message_rendered: false,
             emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
+            model_slug: config.model.clone(),
+            model_pricing,
         }
     }
 
@@ -379,13 +388,19 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         }
 
         if let Some(usage) = &self.last_total_token_usage {
+            let usage_usd = estimate_usage_usd_for_model(
+                &self.model_pricing,
+                self.model_slug.as_deref(),
+                usage.total.input_tokens,
+                usage.total.cached_input_tokens,
+                usage.total.output_tokens,
+                /*regional_processing*/ false,
+            );
             eprintln!(
                 "{}\n{}",
                 "tokens used".style(self.dimmed),
                 format!(
-                    "Token usage: blended_total={} total={} input={} cached_input={} output={} reasoning_output={}",
-                    blended_total(usage),
-                    usage.total.total_tokens,
+                    "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}",
                     usage.total.input_tokens,
                     usage.total.cached_input_tokens,
                     usage.total.output_tokens,
@@ -546,12 +561,6 @@ fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
                 _ => None,
             })
         })
-}
-
-fn blended_total(usage: &ThreadTokenUsage) -> i64 {
-    let cached_input = usage.total.cached_input_tokens.max(0);
-    let non_cached_input = (usage.total.input_tokens - cached_input).max(0);
-    (non_cached_input + usage.total.output_tokens.max(0)).max(0)
 }
 
 fn should_print_final_message_to_stdout(
