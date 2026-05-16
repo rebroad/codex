@@ -88,6 +88,7 @@ use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
+use tracing::info;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -262,9 +263,11 @@ impl MessageProcessor {
         });
         // Keep plugin startup warmups aligned at app-server startup.
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+        info!("app-server startup: scheduling plugin warmups");
         thread_manager
             .plugins_manager()
             .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
+        info!("app-server startup: plugin warmups scheduled");
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,

@@ -345,6 +345,10 @@ fn log_format_from_env() -> LogFormat {
     LogFormat::from_env_value(value.as_deref())
 }
 
+fn app_server_log_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
 pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
@@ -503,16 +507,22 @@ pub async fn run_main_with_transport(
             .json()
             .with_writer(std::io::stderr)
             .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-            .with_filter(EnvFilter::from_default_env())
+            .with_filter(app_server_log_filter())
             .boxed(),
         LogFormat::Default => tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-            .with_filter(EnvFilter::from_default_env())
+            .with_filter(app_server_log_filter())
             .boxed(),
     };
     let log_mode = config.app_server_log.mode;
     let mut log_file_guard: Option<WorkerGuard> = None;
+    info!(
+        ?transport,
+        ?session_source,
+        ?log_mode,
+        "app-server startup: configuring logging"
+    );
     let log_layer: Option<Box<dyn Layer<Registry> + Send + Sync + 'static>> = match log_mode {
         AppServerLogMode::Stderr => Some(stderr_layer()),
         AppServerLogMode::Log | AppServerLogMode::LogAndStderr => {
@@ -539,12 +549,12 @@ pub async fn run_main_with_transport(
                                 .json()
                                 .with_writer(writer)
                                 .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-                                .with_filter(EnvFilter::from_default_env())
+                                .with_filter(app_server_log_filter())
                                 .boxed(),
                             LogFormat::Default => tracing_subscriber::fmt::layer()
                                 .with_writer(writer)
                                 .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-                                .with_filter(EnvFilter::from_default_env())
+                                .with_filter(app_server_log_filter())
                                 .boxed(),
                         }
                     } else {
@@ -554,12 +564,12 @@ pub async fn run_main_with_transport(
                                 .json()
                                 .with_writer(writer)
                                 .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-                                .with_filter(EnvFilter::from_default_env())
+                                .with_filter(app_server_log_filter())
                                 .boxed(),
                             LogFormat::Default => tracing_subscriber::fmt::layer()
                                 .with_writer(writer)
                                 .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-                                .with_filter(EnvFilter::from_default_env())
+                                .with_filter(app_server_log_filter())
                                 .boxed(),
                         }
                     }
@@ -605,6 +615,7 @@ pub async fn run_main_with_transport(
         .with(otel_tracing_layer)
         .try_init();
     let _log_file_guard = log_file_guard;
+    info!("app-server startup: tracing subscriber initialized");
     for warning in &config_warnings {
         match &warning.details {
             Some(details) => error!("{} {}", warning.summary, details),
