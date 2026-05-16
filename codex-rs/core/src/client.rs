@@ -159,6 +159,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    allow_previous_response_id: AtomicBool,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -306,6 +307,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                allow_previous_response_id: AtomicBool::new(true),
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -322,6 +324,12 @@ impl ModelClient {
             websocket_session: self.take_cached_websocket_session(),
             turn_state: Arc::new(OnceLock::new()),
         }
+    }
+
+    pub(crate) fn set_previous_response_id_allowed(&self, allowed: bool) {
+        self.state
+            .allow_previous_response_id
+            .store(allowed, Ordering::Relaxed);
     }
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -963,6 +971,14 @@ impl ModelClientSession {
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
     ) -> ResponsesWsRequest {
+        if !self
+            .client
+            .state
+            .allow_previous_response_id
+            .load(Ordering::Relaxed)
+        {
+            return ResponsesWsRequest::ResponseCreate(payload);
+        }
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
