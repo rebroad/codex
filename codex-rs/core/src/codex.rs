@@ -4062,7 +4062,7 @@ impl Session {
                 }
             }
         }
-        self.send_token_count_event(turn_context).await;
+        self.send_token_count_event(turn_context, query_id).await;
     }
 
     pub(crate) async fn record_startup_prewarm_usage(&self, completion: PrewarmCompletionStats) {
@@ -4140,7 +4140,7 @@ impl Session {
 
             state.set_token_info(Some(info));
         }
-        self.send_token_count_event(turn_context).await;
+        self.send_token_count_event(turn_context, None).await;
     }
 
     pub(crate) async fn update_rate_limits(
@@ -4176,7 +4176,7 @@ impl Session {
                 }
             }
         }
-        self.send_token_count_event(turn_context).await;
+        self.send_token_count_event(turn_context, None).await;
     }
 
     pub(crate) async fn record_usage_limit_reached(&self) {
@@ -4233,12 +4233,20 @@ impl Session {
         state.set_server_reasoning_included(included);
     }
 
-    async fn send_token_count_event(&self, turn_context: &TurnContext) {
+    async fn send_token_count_event(
+        &self,
+        turn_context: &TurnContext,
+        query_id: Option<&str>,
+    ) {
         let (info, rate_limits) = {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let event = EventMsg::TokenCount(TokenCountEvent {
+            info,
+            rate_limits,
+            query_id: query_id.map(str::to_owned),
+        });
         self.send_event(turn_context, event).await;
     }
 
@@ -4247,7 +4255,7 @@ impl Session {
             let mut state = self.state.lock().await;
             state.set_token_usage_full(context_window);
         }
-        self.send_token_count_event(turn_context).await;
+        self.send_token_count_event(turn_context, None).await;
     }
 
     pub(crate) async fn record_response_item_and_emit_turn_item(

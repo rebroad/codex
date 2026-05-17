@@ -9279,6 +9279,7 @@ guardian_approval = true
                 },
                 model_context_window,
             },
+            query_id: None,
         })
     }
 

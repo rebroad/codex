@@ -2193,12 +2193,17 @@ async fn handle_token_count_event(
     token_count_event: TokenCountEvent,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
-    let TokenCountEvent { info, rate_limits } = token_count_event;
+    let TokenCountEvent {
+        info,
+        rate_limits,
+        query_id,
+    } = token_count_event;
     if let Some(token_usage) = info.as_ref().cloned().map(ThreadTokenUsage::from) {
         let notification = ThreadTokenUsageUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id,
             token_usage,
+            query_id,
         };
         outgoing
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
@@ -4005,6 +4010,7 @@ mod tests {
             TokenCountEvent {
                 info: Some(info),
                 rate_limits: Some(rate_limits),
+                query_id: None,
             },
             &outgoing,
         )
@@ -4059,6 +4065,7 @@ mod tests {
             TokenCountEvent {
                 info: None,
                 rate_limits: None,
+                query_id: None,
             },
             &outgoing,
         )
