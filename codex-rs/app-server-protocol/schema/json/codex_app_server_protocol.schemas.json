@@ -14402,6 +14402,12 @@
       "ThreadTokenUsageUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "queryId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "threadId": {
             "type": "string"
           },
