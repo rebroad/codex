@@ -1,6 +1,8 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
+use crate::personality::render_model_instructions;
+use crate::personality::resolve_personality_message;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -10,6 +12,7 @@ use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
+use std::path::Path;
 
 fn build_environment_update_item(
     previous: Option<&TurnContextItem>,
@@ -115,6 +118,7 @@ pub(crate) fn build_initial_realtime_item(
 fn build_personality_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
+    codex_home: &Path,
     personality_feature_enabled: bool,
 ) -> Option<DeveloperInstructions> {
     if !personality_feature_enabled {
@@ -125,11 +129,11 @@ fn build_personality_update_item(
         return None;
     }
 
-    if let Some(personality) = next.personality
-        && next.personality != previous.personality
+    if let Some(personality) = next.personality.clone()
+        && next.personality.as_ref() != previous.personality.as_ref()
     {
-        let model_info = &next.model_info;
-        let personality_message = personality_message_for(model_info, personality);
+        let personality_message =
+            personality_message_for(&next.model_info, codex_home, personality);
         personality_message.map(DeveloperInstructions::personality_spec_message)
     } else {
         None
@@ -138,25 +142,25 @@ fn build_personality_update_item(
 
 pub(crate) fn personality_message_for(
     model_info: &ModelInfo,
+    codex_home: &Path,
     personality: Personality,
 ) -> Option<String> {
-    model_info
-        .model_messages
-        .as_ref()
-        .and_then(|spec| spec.get_personality_message(Some(personality)))
-        .filter(|message| !message.is_empty())
+    resolve_personality_message(model_info, codex_home, Some(personality))
+        .and_then(|message| if message.is_empty() { None } else { Some(message) })
 }
 
 pub(crate) fn build_model_instructions_update_item(
     previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
+    codex_home: &Path,
 ) -> Option<DeveloperInstructions> {
     let previous_turn_settings = previous_turn_settings?;
     if previous_turn_settings.model == next.model_info.slug {
         return None;
     }
 
-    let model_instructions = next.model_info.get_model_instructions(next.personality);
+    let model_instructions =
+        render_model_instructions(&next.model_info, next.personality.clone(), codex_home);
     if model_instructions.is_empty() {
         return None;
     }
@@ -197,6 +201,7 @@ pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
+    codex_home: &Path,
     shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
@@ -209,11 +214,11 @@ pub(crate) fn build_settings_update_items(
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
-        build_model_instructions_update_item(previous_turn_settings, next),
+        build_model_instructions_update_item(previous_turn_settings, next, codex_home),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
-        build_personality_update_item(previous, next, personality_feature_enabled),
+        build_personality_update_item(previous, next, codex_home, personality_feature_enabled),
     ]
     .into_iter()
     .flatten()
