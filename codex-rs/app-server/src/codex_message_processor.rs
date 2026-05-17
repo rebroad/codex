@@ -2152,7 +2152,7 @@ impl CodexMessageProcessor {
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
-            personality: _personality,
+            personality,
             ephemeral,
             persist_extended_history,
         } = params;
@@ -2166,7 +2166,7 @@ impl CodexMessageProcessor {
             sandbox,
             base_instructions,
             developer_instructions,
-            /*personality*/ None,
+            personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
         let cloud_requirements = self.current_cloud_requirements();
