@@ -85,6 +85,7 @@ use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::warn;
 
@@ -399,6 +400,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
+                shutdown_token: CancellationToken::new(),
             });
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();
