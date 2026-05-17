@@ -378,6 +378,13 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_reload_slash_command_returns_error() -> Result<()> {
+    for command in ["/reload", "\\reload"] {
+        turn_start_reload_command_returns_error(command).await?;
+    }
+    Ok(())
+}
+
+async fn turn_start_reload_command_returns_error(command: &str) -> Result<()> {
     let responses = vec![];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -412,7 +419,7 @@ async fn turn_start_reload_slash_command_returns_error() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
-                text: "/reload".to_string(),
+                text: command.to_string(),
                 text_elements: Vec::new(),
             }],
             ..Default::default()
@@ -435,6 +442,13 @@ async fn turn_start_reload_slash_command_returns_error() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_restart_slash_command_returns_error_and_exits() -> Result<()> {
+    for command in ["/restart", "\\restart"] {
+        turn_start_restart_command_returns_error_and_exits(command).await?;
+    }
+    Ok(())
+}
+
+async fn turn_start_restart_command_returns_error_and_exits(command: &str) -> Result<()> {
     let responses = vec![];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -469,7 +483,7 @@ async fn turn_start_restart_slash_command_returns_error_and_exits() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
-                text: "/restart".to_string(),
+                text: command.to_string(),
                 text_elements: Vec::new(),
             }],
             ..Default::default()
