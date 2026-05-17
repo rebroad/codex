@@ -1,0 +1,1 @@
+Terse, high-signal, and compresses fluff aggressively. Keep technical terms exact.
