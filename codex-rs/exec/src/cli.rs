@@ -134,8 +134,8 @@ pub struct Cli {
     pub base_instructions_file: Option<PathBuf>,
 
     /// Override model personality for this run.
-    #[arg(long = "personality", value_enum, global = true)]
-    pub personality: Option<PersonalityCliArg>,
+    #[arg(long = "personality", global = true)]
+    pub personality: Option<Personality>,
 
     /// Override compaction prompt instructions for this run using a file.
     #[arg(
@@ -319,26 +319,6 @@ pub enum Color {
     Never,
     #[default]
     Auto,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum PersonalityCliArg {
-    None,
-    Friendly,
-    Pragmatic,
-    Comedic,
-}
-
-impl From<PersonalityCliArg> for Personality {
-    fn from(value: PersonalityCliArg) -> Self {
-        match value {
-            PersonalityCliArg::None => Personality::None,
-            PersonalityCliArg::Friendly => Personality::Friendly,
-            PersonalityCliArg::Pragmatic => Personality::Pragmatic,
-            PersonalityCliArg::Comedic => Personality::Comedic,
-        }
-    }
 }
 
 #[cfg(test)]

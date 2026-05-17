@@ -2316,7 +2316,7 @@ impl App {
                             *summary,
                             *service_tier,
                             collaboration_mode.clone(),
-                            *personality,
+                            personality.clone(),
                             final_output_json_schema.clone(),
                         )
                         .await?;
@@ -4943,12 +4943,12 @@ impl App {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_personality(Some(personality))
+                    .set_personality(Some(personality.clone()))
                     .apply()
                     .await
                 {
                     Ok(()) => {
-                        let label = Self::personality_label(personality);
+                        let label = Self::personality_label(&personality);
                         let mut message = format!("Personality set to {label}");
                         if let Some(profile) = profile {
                             message.push_str(" for ");
@@ -5761,7 +5761,7 @@ impl App {
     }
 
     fn on_update_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
+        self.config.personality = Some(personality.clone());
         self.chat_widget.set_personality(personality);
     }
 
@@ -5788,12 +5788,13 @@ impl App {
         }
     }
 
-    fn personality_label(personality: Personality) -> &'static str {
+    fn personality_label(personality: &Personality) -> String {
         match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
-            Personality::Comedic => "Comedic",
+            Personality::None => "None".to_string(),
+            Personality::Friendly => "Friendly".to_string(),
+            Personality::Pragmatic => "Pragmatic".to_string(),
+            Personality::Comedic => "Comedic".to_string(),
+            Personality::Custom(name) => format!("Custom ({name})"),
         }
     }
 

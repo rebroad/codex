@@ -1203,7 +1203,7 @@ fn thread_start_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: if bare_prompt {
             Some(String::new())
         } else {
@@ -1233,7 +1233,7 @@ fn thread_resume_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config, bare_prompt),
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: if bare_prompt {
             Some(String::new())
         } else {
@@ -2122,7 +2122,7 @@ async fn run_direct_request(
 
     let mut prompt = Prompt::default();
     prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
-    prompt.personality = config.personality;
+    prompt.personality = config.personality.clone();
     if bare_prompt {
         prompt.base_instructions.text = String::new();
     } else if let Some(base_instructions) = &config.base_instructions {
