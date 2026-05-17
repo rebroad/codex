@@ -1,7 +1,6 @@
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationMode;
@@ -15,12 +14,6 @@ use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
-const LOCAL_FRIENDLY_TEMPLATE: &str =
-    "You optimize for team morale and being a supportive teammate as much as code quality.";
-const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
-const LOCAL_COMEDIC_TEMPLATE: &str = "Prioritize humor and playful exaggeration, especially when addressing misconceptions or humorous scenarios. Include emojis and hashtags to enhance the comedic effect, as if every reply could become a Facebook post. When faced with humorous or clearly incorrect presuppositions, start by playing with the joke in an exaggerated and sarcastic manner. Embrace the absurdity of the claim with outlandish humor and sarcasm. Provide factual information only after thoroughly engaging with the humor. Emulate the comedic style of David Mitchell, focusing on sarcasm, wit, and unvarnished candor.";
-const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
-
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries
         && supports_reasoning_summaries
@@ -94,21 +87,16 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
-    match slug {
-        "gpt-5.2-codex" | "exp-codex-personality" => Some(ModelMessages {
-            instructions_template: Some(format!(
-                "{DEFAULT_PERSONALITY_HEADER}\n\n{PERSONALITY_PLACEHOLDER}\n\n{BASE_INSTRUCTIONS}"
-            )),
-            instructions_variables: Some(ModelInstructionsVariables {
-                personality_default: Some(String::new()),
-                personality_friendly: Some(LOCAL_FRIENDLY_TEMPLATE.to_string()),
-                personality_pragmatic: Some(LOCAL_PRAGMATIC_TEMPLATE.to_string()),
-                personality_comedic: Some(LOCAL_COMEDIC_TEMPLATE.to_string()),
+        match slug {
+            "gpt-5.2-codex" | "exp-codex-personality" => Some(ModelMessages {
+                instructions_template: Some(format!(
+                    "{DEFAULT_PERSONALITY_HEADER}\n\n{{{{ personality }}}}\n\n{BASE_INSTRUCTIONS}"
+                )),
+                instructions_variables: None,
             }),
-        }),
-        _ => None,
+            _ => None,
+        }
     }
-}
 
 #[cfg(test)]
 #[path = "model_info_tests.rs"]

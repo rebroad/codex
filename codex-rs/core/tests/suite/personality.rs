@@ -12,6 +12,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::builtin_personality_message;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -36,9 +37,13 @@ use tokio::time::sleep;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
-const LOCAL_FRIENDLY_TEMPLATE: &str =
-    "You optimize for team morale and being a supportive teammate as much as code quality.";
-const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
+fn friendly_template() -> &'static str {
+    builtin_personality_message(Personality::Friendly).expect("builtin friendly personality")
+}
+
+fn pragmatic_template() -> &'static str {
+    builtin_personality_message(Personality::Pragmatic).expect("builtin pragmatic personality")
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn personality_does_not_mutate_base_instructions_without_template() {
@@ -171,7 +176,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     let instructions_text = request.instructions_text();
 
     assert!(
-        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        instructions_text.contains(friendly_template()),
         "expected personality update to include the local friendly template, got: {instructions_text:?}"
     );
 
@@ -228,11 +233,11 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
     let request = resp_mock.single_request();
     let instructions_text = request.instructions_text();
     assert!(
-        !instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        !instructions_text.contains(friendly_template()),
         "expected no friendly personality template, got: {instructions_text:?}"
     );
     assert!(
-        !instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        !instructions_text.contains(pragmatic_template()),
         "expected no pragmatic personality template, got: {instructions_text:?}"
     );
     assert!(
@@ -292,7 +297,7 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
     let request = resp_mock.single_request();
     let instructions_text = request.instructions_text();
     assert!(
-        instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        instructions_text.contains(pragmatic_template()),
         "expected default friendly template, got: {instructions_text:?}"
     );
 
@@ -396,7 +401,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         "expected personality update preamble, got {personality_text:?}"
     );
     assert!(
-        personality_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        personality_text.contains(friendly_template()),
         "expected personality update to include the local pragmatic template, got: {personality_text:?}"
     );
 
