@@ -828,6 +828,18 @@ impl ModelClientSession {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        if prompt_debug_http_enabled() {
+            prompt_debug_http_log(format!(
+                "responses request route: model={} personality={:?} base_instructions_len={} allow_previous_response_id={}",
+                model_info.slug,
+                prompt.personality,
+                instructions.len(),
+                self.client
+                    .state
+                    .allow_previous_response_id
+                    .load(Ordering::Relaxed)
+            ));
+        }
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
@@ -977,9 +989,15 @@ impl ModelClientSession {
             .allow_previous_response_id
             .load(Ordering::Relaxed)
         {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log("previous_response_id route: disabled by client state");
+            }
             return ResponsesWsRequest::ResponseCreate(payload);
         }
         let Some(last_response) = self.get_last_response() else {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log("previous_response_id route: no prior response available");
+            }
             return ResponsesWsRequest::ResponseCreate(payload);
         };
         let Some(incremental_items) = self.get_incremental_items(
@@ -987,12 +1005,29 @@ impl ModelClientSession {
             Some(&last_response),
             /*allow_empty_delta*/ true,
         ) else {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log(
+                    "previous_response_id route: request was not incremental, sending full request",
+                );
+            }
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
         if last_response.response_id.is_empty() {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log(
+                    "previous_response_id route: prior response id was empty, sending full request",
+                );
+            }
             trace!("incremental request failed, no previous response id");
             return ResponsesWsRequest::ResponseCreate(payload);
+        }
+
+        if prompt_debug_http_enabled() {
+            prompt_debug_http_log(format!(
+                "previous_response_id route: attaching {}",
+                last_response.response_id
+            ));
         }
 
         ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
