@@ -179,6 +179,7 @@ const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
 const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
 const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
 const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
+const CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_STDERR";
 const DEFAULT_DIRECT_SYSTEM_PROMPT: &str = "You are a helpful assistant. Respond directly to the user request without running tools or shell commands.";
 
 enum InitialOperation {
@@ -224,6 +225,7 @@ struct BackendCaptureGuard {
     prior_capture_input: Option<std::ffi::OsString>,
     prior_capture_output: Option<std::ffi::OsString>,
     prior_capture_reasoning: Option<std::ffi::OsString>,
+    prior_capture_stderr: Option<std::ffi::OsString>,
 }
 
 fn format_exec_debug_route(config: &Config) -> String {
@@ -306,6 +308,7 @@ impl BackendCaptureGuard {
         let prior_capture_input = std::env::var_os(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR);
         let prior_capture_output = std::env::var_os(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR);
         let prior_capture_reasoning = std::env::var_os(CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR);
+        let prior_capture_stderr = std::env::var_os(CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR);
         // SAFETY: This is used by a single-process `codex exec` invocation to
         // coordinate backend capture with downstream async tasks.
         unsafe {
@@ -313,12 +316,14 @@ impl BackendCaptureGuard {
             std::env::set_var(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR, "1");
             std::env::set_var(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR, "1");
             std::env::set_var(CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR, "1");
         };
         Self {
             prior_capture_enabled,
             prior_capture_input,
             prior_capture_output,
             prior_capture_reasoning,
+            prior_capture_stderr,
         }
     }
 }
@@ -340,6 +345,10 @@ impl Drop for BackendCaptureGuard {
         restore_env_var(
             CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR,
             self.prior_capture_reasoning.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR,
+            self.prior_capture_stderr.take(),
         );
     }
 }

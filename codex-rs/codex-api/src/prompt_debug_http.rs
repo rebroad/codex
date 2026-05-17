@@ -21,6 +21,7 @@ const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
 const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
 const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 const CODEX_BACKEND_CAPTURE_DIR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_DIR";
+const CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_STDERR";
 const CODEX_PROMPT_DEBUG_HTTP_PREFIX: &str = "[codex backend capture]";
 const EMAIL_PLACEHOLDER: &str = "$EMAIL";
 const QUERY_ID_COUNTER_FILENAME: &str = ".query_id_counter";
@@ -769,7 +770,7 @@ pub fn capture_dir() -> Option<PathBuf> {
 }
 
 pub fn prompt_debug_http_log(message: impl AsRef<str>) {
-    if !prompt_debug_http_enabled() {
+    if !prompt_debug_http_enabled() || env::var_os(CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR).is_none() {
         return;
     }
 
