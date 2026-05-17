@@ -57,6 +57,8 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
@@ -90,8 +92,14 @@ use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::info;
 use tracing::Instrument;
+use tokio_util::sync::CancellationToken;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
+enum TurnStartCommand {
+    Reload,
+    Restart,
+}
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -174,6 +182,7 @@ pub(crate) struct MessageProcessor {
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
     rpc_transport: AppServerRpcTransport,
     remote_control_handle: Option<RemoteControlHandle>,
+    shutdown_token: CancellationToken,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -200,6 +209,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
+    pub(crate) shutdown_token: CancellationToken,
 }
 
 impl MessageProcessor {
@@ -221,6 +231,7 @@ impl MessageProcessor {
             auth_manager,
             rpc_transport,
             remote_control_handle,
+            shutdown_token,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -294,7 +305,12 @@ impl MessageProcessor {
             config_warnings: Arc::new(config_warnings),
             rpc_transport,
             remote_control_handle,
+            shutdown_token,
         }
+    }
+
+    fn request_shutdown(&self) {
+        self.shutdown_token.cancel();
     }
 
     pub(crate) fn clear_runtime_references(&self) {
@@ -758,6 +774,28 @@ impl MessageProcessor {
                 })
                 .await;
             }
+            ClientRequest::TurnStart { request_id, params } => {
+                let connection_request_id = ConnectionRequestId {
+                    connection_id,
+                    request_id: request_id.clone(),
+                };
+                if let Some(command) = Self::turn_start_command(&params) {
+                    self.handle_turn_start_command(connection_request_id, command)
+                        .await;
+                    return;
+                }
+
+                self.codex_message_processor
+                    .process_request(
+                        connection_id,
+                        ClientRequest::TurnStart { request_id, params },
+                        session.app_server_client_name.clone(),
+                        session.client_version.clone(),
+                        request_context,
+                    )
+                    .boxed()
+                    .await;
+            }
             ClientRequest::ConfigRequirementsRead {
                 request_id,
                 params: _,
@@ -874,6 +912,54 @@ impl MessageProcessor {
                     )
                     .boxed()
                     .await;
+            }
+        }
+    }
+
+    fn turn_start_command(params: &TurnStartParams) -> Option<TurnStartCommand> {
+        if params.input.len() != 1 {
+            return None;
+        }
+        let text = match params.input.first()? {
+            V2UserInput::Text { text, .. } => text,
+            _ => return None,
+        };
+        if text.trim().eq_ignore_ascii_case("/reload") {
+            return Some(TurnStartCommand::Reload);
+        }
+        if text.trim().eq_ignore_ascii_case("/restart") {
+            return Some(TurnStartCommand::Restart);
+        }
+        None
+    }
+
+    async fn handle_turn_start_command(
+        &self,
+        request_id: ConnectionRequestId,
+        command: TurnStartCommand,
+    ) {
+        match command {
+            TurnStartCommand::Reload => {
+                let auth_changed = self.reload_runtime_state().await;
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("Reloaded config and auth (authChanged={auth_changed})."),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+            TurnStartCommand::Restart => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "Restart requested; app-server will exit.".to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                self.request_shutdown();
+                tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    std::process::exit(0);
+                });
             }
         }
     }
