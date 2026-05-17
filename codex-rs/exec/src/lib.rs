@@ -60,6 +60,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
@@ -111,6 +112,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
+use std::fmt::Write as _;
 pub use event_processor_with_jsonl_output::CodexStatus;
 pub use event_processor_with_jsonl_output::CollectedThreadEvents;
 pub use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
@@ -222,6 +224,80 @@ struct BackendCaptureGuard {
     prior_capture_input: Option<std::ffi::OsString>,
     prior_capture_output: Option<std::ffi::OsString>,
     prior_capture_reasoning: Option<std::ffi::OsString>,
+}
+
+fn format_exec_debug_route(config: &Config) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "codex exec debug route");
+    let _ = writeln!(out, "  codex_home: {}", config.codex_home.display());
+    let _ = writeln!(out, "  active_profile: {:?}", config.active_profile);
+    let _ = writeln!(out, "  resolved personality: {:?}", config.personality);
+    let _ = writeln!(
+        out,
+        "  personality feature enabled: {}",
+        config.features.enabled(Feature::Personality)
+    );
+
+    let origins = config.config_layer_stack.origins();
+    let _ = writeln!(
+        out,
+        "  personality origin metadata: {:?}",
+        origins.get("personality")
+    );
+
+    let user_layer = config.config_layer_stack.get_user_layer();
+    let _ = writeln!(out, "  user layer present: {}", user_layer.is_some());
+    if let Some(user_layer) = user_layer {
+        let _ = writeln!(out, "  user layer: {:?}", user_layer.name);
+        let _ = writeln!(
+            out,
+            "  user layer personality: {:?}",
+            user_layer.config.get("personality")
+        );
+        let _ = writeln!(
+            out,
+            "  user layer profile: {:?}",
+            user_layer.config.get("profile")
+        );
+        let _ = writeln!(out, "  user layer raw_toml: {:?}", user_layer.raw_toml());
+        if let Some(profile_name) = user_layer
+            .config
+            .get("profile")
+            .and_then(|value| value.as_str())
+        {
+            match config.active_profile.as_deref() {
+                Some(active_profile) if active_profile == profile_name => {
+                    let _ = writeln!(
+                        out,
+                        "  active profile `{profile_name}` is selected by config"
+                    );
+                }
+                Some(active_profile) => {
+                    let _ = writeln!(
+                        out,
+                        "  active profile mismatch: config selected `{active_profile}`, user layer requested `{profile_name}`"
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        out,
+                        "  active profile mismatch: config selected `<none>`, user layer requested `{profile_name}`"
+                    );
+                }
+            }
+        }
+    }
+
+    for layer in config
+        .config_layer_stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, /*include_disabled*/ false)
+    {
+        if let Some(personality) = layer.config.get("personality") {
+            let _ = writeln!(out, "  layer {:?}: personality = {personality}", layer.name);
+        }
+    }
+
+    out
 }
 
 impl BackendCaptureGuard {
@@ -533,6 +609,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
+
+    if debug {
+        eprintln!("{}", format_exec_debug_route(&config));
+    }
 
     if list_models {
         let auth_manager = AuthManager::shared(

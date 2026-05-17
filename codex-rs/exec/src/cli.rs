@@ -157,7 +157,7 @@ pub struct Cli {
     )]
     pub compact_summary_preamble_file: Option<PathBuf>,
 
-    /// Force-enable backend capture for this run (`capture_dir` + query-id files).
+    /// Force-enable backend capture and print the resolved config/personality route.
     #[arg(long = "debug", default_value_t = false, global = true)]
     pub debug: bool,
 

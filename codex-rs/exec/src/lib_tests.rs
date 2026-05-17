@@ -1,4 +1,5 @@
 use super::*;
+use codex_core::config::ConfigBuilder;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use opentelemetry::trace::TraceContextExt;
@@ -18,6 +19,43 @@ fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
 #[test]
 fn exec_defaults_analytics_to_enabled() {
     assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+}
+
+#[tokio::test]
+async fn exec_debug_route_includes_personality_provenance() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "personality = \"comedic\"\n",
+    )
+    .expect("write user config");
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+
+    let route = format_exec_debug_route(&config);
+
+    assert!(
+        route.contains("resolved personality: Some(Comedic)"),
+        "expected resolved personality in debug route, got: {route}"
+    );
+    assert!(
+        route.contains("user layer present: true"),
+        "expected user layer presence in debug route, got: {route}"
+    );
+    assert!(
+        route.contains("user layer personality: Some(String(\"comedic\"))"),
+        "expected raw user personality in debug route, got: {route}"
+    );
+    assert!(
+        route.contains("layer User"),
+        "expected user layer provenance in debug route, got: {route}"
+    );
 }
 
 #[test]
