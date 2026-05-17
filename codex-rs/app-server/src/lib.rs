@@ -755,6 +755,7 @@ pub async fn run_main_with_transport(
             auth_manager,
             rpc_transport: analytics_rpc_transport(transport),
             remote_control_handle: Some(remote_control_handle),
+            shutdown_token: transport_shutdown_token.clone(),
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
@@ -802,6 +803,16 @@ pub async fn run_main_with_transport(
                         }
                         let running_turn_count = *running_turn_count_rx.borrow();
                         shutdown_state.on_signal(connections.len(), running_turn_count);
+                    }
+                    _ = transport_shutdown_token.cancelled(), if !shutdown_state.requested() => {
+                        let running_turn_count = *running_turn_count_rx.borrow();
+                        info!(
+                            "received app-server restart request; exiting now (connections={}, runningAssistantTurns={})",
+                            connections.len(),
+                            running_turn_count,
+                        );
+                        transport_shutdown_token.cancel();
+                        break;
                     }
                     _ = async {
                         if let Some(signal) = reload_signal.as_mut() {

@@ -46,6 +46,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
 use wiremock::MockServer;
 
@@ -252,6 +253,7 @@ fn build_test_processor(
         auth_manager,
         rpc_transport: AppServerRpcTransport::Stdio,
         remote_control_handle: None,
+        shutdown_token: CancellationToken::new(),
     });
     (processor, outgoing_rx)
 }
