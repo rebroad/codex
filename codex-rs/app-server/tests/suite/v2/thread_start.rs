@@ -18,10 +18,14 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -44,6 +48,9 @@ use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const LOCAL_FRIENDLY_TEMPLATE: &str =
+    "You optimize for team morale and being a supportive teammate as much as code quality.";
+const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
@@ -322,6 +329,81 @@ async fn thread_start_accepts_metrics_service_name() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
     assert!(!thread.id.is_empty(), "thread id should not be empty");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_persists_personality_override_into_first_turn() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str("\n[features]\npersonality = true\n");
+    std::fs::write(&config_path, config_toml)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            personality: Some(Personality::Friendly),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("wiremock should record requests");
+    let request = requests
+        .last()
+        .expect("expected a model request for the first turn");
+    let body: serde_json::Value = serde_json::from_slice(&request.body)?;
+    let instructions_text = body
+        .get("instructions")
+        .and_then(serde_json::Value::as_str)
+        .expect("model request should include instructions");
+    assert!(
+        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected thread/start personality to persist into the first turn, got: {instructions_text:?}"
+    );
+    assert!(
+        !instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        "expected the friendly personality to replace the pragmatic default, got: {instructions_text:?}"
+    );
 
     Ok(())
 }
