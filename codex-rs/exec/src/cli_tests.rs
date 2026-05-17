@@ -86,5 +86,5 @@ fn parses_instruction_and_personality_overrides() {
         cli.compact_summary_preamble_file,
         Some(PathBuf::from("/tmp/compact-after.md"))
     );
-    assert_eq!(cli.personality, Some(PersonalityCliArg::Pragmatic));
+    assert_eq!(cli.personality, Some(Personality::Pragmatic));
 }

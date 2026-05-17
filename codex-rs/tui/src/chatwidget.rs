@@ -5759,6 +5759,7 @@ impl ChatWidget {
         let personality = self
             .config
             .personality
+            .clone()
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = Some(self.config.service_tier);
@@ -7730,7 +7731,11 @@ impl ChatWidget {
     }
 
     fn open_personality_popup_for_current_model(&mut self) {
-        let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
+        let current_personality = self
+            .config
+            .personality
+            .clone()
+            .unwrap_or(Personality::Friendly);
         let personalities = [
             Personality::Friendly,
             Personality::Pragmatic,
@@ -7741,8 +7746,9 @@ impl ChatWidget {
         let items: Vec<SelectionItem> = personalities
             .into_iter()
             .map(|personality| {
-                let name = Self::personality_label(personality).to_string();
-                let description = Some(Self::personality_description(personality).to_string());
+                let name = Self::personality_label(&personality);
+                let description = Some(Self::personality_description(&personality));
+                let selected_personality = personality.clone();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::CodexOp(
                         AppCommand::override_turn_context(
@@ -7756,12 +7762,14 @@ impl ChatWidget {
                             /*summary*/ None,
                             /*service_tier*/ None,
                             /*collaboration_mode*/ None,
-                            Some(personality),
+                            Some(selected_personality.clone()),
                         )
                         .into_core(),
                     ));
-                    tx.send(AppEvent::UpdatePersonality(personality));
-                    tx.send(AppEvent::PersistPersonalitySelection { personality });
+                    tx.send(AppEvent::UpdatePersonality(selected_personality.clone()));
+                    tx.send(AppEvent::PersistPersonalitySelection {
+                        personality: selected_personality.clone(),
+                    });
                 })];
                 SelectionItem {
                     name,
@@ -9761,21 +9769,23 @@ impl ChatWidget {
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
     }
 
-    fn personality_label(personality: Personality) -> &'static str {
+    fn personality_label(personality: &Personality) -> String {
         match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
-            Personality::Comedic => "Comedic",
+            Personality::None => "None".to_string(),
+            Personality::Friendly => "Friendly".to_string(),
+            Personality::Pragmatic => "Pragmatic".to_string(),
+            Personality::Comedic => "Comedic".to_string(),
+            Personality::Custom(name) => format!("Custom ({name})"),
         }
     }
 
-    fn personality_description(personality: Personality) -> &'static str {
+    fn personality_description(personality: &Personality) -> String {
         match personality {
-            Personality::None => "No personality instructions.",
-            Personality::Friendly => "Warm, collaborative, and helpful.",
-            Personality::Pragmatic => "Concise, task-focused, and direct.",
-            Personality::Comedic => "Playful, exaggerated, and sarcastic.",
+            Personality::None => "No personality instructions.".to_string(),
+            Personality::Friendly => "Warm, collaborative, and helpful.".to_string(),
+            Personality::Pragmatic => "Concise, task-focused, and direct.".to_string(),
+            Personality::Comedic => "Playful, exaggerated, and sarcastic.".to_string(),
+            Personality::Custom(name) => format!("Custom personality loaded from ~/.codex/personalities/{name}.md."),
         }
     }
 

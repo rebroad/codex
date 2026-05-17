@@ -2,10 +2,11 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::fmt;
 use std::num::NonZeroU64;
+use std::str::FromStr;
 use std::time::Duration;
 use strum_macros::Display;
-use strum_macros::EnumIter;
 use ts_rs::TS;
 
 use crate::openai_models::ReasoningEffort;
@@ -97,28 +98,76 @@ pub enum WindowsSandboxLevel {
     Elevated,
 }
 
-#[derive(
-    Debug,
-    Serialize,
-    Deserialize,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Display,
-    JsonSchema,
-    TS,
-    PartialOrd,
-    Ord,
-    EnumIter,
-)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, JsonSchema, TS)]
+#[serde(try_from = "String", into = "String")]
+#[schemars(with = "String")]
+#[ts(type = "string")]
 pub enum Personality {
     None,
     Friendly,
     Pragmatic,
     Comedic,
+    Custom(String),
+}
+
+impl Personality {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Personality::None => "none",
+            Personality::Friendly => "friendly",
+            Personality::Pragmatic => "pragmatic",
+            Personality::Comedic => "comedic",
+            Personality::Custom(name) => name.as_str(),
+        }
+    }
+}
+
+impl fmt::Display for Personality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<Personality> for String {
+    fn from(value: Personality) -> Self {
+        match value {
+            Personality::None => "none".to_string(),
+            Personality::Friendly => "friendly".to_string(),
+            Personality::Pragmatic => "pragmatic".to_string(),
+            Personality::Comedic => "comedic".to_string(),
+            Personality::Custom(name) => name,
+        }
+    }
+}
+
+impl TryFrom<String> for Personality {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err("personality must not be empty".to_string());
+        }
+        if trimmed.contains('/') || trimmed.contains('\\') {
+            return Err("personality must not contain path separators".to_string());
+        }
+
+        match trimmed.to_ascii_lowercase().as_str() {
+            "none" => Ok(Personality::None),
+            "friendly" => Ok(Personality::Friendly),
+            "pragmatic" => Ok(Personality::Pragmatic),
+            "comedic" => Ok(Personality::Comedic),
+            _ => Ok(Personality::Custom(trimmed.to_string())),
+        }
+    }
+}
+
+impl FromStr for Personality {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.to_string())
+    }
 }
 
 #[derive(
