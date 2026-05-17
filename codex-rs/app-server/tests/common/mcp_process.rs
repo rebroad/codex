@@ -1090,6 +1090,13 @@ impl McpProcess {
         Ok(err)
     }
 
+    pub async fn wait_for_exit(&mut self) -> anyhow::Result<std::process::ExitStatus> {
+        self.process
+            .wait()
+            .await
+            .context("waiting for codex-app-server to exit")
+    }
+
     pub async fn read_stream_until_notification_message(
         &mut self,
         method: &str,
