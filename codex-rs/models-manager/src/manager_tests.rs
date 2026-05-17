@@ -245,7 +245,10 @@ where
 #[tokio::test]
 async fn get_model_info_tracks_fallback_usage() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ModelsManagerConfig::default();
+    let config = ModelsManagerConfig {
+        personality_enabled: true,
+        ..Default::default()
+    };
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
@@ -270,6 +273,32 @@ async fn get_model_info_tracks_fallback_usage() {
         .await;
     assert!(unknown.used_fallback_model_metadata);
     assert_eq!(unknown.slug, "model-that-does-not-exist");
+}
+
+#[tokio::test]
+async fn gpt_5_4_mini_comes_from_bundled_catalog() {
+    let codex_home = tempdir().expect("temp dir");
+    let config = ModelsManagerConfig::default();
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let manager = ModelsManager::new(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        /*model_catalog*/ None,
+        CollaborationModesConfig::default(),
+    );
+
+    let bundled_model = manager
+        .get_remote_models()
+        .await
+        .into_iter()
+        .find(|candidate| candidate.slug == "gpt-5.4-mini")
+        .expect("bundled catalog should include gpt-5.4-mini");
+    assert!(bundled_model.model_messages.is_some());
+
+    let model = manager.get_model_info("gpt-5.4-mini", &config).await;
+
+    assert_eq!(model.display_name, "GPT-5.4-Mini");
+    assert!(!model.used_fallback_model_metadata);
 }
 
 #[tokio::test]

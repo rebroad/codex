@@ -1,6 +1,5 @@
 use super::*;
 use crate::ModelsManagerConfig;
-use codex_protocol::config_types::Personality;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -43,16 +42,4 @@ fn reasoning_summaries_override_false_is_noop_when_model_is_false() {
     let updated = with_config_overrides(model.clone(), &config);
 
     assert_eq!(updated, model);
-}
-
-#[test]
-fn gpt_5_4_mini_fallback_supports_personality_templates() {
-    let model = model_info_from_slug("gpt-5.4-mini");
-    let instructions = model.get_model_instructions(Some(Personality::Comedic));
-
-    assert!(
-        instructions.contains("Prioritize humor and playful exaggeration"),
-        "expected comedic personality instructions, got: {instructions:?}"
-    );
-    assert_ne!(instructions, model.base_instructions);
 }
