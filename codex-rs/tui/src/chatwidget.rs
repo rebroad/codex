@@ -102,6 +102,8 @@ use codex_core::config::ConstraintResult;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
 use codex_core::personality::discover_custom_personalities;
+use codex_core::personality::personality_display_name;
+use codex_core::personality::read_personality_description;
 use codex_core::plugins::PluginsManager;
 use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
@@ -7745,7 +7747,8 @@ impl ChatWidget {
             .into_iter()
             .map(|personality| {
                 let name = Self::personality_label(&personality);
-                let description = Some(Self::personality_description(&personality));
+                let description =
+                    Some(Self::personality_description(&personality, &self.config.codex_home));
                 let selected_personality = personality.clone();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::CodexOp(
@@ -9773,17 +9776,19 @@ impl ChatWidget {
             Personality::Friendly => "Friendly".to_string(),
             Personality::Pragmatic => "Pragmatic".to_string(),
             Personality::Comedic => "Comedic".to_string(),
-            Personality::Custom(name) => format!("Custom ({name})"),
+            Personality::Custom(name) => personality_display_name(name),
         }
     }
 
-    fn personality_description(personality: &Personality) -> String {
+    fn personality_description(personality: &Personality, codex_home: &Path) -> String {
         match personality {
             Personality::None => "No personality instructions.".to_string(),
             Personality::Friendly => "Warm, collaborative, and helpful.".to_string(),
             Personality::Pragmatic => "Concise, task-focused, and direct.".to_string(),
             Personality::Comedic => "Playful, exaggerated, and sarcastic.".to_string(),
-            Personality::Custom(name) => format!("Custom personality loaded from ~/.codex/personalities/{name}.md."),
+            Personality::Custom(name) => read_personality_description(codex_home, name).unwrap_or_else(|| {
+                format!("Custom personality loaded from ~/.codex/personalities/{name}.md.")
+            }),
         }
     }
 
