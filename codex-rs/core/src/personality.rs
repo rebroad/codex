@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use codex_api::prompt_debug_http_enabled;
@@ -11,6 +12,13 @@ use tracing::warn;
 
 const PERSONALITIES_DIRNAME: &str = "personalities";
 const COMEDIC_PERSONALITY_TEMPLATE: &str = include_str!("personality_templates/comedic.md");
+const CAVEMAN_PERSONALITY_TEMPLATE: &str = include_str!("personality_templates/caveman.md");
+
+const CORE_PERSONALITY_NAMES: &[&str] = &["none", "friendly", "pragmatic"];
+const STARTER_PERSONALITIES: &[(&str, &str)] = &[
+    ("comedic", COMEDIC_PERSONALITY_TEMPLATE),
+    ("caveman", CAVEMAN_PERSONALITY_TEMPLATE),
+];
 
 pub(crate) fn render_model_instructions(
     model_info: &ModelInfo,
@@ -33,6 +41,47 @@ pub(crate) fn render_model_instructions(
     }
 
     model_info.base_instructions.clone()
+}
+
+pub fn ensure_personality_starter_files(codex_home: &Path) -> io::Result<()> {
+    let dir = codex_home.join(PERSONALITIES_DIRNAME);
+    fs::create_dir_all(&dir)?;
+    for (name, template) in STARTER_PERSONALITIES {
+        let path = personality_file_path(codex_home, name);
+        if !path.exists() {
+            fs::write(path, template)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn discover_custom_personalities(codex_home: &Path) -> Vec<Personality> {
+    let dir = codex_home.join(PERSONALITIES_DIRNAME);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut personalities = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension() != Some(OsStr::new("md")) {
+                return None;
+            }
+            let stem = path.file_stem()?.to_str()?.trim();
+            if stem.is_empty()
+                || CORE_PERSONALITY_NAMES
+                    .iter()
+                    .any(|builtin| stem.eq_ignore_ascii_case(builtin))
+            {
+                return None;
+            }
+            Some(Personality::Custom(stem.to_string()))
+        })
+        .collect::<Vec<_>>();
+
+    personalities.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    personalities
 }
 
 pub(crate) fn resolve_personality_message(
@@ -69,11 +118,12 @@ pub(crate) fn resolve_personality_message(
 
 fn resolve_file_backed_personality(codex_home: &Path, name: &str) -> Option<String> {
     let path = personality_file_path(codex_home, name);
-    let result = if name == "comedic" {
-        ensure_bootstrap_personality_file(&path)
+    let bootstrap_template = starter_personality_template(name);
+    let result = if let Some(template) = bootstrap_template {
+        ensure_bootstrap_personality_file(&path, template)
             .and_then(|_| fs::read_to_string(&path))
             .map_err(|err| {
-                warn!(path = ?path, error = %err, "failed to bootstrap built-in comedic personality file");
+                warn!(path = ?path, error = %err, "failed to bootstrap built-in personality file");
                 err
             })
     } else {
@@ -93,15 +143,15 @@ fn resolve_file_backed_personality(codex_home: &Path, name: &str) -> Option<Stri
         }
         Err(err) => {
             warn!(name = name, path = ?path, error = %err, "personality file missing or unreadable");
-            if name == "comedic" {
+            if let Some(template) = bootstrap_template {
                 if prompt_debug_http_enabled() {
                     prompt_debug_http_log(format!(
                         "personality file route: name={name} path={} source=builtin-fallback bytes={}",
                         path.display(),
-                        COMEDIC_PERSONALITY_TEMPLATE.len()
+                        template.len()
                     ));
                 }
-                Some(COMEDIC_PERSONALITY_TEMPLATE.to_string())
+                Some(template.to_string())
             } else {
                 None
             }
@@ -109,7 +159,15 @@ fn resolve_file_backed_personality(codex_home: &Path, name: &str) -> Option<Stri
     }
 }
 
-fn ensure_bootstrap_personality_file(path: &Path) -> io::Result<()> {
+fn starter_personality_template(name: &str) -> Option<&'static str> {
+    match name {
+        "comedic" => Some(COMEDIC_PERSONALITY_TEMPLATE),
+        "caveman" => Some(CAVEMAN_PERSONALITY_TEMPLATE),
+        _ => None,
+    }
+}
+
+fn ensure_bootstrap_personality_file(path: &Path, template: &str) -> io::Result<()> {
     if path.exists() {
         return Ok(());
     }
@@ -117,7 +175,7 @@ fn ensure_bootstrap_personality_file(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, COMEDIC_PERSONALITY_TEMPLATE)
+    fs::write(path, template)
 }
 
 fn personality_file_path(codex_home: &Path, name: &str) -> PathBuf {
@@ -190,6 +248,22 @@ mod tests {
     }
 
     #[test]
+    fn caveman_personality_bootstraps_to_file() {
+        let tmp = tempdir().expect("tempdir");
+        let message = resolve_personality_message(
+            &test_model_info(None),
+            tmp.path(),
+            Some(Personality::Custom("caveman".to_string())),
+        )
+        .expect("caveman personality");
+        assert!(message.contains("caveman"));
+        let path = personality_file_path(tmp.path(), "caveman");
+        assert!(path.exists());
+        let file_text = fs::read_to_string(path).expect("read caveman file");
+        assert_eq!(file_text, message);
+    }
+
+    #[test]
     fn custom_personality_reads_from_file() {
         let tmp = tempdir().expect("tempdir");
         let path = personality_file_path(tmp.path(), "playful");
@@ -220,5 +294,55 @@ mod tests {
             codex_protocol::openai_models::builtin_personality_message(Personality::Pragmatic)
                 .expect("builtin pragmatic")
         );
+    }
+
+    #[test]
+    fn discover_custom_personalities_skips_builtins_and_sorts() {
+        let tmp = tempdir().expect("tempdir");
+        let personalities_dir = tmp.path().join(PERSONALITIES_DIRNAME);
+        fs::create_dir_all(&personalities_dir).expect("dir");
+        fs::write(personality_file_path(tmp.path(), "zany"), "zany").expect("zany");
+        fs::write(personality_file_path(tmp.path(), "friendly"), "ignored").expect("friendly");
+        fs::write(personality_file_path(tmp.path(), "caveman"), "caveman").expect("caveman");
+
+        let personalities = discover_custom_personalities(tmp.path());
+        assert_eq!(
+            personalities,
+            vec![
+                Personality::Custom("caveman".to_string()),
+                Personality::Custom("zany".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn discover_custom_personalities_includes_starter_files() {
+        let tmp = tempdir().expect("tempdir");
+        ensure_personality_starter_files(tmp.path()).expect("bootstrap personalities");
+
+        let personalities = discover_custom_personalities(tmp.path());
+        assert!(personalities.contains(&Personality::Custom("comedic".to_string())));
+        assert!(personalities.contains(&Personality::Custom("caveman".to_string())));
+    }
+
+    #[test]
+    fn ensure_personality_starter_files_writes_examples() {
+        let tmp = tempdir().expect("tempdir");
+        ensure_personality_starter_files(tmp.path()).expect("bootstrap personalities");
+        assert!(personality_file_path(tmp.path(), "comedic").exists());
+        assert!(personality_file_path(tmp.path(), "caveman").exists());
+    }
+
+    #[test]
+    fn builtins_are_not_discovered_as_custom_personalities() {
+        let tmp = tempdir().expect("tempdir");
+        let personalities_dir = tmp.path().join(PERSONALITIES_DIRNAME);
+        fs::create_dir_all(&personalities_dir).expect("dir");
+        fs::write(personality_file_path(tmp.path(), "friendly"), "ignored").expect("friendly");
+        fs::write(personality_file_path(tmp.path(), "pragmatic"), "ignored").expect("pragmatic");
+        fs::write(personality_file_path(tmp.path(), "none"), "ignored").expect("none");
+
+        let personalities = discover_custom_personalities(tmp.path());
+        assert!(personalities.is_empty());
     }
 }

@@ -101,6 +101,7 @@ use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
+use codex_core::personality::discover_custom_personalities;
 use codex_core::plugins::PluginsManager;
 use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
@@ -7736,11 +7737,8 @@ impl ChatWidget {
             .personality
             .clone()
             .unwrap_or(Personality::Friendly);
-        let personalities = [
-            Personality::Friendly,
-            Personality::Pragmatic,
-            Personality::Comedic,
-        ];
+        let mut personalities = vec![Personality::Friendly, Personality::Pragmatic];
+        personalities.extend(discover_custom_personalities(&self.config.codex_home));
         let supports_personality = self.current_model_supports_personality();
 
         let items: Vec<SelectionItem> = personalities
@@ -7774,7 +7772,7 @@ impl ChatWidget {
                 SelectionItem {
                     name,
                     description,
-                    is_current: current_personality == personality,
+                    is_current: Self::personality_matches(&current_personality, &personality),
                     is_disabled: !supports_personality,
                     actions,
                     dismiss_on_select: true,
@@ -9787,6 +9785,10 @@ impl ChatWidget {
             Personality::Comedic => "Playful, exaggerated, and sarcastic.".to_string(),
             Personality::Custom(name) => format!("Custom personality loaded from ~/.codex/personalities/{name}.md."),
         }
+    }
+
+    fn personality_matches(lhs: &Personality, rhs: &Personality) -> bool {
+        lhs.as_str().eq_ignore_ascii_case(rhs.as_str())
     }
 
     /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).

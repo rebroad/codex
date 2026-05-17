@@ -57,7 +57,7 @@ pub use codex_mcp::MCP_SANDBOX_STATE_CAPABILITY;
 pub use codex_mcp::MCP_SANDBOX_STATE_METHOD;
 pub use codex_mcp::SandboxState;
 mod mcp_tool_call;
-pub(crate) mod personality;
+pub mod personality;
 mod memories;
 pub(crate) mod mention_syntax;
 pub(crate) mod message_history;
