@@ -3,6 +3,7 @@
 use std::fs;
 use std::fs::File;
 use std::io::Error as IoError;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -263,15 +264,24 @@ impl RolloutRecorder {
             return Ok(truncate_fs_page(fs_page, page_size, sort_key));
         }
 
-        // Warm the DB by repairing every filesystem hit before querying SQLite.
+        // Warm the DB best-effort without blocking thread list startup.
+        //
+        // Read-repair is useful for keeping SQLite consistent, but Cursor's
+        // app-server startup path should not wait on it before answering the
+        // initial handshake and list requests.
         for item in &fs_page.items {
-            state_db::read_repair_rollout_path(
-                state_db_ctx.as_deref(),
-                item.thread_id,
-                Some(archived),
-                item.path.as_path(),
-            )
-            .await;
+            let state_db_ctx = state_db_ctx.clone();
+            let rollout_path = item.path.clone();
+            let thread_id = item.thread_id;
+            tokio::spawn(async move {
+                state_db::read_repair_rollout_path(
+                    state_db_ctx.as_deref(),
+                    thread_id,
+                    Some(archived),
+                    rollout_path.as_path(),
+                )
+                .await;
+            });
         }
 
         if let Some(db_page) = state_db::list_threads_db(
@@ -287,7 +297,23 @@ impl RolloutRecorder {
         )
         .await
         {
-            return Ok(db_page.into());
+            let mut page: ThreadsPage = db_page.into();
+            if page.items.is_empty() && !fs_page.items.is_empty() {
+                return Ok(truncate_fs_page(fs_page, page_size, sort_key));
+            }
+            let fs_paths_by_thread_id: HashMap<ThreadId, PathBuf> = fs_page
+                .items
+                .iter()
+                .filter_map(|item| item.thread_id.map(|thread_id| (thread_id, item.path.clone())))
+                .collect();
+            for item in &mut page.items {
+                if let Some(thread_id) = item.thread_id
+                    && let Some(fs_path) = fs_paths_by_thread_id.get(&thread_id)
+                {
+                    item.path = fs_path.clone();
+                }
+            }
+            return Ok(page);
         }
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
