@@ -924,10 +924,11 @@ impl MessageProcessor {
             V2UserInput::Text { text, .. } => text,
             _ => return None,
         };
-        if text.trim().eq_ignore_ascii_case("/reload") {
+        let command = text.trim();
+        if command.eq_ignore_ascii_case("/reload") || command.eq_ignore_ascii_case("\\reload") {
             return Some(TurnStartCommand::Reload);
         }
-        if text.trim().eq_ignore_ascii_case("/restart") {
+        if command.eq_ignore_ascii_case("/restart") || command.eq_ignore_ascii_case("\\restart") {
             return Some(TurnStartCommand::Restart);
         }
         None
