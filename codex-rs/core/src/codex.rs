@@ -54,6 +54,8 @@ use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::build_track_events_context;
 use codex_api::ToolChoice;
+use codex_api::prompt_debug_http_enabled;
+use codex_api::prompt_debug_http_log;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -3849,14 +3851,38 @@ impl Session {
             && let Some(personality) = turn_context.personality
         {
             let model_info = turn_context.model_info.clone();
+            let personality_message =
+                crate::context_manager::updates::personality_message_for(&model_info, personality);
             let has_baked_personality = model_info.supports_personality()
                 && base_instructions == model_info.get_model_instructions(Some(personality));
+            if prompt_debug_http_enabled() {
+                let personality_variables = model_info
+                    .model_messages
+                    .as_ref()
+                    .and_then(|messages| messages.instructions_variables.as_ref())
+                    .map(|variables| {
+                        (
+                            variables.personality_default.is_some(),
+                            variables.personality_friendly.is_some(),
+                            variables.personality_pragmatic.is_some(),
+                            variables.personality_comedic.is_some(),
+                        )
+                    });
+                let message_preview = personality_message
+                    .as_ref()
+                    .map(|message| message.chars().take(120).collect::<String>());
+                prompt_debug_http_log(format!(
+                    "personality route: requested={:?} model={} supports_personality={} baked_match={} variables_present={:?} selected_message_preview={:?}",
+                    personality,
+                    model_info.slug,
+                    model_info.supports_personality(),
+                    has_baked_personality,
+                    personality_variables,
+                    message_preview
+                ));
+            }
             if !has_baked_personality
-                && let Some(personality_message) =
-                    crate::context_manager::updates::personality_message_for(
-                        &model_info,
-                        personality,
-                    )
+                && let Some(personality_message) = personality_message
             {
                 developer_sections.push(
                     DeveloperInstructions::personality_spec_message(personality_message)

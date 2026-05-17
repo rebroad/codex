@@ -57,6 +57,12 @@
     }
   },
   "properties": {
+    "queryId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "threadId": {
       "type": "string"
     },
