@@ -92,6 +92,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::personality::personality_display_name;
 use codex_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -5794,7 +5795,7 @@ impl App {
             Personality::Friendly => "Friendly".to_string(),
             Personality::Pragmatic => "Pragmatic".to_string(),
             Personality::Comedic => "Comedic".to_string(),
-            Personality::Custom(name) => format!("Custom ({name})"),
+            Personality::Custom(name) => personality_display_name(name),
         }
     }
 

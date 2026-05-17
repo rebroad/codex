@@ -12,12 +12,22 @@ use tracing::warn;
 
 const PERSONALITIES_DIRNAME: &str = "personalities";
 const COMEDIC_PERSONALITY_TEMPLATE: &str = include_str!("personality_templates/comedic.md");
+const COMEDIC_PERSONALITY_DESCRIPTION: &str = include_str!("personality_templates/comedic.txt");
 const CAVEMAN_PERSONALITY_TEMPLATE: &str = include_str!("personality_templates/caveman.md");
+const CAVEMAN_PERSONALITY_DESCRIPTION: &str = include_str!("personality_templates/caveman.txt");
 
 const CORE_PERSONALITY_NAMES: &[&str] = &["none", "friendly", "pragmatic"];
-const STARTER_PERSONALITIES: &[(&str, &str)] = &[
-    ("comedic", COMEDIC_PERSONALITY_TEMPLATE),
-    ("caveman", CAVEMAN_PERSONALITY_TEMPLATE),
+const STARTER_PERSONALITIES: &[(&str, &str, &str)] = &[
+    (
+        "comedic",
+        COMEDIC_PERSONALITY_TEMPLATE,
+        COMEDIC_PERSONALITY_DESCRIPTION,
+    ),
+    (
+        "caveman",
+        CAVEMAN_PERSONALITY_TEMPLATE,
+        CAVEMAN_PERSONALITY_DESCRIPTION,
+    ),
 ];
 
 pub(crate) fn render_model_instructions(
@@ -46,10 +56,14 @@ pub(crate) fn render_model_instructions(
 pub fn ensure_personality_starter_files(codex_home: &Path) -> io::Result<()> {
     let dir = codex_home.join(PERSONALITIES_DIRNAME);
     fs::create_dir_all(&dir)?;
-    for (name, template) in STARTER_PERSONALITIES {
+    for (name, template, description) in STARTER_PERSONALITIES {
         let path = personality_file_path(codex_home, name);
         if !path.exists() {
             fs::write(path, template)?;
+        }
+        let description_path = personality_description_file_path(codex_home, name);
+        if !description_path.exists() {
+            fs::write(description_path, description)?;
         }
     }
     Ok(())
@@ -68,6 +82,9 @@ pub fn discover_custom_personalities(codex_home: &Path) -> Vec<Personality> {
             if path.extension() != Some(OsStr::new("md")) {
                 return None;
             }
+            if is_personality_description_file(&path) {
+                return None;
+            }
             let stem = path.file_stem()?.to_str()?.trim();
             if stem.is_empty()
                 || CORE_PERSONALITY_NAMES
@@ -82,6 +99,25 @@ pub fn discover_custom_personalities(codex_home: &Path) -> Vec<Personality> {
 
     personalities.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     personalities
+}
+
+pub fn personality_display_name(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+pub fn read_personality_description(codex_home: &Path, name: &str) -> Option<String> {
+    let path = personality_description_file_path(codex_home, name);
+    let text = fs::read_to_string(path).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 pub(crate) fn resolve_personality_message(
@@ -182,6 +218,18 @@ fn personality_file_path(codex_home: &Path, name: &str) -> PathBuf {
     codex_home
         .join(PERSONALITIES_DIRNAME)
         .join(format!("{name}.md"))
+}
+
+fn personality_description_file_path(codex_home: &Path, name: &str) -> PathBuf {
+    codex_home
+        .join(PERSONALITIES_DIRNAME)
+        .join(format!("{name}.txt"))
+}
+
+fn is_personality_description_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".txt"))
 }
 
 #[cfg(test)]
@@ -304,6 +352,11 @@ mod tests {
         fs::write(personality_file_path(tmp.path(), "zany"), "zany").expect("zany");
         fs::write(personality_file_path(tmp.path(), "friendly"), "ignored").expect("friendly");
         fs::write(personality_file_path(tmp.path(), "caveman"), "caveman").expect("caveman");
+        fs::write(
+            personality_description_file_path(tmp.path(), "caveman"),
+            "description",
+        )
+        .expect("caveman description");
 
         let personalities = discover_custom_personalities(tmp.path());
         assert_eq!(
@@ -331,6 +384,24 @@ mod tests {
         ensure_personality_starter_files(tmp.path()).expect("bootstrap personalities");
         assert!(personality_file_path(tmp.path(), "comedic").exists());
         assert!(personality_file_path(tmp.path(), "caveman").exists());
+        assert!(personality_description_file_path(tmp.path(), "comedic").exists());
+        assert!(personality_description_file_path(tmp.path(), "caveman").exists());
+    }
+
+    #[test]
+    fn read_personality_description_returns_sidecar_contents() {
+        let tmp = tempdir().expect("tempdir");
+        fs::create_dir_all(tmp.path().join(PERSONALITIES_DIRNAME)).expect("dir");
+        fs::write(
+            personality_description_file_path(tmp.path(), "caveman"),
+            "Terse, high-signal.\n",
+        )
+        .expect("write description");
+
+        assert_eq!(
+            read_personality_description(tmp.path(), "caveman"),
+            Some("Terse, high-signal.".to_string())
+        );
     }
 
     #[test]
@@ -344,5 +415,21 @@ mod tests {
 
         let personalities = discover_custom_personalities(tmp.path());
         assert!(personalities.is_empty());
+    }
+
+    #[test]
+    fn description_sidecars_are_not_discovered_as_personalities() {
+        let tmp = tempdir().expect("tempdir");
+        let personalities_dir = tmp.path().join(PERSONALITIES_DIRNAME);
+        fs::create_dir_all(&personalities_dir).expect("dir");
+        fs::write(personality_file_path(tmp.path(), "caveman"), "caveman").expect("caveman");
+        fs::write(
+            personality_description_file_path(tmp.path(), "caveman"),
+            "description",
+        )
+        .expect("caveman description");
+
+        let personalities = discover_custom_personalities(tmp.path());
+        assert_eq!(personalities, vec![Personality::Custom("caveman".to_string())]);
     }
 }
