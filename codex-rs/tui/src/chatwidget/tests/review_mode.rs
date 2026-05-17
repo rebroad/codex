@@ -311,6 +311,7 @@ async fn review_restores_context_window_indicator() {
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(pre_review_tokens, context_window)),
             rate_limits: None,
+            query_id: None,
         }),
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
@@ -330,6 +331,7 @@ async fn review_restores_context_window_indicator() {
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(review_tokens, context_window)),
             rate_limits: None,
+            query_id: None,
         }),
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(97));

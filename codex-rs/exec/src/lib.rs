@@ -2231,7 +2231,12 @@ async fn consume_direct_stream(
                     printed_response = false;
                 }
                 if let Some(usage) = token_usage {
-                    print_token_usage(&usage, display_model_slug, model_pricing);
+                    print_token_usage(
+                        &usage,
+                        display_model_slug,
+                        model_pricing,
+                        capture_id.as_deref(),
+                    );
                     if let (Some(usage_store), Some(account_key)) =
                         (usage_store.as_ref(), account_key.as_ref())
                     {
@@ -2299,6 +2304,7 @@ fn print_token_usage(
     usage: &codex_protocol::protocol::TokenUsage,
     model_slug: &str,
     model_pricing: &ModelPricingFile,
+    query_id: Option<&str>,
 ) {
     let usage_usd = estimate_usage_usd_for_model(
         model_pricing,
@@ -2308,12 +2314,16 @@ fn print_token_usage(
         usage.output_tokens,
         /*regional_processing*/ false,
     );
+    let query_id_suffix = query_id
+        .map(|query_id| format!(" query_id={query_id}"))
+        .unwrap_or_default();
     eprintln!(
-        "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}",
+        "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}{}",
         usage.input_tokens,
         usage.cached_input_tokens,
         usage.output_tokens,
-        usage.reasoning_output_tokens
+        usage.reasoning_output_tokens,
+        query_id_suffix
     );
 }
 

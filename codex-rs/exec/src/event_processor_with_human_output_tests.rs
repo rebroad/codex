@@ -1,5 +1,7 @@
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_state::ModelPricingFile;
@@ -153,6 +155,7 @@ fn turn_completed_recovers_final_message_from_turn_items() {
         final_message_rendered: false,
         emit_final_message_on_shutdown: false,
         last_total_token_usage: None,
+        last_query_id: None,
         model_slug: None,
         model_pricing: ModelPricingFile::bundled_default().expect("bundled pricing"),
     };
@@ -202,6 +205,7 @@ fn turn_completed_overwrites_stale_final_message_from_turn_items() {
         final_message_rendered: true,
         emit_final_message_on_shutdown: false,
         last_total_token_usage: None,
+        last_query_id: None,
         model_slug: None,
         model_pricing: ModelPricingFile::bundled_default().expect("bundled pricing"),
     };
@@ -235,6 +239,82 @@ fn turn_completed_overwrites_stale_final_message_from_turn_items() {
 }
 
 #[test]
+fn token_usage_update_without_query_id_keeps_previous_query_id() {
+    let mut processor = EventProcessorWithHumanOutput {
+        bold: Style::new(),
+        cyan: Style::new(),
+        dimmed: Style::new(),
+        green: Style::new(),
+        italic: Style::new(),
+        magenta: Style::new(),
+        red: Style::new(),
+        yellow: Style::new(),
+        show_agent_reasoning: true,
+        show_raw_agent_reasoning: false,
+        last_message_path: None,
+        final_message: None,
+        final_message_rendered: false,
+        emit_final_message_on_shutdown: false,
+        last_total_token_usage: None,
+        last_query_id: None,
+        model_slug: None,
+        model_pricing: ModelPricingFile::bundled_default().expect("bundled pricing"),
+    };
+
+    processor.process_server_notification(ServerNotification::ThreadTokenUsageUpdated(
+        ThreadTokenUsageUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            token_usage: ThreadTokenUsage {
+                total: codex_app_server_protocol::TokenUsageBreakdown {
+                    total_tokens: 1,
+                    input_tokens: 1,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                },
+                last: codex_app_server_protocol::TokenUsageBreakdown {
+                    total_tokens: 1,
+                    input_tokens: 1,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                },
+                model_context_window: None,
+            },
+            query_id: Some("query-123".to_string()),
+        },
+    ));
+
+    processor.process_server_notification(ServerNotification::ThreadTokenUsageUpdated(
+        ThreadTokenUsageUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            token_usage: ThreadTokenUsage {
+                total: codex_app_server_protocol::TokenUsageBreakdown {
+                    total_tokens: 2,
+                    input_tokens: 1,
+                    cached_input_tokens: 0,
+                    output_tokens: 1,
+                    reasoning_output_tokens: 0,
+                },
+                last: codex_app_server_protocol::TokenUsageBreakdown {
+                    total_tokens: 1,
+                    input_tokens: 0,
+                    cached_input_tokens: 0,
+                    output_tokens: 1,
+                    reasoning_output_tokens: 0,
+                },
+                model_context_window: None,
+            },
+            query_id: None,
+        },
+    ));
+
+    assert_eq!(processor.last_query_id.as_deref(), Some("query-123"));
+}
+
+#[test]
 fn turn_completed_preserves_streamed_final_message_when_turn_items_are_empty() {
     let mut processor = EventProcessorWithHumanOutput {
         bold: Style::new(),
@@ -252,6 +332,7 @@ fn turn_completed_preserves_streamed_final_message_when_turn_items_are_empty() {
         final_message_rendered: false,
         emit_final_message_on_shutdown: false,
         last_total_token_usage: None,
+        last_query_id: None,
         model_slug: None,
         model_pricing: ModelPricingFile::bundled_default().expect("bundled pricing"),
     };
@@ -297,6 +378,7 @@ fn turn_failed_clears_stale_final_message() {
         final_message_rendered: true,
         emit_final_message_on_shutdown: true,
         last_total_token_usage: None,
+        last_query_id: None,
         model_slug: None,
         model_pricing: ModelPricingFile::bundled_default().expect("bundled pricing"),
     };
@@ -343,6 +425,7 @@ fn turn_interrupted_clears_stale_final_message() {
         final_message_rendered: true,
         emit_final_message_on_shutdown: true,
         last_total_token_usage: None,
+        last_query_id: None,
         model_slug: None,
         model_pricing: ModelPricingFile::bundled_default().expect("bundled pricing"),
     };

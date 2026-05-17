@@ -39,6 +39,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     final_message_rendered: bool,
     emit_final_message_on_shutdown: bool,
     last_total_token_usage: Option<ThreadTokenUsage>,
+    last_query_id: Option<String>,
     model_slug: Option<String>,
     model_pricing: ModelPricingFile,
 }
@@ -68,6 +69,7 @@ impl EventProcessorWithHumanOutput {
             final_message_rendered: false,
             emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
+            last_query_id: None,
             model_slug: config.model.clone(),
             model_pricing,
         }
@@ -302,6 +304,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.last_total_token_usage = Some(notification.token_usage);
+                if notification.query_id.is_some() {
+                    // Keep the most recent real query id. Some token-usage refreshes do not
+                    // carry one, and those should not erase the id we want to surface in the
+                    // shutdown footer.
+                    self.last_query_id = notification.query_id;
+                }
                 CodexStatus::Running
             }
             ServerNotification::TurnCompleted(notification) => match notification.turn.status {
@@ -400,11 +408,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 "{}\n{}",
                 "tokens used".style(self.dimmed),
                 format!(
-                    "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}",
+                    "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}{}",
                     usage.total.input_tokens,
                     usage.total.cached_input_tokens,
                     usage.total.output_tokens,
                     usage.total.reasoning_output_tokens,
+                    self.last_query_id
+                        .as_deref()
+                        .map(|query_id| format!(" query_id={query_id}"))
+                        .unwrap_or_default(),
                 )
             );
         }
