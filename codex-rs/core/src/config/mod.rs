@@ -94,9 +94,11 @@ use std::path::PathBuf;
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_from_profile_network;
+use crate::personality::ensure_personality_starter_files;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+use tracing::warn;
 
 pub(crate) mod agent_roles;
 pub mod edit;
@@ -1426,6 +1428,13 @@ impl Config {
     ) -> std::io::Result<Self> {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        if let Err(err) = ensure_personality_starter_files(&codex_home) {
+            warn!(
+                error = %err,
+                codex_home = %codex_home.display(),
+                "failed to bootstrap starter personalities"
+            );
+        }
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
