@@ -168,7 +168,7 @@ sync_build_tree() {
     return 0
   fi
   echo "syncing source tree into build tree: ${build_root}"
-  cpto --lngit "${repo_root}" "${build_root}"
+  cpto "${repo_root}" "${build_root}"
 }
 
 append_run_header() {
