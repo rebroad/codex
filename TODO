@@ -1,5 +1,4 @@
-=Pragmatic personality is still being injected - find out why
-=survival -> persistent - avoid mention of "final"
+=prewarm uses tokens! Fix the accounting to recognise this!
 =Too many skills being injected, e.g. openai-docs
 =Explore "encrypted_content" in "codex prompt debug".
 =`just argument-comment-lint` produces too much output (token wastage)
