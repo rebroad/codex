@@ -195,6 +195,8 @@ pub struct PromptDebugHttpToml {
     pub capture_output: Option<bool>,
     /// Directory used for captured backend files.
     pub capture_dir: Option<AbsolutePathBuf>,
+    /// Optional absolute path to a dedicated tool usage log file.
+    pub tool_usage_log: Option<AbsolutePathBuf>,
 }
 
 /// Effective HTTP/SSE request debug tracing settings.
@@ -204,6 +206,7 @@ pub struct PromptDebugHttpConfig {
     pub capture_input: bool,
     pub capture_output: bool,
     pub capture_dir: Option<PathBuf>,
+    pub tool_usage_log: Option<PathBuf>,
 }
 
 fn replace_pid_placeholder(path: PathBuf) -> PathBuf {
@@ -227,6 +230,10 @@ impl From<PromptDebugHttpToml> for PromptDebugHttpConfig {
             capture_input: toml.capture_input.unwrap_or(false),
             capture_output: toml.capture_output.unwrap_or(false),
             capture_dir,
+            tool_usage_log: toml
+                .tool_usage_log
+                .map(AbsolutePathBuf::into)
+                .map(replace_pid_placeholder),
         }
     }
 }

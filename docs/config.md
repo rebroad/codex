@@ -105,6 +105,7 @@ enabled = true
 capture_input = true
 capture_output = true
 capture_dir = "/var/tmp/codex-prompt-debug-$EMAIL"
+tool_usage_log = "/tmp/codex-tool-usage-$EMAIL.log"
 ```
 
 If `enabled = true`, capture files are written under `capture_dir` (defaults to `/tmp`).
@@ -116,6 +117,8 @@ Capture files include:
 - query-id scoped files, for example:
 `<query_id>_input.ndjson`,
 `<query_id>_output.ndjson`.
+- `tool_usage.log`, or the configured `tool_usage_log` path, an append-only
+  line log with one entry per distinct tool call.
 If the `capture_dir` path contains `$$`, Codex replaces it with the current
 process PID.
 If the `capture_dir` path contains `$EMAIL`, Codex replaces it with the

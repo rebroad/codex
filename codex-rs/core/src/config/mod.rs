@@ -2250,6 +2250,7 @@ impl Config {
             capture_input: prompt_debug_http.capture_input,
             capture_output: prompt_debug_http.capture_output,
             capture_dir: prompt_debug_http.capture_dir,
+            tool_usage_log: prompt_debug_http.tool_usage_log,
         });
         Ok(config)
     }
