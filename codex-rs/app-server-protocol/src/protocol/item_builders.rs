@@ -287,13 +287,46 @@ fn format_file_change_diff(change: &FileChange) -> String {
         FileChange::Delete { content } => content.clone(),
         FileChange::Update {
             unified_diff,
-            move_path,
-        } => {
-            if let Some(path) = move_path {
-                format!("{unified_diff}\n\nMoved to: {}", path.display())
-            } else {
-                unified_diff.clone()
+            ..
+        } => unified_diff.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::FileChange;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn convert_patch_changes_keeps_move_metadata_out_of_diff_text() {
+        let mut changes = HashMap::new();
+        changes.insert(
+            PathBuf::from("old/name.txt"),
+            FileChange::Update {
+                unified_diff: "diff --git a/old/name.txt b/new/name.txt\n@@ -1 +1 @@\n-old\n+new\n"
+                    .to_string(),
+                move_path: Some(PathBuf::from("new/name.txt")),
+            },
+        );
+
+        let converted = convert_patch_changes(&changes);
+        assert_eq!(converted.len(), 1);
+
+        let change = &converted[0];
+        assert_eq!(change.path, "old/name.txt");
+        assert_eq!(
+            change.diff,
+            "diff --git a/old/name.txt b/new/name.txt\n@@ -1 +1 @@\n-old\n+new\n"
+        );
+
+        match &change.kind {
+            PatchChangeKind::Update { move_path } => {
+                assert_eq!(move_path.as_deref(), Some(PathBuf::from("new/name.txt").as_path()));
             }
+            other => panic!("expected update kind, got {other:?}"),
         }
+        assert!(!change.diff.contains("Moved to:"));
     }
 }
