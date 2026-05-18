@@ -1071,7 +1071,7 @@ install_built_codex_binary() {
 
 declare -A DUPLICATE_CLEANUP_CHECKSUM_CACHE=()
 
-cached_sha256sum() {
+cached_normalized_binary_sha256sum() {
   local file_path="$1"
   local checksum
 
@@ -1080,7 +1080,23 @@ cached_sha256sum() {
     return 0
   fi
 
-  checksum="$(sha256sum "${file_path}" 2>/dev/null | awk '{print $1}' || true)"
+  checksum="$(
+    python3 - "${file_path}" <<'PY'
+import hashlib
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+
+# Normalize embedded version strings so timestamp-only rebuilds hash the same.
+# We only need a stable canonical form for duplicate detection.
+data = re.sub(rb"-(?:[0-9a-f]{11,12}\+?)-\d{12}", b"-<version-suffix>", data)
+
+print(hashlib.sha256(data).hexdigest())
+PY
+  )"
   if [[ -z "${checksum}" ]]; then
     return 1
   fi
@@ -1134,8 +1150,8 @@ offer_duplicate_cleanup_for_installed_binaries() {
   while IFS='|' read -r series size timestamp name; do
     if [[ "${series}" == "${prev_series}" && "${size}" == "${prev_size}" ]]; then
       local prev_checksum current_checksum
-      prev_checksum="$(cached_sha256sum "${INSTALL_BIN_DIR}/${prev_name}")" || prev_checksum=""
-      current_checksum="$(cached_sha256sum "${INSTALL_BIN_DIR}/${name}")" || current_checksum=""
+      prev_checksum="$(cached_normalized_binary_sha256sum "${INSTALL_BIN_DIR}/${prev_name}")" || prev_checksum=""
+      current_checksum="$(cached_normalized_binary_sha256sum "${INSTALL_BIN_DIR}/${name}")" || current_checksum=""
       if [[ -n "${prev_checksum}" && "${prev_checksum}" == "${current_checksum}" ]]; then
         if [[ "${run_has_matches}" != "true" ]]; then
           run_keep_name="${name}"
