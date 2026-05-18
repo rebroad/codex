@@ -1069,9 +1069,30 @@ install_built_codex_binary() {
   ln -s "${versioned_install_name}" "${INSTALL_BIN}"
 }
 
+declare -A DUPLICATE_CLEANUP_CHECKSUM_CACHE=()
+
+cached_sha256sum() {
+  local file_path="$1"
+  local checksum
+
+  if [[ -n "${DUPLICATE_CLEANUP_CHECKSUM_CACHE[${file_path}]:-}" ]]; then
+    printf '%s\n' "${DUPLICATE_CLEANUP_CHECKSUM_CACHE[${file_path}]}"
+    return 0
+  fi
+
+  checksum="$(sha256sum "${file_path}" 2>/dev/null | awk '{print $1}' || true)"
+  if [[ -z "${checksum}" ]]; then
+    return 1
+  fi
+
+  DUPLICATE_CLEANUP_CHECKSUM_CACHE["${file_path}"]="${checksum}"
+  printf '%s\n' "${checksum}"
+}
+
 offer_duplicate_cleanup_for_installed_binaries() {
   local bin_path name size timestamp series
   local -a records
+  DUPLICATE_CLEANUP_CHECKSUM_CACHE=()
 
   shopt -s nullglob
   for bin_path in "${INSTALL_BIN_DIR}"/codex-*; do
@@ -1086,7 +1107,7 @@ offer_duplicate_cleanup_for_installed_binaries() {
     fi
     series="${BASH_REMATCH[1]}"
     timestamp="${BASH_REMATCH[3]}"
-    records+=("${series}|${timestamp}|${size}|${name}")
+    records+=("${series}|${size}|${timestamp}|${name}")
   done
   shopt -u nullglob
 
@@ -1096,28 +1117,38 @@ offer_duplicate_cleanup_for_installed_binaries() {
 
   local sorted_tmp
   sorted_tmp="$(mktemp /var/tmp/rebuild_codex_duplicates.XXXXXX)"
-  printf '%s\n' "${records[@]}" | LC_ALL=C sort -t'|' -k1,1 -k2,2 > "${sorted_tmp}"
+  printf '%s\n' "${records[@]}" | LC_ALL=C sort -t'|' -k1,1 -k2,2 -k3,3 > "${sorted_tmp}"
 
   local prev_series="" prev_size="" prev_name=""
-  local -a batch_names=() delete_names=() keep_names=()
+  local run_keep_name="" run_has_matches="false"
+  local -a delete_names=() keep_names=()
 
-  while IFS='|' read -r series timestamp size name; do
+  flush_duplicate_run() {
+    if [[ "${run_has_matches}" == "true" && -n "${run_keep_name}" ]]; then
+      keep_names+=("${run_keep_name}")
+    fi
+    run_keep_name=""
+    run_has_matches="false"
+  }
+
+  while IFS='|' read -r series size timestamp name; do
     if [[ "${series}" == "${prev_series}" && "${size}" == "${prev_size}" ]]; then
-      if (( ${#batch_names[@]} == 0 )); then
-        batch_names=("${prev_name}" "${name}")
+      local prev_checksum current_checksum
+      prev_checksum="$(cached_sha256sum "${INSTALL_BIN_DIR}/${prev_name}")" || prev_checksum=""
+      current_checksum="$(cached_sha256sum "${INSTALL_BIN_DIR}/${name}")" || current_checksum=""
+      if [[ -n "${prev_checksum}" && "${prev_checksum}" == "${current_checksum}" ]]; then
+        if [[ "${run_has_matches}" != "true" ]]; then
+          run_keep_name="${name}"
+          run_has_matches="true"
+        fi
+        if [[ -n "${prev_name}" ]]; then
+          delete_names+=("${prev_name}")
+        fi
       else
-        batch_names+=("${name}")
+        flush_duplicate_run
       fi
     else
-      if (( ${#batch_names[@]} >= 2 )); then
-        local keep_idx idx
-        keep_idx=$((${#batch_names[@]} - 1))
-        keep_names+=("${batch_names[keep_idx]}")
-        for ((idx = 0; idx < keep_idx; idx++)); do
-          delete_names+=("${batch_names[idx]}")
-        done
-      fi
-      batch_names=()
+      flush_duplicate_run
     fi
     prev_series="${series}"
     prev_size="${size}"
@@ -1125,20 +1156,13 @@ offer_duplicate_cleanup_for_installed_binaries() {
   done < "${sorted_tmp}"
   rm -f "${sorted_tmp}"
 
-  if (( ${#batch_names[@]} >= 2 )); then
-    local keep_idx idx
-    keep_idx=$((${#batch_names[@]} - 1))
-    keep_names+=("${batch_names[keep_idx]}")
-    for ((idx = 0; idx < keep_idx; idx++)); do
-      delete_names+=("${batch_names[idx]}")
-    done
-  fi
+  flush_duplicate_run
 
   if (( ${#delete_names[@]} == 0 )); then
     return 0
   fi
 
-  echo "Detected ${#delete_names[@]} duplicate codex binaries (same size in adjacent timestamp runs)."
+  echo "Detected ${#delete_names[@]} duplicate codex binaries (same size and sha256 in adjacent timestamp runs)."
   local i
   for ((i = 0; i < ${#keep_names[@]}; i++)); do
     echo "- Keep:   ${keep_names[i]}"
