@@ -4,7 +4,6 @@ use crate::common::TransportByteStats;
 use crate::error::ApiError;
 use crate::prompt_debug_http::PromptCaptureSession;
 use crate::prompt_debug_http::prompt_capture_append_output;
-use crate::prompt_debug_http::prompt_capture_append_reasoning_entry;
 use crate::prompt_debug_http::prompt_capture_write_output_json;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
@@ -12,8 +11,6 @@ use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
@@ -466,43 +463,16 @@ pub async fn process_sse(
                         delta,
                         summary_index,
                     } => {
-                        if let Some(capture) = capture.as_ref() {
-                            prompt_capture_append_reasoning_entry(
-                                capture,
-                                "responses_sse",
-                                "reasoning_summary_text_delta",
-                                Some(delta),
-                                Some(*summary_index),
-                                None,
-                            );
-                        }
+                        let _ = (delta, summary_index);
                     }
                     ResponseEvent::ReasoningContentDelta {
                         delta,
                         content_index,
                     } => {
-                        if let Some(capture) = capture.as_ref() {
-                            prompt_capture_append_reasoning_entry(
-                                capture,
-                                "responses_sse",
-                                "reasoning_text_delta",
-                                Some(delta),
-                                None,
-                                Some(*content_index),
-                            );
-                        }
+                        let _ = (delta, content_index);
                     }
                     ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                        if let Some(capture) = capture.as_ref() {
-                            prompt_capture_append_reasoning_entry(
-                                capture,
-                                "responses_sse",
-                                "reasoning_summary_part_added",
-                                None,
-                                Some(*summary_index),
-                                None,
-                            );
-                        }
+                        let _ = summary_index;
                     }
                     ResponseEvent::Completed { .. } => {
                         if let ResponseEvent::Completed {
@@ -549,29 +519,9 @@ fn maybe_capture_response_item(
         return;
     };
 
-    let (output_text, reasoning_text) = capture_sections_from_response_item(item);
+    let output_text = capture_sections_from_response_item(item);
     if let Some(output_text) = output_text {
         prompt_capture_append_output(capture, "responses_sse_output_text", output_text.as_str());
-    }
-    if let Some(reasoning_text) = reasoning_text {
-        prompt_capture_append_reasoning_entry(
-            capture,
-            "responses_sse",
-            "reasoning_item_text",
-            Some(reasoning_text.as_str()),
-            None,
-            None,
-        );
-    }
-    if let Some(marker_text) = capture_reasoning_summary_marker_from_response_item(item) {
-        prompt_capture_append_reasoning_entry(
-            capture,
-            "responses_sse",
-            "reasoning_summary_missing",
-            Some(marker_text.as_str()),
-            None,
-            None,
-        );
     }
 
     if let Ok(item_json) = serde_json::to_value(item) {
@@ -579,9 +529,7 @@ fn maybe_capture_response_item(
     }
 }
 
-pub(crate) fn capture_sections_from_response_item(
-    item: &ResponseItem,
-) -> (Option<String>, Option<String>) {
+pub(crate) fn capture_sections_from_response_item(item: &ResponseItem) -> Option<String> {
     match item {
         ResponseItem::Message { role, content, .. } if role == "assistant" => {
             let output_text = content
@@ -595,62 +543,11 @@ pub(crate) fn capture_sections_from_response_item(
                 .collect::<Vec<_>>()
                 .join("");
             if output_text.is_empty() {
-                (None, None)
+                None
             } else {
-                (Some(output_text), None)
+                Some(output_text)
             }
         }
-        ResponseItem::Reasoning {
-            summary, content, ..
-        } => {
-            let summary_text = summary
-                .iter()
-                .map(|entry| match entry {
-                    ReasoningItemReasoningSummary::SummaryText { text } => text.as_str(),
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let content_text = content
-                .as_ref()
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .map(|entry| match entry {
-                            ReasoningItemContent::ReasoningText { text }
-                            | ReasoningItemContent::Text { text } => text.as_str(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default();
-            let reasoning_text = [summary_text, content_text]
-                .into_iter()
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if reasoning_text.is_empty() {
-                (None, None)
-            } else {
-                (None, Some(reasoning_text))
-            }
-        }
-        _ => (None, None),
-    }
-}
-
-pub(crate) fn capture_reasoning_summary_marker_from_response_item(
-    item: &ResponseItem,
-) -> Option<String> {
-    match item {
-        ResponseItem::Reasoning {
-            summary,
-            encrypted_content,
-            ..
-        } if summary.is_empty() => Some(if encrypted_content.as_ref().is_some_and(|s| !s.is_empty()) {
-            "Reasoning item emitted without a human-readable summary; encrypted reasoning content was present.".to_string()
-        } else {
-            "Reasoning item emitted without a human-readable summary.".to_string()
-        }),
         _ => None,
     }
 }

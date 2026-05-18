@@ -220,7 +220,6 @@ consolidation_model = "gpt-5"
 enabled = true
 capture_input = false
 capture_output = true
-capture_reasoning = true
 capture_dir = "/tmp/prompt-debug-http"
 "#;
     let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http)
@@ -230,7 +229,6 @@ capture_dir = "/tmp/prompt-debug-http"
             enabled: Some(true),
             capture_input: Some(false),
             capture_output: Some(true),
-            capture_reasoning: Some(true),
             capture_dir: Some(test_absolute_path("/tmp/prompt-debug-http")),
         }),
         prompt_debug_http_cfg.prompt_debug_http
@@ -246,7 +244,6 @@ capture_dir = "/tmp/prompt-debug-http"
             enabled: true,
             capture_input: false,
             capture_output: true,
-            capture_reasoning: true,
             capture_dir: Some("/tmp/prompt-debug-http".into()),
         }
     );
@@ -257,7 +254,6 @@ capture_dir = "/tmp/prompt-debug-http"
 enabled = true
 capture_input = true
 capture_output = false
-capture_reasoning = false
 capture_dir = "/tmp/prompt-debug-$$"
 "#;
     let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_pid)
@@ -272,7 +268,6 @@ capture_dir = "/tmp/prompt-debug-$$"
             enabled: true,
             capture_input: true,
             capture_output: false,
-            capture_reasoning: false,
             capture_dir: Some(format!("/tmp/prompt-debug-{pid}").into()),
         }
     );
@@ -282,7 +277,6 @@ capture_dir = "/tmp/prompt-debug-$$"
 enabled = true
 capture_input = true
 capture_output = true
-capture_reasoning = true
 capture_dir = "/var/tmp/prompt-debug-$EMAIL"
 "#;
     let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_email)
@@ -297,7 +291,6 @@ capture_dir = "/var/tmp/prompt-debug-$EMAIL"
             enabled: true,
             capture_input: true,
             capture_output: true,
-            capture_reasoning: true,
             capture_dir: Some("/var/tmp/prompt-debug-$EMAIL".into()),
         }
     );

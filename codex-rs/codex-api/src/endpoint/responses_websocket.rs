@@ -10,7 +10,6 @@ use crate::prompt_debug_http::backend_capture_append_event;
 use crate::prompt_debug_http::capture_headers_json;
 use crate::prompt_debug_http::prompt_capture_append_input;
 use crate::prompt_debug_http::prompt_capture_append_output;
-use crate::prompt_debug_http::prompt_capture_append_reasoning_entry;
 use crate::prompt_debug_http::prompt_capture_record_input_tool_usage;
 use crate::prompt_debug_http::prompt_capture_write_output_json;
 use crate::prompt_debug_http::start_prompt_capture;
@@ -725,43 +724,16 @@ async fn run_websocket_response_stream(
                                 delta,
                                 summary_index,
                             } => {
-                                if let Some(capture) = capture.as_ref() {
-                                    prompt_capture_append_reasoning_entry(
-                                        capture,
-                                        "responses_websocket",
-                                        "reasoning_summary_text_delta",
-                                        Some(delta),
-                                        Some(*summary_index),
-                                        None,
-                                    );
-                                }
+                                let _ = (delta, summary_index);
                             }
                             ResponseEvent::ReasoningContentDelta {
                                 delta,
                                 content_index,
                             } => {
-                                if let Some(capture) = capture.as_ref() {
-                                    prompt_capture_append_reasoning_entry(
-                                        capture,
-                                        "responses_websocket",
-                                        "reasoning_text_delta",
-                                        Some(delta),
-                                        None,
-                                        Some(*content_index),
-                                    );
-                                }
+                                let _ = (delta, content_index);
                             }
                             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                                if let Some(capture) = capture.as_ref() {
-                                    prompt_capture_append_reasoning_entry(
-                                        capture,
-                                        "responses_websocket",
-                                        "reasoning_summary_part_added",
-                                        None,
-                                        Some(*summary_index),
-                                        None,
-                                    );
-                                }
+                                let _ = summary_index;
                             }
                             ResponseEvent::Completed { .. } => {
                                 if let ResponseEvent::Completed {
@@ -834,22 +806,12 @@ fn maybe_capture_response_item(
         return;
     };
 
-    let (output_text, reasoning_text) = capture_sections_from_response_item(item);
+    let output_text = capture_sections_from_response_item(item);
     if let Some(output_text) = output_text {
         prompt_capture_append_output(
             capture,
             "responses_websocket_output_text",
             output_text.as_str(),
-        );
-    }
-    if let Some(reasoning_text) = reasoning_text {
-        prompt_capture_append_reasoning_entry(
-            capture,
-            "responses_websocket",
-            "reasoning_item_text",
-            Some(reasoning_text.as_str()),
-            None,
-            None,
         );
     }
     if let Ok(item_json) = serde_json::to_value(item) {
