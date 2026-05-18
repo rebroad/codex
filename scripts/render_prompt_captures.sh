@@ -101,7 +101,7 @@ infer_query_id_from_path() {
   local path="$1"
   local file_name
   file_name="$(basename "$path")"
-  if [[ "$file_name" =~ ^([0-9]+)_(backend_traffic|input|output|reasoning)\.ndjson$ ]]; then
+  if [[ "$file_name" =~ ^([0-9]+)_(backend_traffic|input|output)\.ndjson$ ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"
     return 0
   fi
@@ -166,12 +166,119 @@ is_compaction_capture() {
 }
 
 pretty_or_raw_json() {
-  local raw="$1"
-  if jq -e . >/dev/null 2>&1 <<<"$raw"; then
-    jq . <<<"$raw"
-  else
-    printf '%s\n' "$raw"
-  fi
+  python3 -c '
+import json
+import sys
+
+PLAIN = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/:@+")
+
+
+def is_plain_string(value: str) -> bool:
+    return bool(value) and all(ch in PLAIN for ch in value)
+
+
+def render_inline_scalar(value):
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, str):
+        if "\n" in value:
+            return None
+        if is_plain_string(value):
+            return value
+        return json.dumps(value, ensure_ascii=False)
+    raise TypeError(f"unsupported scalar type: {type(value)!r}")
+
+
+def render_block_string(value: str, indent: int) -> list[str]:
+    prefix = " " * indent
+    chomp = "|+" if value.endswith("\n\n") else "|" if value.endswith("\n") else "|-"
+    lines = value.split("\n")
+    if value.endswith("\n"):
+        lines = lines[:-1]
+    rendered = [f"{prefix}{chomp}"]
+    rendered.extend(f"{prefix}  {line}" for line in lines)
+    return rendered
+
+
+def render_key(value):
+    rendered = render_inline_scalar(value)
+    if rendered is None:
+        raise TypeError("mapping keys cannot contain newlines")
+    return rendered
+
+
+def render_yaml(value, indent=0):
+    prefix = " " * indent
+    if isinstance(value, dict):
+        if not value:
+            return [f"{prefix}{{}}"]
+        lines = []
+        for key, item in value.items():
+            rendered_key = render_key(key)
+            if isinstance(item, dict) and not item:
+                lines.append(f"{prefix}{rendered_key}: {{}}")
+            elif isinstance(item, list) and not item:
+                lines.append(f"{prefix}{rendered_key}: []")
+            elif isinstance(item, (dict, list)):
+                lines.append(f"{prefix}{rendered_key}:")
+                lines.extend(render_yaml(item, indent + 2))
+            else:
+                rendered_item = render_inline_scalar(item)
+                if rendered_item is not None:
+                    lines.append(f"{prefix}{rendered_key}: {rendered_item}")
+                else:
+                    block_lines = render_block_string(item, indent + 2)
+                    lines.append(f"{prefix}{rendered_key}: {block_lines[0].lstrip()}")
+                    lines.extend(block_lines[1:])
+        return lines
+    if isinstance(value, list):
+        if not value:
+            return [f"{prefix}[]"]
+        lines = []
+        for item in value:
+            if isinstance(item, dict) and not item:
+                lines.append(f"{prefix}- {{}}")
+            elif isinstance(item, list) and not item:
+                lines.append(f"{prefix}- []")
+            elif isinstance(item, (dict, list)):
+                lines.append(f"{prefix}-")
+                lines.extend(render_yaml(item, indent + 2))
+            else:
+                rendered_item = render_inline_scalar(item)
+                if rendered_item is not None:
+                    lines.append(f"{prefix}- {rendered_item}")
+                else:
+                    block_lines = render_block_string(item, indent + 2)
+                    lines.append(f"{prefix}- {block_lines[0].lstrip()}")
+                    lines.extend(block_lines[1:])
+        return lines
+    if isinstance(value, str):
+        rendered_item = render_inline_scalar(value)
+        if rendered_item is not None:
+            return [f"{prefix}{rendered_item}"]
+        return render_block_string(value, indent)
+    return [f"{prefix}{render_inline_scalar(value)}"]
+
+
+def main() -> int:
+    raw = sys.stdin.read()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        sys.stdout.write(raw)
+        return 0
+    sys.stdout.write("\n".join(render_yaml(value)) + "\n")
+    return 0
+
+
+raise SystemExit(main())
+'
 }
 
 render_one() {
@@ -180,7 +287,6 @@ render_one() {
   local force_render="${3:-0}"
   local input_file="$dir/${id}_input.ndjson"
   local output_file="$dir/${id}_output.ndjson"
-  local reasoning_file="$dir/${id}_reasoning.ndjson"
   local dest=""
 
   [[ -f "$input_file" ]] || return 0
@@ -189,16 +295,16 @@ render_one() {
   fi
 
   local request_payload=""
-  request_payload="$(jq -r '.payload // empty' "$input_file" 2>/dev/null | paste -sd '\n' - || true)"
+  request_payload="$(jq -c '.payload | fromjson? // .payload' "$input_file" 2>/dev/null | head -n 1 || true)"
 
   local response_payload=""
   local summary_encrypted=""
   local summary_item_count="0"
   local local_plain_summary=""
   if [[ -f "$output_file" ]]; then
-    response_payload="$(jq -r 'select(.label? == "Compaction response") | .payload' "$output_file" 2>/dev/null | paste -sd '\n' - || true)"
+    response_payload="$(jq -c 'select(.label? == "Compaction response") | .payload | fromjson? // .payload' "$output_file" 2>/dev/null | head -n 1 || true)"
     if [[ -z "$response_payload" ]]; then
-      response_payload="$(jq -r '.payload // empty' "$output_file" 2>/dev/null | paste -sd '\n' - || true)"
+      response_payload="$(jq -c '.payload | fromjson? // .payload' "$output_file" 2>/dev/null | head -n 1 || true)"
     fi
     summary_item_count="$(jq -r '[select(.label? == "Compaction response") | .payload.output[]? | select(.type=="compaction_summary")] | length' "$output_file" 2>/dev/null | tail -n 1 || true)"
     summary_encrypted="$(jq -r 'select(.label? == "Compaction response") | .payload.output[]? | select(.type=="compaction_summary") | has("encrypted_content")' "$output_file" 2>/dev/null | head -n 1 || true)"
@@ -221,26 +327,25 @@ render_one() {
 
   local rendered_output
   rendered_output="$(
-    {
+  {
     echo "# Prompt Capture $id"
     echo
     echo "- Capture dir: \`$dir\`"
     echo "- Input file: \`$input_file\`"
     [[ -f "$output_file" ]] && echo "- Output file: \`$output_file\`"
-    [[ -f "$reasoning_file" ]] && echo "- Reasoning file: \`$reasoning_file\`"
     echo "- Compaction summary items: \`${summary_item_count:-0}\`"
     echo "- Summary encrypted: \`${summary_encrypted:-unknown}\`"
     echo
     echo "## Request"
     echo
-    echo '```json'
-    pretty_or_raw_json "$request_payload"
+    echo '```yaml'
+    printf '%s' "$request_payload" | pretty_or_raw_json
     echo '```'
     echo
     echo "## Response"
     echo
-    echo '```json'
-    pretty_or_raw_json "$response_payload"
+    echo '```yaml'
+    printf '%s' "$response_payload" | pretty_or_raw_json
     echo '```'
     if [[ -n "${local_plain_summary:-}" ]]; then
       echo
