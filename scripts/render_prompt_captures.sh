@@ -5,11 +5,13 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/render_prompt_captures.sh [options]
+  scripts/render_prompt_captures.sh <capture-file-or-dir> [more paths...]
 
 Options:
   --dir <path>           Capture directory (default: latest /var/tmp or /tmp codex-backend-capture.*)
-  --out <path>           Output directory (default: tmp/prompt-captures-md)
+  --out <path>           Write output files to directory instead of stdout
   --query-id <id>        Render only one query id
+  --query_id <id>        Alias for --query-id
   --all                  Render all queries (default: compaction-only)
   --watch                Poll every 2s and render new matches continuously
   --help                 Show this help
@@ -18,15 +20,17 @@ Examples:
   scripts/render_prompt_captures.sh
   scripts/render_prompt_captures.sh --all
   scripts/render_prompt_captures.sh --query-id 127
+  scripts/render_prompt_captures.sh 311_backend_traffic.ndjson
   scripts/render_prompt_captures.sh --watch
 EOF
 }
 
 capture_dir=""
-out_dir="/home/rebroad/src/codex/tmp/prompt-captures-md"
+out_dir=""
 query_id=""
 only_compaction=1
 watch_mode=0
+declare -a explicit_targets=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,7 +44,23 @@ while [[ $# -gt 0 ]]; do
       ;;
     --query-id)
       query_id="$2"
+      only_compaction=0
       shift 2
+      ;;
+    --query_id)
+      query_id="$2"
+      only_compaction=0
+      shift 2
+      ;;
+    --query-id=*)
+      query_id="${1#*=}"
+      only_compaction=0
+      shift
+      ;;
+    --query_id=*)
+      query_id="${1#*=}"
+      only_compaction=0
+      shift
       ;;
     --all)
       only_compaction=0
@@ -55,23 +75,66 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown argument: $1" >&2
-      usage
-      exit 1
+      explicit_targets+=("$1")
+      only_compaction=0
+      shift
       ;;
   esac
 done
+
+infer_capture_dir_from_path() {
+  local path="$1"
+  if [[ -d "$path" ]]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+
+  if [[ -f "$path" ]]; then
+    printf '%s\n' "$(dirname "$path")"
+    return 0
+  fi
+
+  return 1
+}
+
+infer_query_id_from_path() {
+  local path="$1"
+  local file_name
+  file_name="$(basename "$path")"
+  if [[ "$file_name" =~ ^([0-9]+)_(backend_traffic|input|output|reasoning)\.ndjson$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "$file_name" =~ ^([0-9]+)\.ndjson$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
 
 pick_capture_dir() {
   if [[ -n "$capture_dir" ]]; then
     printf '%s\n' "$capture_dir"
     return 0
   fi
-  ls -1dt \
+
+  local candidates=()
+  local pattern
+  local match
+  for pattern in \
     /var/tmp/codex-backend-capture.* \
     /tmp/codex-backend-capture.* \
     /var/tmp/codex-prompt-debug.* \
-    /tmp/codex-prompt-debug.* 2>/dev/null | head -n 1
+    /tmp/codex-prompt-debug.*
+  do
+    for match in $pattern; do
+      [[ -e "$match" ]] || continue
+      candidates+=("$match")
+    done
+  done
+
+  [[ "${#candidates[@]}" -gt 0 ]] || return 0
+  ls -1dt -- "${candidates[@]}" 2>/dev/null | head -n 1
 }
 
 is_compaction_capture() {
@@ -114,17 +177,16 @@ pretty_or_raw_json() {
 render_one() {
   local dir="$1"
   local id="$2"
+  local force_render="${3:-0}"
   local input_file="$dir/${id}_input.ndjson"
   local output_file="$dir/${id}_output.ndjson"
   local reasoning_file="$dir/${id}_reasoning.ndjson"
-  local dest="$out_dir/${id}.md"
+  local dest=""
 
   [[ -f "$input_file" ]] || return 0
-  if [[ "$only_compaction" -eq 1 ]] && ! is_compaction_capture "$input_file"; then
-    return 0
+  if [[ "$force_render" -eq 0 ]] && [[ "$only_compaction" -eq 1 ]] && ! is_compaction_capture "$input_file"; then
+    return 1
   fi
-
-  mkdir -p "$out_dir"
 
   local request_payload=""
   request_payload="$(jq -r '.payload // empty' "$input_file" 2>/dev/null | paste -sd '\n' - || true)"
@@ -157,7 +219,9 @@ render_one() {
     )"
   fi
 
-  {
+  local rendered_output
+  rendered_output="$(
+    {
     echo "# Prompt Capture $id"
     echo
     echo "- Capture dir: \`$dir\`"
@@ -190,13 +254,23 @@ render_one() {
       echo
       echo '> Note: backend compaction summary content is encrypted in captures (`compaction_summary.encrypted_content`), so plain summary text is not available here.'
     fi
-  } >"$dest"
+    }
+  )"
 
-  echo "Rendered: $dest"
+  if [[ -n "$out_dir" ]]; then
+    mkdir -p "$out_dir"
+    dest="$out_dir/${id}.md"
+    printf '%s\n' "$rendered_output" >"$dest"
+    echo "Rendered: $dest" >&2
+  else
+    printf '%s\n' "$rendered_output"
+  fi
+  return 0
 }
 
 render_pass() {
   local dir="$1"
+  local force_render="${2:-0}"
   local input
   shopt -s nullglob
   for input in "$dir"/*_input.ndjson; do
@@ -205,7 +279,7 @@ render_pass() {
     if [[ -n "$query_id" ]] && [[ "$id" != "$query_id" ]]; then
       continue
     fi
-    render_one "$dir" "$id"
+    render_one "$dir" "$id" "$force_render"
   done
 }
 
@@ -218,13 +292,72 @@ main() {
   fi
 
   if [[ "$watch_mode" -eq 0 ]]; then
-    render_pass "$dir"
+    local rendered=0
+    if [[ "${#explicit_targets[@]}" -gt 0 ]]; then
+      local target
+      for target in "${explicit_targets[@]}"; do
+        if [[ -d "$target" ]]; then
+          local target_input
+          local target_rendered=0
+          shopt -s nullglob
+          for target_input in "$target"/*_input.ndjson; do
+            local target_id
+            target_id="$(basename "$target_input" _input.ndjson)"
+            if render_one "$target" "$target_id" 1; then
+              target_rendered=1
+              rendered=$((rendered + 1))
+            fi
+          done
+          if [[ "$target_rendered" -eq 0 ]]; then
+            echo "No captures rendered for dir: $target" >&2
+          fi
+          continue
+        fi
+
+        local target_dir=""
+        local target_id=""
+        target_dir="$(infer_capture_dir_from_path "$target" || true)"
+        target_id="$(infer_query_id_from_path "$target" || true)"
+
+        if [[ -z "$target_dir" ]] && [[ -n "$capture_dir" ]]; then
+          target_dir="$capture_dir"
+        fi
+        if [[ -z "$target_dir" ]]; then
+          target_dir="$dir"
+        fi
+        if [[ -z "$target_id" ]]; then
+          echo "Could not infer query id from: $target" >&2
+          continue
+        fi
+
+        if render_one "$target_dir" "$target_id" 1; then
+          rendered=$((rendered + 1))
+        fi
+      done
+    else
+      local input
+      shopt -s nullglob
+      for input in "$dir"/*_input.ndjson; do
+        local id
+        id="$(basename "$input" _input.ndjson)"
+        if [[ -n "$query_id" ]] && [[ "$id" != "$query_id" ]]; then
+          continue
+        fi
+        if render_one "$dir" "$id" 0; then
+          rendered=$((rendered + 1))
+        fi
+      done
+    fi
+    if [[ "$rendered" -eq 0 ]]; then
+      echo "No captures rendered." >&2
+      exit 1
+    fi
     exit 0
   fi
 
   echo "Watching capture dir: $dir"
   while true; do
-    render_pass "$dir"
+    render_pass "$dir" 0
     sleep 2
   done
 }
