@@ -104,24 +104,18 @@ Set `[prompt_debug_http]` in `config.toml` to capture backend traffic and query 
 enabled = true
 capture_input = true
 capture_output = true
-capture_reasoning = true
 capture_dir = "/var/tmp/codex-prompt-debug-$EMAIL"
 ```
 
 If `enabled = true`, capture files are written under `capture_dir` (defaults to `/tmp`).
 The environment variables `CODEX_BACKEND_CAPTURE`, `CODEX_BACKEND_CAPTURE_INPUT`,
-`CODEX_BACKEND_CAPTURE_OUTPUT`, `CODEX_BACKEND_CAPTURE_REASONING`, and
+`CODEX_BACKEND_CAPTURE_OUTPUT`, and
 `CODEX_BACKEND_CAPTURE_DIR` can force-enable or override runtime capture settings.
 Capture files include:
 - a full backend traffic stream: `<query_id>_backend_traffic.ndjson`
 - query-id scoped files, for example:
 `<query_id>_input.ndjson`,
-`<query_id>_output.ndjson`, and
-`<query_id>_reasoning.ndjson`.
-The reasoning file is intended to capture human-readable reasoning material:
-summary deltas, summary-part markers, and any readable reasoning text emitted
-by the model. Encrypted reasoning blobs may still appear in structured output
-captures, but are not the primary contents of `<query_id>_reasoning.ndjson`.
+`<query_id>_output.ndjson`.
 If the `capture_dir` path contains `$$`, Codex replaces it with the current
 process PID.
 If the `capture_dir` path contains `$EMAIL`, Codex replaces it with the

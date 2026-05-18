@@ -250,7 +250,6 @@ async fn current_client_setup_refreshes_prompt_debug_email_from_reloaded_auth() 
         enabled: true,
         capture_input: false,
         capture_output: false,
-        capture_reasoning: false,
         capture_dir: Some(Path::new("/var/tmp/codex-prompt-debug-$EMAIL").to_path_buf()),
     });
     set_prompt_debug_http_account_email(Some("old@example.com".to_string()));
