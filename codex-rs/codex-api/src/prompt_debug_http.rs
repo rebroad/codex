@@ -19,7 +19,6 @@ use codex_protocol::models::ResponseItem;
 const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
 const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
 const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
-const CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_REASONING";
 const CODEX_BACKEND_CAPTURE_DIR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_DIR";
 const CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_STDERR";
 const CODEX_PROMPT_DEBUG_HTTP_PREFIX: &str = "[codex backend capture]";
@@ -31,7 +30,6 @@ pub struct PromptDebugHttpConfig {
     pub enabled: bool,
     pub capture_input: bool,
     pub capture_output: bool,
-    pub capture_reasoning: bool,
     pub capture_dir: Option<PathBuf>,
 }
 
@@ -40,11 +38,9 @@ pub struct PromptCaptureSession {
     id: String,
     capture_input: bool,
     capture_output: bool,
-    capture_reasoning: bool,
     backend_traffic_path: PathBuf,
     input_path: PathBuf,
     output_path: PathBuf,
-    reasoning_path: PathBuf,
 }
 
 impl PromptCaptureSession {
@@ -58,10 +54,6 @@ impl PromptCaptureSession {
 
     pub fn output_path(&self) -> &Path {
         self.output_path.as_path()
-    }
-
-    pub fn reasoning_path(&self) -> &Path {
-        self.reasoning_path.as_path()
     }
 
     pub fn backend_traffic_path(&self) -> &Path {
@@ -128,10 +120,6 @@ fn env_prompt_debug_http_capture_output() -> Option<bool> {
     env::var_os(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR).map(|_| true)
 }
 
-fn env_prompt_debug_http_capture_reasoning() -> Option<bool> {
-    env::var_os(CODEX_BACKEND_CAPTURE_REASONING_ENV_VAR).map(|_| true)
-}
-
 fn env_prompt_debug_http_capture_dir() -> Option<PathBuf> {
     env::var_os(CODEX_BACKEND_CAPTURE_DIR_ENV_VAR).map(PathBuf::from)
 }
@@ -142,15 +130,12 @@ fn active_prompt_debug_http_config() -> PromptDebugHttpConfig {
     let capture_input = env_prompt_debug_http_capture_input().unwrap_or(configured.capture_input);
     let capture_output =
         env_prompt_debug_http_capture_output().unwrap_or(configured.capture_output);
-    let capture_reasoning =
-        env_prompt_debug_http_capture_reasoning().unwrap_or(configured.capture_reasoning);
     let capture_dir = env_prompt_debug_http_capture_dir().or(configured.capture_dir);
 
     PromptDebugHttpConfig {
         enabled,
         capture_input,
         capture_output,
-        capture_reasoning,
         capture_dir,
     }
 }
@@ -606,7 +591,6 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
 
     let input_path = dir.join(format!("{id}_input.ndjson"));
     let output_path = dir.join(format!("{id}_output.ndjson"));
-    let reasoning_path = dir.join(format!("{id}_reasoning.ndjson"));
     let backend_traffic_path = capture_traffic_path(dir.as_path(), id.as_str());
 
     // Ensure a stats file exists for this capture directory even before first tool call.
@@ -642,11 +626,9 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
         id,
         capture_input: config.capture_input,
         capture_output: config.capture_output,
-        capture_reasoning: config.capture_reasoning,
         backend_traffic_path,
         input_path,
         output_path,
-        reasoning_path,
     })
 }
 
@@ -686,48 +668,6 @@ pub fn prompt_capture_append_output(
             record_payload_tool_usage(stats, &json_payload)
         });
     }
-}
-
-pub fn prompt_capture_append_reasoning(
-    session: &PromptCaptureSession,
-    transport: &str,
-    payload: &str,
-) {
-    if !session.capture_reasoning {
-        return;
-    }
-    append_json_line(
-        session.reasoning_path(),
-        &serde_json::json!({
-            "query_id": session.id(),
-            "transport": transport,
-            "payload": payload,
-        }),
-    );
-}
-
-pub fn prompt_capture_append_reasoning_entry(
-    session: &PromptCaptureSession,
-    transport: &str,
-    kind: &str,
-    text: Option<&str>,
-    summary_index: Option<i64>,
-    content_index: Option<i64>,
-) {
-    if !session.capture_reasoning {
-        return;
-    }
-    append_json_line(
-        session.reasoning_path(),
-        &serde_json::json!({
-            "query_id": session.id(),
-            "transport": transport,
-            "kind": kind,
-            "text": text,
-            "summary_index": summary_index,
-            "content_index": content_index,
-        }),
-    );
 }
 
 pub fn prompt_capture_write_output_json(
@@ -837,11 +777,9 @@ mod tests {
             id: "9".to_string(),
             capture_input: true,
             capture_output: true,
-            capture_reasoning: false,
             backend_traffic_path: dir.join("9_backend_traffic.ndjson"),
             input_path: dir.join("9_input.ndjson"),
             output_path: dir.join("9_output.ndjson"),
-            reasoning_path: dir.join("9_reasoning.ndjson"),
         };
 
         prompt_capture_record_input_tool_usage(
@@ -902,11 +840,9 @@ mod tests {
             id: "10".to_string(),
             capture_input: true,
             capture_output: true,
-            capture_reasoning: false,
             backend_traffic_path: dir.join("10_backend_traffic.ndjson"),
             input_path: dir.join("10_input.ndjson"),
             output_path: dir.join("10_output.ndjson"),
-            reasoning_path: dir.join("10_reasoning.ndjson"),
         };
 
         prompt_capture_record_input_tool_usage(
@@ -971,48 +907,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn prompt_capture_append_reasoning_entry_writes_human_readable_ndjson() {
-        let dir = PathBuf::from(format!(
-            "/var/tmp/codex-prompt-debug-http-test-{}-{}",
-            std::process::id(),
-            now_unix_ms()
-        ));
-        std::fs::create_dir_all(dir.as_path()).expect("create temp dir");
-        let reasoning_path = dir.join("7_reasoning.ndjson");
-        let session = PromptCaptureSession {
-            id: "7".to_string(),
-            capture_input: false,
-            capture_output: false,
-            capture_reasoning: true,
-            backend_traffic_path: dir.join("7_backend_traffic.ndjson"),
-            input_path: dir.join("7_input.ndjson"),
-            output_path: dir.join("7_output.ndjson"),
-            reasoning_path: reasoning_path.clone(),
-        };
-
-        prompt_capture_append_reasoning_entry(
-            &session,
-            "responses_websocket",
-            "reasoning_summary_text_delta",
-            Some("Plan: inspect the request"),
-            Some(0),
-            None,
-        );
-
-        let captured = std::fs::read_to_string(reasoning_path).expect("read reasoning file");
-        let value: serde_json::Value =
-            serde_json::from_str(captured.trim()).expect("parse reasoning json");
-        assert_eq!(value.get("query_id"), Some(&serde_json::json!("7")));
-        assert_eq!(
-            value.get("kind"),
-            Some(&serde_json::json!("reasoning_summary_text_delta"))
-        );
-        assert_eq!(
-            value.get("text"),
-            Some(&serde_json::json!("Plan: inspect the request"))
-        );
-        assert_eq!(value.get("summary_index"), Some(&serde_json::json!(0)));
-        let _ = std::fs::remove_dir_all(dir);
-    }
 }

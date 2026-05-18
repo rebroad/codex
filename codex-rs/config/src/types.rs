@@ -193,8 +193,6 @@ pub struct PromptDebugHttpToml {
     pub capture_input: Option<bool>,
     /// Capture model output stream payloads.
     pub capture_output: Option<bool>,
-    /// Capture model reasoning-related stream payloads.
-    pub capture_reasoning: Option<bool>,
     /// Directory used for captured backend files.
     pub capture_dir: Option<AbsolutePathBuf>,
 }
@@ -205,7 +203,6 @@ pub struct PromptDebugHttpConfig {
     pub enabled: bool,
     pub capture_input: bool,
     pub capture_output: bool,
-    pub capture_reasoning: bool,
     pub capture_dir: Option<PathBuf>,
 }
 
@@ -229,7 +226,6 @@ impl From<PromptDebugHttpToml> for PromptDebugHttpConfig {
             enabled: toml.enabled.unwrap_or(false),
             capture_input: toml.capture_input.unwrap_or(false),
             capture_output: toml.capture_output.unwrap_or(false),
-            capture_reasoning: toml.capture_reasoning.unwrap_or(false),
             capture_dir,
         }
     }

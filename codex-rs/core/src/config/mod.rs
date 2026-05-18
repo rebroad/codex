@@ -2249,7 +2249,6 @@ impl Config {
             enabled: prompt_debug_http.enabled,
             capture_input: prompt_debug_http.capture_input,
             capture_output: prompt_debug_http.capture_output,
-            capture_reasoning: prompt_debug_http.capture_reasoning,
             capture_dir: prompt_debug_http.capture_dir,
         });
         Ok(config)
