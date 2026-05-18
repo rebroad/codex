@@ -221,6 +221,7 @@ enabled = true
 capture_input = false
 capture_output = true
 capture_dir = "/tmp/prompt-debug-http"
+tool_usage_log = "/tmp/prompt-debug-http/tool_usage.log"
 "#;
     let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http)
         .expect("TOML deserialization should succeed");
@@ -230,6 +231,7 @@ capture_dir = "/tmp/prompt-debug-http"
             capture_input: Some(false),
             capture_output: Some(true),
             capture_dir: Some(test_absolute_path("/tmp/prompt-debug-http")),
+            tool_usage_log: Some(test_absolute_path("/tmp/prompt-debug-http/tool_usage.log")),
         }),
         prompt_debug_http_cfg.prompt_debug_http
     );
@@ -245,6 +247,7 @@ capture_dir = "/tmp/prompt-debug-http"
             capture_input: false,
             capture_output: true,
             capture_dir: Some("/tmp/prompt-debug-http".into()),
+            tool_usage_log: Some("/tmp/prompt-debug-http/tool_usage.log".into()),
         }
     );
 
@@ -255,6 +258,7 @@ enabled = true
 capture_input = true
 capture_output = false
 capture_dir = "/tmp/prompt-debug-$$"
+tool_usage_log = "/tmp/prompt-debug-$$/tool_usage.log"
 "#;
     let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_pid)
         .expect("TOML deserialization should succeed");
@@ -269,6 +273,7 @@ capture_dir = "/tmp/prompt-debug-$$"
             capture_input: true,
             capture_output: false,
             capture_dir: Some(format!("/tmp/prompt-debug-{pid}").into()),
+            tool_usage_log: Some(format!("/tmp/prompt-debug-{pid}/tool_usage.log").into()),
         }
     );
 
@@ -278,6 +283,7 @@ enabled = true
 capture_input = true
 capture_output = true
 capture_dir = "/var/tmp/prompt-debug-$EMAIL"
+tool_usage_log = "/var/tmp/prompt-debug-$EMAIL/tool_usage.log"
 "#;
     let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_email)
         .expect("TOML deserialization should succeed");
@@ -292,6 +298,7 @@ capture_dir = "/var/tmp/prompt-debug-$EMAIL"
             capture_input: true,
             capture_output: true,
             capture_dir: Some("/var/tmp/prompt-debug-$EMAIL".into()),
+            tool_usage_log: Some("/var/tmp/prompt-debug-$EMAIL/tool_usage.log".into()),
         }
     );
 

@@ -1364,13 +1364,29 @@
       "type": "object"
     },
     "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic",
-        "comedic"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "None",
+            "Friendly",
+            "Pragmatic",
+            "Comedic"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Custom"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "PluginConfig": {
       "additionalProperties": false,
@@ -1422,6 +1438,14 @@
         "enabled": {
           "description": "When `true`, captures backend query payloads.",
           "type": "boolean"
+        },
+        "tool_usage_log": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute path to a dedicated tool usage log file."
         }
       },
       "type": "object"
