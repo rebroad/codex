@@ -1136,16 +1136,9 @@ offer_duplicate_cleanup_for_installed_binaries() {
   printf '%s\n' "${records[@]}" | LC_ALL=C sort -t'|' -k1,1 -k2,2 -k3,3 > "${sorted_tmp}"
 
   local prev_series="" prev_size="" prev_name=""
-  local run_keep_name="" run_has_matches="false"
-  local -a delete_names=() keep_names=()
+  local -a delete_names=()
 
-  flush_duplicate_run() {
-    if [[ "${run_has_matches}" == "true" && -n "${run_keep_name}" ]]; then
-      keep_names+=("${run_keep_name}")
-    fi
-    run_keep_name=""
-    run_has_matches="false"
-  }
+  echo "Scanning installed codex binaries for timestamp-normalized duplicates; this may take a bit..."
 
   while IFS='|' read -r series size timestamp name; do
     if [[ "${series}" == "${prev_series}" && "${size}" == "${prev_size}" ]]; then
@@ -1153,18 +1146,10 @@ offer_duplicate_cleanup_for_installed_binaries() {
       prev_checksum="$(cached_normalized_binary_sha256sum "${INSTALL_BIN_DIR}/${prev_name}")" || prev_checksum=""
       current_checksum="$(cached_normalized_binary_sha256sum "${INSTALL_BIN_DIR}/${name}")" || current_checksum=""
       if [[ -n "${prev_checksum}" && "${prev_checksum}" == "${current_checksum}" ]]; then
-        if [[ "${run_has_matches}" != "true" ]]; then
-          run_keep_name="${name}"
-          run_has_matches="true"
-        fi
         if [[ -n "${prev_name}" ]]; then
           delete_names+=("${prev_name}")
         fi
-      else
-        flush_duplicate_run
       fi
-    else
-      flush_duplicate_run
     fi
     prev_series="${series}"
     prev_size="${size}"
@@ -1172,19 +1157,14 @@ offer_duplicate_cleanup_for_installed_binaries() {
   done < "${sorted_tmp}"
   rm -f "${sorted_tmp}"
 
-  flush_duplicate_run
-
   if (( ${#delete_names[@]} == 0 )); then
     return 0
   fi
 
   echo "Detected ${#delete_names[@]} duplicate codex binaries (same size and sha256 in adjacent timestamp runs)."
-  local i
-  for ((i = 0; i < ${#keep_names[@]}; i++)); do
-    echo "- Keep:   ${keep_names[i]}"
-  done
-  for ((i = 0; i < ${#delete_names[@]}; i++)); do
-    echo "- Delete: ${delete_names[i]}"
+  local name
+  for name in "${delete_names[@]}"; do
+    echo "- Delete: ${name}"
   done
 
   for name in "${delete_names[@]}"; do
