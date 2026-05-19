@@ -15,10 +15,14 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -28,6 +32,7 @@ use tracing::warn;
 /// is a balance between throughput and memory usage - 128 messages should be
 /// plenty for an interactive CLI.
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
+const OVERLOAD_WARNING_SUPPRESSION_WINDOW: Duration = Duration::from_secs(1);
 
 mod remote_control;
 mod stdio;
@@ -176,6 +181,77 @@ impl OutboundConnectionState {
 }
 
 static CONNECTION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+static OVERLOAD_WARNING_STATE: OnceLock<Mutex<HashMap<ConnectionId, OverloadWarningState>>> =
+    OnceLock::new();
+
+#[derive(Default)]
+struct OverloadWarningState {
+    last_emitted_at: Option<Instant>,
+    suppressed_since_last_emit: usize,
+}
+
+enum OverloadWarningDisposition {
+    EmitNow,
+    EmitWithSuppressedCount(usize),
+    Suppress,
+}
+
+fn overload_warning_state() -> &'static Mutex<HashMap<ConnectionId, OverloadWarningState>> {
+    OVERLOAD_WARNING_STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn next_overload_warning_disposition(
+    state: &mut OverloadWarningState,
+    now: Instant,
+) -> OverloadWarningDisposition {
+    match state.last_emitted_at {
+        None => {
+            state.last_emitted_at = Some(now);
+            OverloadWarningDisposition::EmitNow
+        }
+        Some(last_emitted_at)
+            if now.duration_since(last_emitted_at) < OVERLOAD_WARNING_SUPPRESSION_WINDOW =>
+        {
+            state.suppressed_since_last_emit =
+                state.suppressed_since_last_emit.saturating_add(1);
+            OverloadWarningDisposition::Suppress
+        }
+        Some(_) => {
+            state.last_emitted_at = Some(now);
+            let suppressed_since_last_emit = state.suppressed_since_last_emit;
+            state.suppressed_since_last_emit = 0;
+            if suppressed_since_last_emit > 0 {
+                OverloadWarningDisposition::EmitWithSuppressedCount(suppressed_since_last_emit)
+            } else {
+                OverloadWarningDisposition::EmitNow
+            }
+        }
+    }
+}
+
+fn warn_dropped_overload_response(connection_id: ConnectionId) {
+    let now = Instant::now();
+    let mut state_guard = overload_warning_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = state_guard.entry(connection_id).or_default();
+    match next_overload_warning_disposition(state, now) {
+        OverloadWarningDisposition::EmitNow => {
+            warn!(
+                "dropping overload response for connection {:?}: outbound queue is full",
+                connection_id
+            );
+        }
+        OverloadWarningDisposition::EmitWithSuppressedCount(suppressed_since_last_emit) => {
+            warn!(
+                suppressed_since_last_emit,
+                "dropping overload response for connection {:?}: outbound queue is full",
+                connection_id
+            );
+        }
+        OverloadWarningDisposition::Suppress => {}
+    }
+}
 
 fn next_connection_id() -> ConnectionId {
     ConnectionId(CONNECTION_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
@@ -227,10 +303,7 @@ async fn enqueue_incoming_message(
                 Ok(()) => true,
                 Err(mpsc::error::TrySendError::Closed(_)) => false,
                 Err(mpsc::error::TrySendError::Full(_overload_error)) => {
-                    warn!(
-                        "dropping overload response for connection {:?}: outbound queue is full",
-                        connection_id
-                    );
+                    warn_dropped_overload_response(connection_id);
                     true
                 }
             }
@@ -610,6 +683,45 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn overload_warning_suppresses_repeats_within_window() {
+        let mut state = OverloadWarningState::default();
+        let start = Instant::now();
+
+        assert!(matches!(
+            next_overload_warning_disposition(&mut state, start),
+            OverloadWarningDisposition::EmitNow
+        ));
+        assert!(matches!(
+            next_overload_warning_disposition(
+                &mut state,
+                start + Duration::from_millis(100)
+            ),
+            OverloadWarningDisposition::Suppress
+        ));
+        assert!(matches!(
+            next_overload_warning_disposition(
+                &mut state,
+                start + Duration::from_millis(200)
+            ),
+            OverloadWarningDisposition::Suppress
+        ));
+        assert!(matches!(
+            next_overload_warning_disposition(
+                &mut state,
+                start + OVERLOAD_WARNING_SUPPRESSION_WINDOW + Duration::from_millis(1)
+            ),
+            OverloadWarningDisposition::EmitWithSuppressedCount(2)
+        ));
+        assert!(matches!(
+            next_overload_warning_disposition(
+                &mut state,
+                start + OVERLOAD_WARNING_SUPPRESSION_WINDOW + Duration::from_millis(2)
+            ),
+            OverloadWarningDisposition::Suppress
+        ));
     }
 
     #[tokio::test]
