@@ -152,7 +152,7 @@ Current `usage_pct` log order is:
 A reset is recorded when:
 
 - The backend snapshot is newer, and
-- `used_percent` drops to zero, or the window metadata changes (`resets_at` or `window_minutes`).
+- `used_percent` drops while `resets_at` advances by more than 3 days.
 
 When a reset is detected:
 
