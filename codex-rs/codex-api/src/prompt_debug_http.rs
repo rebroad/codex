@@ -14,6 +14,8 @@ use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use chrono::SecondsFormat;
+use chrono::Utc;
 use codex_protocol::models::ResponseItem;
 
 const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
@@ -209,7 +211,7 @@ fn capture_traffic_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}_backend_traffic.ndjson"))
 }
 
-fn tool_usage_log_path(dir: &Path) -> PathBuf {
+fn tool_usage_log_path_in_dir(dir: &Path) -> PathBuf {
     dir.join("tool_usage.log")
 }
 
@@ -218,6 +220,167 @@ fn now_unix_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+fn human_timestamp_from_unix_ms(unix_ms: u128) -> String {
+    let unix_ms = i64::try_from(unix_ms).unwrap_or(i64::MAX);
+    let dt = chrono::DateTime::<Utc>::from_timestamp_millis(unix_ms).unwrap_or_else(Utc::now);
+    dt.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn summarize_json_string(text: &str, max_chars: usize) -> serde_json::Value {
+    serde_json::Value::String(truncate_for_log(text, max_chars))
+}
+
+fn summarize_tool_arguments_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut summary = serde_json::Map::new();
+            for key in [
+                "command",
+                "workdir",
+                "timeout_ms",
+                "timeout",
+                "login",
+                "sandbox_permissions",
+                "prefix_rule",
+                "justification",
+                "execution",
+                "query",
+                "queries",
+                "action",
+                "input",
+                "limit",
+            ] {
+                if let Some(value) = map.get(key) {
+                    summary.insert(key.to_string(), simplify_json_for_log(value.clone()));
+                }
+            }
+            if summary.is_empty() {
+                simplify_json_for_log(value.clone())
+            } else {
+                serde_json::Value::Object(summary)
+            }
+        }
+        _ => simplify_json_for_log(value.clone()),
+    }
+}
+
+fn extract_timeout_ms_from_value(value: &serde_json::Value) -> Option<u64> {
+    match value {
+        serde_json::Value::Object(map) => {
+            let timeout = map
+                .get("timeout_ms")
+                .or_else(|| map.get("timeout"))
+                .and_then(serde_json::Value::as_u64);
+            timeout.or_else(|| map.values().find_map(extract_timeout_ms_from_value))
+        }
+        serde_json::Value::Array(values) => values.iter().find_map(extract_timeout_ms_from_value),
+        _ => None,
+    }
+}
+
+fn extract_timeout_ms_from_text(text: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| extract_timeout_ms_from_value(&value))
+}
+
+fn tool_usage_log_line_prefix() -> String {
+    human_timestamp_from_unix_ms(now_unix_ms())
+}
+
+fn quoted(text: &str) -> String {
+    serde_json::to_string(text).unwrap_or_else(|_| format!("{text:?}"))
+}
+
+fn format_tool_usage_log_line(
+    event: &str,
+    turn_id: Option<&str>,
+    tool_name: &str,
+    call_id: Option<&str>,
+    timeout_ms: Option<u64>,
+    duration_ms: Option<u128>,
+    success: Option<bool>,
+    status: Option<&str>,
+    arguments: Option<&str>,
+    output: Option<&str>,
+) -> String {
+    let mut parts = vec![
+        tool_usage_log_line_prefix(),
+        format!("event={event}"),
+        format!("tool={tool_name}"),
+    ];
+    if let Some(turn_id) = turn_id {
+        parts.push(format!("turn={turn_id}"));
+    }
+    if let Some(call_id) = call_id {
+        parts.push(format!("call_id={call_id}"));
+    }
+    if let Some(timeout_ms) = timeout_ms {
+        parts.push(format!("timeout_ms={timeout_ms}"));
+    }
+    if let Some(duration_ms) = duration_ms {
+        parts.push(format!("duration_ms={duration_ms}"));
+    }
+    if let Some(success) = success {
+        parts.push(format!("success={success}"));
+    }
+    if let Some(status) = status {
+        parts.push(format!("status={status}"));
+    }
+    if let Some(arguments) = arguments {
+        parts.push(format!("args={}", quoted(arguments)));
+    }
+    if let Some(output) = output {
+        parts.push(format!("output={}", quoted(output)));
+    }
+    parts.join(" ")
+}
+
+fn active_tool_usage_log_path() -> Option<PathBuf> {
+    let config = active_prompt_debug_http_config();
+    if let Some(path) = config.tool_usage_log {
+        return Some(resolve_prompt_debug_path(path));
+    }
+    if !config.enabled {
+        return None;
+    }
+    let dir = resolve_prompt_debug_path(config.capture_dir.unwrap_or_else(default_capture_dir));
+    Some(tool_usage_log_path_in_dir(dir.as_path()))
+}
+
+pub fn prompt_debug_http_log_tool_event(line: impl AsRef<str>) {
+    let Some(path) = active_tool_usage_log_path() else {
+        return;
+    };
+    append_line(path.as_path(), line.as_ref());
+}
+
+pub fn prompt_debug_http_log_tool_usage(
+    event: &str,
+    turn_id: Option<&str>,
+    tool_name: &str,
+    call_id: Option<&str>,
+    timeout_ms: Option<u64>,
+    duration_ms: Option<u128>,
+    success: Option<bool>,
+    status: Option<&str>,
+    arguments: Option<&str>,
+    output: Option<&str>,
+) {
+    prompt_debug_http_log_tool_event(format_tool_usage_log_line(
+        event,
+        turn_id,
+        tool_name,
+        call_id,
+        timeout_ms,
+        duration_ms,
+        success,
+        status,
+        arguments,
+        output,
+    ));
 }
 
 pub fn capture_headers_json(headers: &http::HeaderMap) -> serde_json::Value {
@@ -379,98 +542,89 @@ fn simplify_json_for_log(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn tool_usage_log_path_for_session(session: &PromptCaptureSession) -> &Path {
-    session.tool_usage_log_path()
-}
-
 fn write_tool_usage_log_line(
     session: &PromptCaptureSession,
     tool_name: &str,
     payload: serde_json::Value,
 ) {
     append_line(
-        tool_usage_log_path_for_session(session),
-        &format!(
-            "{} {} {} {}",
-            now_unix_ms(),
-            session.id(),
+        session.tool_usage_log_path(),
+        &format_tool_usage_log_line(
+            "model_output",
+            Some(session.id()),
             tool_name,
-            simplify_json_for_log(payload)
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&simplify_json_for_log(payload).to_string()),
+            None,
         ),
     );
 }
 
 fn tool_usage_log_payload(item: &ResponseItem) -> Option<serde_json::Value> {
     match item {
-        ResponseItem::LocalShellCall {
-            id,
-            call_id,
-            status,
-            action,
-        } => Some(serde_json::json!({
-            "type": "local_shell_call",
-            "id": id,
-            "call_id": call_id,
-            "status": status,
-            "action": action,
-        })),
+        ResponseItem::LocalShellCall { status, action, .. } => {
+            let timeout_ms = match action {
+                codex_protocol::models::LocalShellAction::Exec(exec) => exec.timeout_ms,
+            };
+            Some(serde_json::json!({
+                "action": action,
+                "status": status,
+                "timeout_ms": timeout_ms,
+            }))
+        }
         ResponseItem::FunctionCall {
             name,
             namespace,
             arguments,
-            call_id,
             ..
-        } => Some(serde_json::json!({
-            "type": "function_call",
-            "name": name,
-            "namespace": namespace,
-            "call_id": call_id,
-            "arguments": arguments,
-        })),
+        } => {
+            let details = serde_json::from_str::<serde_json::Value>(arguments)
+                .ok()
+                .map(|value| summarize_tool_arguments_json(&value))
+                .unwrap_or_else(|| summarize_json_string(arguments, 240));
+            Some(serde_json::json!({
+                "name": name,
+                "namespace": namespace,
+                "arguments": details,
+                "timeout_ms": extract_timeout_ms_from_text(arguments),
+            }))
+        }
         ResponseItem::ToolSearchCall {
-            id,
-            call_id,
             status,
             execution,
             arguments,
+            ..
         } => Some(serde_json::json!({
-            "type": "tool_search_call",
-            "id": id,
-            "call_id": call_id,
-            "status": status,
             "execution": execution,
-            "arguments": arguments,
+            "status": status,
+            "arguments": summarize_tool_arguments_json(arguments),
+            "timeout_ms": extract_timeout_ms_from_value(arguments),
         })),
         ResponseItem::CustomToolCall {
-            id,
             status,
-            call_id,
             name,
             input,
+            ..
         } => Some(serde_json::json!({
-            "type": "custom_tool_call",
-            "id": id,
-            "status": status,
-            "call_id": call_id,
             "name": name,
-            "input": input,
+            "status": status,
+            "input": summarize_json_string(input, 240),
         })),
-        ResponseItem::WebSearchCall { id, status, action } => Some(serde_json::json!({
-            "type": "web_search_call",
-            "id": id,
+        ResponseItem::WebSearchCall { status, action, .. } => Some(serde_json::json!({
             "status": status,
             "action": action,
         })),
         ResponseItem::ImageGenerationCall {
-            id,
             status,
             revised_prompt,
             ..
         } => Some(serde_json::json!({
-            "type": "image_generation_call",
-            "id": id,
             "status": status,
-            "revised_prompt": revised_prompt,
+            "revised_prompt": revised_prompt.as_ref().map(|text| truncate_for_log(text, 240)),
         })),
         _ => None,
     }
@@ -821,7 +975,8 @@ pub fn start_prompt_capture(kind: &str, input: Option<&str>) -> Option<PromptCap
         }
     }
 
-    let tool_usage_log_file_path = tool_usage_log.unwrap_or_else(|| tool_usage_log_path(dir.as_path()));
+    let tool_usage_log_file_path =
+        tool_usage_log.unwrap_or_else(|| tool_usage_log_path_in_dir(dir.as_path()));
     {
         let write_lock = PROMPT_DEBUG_HTTP_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
         let Ok(_write_guard) = write_lock.lock() else {
@@ -1061,7 +1216,7 @@ mod tests {
             Some(&serde_json::json!(1))
         );
 
-        let log_path = tool_usage_log_path_for_session(&session);
+        let log_path = session.tool_usage_log_path();
         let log_contents = std::fs::read_to_string(log_path).expect("read tool log");
         let log_lines: Vec<&str> = log_contents.lines().collect();
         assert_eq!(log_lines.len(), 1);
@@ -1114,7 +1269,7 @@ mod tests {
             Some(&serde_json::json!(1))
         );
 
-        let log_path = tool_usage_log_path_for_session(&session);
+        let log_path = session.tool_usage_log_path();
         let log_contents = std::fs::read_to_string(log_path).expect("read tool log");
         let log_lines: Vec<&str> = log_contents.lines().collect();
         assert_eq!(log_lines.len(), 1);
