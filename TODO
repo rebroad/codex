@@ -1,5 +1,6 @@
 =see if app-server can filter by CWD (does the client offer this info when it asks for the thread, or when it spawns the app-server via an ENV?)
 =prewarm uses tokens! Fix the accounting to recognise this!
+=Only 101 when it's really a backend usage limit reached, otherwise forward the error to the client as usual (and don't 101)
 =ensure subagents use 5.4-mini (not 5.2!)
 =explore previous_response_id and work out algo for how it picks which to use for new conversations
 =Too many skills being injected, e.g. openai-docs
