@@ -1,4 +1,6 @@
 =prewarm uses tokens! Fix the accounting to recognise this!
+=ensure subagents use 5.4-mini (not 5.2!)
+=explore previous_response_id and work out algo for how it picks which to use for new conversations
 =Too many skills being injected, e.g. openai-docs
 =Explore "encrypted_content" in "codex prompt debug".
 =`just argument-comment-lint` produces too much output (token wastage)
