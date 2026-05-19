@@ -59,6 +59,7 @@ use codex_api::build_conversation_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::prompt_debug_http_enabled;
 use codex_api::prompt_debug_http_log;
+use codex_api::prompt_debug_http_log_tool_usage;
 use codex_api::set_prompt_debug_http_account_email;
 use codex_api::start_prompt_capture;
 use codex_api::response_create_client_metadata;
@@ -1943,6 +1944,21 @@ impl ApiTelemetry {
     }
 }
 
+fn log_transport_poll(tool_name: &str, status: &str, duration: Duration) {
+    prompt_debug_http_log_tool_usage(
+        "poll",
+        None,
+        tool_name,
+        None,
+        None,
+        Some(duration.as_millis()),
+        None,
+        Some(status),
+        None,
+        None,
+    );
+}
+
 impl RequestTelemetry for ApiTelemetry {
     fn on_request(
         &self,
@@ -2010,6 +2026,15 @@ impl SseTelemetry for ApiTelemetry {
         >,
         duration: Duration,
     ) {
+        let status = match result {
+            Err(_) => Some("timeout"),
+            Ok(None) => Some("closed"),
+            Ok(Some(Err(_))) => Some("error"),
+            Ok(Some(Ok(_))) => None,
+        };
+        if let Some(status) = status {
+            log_transport_poll("responses_sse", status, duration);
+        }
         self.session_telemetry.log_sse_event(result, duration);
     }
 }
@@ -2059,6 +2084,15 @@ impl WebsocketTelemetry for ApiTelemetry {
         result: &std::result::Result<Option<std::result::Result<Message, Error>>, ApiError>,
         duration: Duration,
     ) {
+        let status = match result {
+            Err(_) => Some("timeout"),
+            Ok(None) => Some("closed"),
+            Ok(Some(Err(_))) => Some("error"),
+            Ok(Some(Ok(_))) => None,
+        };
+        if let Some(status) = status {
+            log_transport_poll("responses_websocket", status, duration);
+        }
         self.session_telemetry
             .record_websocket_event(result, duration);
     }

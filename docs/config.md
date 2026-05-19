@@ -118,7 +118,9 @@ Capture files include:
 `<query_id>_input.ndjson`,
 `<query_id>_output.ndjson`.
 - `tool_usage.log`, or the configured `tool_usage_log` path, an append-only
-  line log with one entry per distinct tool call.
+  line log with human-readable entries such as `event=started`,
+  `event=gate_wait`, `event=poll`, and `event=completed`, including `call_id`,
+  `duration_ms`, and any available `timeout_ms`.
 If the `capture_dir` path contains `$$`, Codex replaces it with the current
 process PID.
 If the `capture_dir` path contains `$EMAIL`, Codex replaces it with the

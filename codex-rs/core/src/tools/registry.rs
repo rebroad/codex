@@ -13,6 +13,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use codex_api::prompt_debug_http_log_tool_usage;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -344,6 +345,22 @@ impl ToolRegistry {
         let is_mutating = handler.is_mutating(&invocation).await;
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
+        let tool_name_for_gate = tool_name.clone();
+        let call_id_for_gate = call_id_owned.clone();
+        let log_payload_for_gate = log_payload.clone();
+
+        prompt_debug_http_log_tool_usage(
+            "started",
+            Some(invocation.turn.sub_id.as_str()),
+            tool_name.as_ref(),
+            Some(call_id_owned.as_str()),
+            invocation.payload.timeout_ms(),
+            None,
+            None,
+            None,
+            Some(log_payload.as_ref()),
+            None,
+        );
 
         let started = Instant::now();
         let result = otel
@@ -360,7 +377,23 @@ impl ToolRegistry {
                     async move {
                         if is_mutating {
                             tracing::trace!("waiting for tool gate");
+                            let gate_started = Instant::now();
                             invocation_for_tool.turn.tool_call_gate.wait_ready().await;
+                            let gate_duration = gate_started.elapsed();
+                            if !gate_duration.is_zero() {
+                                prompt_debug_http_log_tool_usage(
+                                    "gate_wait",
+                                    Some(invocation_for_tool.turn.sub_id.as_str()),
+                                    tool_name_for_gate.as_ref(),
+                                    Some(call_id_for_gate.as_str()),
+                                    invocation_for_tool.payload.timeout_ms(),
+                                    Some(gate_duration.as_millis()),
+                                    None,
+                                    Some("released"),
+                                    Some(log_payload_for_gate.as_ref()),
+                                    None,
+                                );
+                            }
                             tracing::trace!("tool gate released");
                         }
                         match handler.handle_any(invocation_for_tool).await {
@@ -382,6 +415,18 @@ impl ToolRegistry {
             Ok((preview, success)) => (preview.clone(), *success),
             Err(err) => (err.to_string(), false),
         };
+        prompt_debug_http_log_tool_usage(
+            if success { "completed" } else { "failed" },
+            Some(invocation.turn.sub_id.as_str()),
+            tool_name.as_ref(),
+            Some(call_id_owned.as_str()),
+            invocation.payload.timeout_ms(),
+            Some(duration.as_millis()),
+            Some(success),
+            None,
+            Some(log_payload.as_ref()),
+            Some(output_preview.as_str()),
+        );
         emit_metric_for_tool_read(&invocation, success).await;
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
