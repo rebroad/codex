@@ -370,14 +370,19 @@ impl ProcessGroupGuard {
                 }
             };
         if should_escalate {
+            warn!(
+                "Escalating {source_label} process group {process_group_id} to SIGKILL after SIGTERM"
+            );
             std::thread::spawn(move || {
                 std::thread::sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
-                if let Err(error) =
-                    codex_utils_pty::process_group::kill_process_group(process_group_id)
-                {
-                    warn!(
-                        "Failed to kill {source_label} process group {process_group_id}: {error}"
-                    );
+                match codex_utils_pty::process_group::kill_process_group(process_group_id) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        warn!(
+                            "Failed to kill {source_label} process group {process_group_id}: {error}"
+                        );
+                    }
+                    Err(_) => {}
                 }
             });
         }
