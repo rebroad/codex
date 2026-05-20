@@ -29,6 +29,7 @@ use std::collections::HashMap;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+pub(crate) const DEFAULT_SPAWN_AGENT_MODEL: &str = "gpt-5.4-mini";
 
 pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
     match payload {
@@ -205,6 +206,7 @@ pub(crate) fn build_agent_spawn_config(
     turn: &TurnContext,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
+    config.model = Some(DEFAULT_SPAWN_AGENT_MODEL.to_string());
     config.base_instructions = Some(base_instructions.text.clone());
     Ok(config)
 }
