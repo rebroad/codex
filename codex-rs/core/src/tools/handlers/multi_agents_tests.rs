@@ -3258,7 +3258,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
     let mut expected = (*turn.config).clone();
     expected.base_instructions = Some(base_instructions.text);
-    expected.model = Some(turn.model_info.slug.clone());
+    expected.model = Some(DEFAULT_SPAWN_AGENT_MODEL.to_string());
     expected.model_provider = turn.provider.clone();
     expected.model_reasoning_effort = turn.reasoning_effort;
     expected.model_reasoning_summary = Some(turn.reasoning_summary);

@@ -53,7 +53,10 @@ impl ToolHandler for Handler {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
-                    model: args.model.clone().unwrap_or_default(),
+                    model: args
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_SPAWN_AGENT_MODEL.to_string()),
                     reasoning_effort: args.reasoning_effort.unwrap_or_default(),
                 }
                 .into(),
