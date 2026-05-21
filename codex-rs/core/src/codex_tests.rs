@@ -131,7 +131,8 @@ fn mempalace_guidance_is_added_only_when_visible_tools_include_mempalace() {
         /*bare_prompt*/ false,
         has_visible_mempalace_tools([&mempalace_tool]),
     );
-    assert!(with_guidance.contains("Use MemPalace MCP tools"));
+    assert!(with_guidance.contains("mempalace"));
+    assert!(with_guidance.contains("durable recall"));
 
     let without_guidance = append_mempalace_memory_guidance(
         base.clone(),
