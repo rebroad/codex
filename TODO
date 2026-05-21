@@ -2,7 +2,7 @@
 =prewarm uses tokens! Fix the accounting to recognise this!
 =Only 101 when it's really a backend usage limit reached, otherwise forward the error to the client as usual (and don't 101)
 =Try to find out why auto-compaction sometimes ends the turn (when 100% used) and sometimes does not.
-=ensure subagents use 5.4-mini (not 5.2!)
+=Find out how codex deals with the backend not offering cached_input (cache expired) - does the backend deny the first attempt with previous_response_id?
 =explore previous_response_id and work out algo for how it picks which to use for new conversations
 =Too many skills being injected, e.g. openai-docs
 =Explore "encrypted_content" in "codex prompt debug".
