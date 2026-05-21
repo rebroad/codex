@@ -30,6 +30,20 @@ pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 
+pub(crate) fn normalize_spawn_agent_requested_model(requested_model: Option<&str>) -> Option<String> {
+    let requested_model = requested_model?.trim();
+    if requested_model.is_empty() {
+        return None;
+    }
+
+    let normalized_model = match requested_model {
+        "gpt-5.2" | "gpt-5.2-codex" | "gpt-5.3" | "gpt-5.3-codex" => "gpt-5.4-mini",
+        other => other,
+    };
+
+    Some(normalized_model.to_string())
+}
+
 pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
     match payload {
         ToolPayload::Function { arguments } => Ok(arguments),
@@ -115,6 +129,28 @@ pub(crate) fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
         }
         CodexErr::UnsupportedOperation(message) => FunctionCallError::RespondToModel(message),
         err => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_spawn_agent_requested_model;
+
+    #[test]
+    fn normalize_spawn_agent_requested_model_maps_legacy_families() {
+        assert_eq!(
+            normalize_spawn_agent_requested_model(Some("gpt-5.2")),
+            Some("gpt-5.4-mini".to_string())
+        );
+        assert_eq!(
+            normalize_spawn_agent_requested_model(Some("gpt-5.3-codex")),
+            Some("gpt-5.4-mini".to_string())
+        );
+        assert_eq!(
+            normalize_spawn_agent_requested_model(Some("gpt-5.4-mini")),
+            Some("gpt-5.4-mini".to_string())
+        );
+        assert_eq!(normalize_spawn_agent_requested_model(Some("   ")), None);
     }
 }
 
