@@ -187,6 +187,7 @@ use crate::client::ModelClientSession;
 use crate::client::PrewarmCompletionStats;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::mempalace_writeback::spawn_after_agent_writeback;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
@@ -212,13 +213,9 @@ mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
-const MEMPALACE_MEMORY_GUIDANCE: &str = r#"## Memory strategy
+const MEMPALACE_MEMORY_GUIDANCE: &str = r#"## MemPalace
 
-- Use MemPalace MCP tools for durable, reusable memory (user preferences, long-lived project facts, recurring constraints, decisions, and timelines).
-- Use normal conversation context for short-lived task details.
-- Before re-asking likely-known context, check MemPalace first.
-- Persist new high-signal facts to MemPalace when that will help future sessions.
-"#;
+Use the `mempalace` skill for durable recall: prior decisions, rationale, preferences, and project history. Use `rg` for current source facts. If the question is about why code is the way it is, check the repository first and then MemPalace for the decision trail. If MemPalace has nothing relevant, say so plainly."#;
 
 fn append_mempalace_memory_guidance(
     base_instructions: String,
@@ -6658,6 +6655,7 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_stop {
                         break;
                     }
+                    let writeback_input_messages = sampling_request_input_messages.clone();
                     let hook_outcomes = sess
                         .hooks()
                         .dispatch(HookPayload {
@@ -6716,6 +6714,14 @@ pub(crate) async fn run_turn(
                         .await;
                         return None;
                     }
+                    spawn_after_agent_writeback(
+                        Arc::clone(&sess),
+                        sess.conversation_id,
+                        turn_context.sub_id.clone(),
+                        turn_context.cwd.to_path_buf(),
+                        writeback_input_messages,
+                        last_agent_message.clone(),
+                    );
                     break;
                 }
                 continue;
