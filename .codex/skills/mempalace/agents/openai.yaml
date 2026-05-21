@@ -1,0 +1,6 @@
+interface:
+  display_name: "MemPalace"
+  short_description: "Recall durable decisions and rationale"
+  default_prompt: "Use $mempalace to check prior decisions, rationale, and durable project context before answering why something is the way it is."
+policy:
+  allow_implicit_invocation: true
