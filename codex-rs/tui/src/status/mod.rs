@@ -282,12 +282,16 @@ pub(crate) async fn render_compact_status_for_cli(
     }
 
     let compact_usage = compact_status_usage(config, auth, rate_limit_mode).await;
-    let timestamp_with_timezone =
-        compact_status_timestamp_with_timezone(compact_usage.reset_at_unix, use_utc);
-    format!(
-        "{timestamp_with_timezone} {email} {}%",
-        compact_usage.percent_left
-    )
+    match (compact_usage.reset_at_unix, compact_usage.percent_left) {
+        (Some(reset_at_unix), Some(percent_left)) => {
+            let timestamp_with_timezone =
+                compact_status_timestamp_with_timezone(Some(reset_at_unix), use_utc);
+            format!("{timestamp_with_timezone} {email} {percent_left}%")
+        }
+        _ => format!(
+            "{UNKNOWN_COMPACT_STATUS_TIMESTAMP} {email} {UNKNOWN_COMPACT_STATUS_PERCENT}"
+        ),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -339,7 +343,7 @@ fn compact_status_timestamp_with_timezone(reset_at_unix: Option<i64>, use_utc: b
 
 #[derive(Debug, Clone, Copy)]
 struct CompactStatusUsage {
-    percent_left: i64,
+    percent_left: Option<i64>,
     reset_at_unix: Option<i64>,
 }
 
@@ -350,7 +354,7 @@ async fn compact_status_usage(
 ) -> CompactStatusUsage {
     let Some(auth) = auth else {
         return CompactStatusUsage {
-            percent_left: 0,
+            percent_left: None,
             reset_at_unix: None,
         };
     };
@@ -359,7 +363,7 @@ async fn compact_status_usage(
         auth.get_account_email().as_deref(),
     ) else {
         return CompactStatusUsage {
-            percent_left: 0,
+            percent_left: None,
             reset_at_unix: None,
         };
     };
@@ -381,7 +385,7 @@ async fn compact_status_usage(
     .ok();
     let Some(account_usage_store) = account_usage_store else {
         return CompactStatusUsage {
-            percent_left: 0,
+            percent_left: None,
             reset_at_unix: None,
         };
     };
@@ -465,10 +469,11 @@ async fn compact_status_usage(
         .and_then(|window| window.resets_at)
         .or(fallback_reset_at);
     CompactStatusUsage {
-        percent_left: used_percent
-            .map(|used_percent| (100.0 - used_percent).round() as i64)
-            .map(|percent_left| percent_left.clamp(0, 100))
-            .unwrap_or(0),
+        percent_left: used_percent.map(|used_percent| {
+            (100.0 - used_percent)
+                .round()
+                .clamp(0.0, 100.0) as i64
+        }),
         reset_at_unix,
     }
 }
