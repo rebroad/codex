@@ -276,6 +276,23 @@ async fn compact_status_unknown_mode_uses_question_mark_placeholders() {
 }
 
 #[tokio::test]
+async fn compact_status_missing_usage_uses_question_mark_placeholders() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home).await;
+
+    let line = super::render_compact_status_for_cli(
+        &config,
+        /*auth*/ None,
+        /*use_utc*/ false,
+        super::CompactStatusOutputMode::Normal,
+        super::CliStatusRateLimitMode::LiveOnly,
+    )
+    .await;
+
+    assert_eq!(line, "?????????????? - ???%");
+}
+
+#[tokio::test]
 async fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
