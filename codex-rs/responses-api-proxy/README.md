@@ -7,7 +7,7 @@ This makes it a drop-in replacement for tools that normally talk directly to a C
 ## What It Does
 
 - Reads the upstream API key from `stdin`.
-- Optionally reads upstream auth from `auth.json` via `--auth-file` instead of stdin.
+- Optionally reads upstream auth from `auth.json` via `--auth-file` instead of stdin, and uses that same file as the accounting identity source.
 - Listens on `127.0.0.1` on the requested port, or an ephemeral port if `--port` is omitted.
 - Forwards arbitrary HTTP requests to the configured upstream URL.
 - Streams SSE responses and observes backend usage events.
@@ -64,13 +64,14 @@ base_url = "http://127.0.0.1:43128/v1"
 wire_api = "responses"
 ```
 
-Account identity is derived from the client request in this order:
+Account identity is derived from the auth file when `--auth-file` is set; otherwise it falls back to the client request in this order:
 
-1. `chatgpt-account-id` or `ChatGPT-Account-ID` request header.
-2. A stable `auth:<fingerprint>` derived from the client request's `Authorization` header.
-3. The fixed fallback bucket `proxy`.
+1. `account_id` / account email / token fingerprint from the selected `auth.json`.
+2. `chatgpt-account-id` or `ChatGPT-Account-ID` request header.
+3. A stable `auth:<fingerprint>` derived from the client request's `Authorization` header.
+4. The fixed fallback bucket `proxy`.
 
-That means existing clients that already send `chatgpt-account-id` can use the proxy without any additional identity configuration, and clients that only send `Authorization` still get a stable local usage bucket.
+That means `--auth-file` now keeps accounting and upstream auth aligned on the same stored account, while existing clients without `--auth-file` can still use request headers or a stable local usage bucket.
 
 When finished:
 
@@ -94,9 +95,11 @@ codex-responses-api-proxy \
 
 - `--upstream-url <URL>`: Base upstream URL to forward to. Defaults to `https://api.openai.com`.
 - `--sqlite-home <DIR>`: Overrides the local Codex SQLite home. If omitted, the proxy uses `CODEX_SQLITE_HOME` when set, otherwise `~/.codex`.
-- `--auth-file <FILE>`: Uses the auth token stored in the specified `auth.json` file for upstream requests instead of reading stdin.
+- `--auth-file <FILE>`: Uses the auth token stored in the specified `auth.json` file for upstream requests instead of reading stdin, and derives the accounting identity from that same file when possible.
 - `--provider-id <ID>`: Provider key written into the usage tables. Defaults to `proxy`.
 - `--dump-dir <DIR>`: Writes `<prefix>-request.json` and `<prefix>-response.json` files for each proxied exchange.
+
+When `--auth-file` is set, `kill -HUP <pid>` makes the proxy reload that file and swap in the updated upstream bearer token and accounting identity without restarting the process. If no `--auth-file` was configured, the proxy still handles `SIGHUP` but only logs that there is nothing to reload.
 
 After `rebuild_codex.sh`, the proxy binary is installed as `~/.cargo/bin/codex-responses-api-proxy` and versioned copies are kept alongside it, just like `codex`.
 
