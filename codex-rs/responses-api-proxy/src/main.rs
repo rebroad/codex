@@ -6,7 +6,8 @@ fn pre_main() {
     codex_process_hardening::pre_main_hardening();
 }
 
-pub fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> anyhow::Result<()> {
     let args = ResponsesApiProxyArgs::parse();
-    codex_responses_api_proxy::run_main(args)
+    codex_responses_api_proxy::run_main(args).await
 }

@@ -1,82 +1,94 @@
 # codex-responses-api-proxy
 
-A strict HTTP proxy that only forwards `POST` requests to `/v1/responses` to the OpenAI API (`https://api.openai.com`), injecting the `Authorization: Bearer $OPENAI_API_KEY` header. Everything else is rejected with `403 Forbidden`.
+`codex-responses-api-proxy` is a standalone HTTP proxy for OpenAI/Codex-style backend traffic. It forwards requests upstream, streams responses back to the client, and reuses the same usage-accounting tables and usage log files that Codex uses internally.
 
-## Expected Usage
+This makes it a drop-in replacement for tools that normally talk directly to a ChatGPT/OpenAI backend URL. Point those tools at the proxy instead, and the proxy will forward traffic to the real backend while recording usage locally.
 
-**IMPORTANT:** `codex-responses-api-proxy` is designed to be run by a privileged user with access to `OPENAI_API_KEY` so that an unprivileged user cannot inspect or tamper with the process. Though if `--http-shutdown` is specified, an unprivileged user _can_ make a `GET` request to `/shutdown` to shutdown the server, as an unprivileged user could not send `SIGTERM` to kill the process.
+## What It Does
 
-A privileged user (i.e., `root` or a user with `sudo`) who has access to `OPENAI_API_KEY` would run the following to start the server, as `codex-responses-api-proxy` reads the auth token from `stdin`:
+- Reads the upstream API key from `stdin`.
+- Listens on `127.0.0.1` on the requested port, or an ephemeral port if `--port` is omitted.
+- Forwards arbitrary HTTP requests to the configured upstream URL.
+- Streams SSE responses and observes backend usage events.
+- Updates the same `account_usage` SQLite tables and writes the same `usage/*.log` files that Codex already uses.
+- Optionally writes request/response exchange dumps for debugging.
+- Optionally exposes `GET /shutdown` for environments that cannot send `SIGTERM`.
+- Derives the account identity from the incoming client request, so no account-id or account-display CLI flags are needed.
+
+## Usage
+
+Start the proxy with the upstream key on stdin:
 
 ```shell
-printenv OPENAI_API_KEY | env -u OPENAI_API_KEY codex-responses-api-proxy --http-shutdown --server-info /tmp/server-info.json
+printenv OPENAI_API_KEY | env -u OPENAI_API_KEY codex-responses-api-proxy \
+  --http-shutdown \
+  --server-info /var/tmp/codex-proxy/server-info.json
 ```
 
-A non-privileged user would then run Codex as follows, specifying the `model_provider` dynamically:
+Point the client application at the proxy instead of the backend directly. For example, if the app normally talks to `https://chatgpt.com/backend-api`, point it at the proxy host and preserve the same path shape:
 
 ```shell
-PROXY_PORT=$(jq .port /tmp/server-info.json)
+PROXY_PORT=$(jq -r .port /var/tmp/codex-proxy/server-info.json)
 PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}"
-codex exec -c "model_providers.openai-proxy={ name = 'OpenAI Proxy', base_url = '${PROXY_BASE_URL}/v1', wire_api='responses' }" \
-    -c model_provider="openai-proxy" \
-    'Your prompt here'
+
+# Example Codex override
+codex exec \
+  -c "model_providers.openai-proxy={ name = 'OpenAI Proxy', base_url = '${PROXY_BASE_URL}/backend-api', wire_api='responses' }" \
+  -c model_provider="openai-proxy" \
+  'Your prompt here'
 ```
 
-When the unprivileged user was finished, they could shutdown the server using `curl` (since `kill -SIGTERM` is not an option):
+If the client already speaks the OpenAI Responses API directly, you can point it at the proxy root and let the proxy forward the request to the real upstream:
 
 ```shell
-curl --fail --silent --show-error "${PROXY_BASE_URL}/shutdown"
+PROXY_PORT=$(jq -r .port /var/tmp/codex-proxy/server-info.json)
+export OPENAI_BASE_URL="http://127.0.0.1:${PROXY_PORT}"
 ```
 
-## Behavior
+Account identity is derived from the client request in this order:
 
-- Reads the API key from `stdin`. All callers should pipe the key in (for example, `printenv OPENAI_API_KEY | codex-responses-api-proxy`).
-- Formats the header value as `Bearer <key>` and attempts to `mlock(2)` the memory holding that header so it is not swapped to disk.
-- Listens on the provided port or an ephemeral port if `--port` is not specified.
-- Accepts exactly `POST /v1/responses` (no query string). The request body is forwarded to `https://api.openai.com/v1/responses` with `Authorization: Bearer <key>` set. All original request headers (except any incoming `Authorization`) are forwarded upstream, with `Host` overridden to `api.openai.com`. For other requests, it responds with `403`.
-- Optionally writes a single-line JSON file with server info, currently `{ "port": <u16>, "pid": <u32> }`.
-- Optionally writes request/response JSON dumps to a directory. Each accepted request gets a pair of files that share a sequence/timestamp prefix, for example `000001-1846179912345-request.json` and `000001-1846179912345-response.json`. Header values are dumped in full except `Authorization` and any header whose name includes `cookie`, which are redacted. Bodies are written as parsed JSON when possible, otherwise as UTF-8 text.
-- Optional `--http-shutdown` enables `GET /shutdown` to terminate the process with exit code `0`. This allows one user (e.g., `root`) to start the proxy and another unprivileged user on the host to shut it down.
+1. `chatgpt-account-id` or `ChatGPT-Account-ID` request header.
+2. A stable `auth:<fingerprint>` derived from the client request's `Authorization` header.
+3. The fixed fallback bucket `proxy`.
+
+That means existing clients that already send `chatgpt-account-id` can use the proxy without any additional identity configuration, and clients that only send `Authorization` still get a stable local usage bucket.
+
+When finished:
+
+```shell
+curl --fail --silent --show-error "http://127.0.0.1:${PROXY_PORT}/shutdown"
+```
 
 ## CLI
 
-```
-codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown] [--upstream-url <URL>] [--dump-dir <DIR>]
-```
-
-- `--port <PORT>`: Port to bind on `127.0.0.1`. If omitted, an ephemeral port is chosen.
-- `--server-info <FILE>`: If set, the proxy writes a single line of JSON with `{ "port": <PORT>, "pid": <PID> }` once listening.
-- `--http-shutdown`: If set, enables `GET /shutdown` to exit the process with code `0`.
-- `--upstream-url <URL>`: Absolute URL to forward requests to. Defaults to `https://api.openai.com/v1/responses`.
-- `--dump-dir <DIR>`: If set, writes one request JSON file and one response JSON file per accepted proxy call under this directory. Filenames use a shared sequence/timestamp prefix so each pair is easy to correlate.
-- Authentication is fixed to `Authorization: Bearer <key>` to match the Codex CLI expectations.
-
-For Azure, for example (ensure your deployment accepts `Authorization: Bearer <key>`):
-
 ```shell
-printenv AZURE_OPENAI_API_KEY | env -u AZURE_OPENAI_API_KEY codex-responses-api-proxy \
-  --http-shutdown \
-  --server-info /tmp/server-info.json \
-  --upstream-url "https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/responses?api-version=2025-04-01-preview"
+codex-responses-api-proxy \
+  [--port <PORT>] \
+  [--server-info <FILE>] \
+  [--http-shutdown] \
+  [--upstream-url <URL>] \
+  [--dump-dir <DIR>] \
+  [--sqlite-home <DIR>] \
+  [--provider-id <ID>]
 ```
 
-## Notes
+- `--upstream-url <URL>`: Base upstream URL to forward to. Defaults to `https://api.openai.com`.
+- `--sqlite-home <DIR>`: Overrides the local Codex SQLite home. If omitted, the proxy uses `CODEX_SQLITE_HOME` when set, otherwise `~/.codex`.
+- `--provider-id <ID>`: Provider key written into the usage tables. Defaults to `proxy`.
+- `--dump-dir <DIR>`: Writes `<prefix>-request.json` and `<prefix>-response.json` files for each proxied exchange.
 
-- Only `POST /v1/responses` is permitted. No query strings are allowed.
-- All request headers are forwarded to the upstream call (aside from overriding `Authorization` and `Host`). Response status and content-type are mirrored from upstream.
+## Compatibility Notes
 
-## Hardening Details
+- The proxy currently expects the backend to speak the same Responses/SSE shape that Codex already handles.
+- Requests that are not SSE-based are still forwarded, but usage accounting only happens when the backend returns recognized usage metadata.
+- `CONNECT` tunneling is not implemented in this binary. Use direct base URL redirection for HTTPS-backed clients, or add MITM handling in a separate transport layer if you need true transparent TLS interception.
 
-Care is taken to restrict access/copying to the value of `OPENAI_API_KEY` retained in memory:
+## Logging And Accounting
 
-- We leverage [`codex_process_hardening`](https://github.com/openai/codex/blob/main/codex-rs/process-hardening/README.md) so `codex-responses-api-proxy` is run with standard process-hardening techniques.
-- At startup, we allocate a `1024` byte buffer on the stack and copy `"Bearer "` into the start of the buffer.
-- We then read from `stdin`, copying the contents into the buffer after `"Bearer "`.
-- After verifying the key matches `/^[a-zA-Z0-9_-]+$/` (and does not exceed the buffer), we create a `String` from that buffer (so the data is now on the heap).
-- We zero out the stack-allocated buffer using https://crates.io/crates/zeroize so it is not optimized away by the compiler.
-- We invoke `.leak()` on the `String` so we can treat its contents as a `&'static str`, as it will live for the rest of the process.
-- On UNIX, we `mlock(2)` the memory backing the `&'static str`.
-- When using the `&'static str` when building an HTTP request, we use `HeaderValue::from_static()` to avoid copying the `&str`.
-- We also invoke `.set_sensitive(true)` on the `HeaderValue`, which in theory indicates to other parts of the HTTP stack that the header should be treated with "special care" to avoid leakage:
+Usage accounting is handled by `codex-state::AccountUsageStore`, so the proxy writes to the same:
 
-https://github.com/hyperium/http/blob/439d1c50d71e3be3204b6c4a1bf2255ed78e1f93/src/header/value.rs#L346-L376
+- `account_usage` SQLite tables, under the derived client account key
+- `usage/usage-*.log` files
+- threshold logs for the 100% and 101% limit crossings
+
+Because the proxy reuses the same storage layer, it honors the same `CODEX_HOME`, `CODEX_SQLITE_HOME`, and `CODEX_USAGE_LOG_DIR` conventions that Codex already uses.
