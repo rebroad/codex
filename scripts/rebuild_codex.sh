@@ -6,6 +6,7 @@ REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 RUST_WORKSPACE_DIR="${REPO_DIR}/codex-rs"
 TOOLCHAIN_FILE="${RUST_WORKSPACE_DIR}/rust-toolchain.toml"
 INSTALL_BIN="${HOME}/.cargo/bin/codex"
+INSTALL_PROXY_BIN="${HOME}/.cargo/bin/codex-responses-api-proxy"
 INSTALL_BIN_DIR="${HOME}/.cargo/bin"
 CARGO_LOCK_REL="codex-rs/Cargo.lock"
 PUBLISH_TIMEOUT_MINUTES_DEFAULT=45
@@ -375,6 +376,7 @@ assert_npm_linux_tags() {
 }
 
 run_release_build_with_locked_fallback() {
+  local package="$1"
   local build_log
   local -a cargo_env
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
@@ -395,7 +397,7 @@ run_release_build_with_locked_fallback() {
   append_default_build_accel_env cargo_env
   build_log="$(mktemp)"
   set +e
-  env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli --release --locked 2>&1 | tee "${build_log}"
+  env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p "${package}" --release --locked 2>&1 | tee "${build_log}"
   local status=${PIPESTATUS[0]}
   set -e
 
@@ -407,7 +409,7 @@ run_release_build_with_locked_fallback() {
   if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build needs lockfile regeneration; retrying release build without --locked."
     rm -f "${build_log}"
-    env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli --release
+    env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p "${package}" --release
     return 0
   fi
 
@@ -416,6 +418,7 @@ run_release_build_with_locked_fallback() {
 }
 
 run_debug_build_with_offline_fallback() {
+  local package="$1"
   local build_log
   local -a cargo_env
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1)
@@ -432,7 +435,7 @@ run_debug_build_with_offline_fallback() {
 
   build_log="$(mktemp)"
   set +e
-  env "${cargo_env[@]}" CARGO_NET_OFFLINE=true cargo +"${TOOLCHAIN}" build -p codex-cli 2>&1 | tee "${build_log}"
+  env "${cargo_env[@]}" CARGO_NET_OFFLINE=true cargo +"${TOOLCHAIN}" build -p "${package}" 2>&1 | tee "${build_log}"
   local status=${PIPESTATUS[0]}
   set -e
 
@@ -444,7 +447,7 @@ run_debug_build_with_offline_fallback() {
   if log_needs_network_retry "${build_log}"; then
     echo "Debug build needs registry/network access; retrying without --offline."
     rm -f "${build_log}"
-    env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli 2>&1 | tee "${build_log}"
+    env "${cargo_env[@]}" cargo +"${TOOLCHAIN}" build -p "${package}" 2>&1 | tee "${build_log}"
     local retry_status=${PIPESTATUS[0]}
     rm -f "${build_log}"
     return "${retry_status}"
@@ -455,8 +458,9 @@ run_debug_build_with_offline_fallback() {
 }
 
 run_target_build_with_locked_fallback() {
-  local target="$1"
-  local profile="$2"
+  local package="$1"
+  local target="$2"
+  local profile="$3"
   local build_log
   local -a cargo_env
   cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=1)
@@ -478,7 +482,7 @@ run_target_build_with_locked_fallback() {
   build_log="$(mktemp)"
   set +e
   local -a cargo_cmd
-  cargo_cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli --target "${target}" --locked)
+  cargo_cmd=(cargo +"${TOOLCHAIN}" build -p "${package}" --target "${target}" --locked)
   if [[ "${profile}" == "release" ]]; then
     cargo_cmd+=(--release)
   fi
@@ -494,7 +498,7 @@ run_target_build_with_locked_fallback() {
   if grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build for ${target} (${profile}) needs lockfile regeneration; retrying without --locked."
     rm -f "${build_log}"
-    cargo_cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli --target "${target}")
+    cargo_cmd=(cargo +"${TOOLCHAIN}" build -p "${package}" --target "${target}")
     if [[ "${profile}" == "release" ]]; then
       cargo_cmd+=(--release)
     fi
@@ -970,7 +974,7 @@ patch_installed_binary_version_timestamp() {
   if [[ "${from_suffix}" == "${now_suffix}" ]]; then
     return 0
   fi
-  if ! python3 - "${bin_path}" "${base_version}" "${from_suffix}" "${now_suffix}" <<'PY'
+  if python3 - "${bin_path}" "${base_version}" "${from_suffix}" "${now_suffix}" <<'PY'
 import mmap
 import re
 import sys
@@ -1028,12 +1032,20 @@ print(
 )
 PY
   then
-    echo "Warning: failed to patch embedded version timestamp in ${bin_path}."
+    :
+  else
+    status=$?
+    if [[ "${status}" -eq 2 ]]; then
+      :
+    else
+      echo "Warning: failed to patch embedded version timestamp in ${bin_path}."
+    fi
   fi
 }
 
 resolve_versioned_install_name_from_binary() {
   local bin_path="$1"
+  local install_prefix="$2"
   local full_version normalized_version
   full_version="$("${bin_path}" --version | awk '{print $2}')"
   if [[ -z "${full_version}" ]]; then
@@ -1048,25 +1060,30 @@ resolve_versioned_install_name_from_binary() {
     return 1
   fi
 
-  echo "codex-${normalized_version}"
+  echo "${install_prefix}-${normalized_version}"
 }
 
-install_built_codex_binary() {
+install_built_binary() {
   local flavor="$1"
-  local bin_path="$2"
+  local install_prefix="$2"
+  local bin_path="$3"
+  local install_link="$4"
+  local patch_version_timestamp="$5"
   local install_tmp versioned_install_name versioned_install_bin
 
-  patch_installed_binary_version_timestamp "${bin_path}"
+  if [[ "${patch_version_timestamp}" == "true" ]]; then
+    patch_installed_binary_version_timestamp "${bin_path}"
+  fi
   restore_cargo_lock_once
 
-  install_tmp="${INSTALL_BIN_DIR}/.codex.new.$$"
+  install_tmp="${INSTALL_BIN_DIR}/.${install_prefix}.new.$$"
   install -D -m 755 "${bin_path}" "${install_tmp}"
-  versioned_install_name="$(resolve_versioned_install_name_from_binary "${install_tmp}")"
+  versioned_install_name="$(resolve_versioned_install_name_from_binary "${install_tmp}" "${install_prefix}")"
   versioned_install_bin="${INSTALL_BIN_DIR}/${versioned_install_name}"
-  echo "[3/4] Installing ${flavor} codex to ${versioned_install_bin} and linking ${INSTALL_BIN}..."
+  echo "[3/4] Installing ${flavor} ${install_prefix} to ${versioned_install_bin} and linking ${install_link}..."
   mv -f "${install_tmp}" "${versioned_install_bin}"
-  rm -f "${INSTALL_BIN}"
-  ln -s "${versioned_install_name}" "${INSTALL_BIN}"
+  rm -f "${install_link}"
+  ln -s "${versioned_install_name}" "${install_link}"
 }
 
 declare -A DUPLICATE_CLEANUP_CHECKSUM_CACHE=()
@@ -1783,10 +1800,18 @@ if [[ "${MODE}" == "release" ]]; then
   if [[ "${FAST_RELEASE_BUILD}" == "true" ]]; then
     echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
   fi
-  run_release_build_with_locked_fallback
+  run_release_build_with_locked_fallback codex-cli
+  run_release_build_with_locked_fallback codex-responses-api-proxy
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex"
-  install_built_codex_binary "release" "${release_bin}"
+  install_built_binary "release" "codex" "${release_bin}" "${INSTALL_BIN}" true
+
+  proxy_release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex-responses-api-proxy"
+  if [[ ! -x "${proxy_release_bin}" ]]; then
+    echo "Build completed but proxy binary was not found at ${proxy_release_bin}" >&2
+    exit 1
+  fi
+  install_built_binary "release" "codex-responses-api-proxy" "${proxy_release_bin}" "${INSTALL_PROXY_BIN}" false
 else
   echo "[2/4] Building debug codex..."
   if [[ "${FAST_GATE}" == "true" ]]; then
@@ -1813,11 +1838,19 @@ else
       env "${retry_env[@]}" cargo +"${TOOLCHAIN}" build -p codex-cli
     fi
   else
-    run_debug_build_with_offline_fallback
+    run_debug_build_with_offline_fallback codex-cli
   fi
+  run_debug_build_with_offline_fallback codex-responses-api-proxy
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
-  install_built_codex_binary "debug" "${debug_bin}"
+  install_built_binary "debug" "codex" "${debug_bin}" "${INSTALL_BIN}" true
+
+  proxy_debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex-responses-api-proxy"
+  if [[ ! -x "${proxy_debug_bin}" ]]; then
+    echo "Build completed but proxy binary was not found at ${proxy_debug_bin}" >&2
+    exit 1
+  fi
+  install_built_binary "debug" "codex-responses-api-proxy" "${proxy_debug_bin}" "${INSTALL_PROXY_BIN}" false
 fi
 
 offer_duplicate_cleanup_for_installed_binaries
@@ -1828,7 +1861,7 @@ if [[ "${BUILD_NPM_VENDOR}" == "true" ]]; then
   if ! rustup target list --toolchain "${TOOLCHAIN}" --installed | grep -Fxq "${NPM_X64_TARGET}"; then
     rustup target add --toolchain "${TOOLCHAIN}" "${NPM_X64_TARGET}"
   fi
-  run_target_build_with_locked_fallback "${NPM_X64_TARGET}" "${MODE}"
+  run_target_build_with_locked_fallback codex-cli "${NPM_X64_TARGET}" "${MODE}"
 
   echo "Building npm vendor target ${NPM_ARMV7_TARGET} (${MODE})..."
   run_armv7_build "${MODE}"
@@ -1844,9 +1877,11 @@ fi
 echo "[4/4] Cleaning workspace codex binaries from target/..."
 CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
 rm -f "${CARGO_TARGET_DIR_RESOLVED}/release/codex"
+rm -f "${CARGO_TARGET_DIR_RESOLVED}/release/codex-responses-api-proxy"
 
 echo "Final version:"
 echo "- Installed: $("${INSTALL_BIN}" --version)"
+echo "- Proxy: $("${INSTALL_PROXY_BIN}" --version)"
 
 if [[ "${publish_to_github}" == "true" ]]; then
 

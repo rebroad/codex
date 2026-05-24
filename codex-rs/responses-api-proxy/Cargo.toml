@@ -24,6 +24,7 @@ bytes = { workspace = true }
 codex-process-hardening = { workspace = true }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
+codex-login = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-protocol = { workspace = true }

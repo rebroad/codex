@@ -7,6 +7,7 @@ This makes it a drop-in replacement for tools that normally talk directly to a C
 ## What It Does
 
 - Reads the upstream API key from `stdin`.
+- Optionally reads upstream auth from `auth.json` via `--auth-file` instead of stdin.
 - Listens on `127.0.0.1` on the requested port, or an ephemeral port if `--port` is omitted.
 - Forwards arbitrary HTTP requests to the configured upstream URL.
 - Streams SSE responses and observes backend usage events.
@@ -23,6 +24,14 @@ Start the proxy with the upstream key on stdin:
 printenv OPENAI_API_KEY | env -u OPENAI_API_KEY codex-responses-api-proxy \
   --http-shutdown \
   --server-info /var/tmp/codex-proxy/server-info.json
+```
+
+If you want the proxy to use the auth from `~/.codex/auth.json` instead of stdin, pass `--auth-file`:
+
+```shell
+codex-responses-api-proxy \
+  --auth-file ~/.codex/auth.json \
+  --http-shutdown
 ```
 
 Point the client application at the proxy instead of the backend directly. For example, if the app normally talks to `https://chatgpt.com/backend-api`, point it at the proxy host and preserve the same path shape:
@@ -43,6 +52,16 @@ If the client already speaks the OpenAI Responses API directly, you can point it
 ```shell
 PROXY_PORT=$(jq -r .port /var/tmp/codex-proxy/server-info.json)
 export OPENAI_BASE_URL="http://127.0.0.1:${PROXY_PORT}"
+```
+
+If you want Codex to use the proxy from `~/.codex/config.toml`, point the relevant base URL at the proxy instead of the public backend:
+
+```toml
+chatgpt_base_url = "http://127.0.0.1:43128/backend-api"
+
+[model_providers.openai]
+base_url = "http://127.0.0.1:43128/v1"
+wire_api = "responses"
 ```
 
 Account identity is derived from the client request in this order:
@@ -69,13 +88,17 @@ codex-responses-api-proxy \
   [--upstream-url <URL>] \
   [--dump-dir <DIR>] \
   [--sqlite-home <DIR>] \
+  [--auth-file <FILE>] \
   [--provider-id <ID>]
 ```
 
 - `--upstream-url <URL>`: Base upstream URL to forward to. Defaults to `https://api.openai.com`.
 - `--sqlite-home <DIR>`: Overrides the local Codex SQLite home. If omitted, the proxy uses `CODEX_SQLITE_HOME` when set, otherwise `~/.codex`.
+- `--auth-file <FILE>`: Uses the auth token stored in the specified `auth.json` file for upstream requests instead of reading stdin.
 - `--provider-id <ID>`: Provider key written into the usage tables. Defaults to `proxy`.
 - `--dump-dir <DIR>`: Writes `<prefix>-request.json` and `<prefix>-response.json` files for each proxied exchange.
+
+After `rebuild_codex.sh`, the proxy binary is installed as `~/.cargo/bin/codex-responses-api-proxy` and versioned copies are kept alongside it, just like `codex`.
 
 ## Compatibility Notes
 

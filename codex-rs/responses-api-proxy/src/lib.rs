@@ -24,7 +24,9 @@ use clap::Parser;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_api::spawn_response_stream;
+use codex_login::AuthCredentialsStoreMode;
 use codex_client::StreamResponse;
+use codex_login::AuthManager;
 use codex_state::AccountUsageEstimatorConfig;
 use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
@@ -51,7 +53,11 @@ const DEFAULT_ACCOUNT_ID: &str = "proxy";
 
 /// CLI arguments for the proxy.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "responses-api-proxy", about = "HTTP proxy for OpenAI/Codex responses traffic")]
+#[command(
+    name = "responses-api-proxy",
+    about = "HTTP proxy for OpenAI/Codex responses traffic",
+    version
+)]
 pub struct Args {
     /// Port to listen on. If not set, an ephemeral port is used.
     #[arg(long)]
@@ -77,6 +83,10 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub sqlite_home: Option<PathBuf>,
 
+    /// Use the auth token from an auth.json file instead of stdin.
+    #[arg(long, value_name = "FILE")]
+    pub auth_file: Option<PathBuf>,
+
     /// Provider ID to use when writing usage rows.
     #[arg(long, default_value = DEFAULT_PROVIDER_ID)]
     pub provider_id: String,
@@ -86,7 +96,7 @@ pub struct Args {
 #[derive(Clone)]
 struct ProxyState {
     client: reqwest::Client,
-    auth_header: &'static str,
+    upstream_auth_header: String,
     upstream_url: Url,
     dump_dir: Option<Arc<ExchangeDumper>>,
     usage_store: Option<Arc<AccountUsageStore>>,
@@ -121,8 +131,8 @@ struct JsonResponseCompletedOutputTokensDetails {
 
 /// Entry point for the library main, for parity with other crates.
 pub async fn run_main(args: Args) -> Result<()> {
-    let auth_header = read_auth_header_from_stdin()?;
     let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
+    let upstream_auth_header = resolve_upstream_auth_header(args.auth_file.as_deref()).await?;
     let dump_dir = args
         .dump_dir
         .map(ExchangeDumper::new)
@@ -147,7 +157,7 @@ pub async fn run_main(args: Args) -> Result<()> {
         client: reqwest::Client::builder()
             .build()
             .context("building reqwest client")?,
-        auth_header,
+        upstream_auth_header,
         upstream_url,
         dump_dir,
         usage_store,
@@ -400,19 +410,22 @@ async fn send_upstream_request(
     parts: &axum::http::request::Parts,
     body_bytes: Bytes,
     target_url: Url,
-) -> reqwest::Result<reqwest::Response> {
+) -> anyhow::Result<reqwest::Response> {
     let mut headers = sanitize_request_headers(&parts.headers);
-    let mut auth_header = HeaderValue::from_static(state.auth_header);
+    let mut auth_header = HeaderValue::from_str(&state.upstream_auth_header)
+        .context("building upstream authorization header")?;
     auth_header.set_sensitive(true);
     headers.insert(axum::http::header::AUTHORIZATION, auth_header);
 
-    state
+    let response = state
         .client
         .request(parts.method.clone(), target_url)
         .headers(headers)
         .body(body_bytes)
         .send()
         .await
+        .context("sending upstream request")?;
+    Ok(response)
 }
 
 async fn record_usage_events(
@@ -647,6 +660,37 @@ fn resolve_sqlite_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
     }
 
     find_codex_home().context("resolving default CODEX_HOME")
+}
+
+async fn resolve_upstream_auth_header(auth_file: Option<&std::path::Path>) -> Result<String> {
+    if let Some(path) = auth_file {
+        let auth_path = path.to_path_buf();
+        let codex_home = auth_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| find_codex_home().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        codex_login::set_auth_file_override(Some(auth_path.to_path_buf()));
+        let auth_manager = AuthManager::new(
+            codex_home,
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+        );
+        let auth = auth_manager.auth().await;
+        let Some(auth) = auth else {
+            return Err(anyhow::anyhow!(
+                "failed to load upstream auth from {}",
+                path.display()
+            ));
+        };
+        let token = auth
+            .get_token()
+            .context("reading token from upstream auth file")?;
+        return Ok(format!("Bearer {token}"));
+    }
+
+    read_auth_header_from_stdin().map(str::to_string)
 }
 
 async fn bind_listener(port: Option<u16>) -> Result<TcpListener> {
