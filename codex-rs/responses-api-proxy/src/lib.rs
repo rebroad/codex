@@ -38,6 +38,7 @@ use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -96,10 +97,16 @@ pub struct Args {
 #[derive(Clone)]
 struct ProxyState {
     client: reqwest::Client,
-    upstream_auth_header: String,
+    upstream_auth_header: Arc<RwLock<String>>,
+    auth_file_account_identity: Arc<RwLock<Option<(String, String)>>>,
     upstream_url: Url,
     dump_dir: Option<Arc<ExchangeDumper>>,
     usage_store: Option<Arc<AccountUsageStore>>,
+}
+
+struct AuthFileConfig {
+    upstream_auth_header: String,
+    account_identity: (String, String),
 }
 
 #[derive(Deserialize)]
@@ -132,7 +139,18 @@ struct JsonResponseCompletedOutputTokensDetails {
 /// Entry point for the library main, for parity with other crates.
 pub async fn run_main(args: Args) -> Result<()> {
     let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
-    let upstream_auth_header = resolve_upstream_auth_header(args.auth_file.as_deref()).await?;
+    let auth_file_config = if let Some(auth_file) = args.auth_file.as_deref() {
+        Some(resolve_auth_file_config(auth_file).await?)
+    } else {
+        None
+    };
+    let upstream_auth_header = Arc::new(RwLock::new(match auth_file_config.as_ref() {
+        Some(config) => config.upstream_auth_header.clone(),
+        None => read_auth_header_from_stdin().map(str::to_string)?,
+    }));
+    let auth_file_account_identity = Arc::new(RwLock::new(
+        auth_file_config.map(|config| config.account_identity),
+    ));
     let dump_dir = args
         .dump_dir
         .map(ExchangeDumper::new)
@@ -158,10 +176,13 @@ pub async fn run_main(args: Args) -> Result<()> {
             .build()
             .context("building reqwest client")?,
         upstream_auth_header,
+        auth_file_account_identity,
         upstream_url,
         dump_dir,
         usage_store,
     });
+
+    spawn_auth_reload_signal_handler(Arc::clone(&state), args.auth_file.clone());
 
     let listener = bind_listener(args.port).await?;
     if let Some(path) = args.server_info.as_ref() {
@@ -213,7 +234,9 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
             );
         }
     };
-    let (account_id, account_display) = derive_account_identity(&parts.headers);
+    let auth_file_account_identity = state.auth_file_account_identity.read().await.clone();
+    let (account_id, account_display) =
+        resolve_account_identity(auth_file_account_identity.as_ref(), &parts.headers);
 
     let request_dump = state
         .dump_dir
@@ -412,7 +435,8 @@ async fn send_upstream_request(
     target_url: Url,
 ) -> anyhow::Result<reqwest::Response> {
     let mut headers = sanitize_request_headers(&parts.headers);
-    let mut auth_header = HeaderValue::from_str(&state.upstream_auth_header)
+    let upstream_auth_header = state.upstream_auth_header.read().await.clone();
+    let mut auth_header = HeaderValue::from_str(&upstream_auth_header)
         .context("building upstream authorization header")?;
     auth_header.set_sensitive(true);
     headers.insert(axum::http::header::AUTHORIZATION, auth_header);
@@ -599,7 +623,18 @@ fn extract_request_model_slug(body_bytes: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn derive_account_identity(headers: &HeaderMap) -> (String, String) {
+fn resolve_account_identity(
+    auth_file_account_identity: Option<&(String, String)>,
+    headers: &HeaderMap,
+) -> (String, String) {
+    if let Some(identity) = auth_file_account_identity {
+        return identity.clone();
+    }
+
+    derive_request_account_identity(headers)
+}
+
+fn derive_request_account_identity(headers: &HeaderMap) -> (String, String) {
     if let Some(account_id) = headers
         .get("chatgpt-account-id")
         .and_then(|value| value.to_str().ok())
@@ -615,6 +650,44 @@ fn derive_account_identity(headers: &HeaderMap) -> (String, String) {
         .filter(|value| !value.is_empty())
     {
         let digest = Sha256::digest(authorization.as_bytes());
+        let fingerprint = hex_prefix(&digest, 12);
+        let account_id = format!("auth:{fingerprint}");
+        return (account_id.clone(), account_id);
+    }
+
+    (
+        DEFAULT_ACCOUNT_ID.to_string(),
+        DEFAULT_ACCOUNT_ID.to_string(),
+    )
+}
+
+fn derive_auth_file_account_identity(
+    account_id: Option<&str>,
+    account_email: Option<&str>,
+    bearer_token: Option<&str>,
+) -> (String, String) {
+    if let Some(account_id) = account_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let display = account_email
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| account_id.to_string());
+        return (account_id.to_string(), display);
+    }
+
+    if let Some(account_email) = account_email
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let account_email = account_email.to_string();
+        return (account_email.clone(), account_email);
+    }
+
+    if let Some(bearer_token) = bearer_token {
+        let digest = Sha256::digest(bearer_token.as_bytes());
         let fingerprint = hex_prefix(&digest, 12);
         let account_id = format!("auth:{fingerprint}");
         return (account_id.clone(), account_id);
@@ -662,35 +735,91 @@ fn resolve_sqlite_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
     find_codex_home().context("resolving default CODEX_HOME")
 }
 
-async fn resolve_upstream_auth_header(auth_file: Option<&std::path::Path>) -> Result<String> {
-    if let Some(path) = auth_file {
-        let auth_path = path.to_path_buf();
-        let codex_home = auth_path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .map(PathBuf::from)
-            .or_else(|| find_codex_home().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
-        codex_login::set_auth_file_override(Some(auth_path.to_path_buf()));
-        let auth_manager = AuthManager::new(
-            codex_home,
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::File,
-        );
-        let auth = auth_manager.auth().await;
-        let Some(auth) = auth else {
-            return Err(anyhow::anyhow!(
-                "failed to load upstream auth from {}",
-                path.display()
-            ));
-        };
-        let token = auth
-            .get_token()
-            .context("reading token from upstream auth file")?;
-        return Ok(format!("Bearer {token}"));
+async fn resolve_auth_file_config(auth_file: &std::path::Path) -> Result<AuthFileConfig> {
+    let auth_path = auth_file.to_path_buf();
+    let codex_home = auth_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| find_codex_home().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    codex_login::set_auth_file_override(Some(auth_path));
+    let auth_manager = AuthManager::new(
+        codex_home,
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+    let auth = auth_manager.auth().await;
+    let Some(auth) = auth else {
+        return Err(anyhow::anyhow!(
+            "failed to load upstream auth from {}",
+            auth_file.display()
+        ));
+    };
+    let token = auth
+        .get_token()
+        .context("reading token from upstream auth file")?;
+    let upstream_auth_header = format!("Bearer {token}");
+    let account_identity = derive_auth_file_account_identity(
+        auth.get_account_id().as_deref(),
+        auth.get_account_email().as_deref(),
+        Some(&token),
+    );
+    Ok(AuthFileConfig {
+        upstream_auth_header,
+        account_identity,
+    })
+}
+
+fn spawn_auth_reload_signal_handler(state: Arc<ProxyState>, auth_file: Option<PathBuf>) {
+    #[cfg(unix)]
+    {
+        tokio::spawn(async move {
+            use tokio::signal::unix::signal;
+            use tokio::signal::unix::SignalKind;
+
+            let mut reload = match signal(SignalKind::hangup()) {
+                Ok(signal) => signal,
+                Err(err) => {
+                    eprintln!("failed to listen for SIGHUP reload signal: {err}");
+                    return;
+                }
+            };
+
+            while reload.recv().await.is_some() {
+                match auth_file.as_ref() {
+                    Some(auth_file) => {
+                        match resolve_auth_file_config(auth_file.as_path()).await {
+                            Ok(new_config) => {
+                                *state.upstream_auth_header.write().await =
+                                    new_config.upstream_auth_header;
+                                *state.auth_file_account_identity.write().await =
+                                    Some(new_config.account_identity);
+                                eprintln!(
+                                    "received SIGHUP; reloaded upstream auth and accounting identity from {}",
+                                    auth_file.display()
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "received SIGHUP but failed to reload upstream auth and accounting identity from {}: {err}",
+                                    auth_file.display()
+                                );
+                            }
+                        }
+                    }
+                    None => {
+                        eprintln!("received SIGHUP but no --auth-file was configured; ignoring");
+                    }
+                }
+            }
+        });
     }
 
-    read_auth_header_from_stdin().map(str::to_string)
+    #[cfg(not(unix))]
+    {
+        let _ = (state, auth_file);
+    }
 }
 
 async fn bind_listener(port: Option<u16>) -> Result<TcpListener> {
@@ -728,7 +857,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("chatgpt-account-id", HeaderValue::from_static("account-123"));
 
-        let (account_id, account_display) = derive_account_identity(&headers);
+        let (account_id, account_display) = derive_request_account_identity(&headers);
 
         assert_eq!(account_id, "account-123");
         assert_eq!(account_display, "account-123");
@@ -742,7 +871,7 @@ mod tests {
             HeaderValue::from_static("Bearer secret-token"),
         );
 
-        let (account_id, account_display) = derive_account_identity(&headers);
+        let (account_id, account_display) = derive_request_account_identity(&headers);
 
         assert!(account_id.starts_with("auth:"));
         assert_eq!(account_display, account_id);
@@ -752,9 +881,46 @@ mod tests {
     fn account_identity_falls_back_to_proxy_bucket() {
         let headers = HeaderMap::new();
 
-        let (account_id, account_display) = derive_account_identity(&headers);
+        let (account_id, account_display) = derive_request_account_identity(&headers);
 
         assert_eq!(account_id, DEFAULT_ACCOUNT_ID);
         assert_eq!(account_display, DEFAULT_ACCOUNT_ID);
+    }
+
+    #[test]
+    fn auth_file_account_identity_prefers_account_id_then_email_then_token() {
+        let (account_id, account_display) = derive_auth_file_account_identity(
+            Some("workspace-123"),
+            Some("alice@example.com"),
+            Some("unused-token"),
+        );
+        assert_eq!(account_id, "workspace-123");
+        assert_eq!(account_display, "alice@example.com");
+
+        let (account_id, account_display) = derive_auth_file_account_identity(
+            None,
+            Some("alice@example.com"),
+            Some("unused-token"),
+        );
+        assert_eq!(account_id, "alice@example.com");
+        assert_eq!(account_display, "alice@example.com");
+
+        let (account_id, account_display) =
+            derive_auth_file_account_identity(None, None, Some("Bearer secret-token"));
+        assert!(account_id.starts_with("auth:"));
+        assert_eq!(account_display, account_id);
+    }
+
+    #[test]
+    fn auth_file_identity_overrides_request_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("chatgpt-account-id", HeaderValue::from_static("header-account"));
+        let auth_file_identity = Some(("auth-account".to_string(), "auth-display".to_string()));
+
+        let (account_id, account_display) =
+            resolve_account_identity(auth_file_identity.as_ref(), &headers);
+
+        assert_eq!(account_id, "auth-account");
+        assert_eq!(account_display, "auth-display");
     }
 }
