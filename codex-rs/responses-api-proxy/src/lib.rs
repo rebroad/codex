@@ -1,41 +1,57 @@
-use std::fs::File;
-use std::fs::{self};
-use std::io::Read;
-use std::io::Write;
-use std::net::SocketAddr;
-use std::net::TcpListener;
-use std::path::Path;
+use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
+use axum::body::Body;
+use axum::body::to_bytes;
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::http::HeaderValue;
+use axum::http::Method;
+use axum::http::Request;
+use axum::http::Response;
+use axum::http::StatusCode;
+use axum::http::Uri;
+use axum::response::IntoResponse;
+use axum::routing::any;
+use axum::routing::get;
+use axum::Router;
+use bytes::Bytes;
 use clap::Parser;
+use codex_api::ResponseEvent;
+use codex_api::TransportError;
+use codex_api::spawn_response_stream;
+use codex_client::StreamResponse;
+use codex_state::AccountUsageEstimatorConfig;
+use codex_state::AccountUsageEventMeta;
+use codex_state::AccountUsageStore;
+use codex_utils_home_dir::find_codex_home;
+use futures::StreamExt;
 use reqwest::Url;
-use reqwest::blocking::Client;
-use reqwest::header::AUTHORIZATION;
-use reqwest::header::HOST;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
-use serde::Serialize;
-use tiny_http::Header;
-use tiny_http::Method;
-use tiny_http::Request;
-use tiny_http::Response;
-use tiny_http::Server;
-use tiny_http::StatusCode;
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 mod dump;
 mod read_api_key;
+
 use dump::ExchangeDumper;
 use read_api_key::read_auth_header_from_stdin;
 
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+const DEFAULT_PROVIDER_ID: &str = "proxy";
+const DEFAULT_ACCOUNT_ID: &str = "proxy";
+
 /// CLI arguments for the proxy.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "responses-api-proxy", about = "Minimal OpenAI responses proxy")]
+#[command(name = "responses-api-proxy", about = "HTTP proxy for OpenAI/Codex responses traffic")]
 pub struct Args {
     /// Port to listen on. If not set, an ephemeral port is used.
     #[arg(long)]
@@ -45,231 +61,656 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub server_info: Option<PathBuf>,
 
-    /// Enable HTTP shutdown endpoint at GET /shutdown
+    /// Enable HTTP shutdown endpoint at GET /shutdown.
     #[arg(long)]
     pub http_shutdown: bool,
 
-    /// Absolute URL the proxy should forward requests to (defaults to OpenAI).
-    #[arg(long, default_value = "https://api.openai.com/v1/responses")]
+    /// Absolute URL the proxy should forward requests to.
+    #[arg(long, default_value = "https://api.openai.com")]
     pub upstream_url: String,
 
     /// Directory where request/response dumps should be written as JSON.
     #[arg(long, value_name = "DIR")]
     pub dump_dir: Option<PathBuf>,
+
+    /// Override the SQLite home directory used for usage accounting.
+    #[arg(long, value_name = "DIR")]
+    pub sqlite_home: Option<PathBuf>,
+
+    /// Provider ID to use when writing usage rows.
+    #[arg(long, default_value = DEFAULT_PROVIDER_ID)]
+    pub provider_id: String,
+
 }
 
-#[derive(Serialize)]
-struct ServerInfo {
-    port: u16,
-    pid: u32,
-}
-
-struct ForwardConfig {
+#[derive(Clone)]
+struct ProxyState {
+    client: reqwest::Client,
+    auth_header: &'static str,
     upstream_url: Url,
-    host_header: HeaderValue,
+    dump_dir: Option<Arc<ExchangeDumper>>,
+    usage_store: Option<Arc<AccountUsageStore>>,
+}
+
+#[derive(Deserialize)]
+struct JsonResponseCompleted {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    usage: Option<JsonResponseCompletedUsage>,
+}
+
+#[derive(Deserialize)]
+struct JsonResponseCompletedUsage {
+    input_tokens: i64,
+    input_tokens_details: Option<JsonResponseCompletedInputTokensDetails>,
+    output_tokens: i64,
+    output_tokens_details: Option<JsonResponseCompletedOutputTokensDetails>,
+    total_tokens: i64,
+}
+
+#[derive(Deserialize)]
+struct JsonResponseCompletedInputTokensDetails {
+    cached_tokens: i64,
+}
+
+#[derive(Deserialize)]
+struct JsonResponseCompletedOutputTokensDetails {
+    reasoning_tokens: i64,
 }
 
 /// Entry point for the library main, for parity with other crates.
-pub fn run_main(args: Args) -> Result<()> {
+pub async fn run_main(args: Args) -> Result<()> {
     let auth_header = read_auth_header_from_stdin()?;
-
     let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
-    let host = match (upstream_url.host_str(), upstream_url.port()) {
-        (Some(host), Some(port)) => format!("{host}:{port}"),
-        (Some(host), None) => host.to_string(),
-        _ => return Err(anyhow!("upstream URL must include a host")),
-    };
-    let host_header =
-        HeaderValue::from_str(&host).context("constructing Host header from upstream URL")?;
-
-    let forward_config = Arc::new(ForwardConfig {
-        upstream_url,
-        host_header,
-    });
     let dump_dir = args
         .dump_dir
         .map(ExchangeDumper::new)
         .transpose()
         .context("creating --dump-dir")?
         .map(Arc::new);
-
-    let (listener, bound_addr) = bind_listener(args.port)?;
-    if let Some(path) = args.server_info.as_ref() {
-        write_server_info(path, bound_addr.port())?;
-    }
-    let server = Server::from_listener(listener, None)
-        .map_err(|err| anyhow!("creating HTTP server: {err}"))?;
-    let client = Arc::new(
-        Client::builder()
-            // Disable reqwest's 30s default so long-lived response streams keep flowing.
-            .timeout(None::<Duration>)
+    let sqlite_home = resolve_sqlite_home(args.sqlite_home)?;
+    let usage_store = match AccountUsageStore::init_with_estimator_config(
+        sqlite_home,
+        args.provider_id.clone(),
+        AccountUsageEstimatorConfig::default(),
+    )
+    .await
+    {
+        Ok(store) => Some(store),
+        Err(err) => {
+            eprintln!("failed to initialize usage accounting: {err}");
+            None
+        }
+    };
+    let state = Arc::new(ProxyState {
+        client: reqwest::Client::builder()
             .build()
             .context("building reqwest client")?,
-    );
+        auth_header,
+        upstream_url,
+        dump_dir,
+        usage_store,
+    });
 
-    eprintln!("responses-api-proxy listening on {bound_addr}");
-
-    let http_shutdown = args.http_shutdown;
-    for request in server.incoming_requests() {
-        let client = client.clone();
-        let forward_config = forward_config.clone();
-        let dump_dir = dump_dir.clone();
-        std::thread::spawn(move || {
-            if http_shutdown && request.method() == &Method::Get && request.url() == "/shutdown" {
-                let _ = request.respond(Response::new_empty(StatusCode(200)));
-                std::process::exit(0);
-            }
-
-            if let Err(e) = forward_request(
-                &client,
-                auth_header,
-                &forward_config,
-                dump_dir.as_deref(),
-                request,
-            ) {
-                eprintln!("forwarding error: {e}");
-            }
-        });
+    let listener = bind_listener(args.port).await?;
+    if let Some(path) = args.server_info.as_ref() {
+        write_server_info(path, listener.local_addr()?.port())?;
     }
 
-    Err(anyhow!("server stopped unexpectedly"))
+    let app = if args.http_shutdown {
+        Router::new()
+            .route("/shutdown", get(shutdown))
+            .fallback(any(proxy))
+            .with_state(state)
+    } else {
+        Router::new().fallback(any(proxy)).with_state(state)
+    };
+
+    eprintln!("responses-api-proxy listening on {}", listener.local_addr()?);
+
+    axum::serve(listener, app)
+        .await
+        .context("serving proxy")
 }
 
-fn bind_listener(port: Option<u16>) -> Result<(TcpListener, SocketAddr)> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port.unwrap_or(0)));
-    let listener = TcpListener::bind(addr).with_context(|| format!("failed to bind {addr}"))?;
-    let bound = listener.local_addr().context("failed to read local_addr")?;
-    Ok((listener, bound))
+async fn shutdown() -> impl IntoResponse {
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        std::process::exit(0);
+    });
+    StatusCode::OK
 }
 
-fn write_server_info(path: &Path, port: u16) -> Result<()> {
+async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Response<Body> {
+    if req.method() == Method::CONNECT {
+        return proxy_error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "CONNECT is not supported by this proxy",
+        );
+    }
+
+    let incoming_method = req.method().clone();
+    let incoming_uri = req.uri().clone();
+    let incoming_url = incoming_uri.to_string();
+    let (parts, body) = req.into_parts();
+    let body_bytes = match to_bytes(body, usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("failed to read request body: {err}"),
+            );
+        }
+    };
+    let (account_id, account_display) = derive_account_identity(&parts.headers);
+
+    let request_dump = state
+        .dump_dir
+        .as_ref()
+        .and_then(|dumper| dumper.dump_request(&incoming_method, &incoming_url, &parts.headers, &body_bytes).ok());
+
+    let request_model_slug = extract_request_model_slug(&body_bytes);
+    let target_url = match resolve_upstream_url(&state.upstream_url, &incoming_uri) {
+        Ok(url) => url,
+        Err(err) => {
+            return proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("failed to resolve upstream URL: {err}"),
+            );
+        }
+    };
+
+    let upstream_response = match send_upstream_request(&state, &parts, body_bytes.clone(), target_url.clone()).await {
+        Ok(response) => response,
+        Err(err) => {
+            return proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("failed to forward request upstream: {err}"),
+            );
+        }
+    };
+
+    let status = upstream_response.status();
+    let response_headers = sanitize_response_headers(upstream_response.headers());
+    let stream_response_headers = sanitize_stream_response_headers(upstream_response.headers());
+    let response_content_type = upstream_response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_lowercase());
+    let is_sse = response_content_type
+        .as_deref()
+        .is_some_and(|value| value.contains("text/event-stream"));
+
+    if is_sse {
+        let (client_tx, client_rx) = mpsc::channel::<Bytes>(16);
+        let (parser_tx, parser_rx) = mpsc::channel::<Bytes>(16);
+        let response_headers_for_dump = response_headers.clone();
+        let request_dump_path = request_dump;
+        let mut response_stream = upstream_response.bytes_stream();
+        let status_for_dump = status;
+
+        tokio::spawn(async move {
+            let mut response_bytes = Vec::new();
+            while let Some(chunk) = response_stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        response_bytes.extend_from_slice(&bytes);
+                        let _ = client_tx.send(bytes.clone()).await;
+                        let _ = parser_tx.send(bytes).await;
+                    }
+                    Err(err) => {
+                        eprintln!("upstream stream error: {err}");
+                        break;
+                    }
+                }
+            }
+
+            if let Some(dumper) = request_dump_path {
+                if let Err(err) = dumper.write_response(
+                    status_for_dump.as_u16(),
+                    &response_headers_for_dump,
+                    &response_bytes,
+                ) {
+                    eprintln!("failed to write response dump: {err}");
+                }
+            }
+        });
+
+        let parser_bytes = ReceiverStream::new(parser_rx)
+            .map(Ok::<Bytes, TransportError>)
+            .boxed();
+        let response_stream = StreamResponse {
+            status,
+            headers: stream_response_headers.clone(),
+            bytes: parser_bytes,
+        };
+
+        tokio::spawn(record_usage_events(
+            spawn_response_stream(
+                response_stream,
+                STREAM_IDLE_TIMEOUT,
+                None,
+                None,
+                None,
+                body_bytes.len() as i64,
+            ),
+            state.usage_store.clone(),
+            account_id.clone(),
+            account_display.clone(),
+            request_model_slug,
+        ));
+
+        return build_streaming_response(status, stream_response_headers, client_rx);
+    }
+
+    let response_bytes = match upstream_response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("failed to read upstream response: {err}"),
+            );
+        }
+    };
+
+    if let Some(dumper) = request_dump
+        && let Err(err) = dumper.write_response(
+            status.as_u16(),
+            &response_headers,
+            &response_bytes,
+        )
+    {
+        eprintln!("failed to write response dump: {err}");
+    }
+
+    if let Some(usage_store) = state.usage_store.as_ref()
+        && let Ok(json) = serde_json::from_slice::<JsonResponseCompleted>(&response_bytes)
+        && let Some(usage) = json.usage
+    {
+        if let Some(model_slug) = json_model_slug(&response_headers).or(request_model_slug.as_deref()) {
+            if let Err(err) = usage_store
+                .record_account_token_usage(
+                    &account_id,
+                    &codex_protocol::protocol::TokenUsage {
+                        input_tokens: usage.input_tokens,
+                        cached_input_tokens: usage
+                            .input_tokens_details
+                            .map(|details| details.cached_tokens)
+                            .unwrap_or(0),
+                        output_tokens: usage.output_tokens,
+                        reasoning_output_tokens: usage
+                            .output_tokens_details
+                            .map(|details| details.reasoning_tokens)
+                            .unwrap_or(0),
+                        total_tokens: usage.total_tokens,
+                    },
+                    AccountUsageEventMeta {
+                        query_id: json.id.as_deref(),
+                        model_slug: Some(model_slug),
+                        sent_bytes: Some(body_bytes.len() as i64),
+                        recv_bytes: Some(response_bytes.len() as i64),
+                        is_prewarm: false,
+                        is_regional_processing: false,
+                    },
+                )
+                .await
+            {
+                eprintln!("failed to record usage from JSON response: {err}");
+            }
+        }
+    }
+
+    build_buffered_response(status, response_headers, response_bytes)
+}
+
+fn build_streaming_response(
+    status: StatusCode,
+    headers: HeaderMap,
+    client_rx: mpsc::Receiver<Bytes>,
+) -> Response<Body> {
+    let body_stream = ReceiverStream::new(client_rx)
+        .map(Ok::<Bytes, Infallible>);
+    let mut response = Response::builder().status(status);
+    for (name, value) in headers.iter() {
+        response = response.header(name, value);
+    }
+    response
+        .body(Body::from_stream(body_stream))
+        .unwrap_or_else(|_| Response::new(Body::from("proxy response build failed")))
+}
+
+fn build_buffered_response(
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response<Body> {
+    let mut response = Response::builder().status(status);
+    for (name, value) in headers.iter() {
+        response = response.header(name, value);
+    }
+    response
+        .body(Body::from(body))
+        .unwrap_or_else(|_| Response::new(Body::from("proxy response build failed")))
+}
+
+async fn send_upstream_request(
+    state: &ProxyState,
+    parts: &axum::http::request::Parts,
+    body_bytes: Bytes,
+    target_url: Url,
+) -> reqwest::Result<reqwest::Response> {
+    let mut headers = sanitize_request_headers(&parts.headers);
+    let mut auth_header = HeaderValue::from_static(state.auth_header);
+    auth_header.set_sensitive(true);
+    headers.insert(axum::http::header::AUTHORIZATION, auth_header);
+
+    state
+        .client
+        .request(parts.method.clone(), target_url)
+        .headers(headers)
+        .body(body_bytes)
+        .send()
+        .await
+}
+
+async fn record_usage_events(
+    mut response_stream: codex_api::ResponseStream,
+    usage_store: Option<Arc<AccountUsageStore>>,
+    account_id: String,
+    account_display: String,
+    request_model_slug: Option<String>,
+) {
+    if let Some(store) = usage_store.as_ref() {
+        store.cache_account_display(&account_id, account_display).await;
+    }
+
+    let mut last_server_model: Option<String> = request_model_slug;
+    while let Some(event) = response_stream.next().await {
+        match event {
+            Ok(ResponseEvent::ServerModel(model)) => {
+                last_server_model = Some(model);
+            }
+            Ok(ResponseEvent::RateLimits(snapshot)) => {
+                if let Some(store) = usage_store.as_ref()
+                    && let Err(err) = store
+                        .record_account_backend_rate_limit(&account_id, &snapshot)
+                        .await
+                {
+                    eprintln!("failed to record backend rate limit: {err}");
+                }
+            }
+            Ok(ResponseEvent::Completed {
+                token_usage: Some(token_usage),
+                capture_id,
+                transport_bytes,
+                ..
+            }) => {
+                if let Some(store) = usage_store.as_ref() {
+                    let model_slug = last_server_model.as_deref();
+                    if let Err(err) = store
+                        .record_account_token_usage(
+                            &account_id,
+                            &token_usage,
+                            AccountUsageEventMeta {
+                                query_id: capture_id.as_deref(),
+                                model_slug,
+                                sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
+                                recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                is_prewarm: false,
+                                is_regional_processing: false,
+                            },
+                        )
+                        .await
+                    {
+                        eprintln!("failed to record account token usage: {err}");
+                    }
+                }
+            }
+            Ok(ResponseEvent::Completed { .. })
+            | Ok(ResponseEvent::Created)
+            | Ok(ResponseEvent::OutputItemAdded(_))
+            | Ok(ResponseEvent::OutputItemDone(_))
+            | Ok(ResponseEvent::OutputTextDelta(_))
+            | Ok(ResponseEvent::ReasoningSummaryDelta { .. })
+            | Ok(ResponseEvent::ReasoningContentDelta { .. })
+            | Ok(ResponseEvent::ReasoningSummaryPartAdded { .. })
+            | Ok(ResponseEvent::ServerReasoningIncluded(_))
+            | Ok(ResponseEvent::ModelsEtag(_)) => {}
+            Err(err) => {
+                eprintln!("failed to observe upstream response stream: {err}");
+                return;
+            }
+        }
+    }
+}
+
+fn proxy_error_response(status: StatusCode, message: &str) -> Response<Body> {
+    Response::builder()
+        .status(status)
+        .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from(message.to_string()))
+        .unwrap_or_else(|_| Response::new(Body::from("proxy error")))
+}
+
+fn sanitize_request_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut forwarded = HeaderMap::new();
+    for (name, value) in headers.iter() {
+        if is_hop_by_hop_request_header(name) {
+            continue;
+        }
+        forwarded.append(name.clone(), value.clone());
+    }
+    forwarded
+}
+
+fn sanitize_response_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut forwarded = HeaderMap::new();
+    for (name, value) in headers.iter() {
+        if is_hop_by_hop_response_header(name) {
+            continue;
+        }
+        forwarded.append(name.clone(), value.clone());
+    }
+    forwarded
+}
+
+fn sanitize_stream_response_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut forwarded = sanitize_response_headers(headers);
+    forwarded.remove(axum::http::header::CONTENT_LENGTH);
+    forwarded
+}
+
+fn is_hop_by_hop_request_header(name: &axum::http::HeaderName) -> bool {
+    matches!(
+        name.as_str().to_ascii_lowercase().as_str(),
+        "connection"
+            | "proxy-connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+            | "content-length"
+    )
+}
+
+fn is_hop_by_hop_response_header(name: &axum::http::HeaderName) -> bool {
+    matches!(
+        name.as_str().to_ascii_lowercase().as_str(),
+        "connection"
+            | "proxy-connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+fn resolve_upstream_url(base_url: &Url, uri: &Uri) -> Result<Url> {
+    if uri.scheme().is_some() {
+        return Url::parse(&uri.to_string()).context("parse absolute request URI");
+    }
+
+    let mut resolved = base_url.clone();
+    let combined_path = join_paths(base_url.path(), uri.path());
+    resolved.set_path(&combined_path);
+    resolved.set_query(uri.query());
+    Ok(resolved)
+}
+
+fn join_paths(base_path: &str, request_path: &str) -> String {
+    let base = base_path.trim_end_matches('/');
+    let request = request_path.trim_start_matches('/');
+
+    match (base.is_empty(), request.is_empty()) {
+        (true, true) => "/".to_string(),
+        (true, false) => format!("/{request}"),
+        (false, true) => format!("{base}/"),
+        (false, false) => format!("{base}/{request}"),
+    }
+}
+
+fn extract_request_model_slug(body_bytes: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body_bytes).ok()?;
+    value
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+}
+
+fn derive_account_identity(headers: &HeaderMap) -> (String, String) {
+    if let Some(account_id) = headers
+        .get("chatgpt-account-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .filter(|value| !value.is_empty())
+    {
+        return (account_id.clone(), account_id);
+    }
+
+    if let Some(authorization) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+    {
+        let digest = Sha256::digest(authorization.as_bytes());
+        let fingerprint = hex_prefix(&digest, 12);
+        let account_id = format!("auth:{fingerprint}");
+        return (account_id.clone(), account_id);
+    }
+
+    (
+        DEFAULT_ACCOUNT_ID.to_string(),
+        DEFAULT_ACCOUNT_ID.to_string(),
+    )
+}
+
+fn hex_prefix(bytes: &[u8], n_bytes: usize) -> String {
+    bytes
+        .iter()
+        .take(n_bytes)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn json_model_slug(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("openai-model")
+        .or_else(|| headers.get("x-openai-model"))
+        .and_then(|value| value.to_str().ok())
+}
+
+fn resolve_sqlite_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+
+    if let Ok(raw) = std::env::var(codex_state::SQLITE_HOME_ENV) {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            let path = PathBuf::from(raw);
+            if path.is_absolute() {
+                return Ok(path);
+            }
+            return Ok(std::env::current_dir()
+                .context("reading current directory for CODEX_SQLITE_HOME")?
+                .join(path));
+        }
+    }
+
+    find_codex_home().context("resolving default CODEX_HOME")
+}
+
+async fn bind_listener(port: Option<u16>) -> Result<TcpListener> {
+    let listener = TcpListener::bind(("127.0.0.1", port.unwrap_or(0)))
+        .await
+        .context("binding proxy listener")?;
+    Ok(listener)
+}
+
+fn write_server_info(path: &std::path::Path, port: u16) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
     }
 
-    let info = ServerInfo {
-        port,
-        pid: std::process::id(),
-    };
-    let mut data = serde_json::to_string(&info)?;
-    data.push('\n');
-    let mut f = File::create(path)?;
-    f.write_all(data.as_bytes())?;
+    let payload = serde_json::json!({
+        "port": port,
+        "pid": std::process::id(),
+    });
+    let mut data = serde_json::to_vec(&payload)?;
+    data.push(b'\n');
+    std::fs::write(path, data).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
-fn forward_request(
-    client: &Client,
-    auth_header: &'static str,
-    config: &ForwardConfig,
-    dump_dir: Option<&ExchangeDumper>,
-    mut req: Request,
-) -> Result<()> {
-    // Only allow POST /v1/responses exactly, no query string.
-    let method = req.method().clone();
-    let url_path = req.url().to_string();
-    let allow = method == Method::Post && url_path == "/v1/responses";
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
 
-    if !allow {
-        let resp = Response::new_empty(StatusCode(403));
-        let _ = req.respond(resp);
-        return Ok(());
+    #[test]
+    fn account_identity_prefers_chatgpt_account_id_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("chatgpt-account-id", HeaderValue::from_static("account-123"));
+
+        let (account_id, account_display) = derive_account_identity(&headers);
+
+        assert_eq!(account_id, "account-123");
+        assert_eq!(account_display, "account-123");
     }
 
-    // Read request body
-    let mut body = Vec::new();
-    let reader = req.as_reader();
-    reader.read_to_end(&mut body)?;
+    #[test]
+    fn account_identity_hashes_authorization_when_account_header_missing() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-token"),
+        );
 
-    let exchange_dump = dump_dir.and_then(|dump_dir| {
-        dump_dir
-            .dump_request(&method, &url_path, req.headers(), &body)
-            .map_err(|err| {
-                eprintln!("responses-api-proxy failed to dump request: {err}");
-                err
-            })
-            .ok()
-    });
+        let (account_id, account_display) = derive_account_identity(&headers);
 
-    // Build headers for upstream, forwarding everything from the incoming
-    // request except Authorization (we replace it below).
-    let mut headers = HeaderMap::new();
-    for header in req.headers() {
-        let name_ascii = header.field.as_str();
-        let lower = name_ascii.to_ascii_lowercase();
-        if lower.as_str() == "authorization" || lower.as_str() == "host" {
-            continue;
-        }
-
-        let header_name = match HeaderName::from_bytes(lower.as_bytes()) {
-            Ok(name) => name,
-            Err(_) => continue,
-        };
-        if let Ok(value) = HeaderValue::from_bytes(header.value.as_bytes()) {
-            headers.append(header_name, value);
-        }
+        assert!(account_id.starts_with("auth:"));
+        assert_eq!(account_display, account_id);
     }
 
-    // As part of our effort to to keep `auth_header` secret, we use a
-    // combination of `from_static()` and `set_sensitive(true)`.
-    let mut auth_header_value = HeaderValue::from_static(auth_header);
-    auth_header_value.set_sensitive(true);
-    headers.insert(AUTHORIZATION, auth_header_value);
+    #[test]
+    fn account_identity_falls_back_to_proxy_bucket() {
+        let headers = HeaderMap::new();
 
-    headers.insert(HOST, config.host_header.clone());
+        let (account_id, account_display) = derive_account_identity(&headers);
 
-    let upstream_resp = client
-        .post(config.upstream_url.clone())
-        .headers(headers)
-        .body(body)
-        .send()
-        .context("forwarding request to upstream")?;
-
-    // We have to create an adapter between a `reqwest::blocking::Response`
-    // and a `tiny_http::Response`. Fortunately, `reqwest::blocking::Response`
-    // implements `Read`, so we can use it directly as the body of the
-    // `tiny_http::Response`.
-    let status = upstream_resp.status();
-    let mut response_headers = Vec::new();
-    for (name, value) in upstream_resp.headers().iter() {
-        // Skip headers that tiny_http manages itself.
-        if matches!(
-            name.as_str(),
-            "content-length" | "transfer-encoding" | "connection" | "trailer" | "upgrade"
-        ) {
-            continue;
-        }
-
-        if let Ok(header) = Header::from_bytes(name.as_str().as_bytes(), value.as_bytes()) {
-            response_headers.push(header);
-        }
+        assert_eq!(account_id, DEFAULT_ACCOUNT_ID);
+        assert_eq!(account_display, DEFAULT_ACCOUNT_ID);
     }
-
-    let content_length = upstream_resp.content_length().and_then(|len| {
-        if len <= usize::MAX as u64 {
-            Some(len as usize)
-        } else {
-            None
-        }
-    });
-
-    let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {
-        let headers = upstream_resp.headers().clone();
-        Box::new(exchange_dump.tee_response_body(status.as_u16(), &headers, upstream_resp))
-    } else {
-        Box::new(upstream_resp)
-    };
-
-    let response = Response::new(
-        StatusCode(status.as_u16()),
-        response_headers,
-        response_body,
-        content_length,
-        None,
-    );
-
-    let _ = req.respond(response);
-    Ok(())
 }
