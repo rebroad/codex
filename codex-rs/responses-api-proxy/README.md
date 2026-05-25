@@ -73,7 +73,7 @@ Account identity is derived from the auth file when `--auth-file` is set; otherw
 
 That means `--auth-file` keeps accounting and upstream auth aligned on the same stored account, while existing clients without `--auth-file` can still use request headers or a stable local usage bucket.
 
-For streamed Responses requests, the proxy records usage from `response.completed` when the backend includes it. If the completed event omits usage, the proxy follows up with `GET /responses/{response_id}` and backfills the usage block before writing to the local accounting store.
+For streamed Responses requests, the proxy records usage from `response.completed` when the backend includes it. If the completed event omits usage, the proxy follows up with `GET /responses/{response_id}` and backfills the usage block before writing to the local accounting store. To make that backfill reliable, the proxy forces `store=true` on the Codex backend path even if the client sent `store=false`.
 
 When finished:
 
