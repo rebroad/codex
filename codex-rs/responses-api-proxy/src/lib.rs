@@ -108,7 +108,7 @@ pub struct Args {
 struct ProxyState {
     client: reqwest::Client,
     upstream_auth_header: Arc<RwLock<String>>,
-    auth_file_account_identity: Arc<RwLock<Option<(String, String)>>>,
+    account_identity: Arc<RwLock<Option<(String, String)>>>,
     upstream_url: Url,
     dump_dir: Option<Arc<ExchangeDumper>>,
     usage_store: Option<Arc<AccountUsageStore>>,
@@ -118,7 +118,10 @@ struct ProxyState {
 
 struct AuthFileConfig {
     upstream_auth_header: String,
-    account_identity: (String, String),
+}
+
+struct ActiveAccountConfig {
+    account_identity: Option<(String, String)>,
     account_email: Option<String>,
 }
 
@@ -225,34 +228,34 @@ pub async fn run_main(args: Args) -> Result<()> {
     let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
     let codex_home = find_codex_home().context("resolving default CODEX_HOME")?;
     let current_dir = std::env::current_dir().context("reading current directory")?;
+    let config = load_codex_config(&codex_home, Some(current_dir)).await?;
+    let active_account_config = resolve_active_account_config(&codex_home).await?;
     let auth_file_config = if let Some(auth_file) = args.auth_file.as_deref() {
         Some(resolve_auth_file_config(auth_file).await?)
     } else {
         None
     };
-    initialize_prompt_debug_http_from_codex_config(&codex_home, Some(current_dir)).await?;
-    set_prompt_debug_http_account_email(
-        auth_file_config
-            .as_ref()
-            .and_then(|config| config.account_email.clone()),
-    );
+    set_prompt_debug_http_account_email(active_account_config.account_email.clone());
     let upstream_auth_header = Arc::new(RwLock::new(match auth_file_config.as_ref() {
         Some(config) => config.upstream_auth_header.clone(),
         None => read_auth_header_from_stdin().map(str::to_string)?,
     }));
-    let auth_file_account_identity = Arc::new(RwLock::new(
-        auth_file_config.map(|config| config.account_identity),
-    ));
+    let account_identity = Arc::new(RwLock::new(active_account_config.account_identity));
     let dump_dir = args
         .dump_dir
         .map(ExchangeDumper::new)
         .transpose()
         .context("creating --dump-dir")?
         .map(Arc::new);
-    let sqlite_home = resolve_sqlite_home(args.sqlite_home)?;
+    let sqlite_home = args.sqlite_home.unwrap_or_else(|| config.sqlite_home.clone());
+    let provider_id = if args.provider_id == DEFAULT_PROVIDER_ID {
+        config.model_provider_id.clone()
+    } else {
+        args.provider_id.clone()
+    };
     let usage_store = match AccountUsageStore::init_with_estimator_config(
         sqlite_home,
-        args.provider_id.clone(),
+        provider_id,
         AccountUsageEstimatorConfig::default(),
     )
     .await
@@ -268,7 +271,7 @@ pub async fn run_main(args: Args) -> Result<()> {
             .build()
             .context("building reqwest client")?,
         upstream_auth_header,
-        auth_file_account_identity,
+        account_identity,
         upstream_url,
         dump_dir,
         usage_store,
@@ -340,9 +343,9 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
             );
         }
     };
-    let auth_file_account_identity = state.auth_file_account_identity.read().await.clone();
+    let account_identity = state.account_identity.read().await.clone();
     let (account_id, account_display) =
-        resolve_account_identity(auth_file_account_identity.as_ref(), &parts.headers);
+        resolve_account_identity(account_identity.as_ref(), &parts.headers);
 
     let request_model_slug = extract_request_model_slug(&body_bytes);
     let target_url = match resolve_upstream_url(&state.upstream_url, &incoming_uri) {
@@ -1043,10 +1046,10 @@ fn usage_query_id_dir() -> Option<PathBuf> {
 }
 
 fn resolve_account_identity(
-    auth_file_account_identity: Option<&(String, String)>,
+    account_identity: Option<&(String, String)>,
     headers: &HeaderMap,
 ) -> (String, String) {
-    if let Some(identity) = auth_file_account_identity {
+    if let Some(identity) = account_identity {
         return identity.clone();
     }
 
@@ -1080,6 +1083,7 @@ fn derive_request_account_identity(headers: &HeaderMap) -> (String, String) {
     )
 }
 
+#[cfg(test)]
 fn derive_auth_file_account_identity(
     account_id: Option<&str>,
     account_email: Option<&str>,
@@ -1133,27 +1137,6 @@ fn json_model_slug(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
-fn resolve_sqlite_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(path);
-    }
-
-    if let Ok(raw) = std::env::var(codex_state::SQLITE_HOME_ENV) {
-        let raw = raw.trim();
-        if !raw.is_empty() {
-            let path = PathBuf::from(raw);
-            if path.is_absolute() {
-                return Ok(path);
-            }
-            return Ok(std::env::current_dir()
-                .context("reading current directory for CODEX_SQLITE_HOME")?
-                .join(path));
-        }
-    }
-
-    find_codex_home().context("resolving default CODEX_HOME")
-}
-
 async fn resolve_auth_file_config(auth_file: &std::path::Path) -> Result<AuthFileConfig> {
     let auth_path = auth_file.to_path_buf();
     let codex_home = auth_path
@@ -1169,6 +1152,7 @@ async fn resolve_auth_file_config(auth_file: &std::path::Path) -> Result<AuthFil
         AuthCredentialsStoreMode::File,
     );
     let auth = auth_manager.auth().await;
+    codex_login::set_auth_file_override(None);
     let Some(auth) = auth else {
         return Err(anyhow::anyhow!(
             "failed to load upstream auth from {}",
@@ -1179,30 +1163,48 @@ async fn resolve_auth_file_config(auth_file: &std::path::Path) -> Result<AuthFil
         .get_token()
         .context("reading token from upstream auth file")?;
     let upstream_auth_header = format!("Bearer {token}");
-    let account_email = auth.get_account_email();
-    let account_identity = derive_auth_file_account_identity(
-        auth.get_account_id().as_deref(),
-        account_email.as_deref(),
-        Some(&token),
-    );
-    Ok(AuthFileConfig {
-        upstream_auth_header,
-        account_identity,
-        account_email,
-    })
+    Ok(AuthFileConfig { upstream_auth_header })
 }
 
-async fn initialize_prompt_debug_http_from_codex_config(
+async fn load_codex_config(
     codex_home: &std::path::Path,
     current_dir: Option<PathBuf>,
-) -> Result<()> {
-    let _config = ConfigBuilder::default()
+) -> Result<codex_core::config::Config> {
+    ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
         .fallback_cwd(current_dir)
         .build()
         .await
-        .context("loading Codex config for prompt-debug capture")?;
-    Ok(())
+        .context("loading Codex config for proxy startup")
+}
+
+async fn resolve_active_account_config(codex_home: &std::path::Path) -> Result<ActiveAccountConfig> {
+    let auth_manager = AuthManager::new(
+        codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+    let auth = auth_manager.auth().await;
+    let Some(auth) = auth else {
+        return Ok(ActiveAccountConfig {
+            account_identity: None,
+            account_email: None,
+        });
+    };
+    let account_email = auth.get_account_email();
+    let account_identity = account_email.as_deref().map(|email| {
+        (
+            auth.get_account_id()
+                .as_deref()
+                .unwrap_or(email)
+                .to_string(),
+            email.to_string(),
+        )
+    });
+    Ok(ActiveAccountConfig {
+        account_identity,
+        account_email,
+    })
 }
 
 fn spawn_auth_reload_signal_handler(state: Arc<ProxyState>, auth_file: Option<PathBuf>) {
@@ -1227,16 +1229,14 @@ fn spawn_auth_reload_signal_handler(state: Arc<ProxyState>, auth_file: Option<Pa
                             Ok(new_config) => {
                                 *state.upstream_auth_header.write().await =
                                     new_config.upstream_auth_header;
-                                *state.auth_file_account_identity.write().await =
-                                    Some(new_config.account_identity);
                                 eprintln!(
-                                    "received SIGHUP; reloaded upstream auth and accounting identity from {}",
+                                    "received SIGHUP; reloaded upstream auth from {}",
                                     auth_file.display()
                                 );
                             }
                             Err(err) => {
                                 eprintln!(
-                                    "received SIGHUP but failed to reload upstream auth and accounting identity from {}: {err}",
+                                    "received SIGHUP but failed to reload upstream auth from {}: {err}",
                                     auth_file.display()
                                 );
                             }
@@ -1436,7 +1436,7 @@ mod tests {
             env::set_var("CODEX_USAGE_LOG_DIR", "/var/tmp/codex-usage-guard");
         }
 
-        initialize_prompt_debug_http_from_codex_config(&codex_home, Some(cwd.clone()))
+        load_codex_config(&codex_home, Some(cwd.clone()))
             .await
             .expect("load prompt_debug_http config");
 
