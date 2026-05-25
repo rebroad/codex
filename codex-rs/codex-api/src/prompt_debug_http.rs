@@ -6,6 +6,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::os::fd::AsRawFd;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -175,7 +176,22 @@ fn resolve_prompt_debug_path(path: PathBuf) -> PathBuf {
     PathBuf::from(path_str.replace(EMAIL_PLACEHOLDER, account_email.as_str()))
 }
 
-fn next_persistent_query_id(dir: &Path) -> Option<String> {
+pub fn next_persistent_query_id(dir: &Path) -> Option<String> {
+    let lock_path = dir.join(format!("{QUERY_ID_COUNTER_FILENAME}.lock"));
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .ok()?;
+
+    #[cfg(unix)]
+    {
+        if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return None;
+        }
+    }
+
     let counter_path = dir.join(QUERY_ID_COUNTER_FILENAME);
     let current = std::fs::read_to_string(counter_path.as_path())
         .ok()
@@ -183,6 +199,12 @@ fn next_persistent_query_id(dir: &Path) -> Option<String> {
         .unwrap_or(0);
     let next = current.checked_add(1)?;
     std::fs::write(counter_path, format!("{next}\n")).ok()?;
+
+    #[cfg(unix)]
+    {
+        let _ = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) };
+    }
+
     Some(next.to_string())
 }
 
