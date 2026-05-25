@@ -55,6 +55,7 @@ use read_api_key::read_auth_header_from_stdin;
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_PROVIDER_ID: &str = "proxy";
 const DEFAULT_ACCOUNT_ID: &str = "proxy";
+const PROXY_USAGE_DEBUG_ENV_VAR: &str = "CODEX_PROXY_DEBUG_USAGE";
 
 /// CLI arguments for the proxy.
 #[derive(Debug, Clone, Parser)]
@@ -366,6 +367,16 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
     let is_sse = response_content_type
         .as_deref()
         .is_some_and(|value| value.contains("text/event-stream"));
+    let debug_usage = std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some();
+    if debug_usage {
+        eprintln!(
+            "proxy usage: upstream status={} content_type={:?} is_sse={} target_path={}",
+            status,
+            response_content_type,
+            is_sse,
+            target_url.path(),
+        );
+    }
 
     if is_sse {
         let (client_tx, client_rx) = mpsc::channel::<Bytes>(16);
@@ -601,6 +612,7 @@ async fn record_usage_events(
     account_display: String,
     request_model_slug: Option<String>,
 ) {
+    let debug_usage = std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some();
     if let Some(store) = usage_store.as_ref() {
         store.cache_account_display(&account_id, account_display).await;
     }
@@ -626,6 +638,13 @@ async fn record_usage_events(
                 transport_bytes,
                 ..
             }) => {
+                if debug_usage {
+                    eprintln!(
+                        "proxy usage: completed event with inline usage response_id={:?} capture_id={:?}",
+                        None::<&str>,
+                        capture_id.as_deref(),
+                    );
+                }
                 if let Some(store) = usage_store.as_ref() {
                     let model_slug = last_server_model.as_deref();
                     if let Err(err) = store
@@ -644,6 +663,11 @@ async fn record_usage_events(
                         .await
                     {
                         eprintln!("failed to record account token usage: {err}");
+                    } else if debug_usage {
+                        eprintln!(
+                            "proxy usage: wrote inline usage account_id={account_id} capture_id={:?}",
+                            capture_id.as_deref()
+                        );
                     }
                 }
             }
@@ -654,9 +678,21 @@ async fn record_usage_events(
                 transport_bytes,
                 ..
             }) => {
+                if debug_usage {
+                    eprintln!(
+                        "proxy usage: completed event without inline usage response_id={response_id} capture_id={:?}",
+                        capture_id.as_deref()
+                    );
+                }
                 if let Some(store) = usage_store.as_ref() {
                     match fetch_completed_response_usage(&state, &response_id).await {
                         Ok(Some(token_usage)) => {
+                            if debug_usage {
+                                eprintln!(
+                                    "proxy usage: fetched completed usage response_id={response_id} capture_id={:?}",
+                                    capture_id.as_deref()
+                                );
+                            }
                             let model_slug = last_server_model.as_deref();
                             if let Err(err) = store
                                 .record_account_token_usage(
@@ -674,9 +710,21 @@ async fn record_usage_events(
                                 .await
                             {
                                 eprintln!("failed to record account token usage: {err}");
+                            } else if debug_usage {
+                                eprintln!(
+                                    "proxy usage: wrote fetched usage account_id={account_id} response_id={response_id} capture_id={:?}",
+                                    capture_id.as_deref()
+                                );
                             }
                         }
-                        Ok(None) => {}
+                        Ok(None) => {
+                            if debug_usage {
+                                eprintln!(
+                                    "proxy usage: no usage found for response_id={response_id} capture_id={:?}",
+                                    capture_id.as_deref()
+                                );
+                            }
+                        }
                         Err(err) => {
                             eprintln!(
                                 "failed to fetch completed response usage for {response_id}: {err}"
@@ -724,6 +772,12 @@ async fn fetch_completed_response_usage(
         .context("sending completed response retrieval request")?;
 
     if !response.status().is_success() {
+        if std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some() {
+            eprintln!(
+                "proxy usage: response retrieval returned status={} for response_id={response_id}",
+                response.status()
+            );
+        }
         return Ok(None);
     }
 
@@ -842,6 +896,13 @@ fn normalize_request_body(body_bytes: Bytes, target_url: &Url) -> Bytes {
     }
 
     if target_url.path().contains("/backend-api/codex") {
+        match object.get("store") {
+            Some(Value::Bool(true)) => {}
+            _ => {
+                object.insert("store".to_string(), Value::Bool(true));
+                changed = true;
+            }
+        }
         match object.get("stream") {
             Some(Value::Bool(true)) => {}
             _ => {
@@ -1188,7 +1249,7 @@ mod tests {
     #[test]
     fn normalize_request_body_strips_extra_headers_and_forces_stream_for_codex_backend() {
         let body = Bytes::from(
-            r#"{"model":"gpt-5.4-mini","extra_headers":{"session_id":"abc"},"input":[{"role":"user","content":"hi"}]}"#,
+            r#"{"model":"gpt-5.4-mini","store":false,"extra_headers":{"session_id":"abc"},"input":[{"role":"user","content":"hi"}]}"#,
         );
         let target_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
 
@@ -1196,6 +1257,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&normalized).unwrap();
 
         assert!(value.get("extra_headers").is_none());
+        assert_eq!(value.get("store"), Some(&Value::Bool(true)));
         assert_eq!(value.get("stream"), Some(&Value::Bool(true)));
     }
 
