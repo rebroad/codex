@@ -238,11 +238,6 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
     let (account_id, account_display) =
         resolve_account_identity(auth_file_account_identity.as_ref(), &parts.headers);
 
-    let request_dump = state
-        .dump_dir
-        .as_ref()
-        .and_then(|dumper| dumper.dump_request(&incoming_method, &incoming_url, &parts.headers, &body_bytes).ok());
-
     let request_model_slug = extract_request_model_slug(&body_bytes);
     let target_url = match resolve_upstream_url(&state.upstream_url, &incoming_uri) {
         Ok(url) => url,
@@ -253,6 +248,11 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
             );
         }
     };
+    let request_dump = state
+        .dump_dir
+        .as_ref()
+        .and_then(|dumper| dumper.dump_request(&incoming_method, &incoming_url, &parts.headers, &body_bytes).ok());
+    let body_bytes = normalize_request_body(body_bytes, &target_url);
 
     let upstream_response = match send_upstream_request(&state, &parts, body_bytes.clone(), target_url.clone()).await {
         Ok(response) => response,
@@ -603,6 +603,43 @@ fn resolve_upstream_url(base_url: &Url, uri: &Uri) -> Result<Url> {
     Ok(resolved)
 }
 
+fn normalize_request_body(body_bytes: Bytes, target_url: &Url) -> Bytes {
+    let Ok(mut value) = serde_json::from_slice::<Value>(&body_bytes) else {
+        return body_bytes;
+    };
+
+    let Some(object) = value.as_object_mut() else {
+        return body_bytes;
+    };
+
+    let mut changed = false;
+    if object.remove("extra_headers").is_some() {
+        changed = true;
+    }
+
+    if target_url.path().contains("/backend-api/codex") {
+        match object.get("stream") {
+            Some(Value::Bool(true)) => {}
+            _ => {
+                object.insert("stream".to_string(), Value::Bool(true));
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        match serde_json::to_vec(&value) {
+            Ok(mut data) => {
+                data.shrink_to_fit();
+                Bytes::from(data)
+            }
+            Err(_) => body_bytes,
+        }
+    } else {
+        body_bytes
+    }
+}
+
 fn join_paths(base_path: &str, request_path: &str) -> String {
     let base = base_path.trim_end_matches('/');
     let request = request_path.trim_start_matches('/');
@@ -922,5 +959,29 @@ mod tests {
 
         assert_eq!(account_id, "auth-account");
         assert_eq!(account_display, "auth-display");
+    }
+
+    #[test]
+    fn normalize_request_body_strips_extra_headers_and_forces_stream_for_codex_backend() {
+        let body = Bytes::from(
+            r#"{"model":"gpt-5.4-mini","extra_headers":{"session_id":"abc"},"input":[{"role":"user","content":"hi"}]}"#,
+        );
+        let target_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+
+        let normalized = normalize_request_body(body, &target_url);
+        let value: Value = serde_json::from_slice(&normalized).unwrap();
+
+        assert!(value.get("extra_headers").is_none());
+        assert_eq!(value.get("stream"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn normalize_request_body_leaves_non_json_unchanged() {
+        let body = Bytes::from_static(b"not-json");
+        let target_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+
+        let normalized = normalize_request_body(body.clone(), &target_url);
+
+        assert_eq!(normalized, body);
     }
 }
