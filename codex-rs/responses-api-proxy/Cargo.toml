@@ -26,7 +26,6 @@ codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-login = { workspace = true }
 codex-state = { workspace = true }
-codex-models-manager = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-protocol = { workspace = true }
 ctor = { workspace = true }
