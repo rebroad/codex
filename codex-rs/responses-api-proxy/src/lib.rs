@@ -30,6 +30,7 @@ use codex_api::spawn_response_stream;
 use codex_login::AuthCredentialsStoreMode;
 use codex_client::StreamResponse;
 use codex_login::AuthManager;
+use codex_models_manager::bundled_models_response;
 use codex_state::AccountUsageEstimatorConfig;
 use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
@@ -338,6 +339,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         resolve_account_identity(auth_file_account_identity.as_ref(), &parts.headers);
 
     let request_model_slug = extract_request_model_slug(&body_bytes);
+    let request_stream = extract_request_stream_flag(&body_bytes);
     let target_url = match resolve_upstream_url(&state.upstream_url, &incoming_uri) {
         Ok(url) => url,
         Err(err) => {
@@ -352,6 +354,9 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         .as_ref()
         .and_then(|dumper| dumper.dump_request(&incoming_method, &incoming_url, &parts.headers, &body_bytes).ok());
     let body_bytes = normalize_request_body(body_bytes, &target_url);
+    if let Some(response) = maybe_handle_local_probe(&incoming_method, &target_url) {
+        return response;
+    }
 
     let upstream_response = match send_upstream_request(&state, &parts, body_bytes.clone(), target_url.clone()).await {
         Ok(response) => response,
@@ -374,6 +379,8 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
     let is_sse = response_content_type
         .as_deref()
         .is_some_and(|value| value.contains("text/event-stream"));
+    let is_sse = is_sse
+        || (request_stream && target_url.path().ends_with("/responses"));
     let debug_usage = std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some();
     if debug_usage {
         eprintln!(
@@ -808,8 +815,7 @@ async fn record_usage_events(
                     }
                 }
             }
-            Ok(ResponseEvent::Completed { .. })
-            | Ok(ResponseEvent::Created)
+            Ok(ResponseEvent::Created)
             | Ok(ResponseEvent::OutputItemAdded(_))
             | Ok(ResponseEvent::OutputItemDone(_))
             | Ok(ResponseEvent::OutputTextDelta(_))
@@ -1025,13 +1031,6 @@ fn normalize_request_body(body_bytes: Bytes, target_url: &Url) -> Bytes {
     }
 
     if target_url.path().contains("/backend-api/codex") {
-        match object.get("store") {
-            Some(Value::Bool(true)) => {}
-            _ => {
-                object.insert("store".to_string(), Value::Bool(true));
-                changed = true;
-            }
-        }
         match object.get("stream") {
             Some(Value::Bool(true)) => {}
             _ => {
@@ -1054,6 +1053,56 @@ fn normalize_request_body(body_bytes: Bytes, target_url: &Url) -> Bytes {
     }
 }
 
+fn maybe_handle_local_probe(method: &Method, target_url: &Url) -> Option<Response<Body>> {
+    if method != Method::GET {
+        return None;
+    }
+
+    let path = target_url.path();
+    if path.contains("/v1/models/") {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("not found"))
+            .ok();
+    }
+
+    if path.ends_with("/models") {
+        if path == "/backend-api/codex/models" {
+            let response = bundled_models_response().ok()?;
+            let body = serde_json::to_vec(&response).ok()?;
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .ok();
+        }
+
+        if path.contains("/api/v1/models") || path.ends_with("/api/v1/models") {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("not found"))
+                .ok();
+        }
+    }
+
+    if path.ends_with("/api/tags")
+        || path.ends_with("/v1/props")
+        || path.ends_with("/props")
+        || path.ends_with("/version")
+        || path.ends_with("/api/show")
+    {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("not found"))
+            .ok();
+    }
+
+    None
+}
+
 fn join_paths(base_path: &str, request_path: &str) -> String {
     let base = base_path.trim_end_matches('/');
     let request = request_path.trim_start_matches('/');
@@ -1072,6 +1121,17 @@ fn extract_request_model_slug(body_bytes: &[u8]) -> Option<String> {
         .get("model")
         .and_then(|value| value.as_str())
         .map(str::to_owned)
+}
+
+fn extract_request_stream_flag(body_bytes: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(body_bytes) else {
+        return false;
+    };
+
+    value
+        .get("stream")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 fn resolve_account_identity(
@@ -1386,7 +1446,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&normalized).unwrap();
 
         assert!(value.get("extra_headers").is_none());
-        assert_eq!(value.get("store"), Some(&Value::Bool(true)));
+        assert_eq!(value.get("store"), Some(&Value::Bool(false)));
         assert_eq!(value.get("stream"), Some(&Value::Bool(true)));
     }
 
@@ -1398,6 +1458,20 @@ mod tests {
         let normalized = normalize_request_body(body.clone(), &target_url);
 
         assert_eq!(normalized, body);
+    }
+
+    #[test]
+    fn extract_request_stream_flag_reads_json_bool() {
+        let body = Bytes::from_static(br#"{"stream":true}"#);
+
+        assert!(extract_request_stream_flag(&body));
+    }
+
+    #[test]
+    fn extract_request_stream_flag_defaults_to_false() {
+        let body = Bytes::from_static(br#"{"model":"gpt-5.4-mini"}"#);
+
+        assert!(!extract_request_stream_flag(&body));
     }
 
     #[test]
