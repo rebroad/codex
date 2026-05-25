@@ -250,6 +250,12 @@ pub async fn run_main(args: Args) -> Result<()> {
             None
         }
     };
+    if std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some() {
+        eprintln!(
+            "proxy usage: startup CODEX_USAGE_LOG_DIR={:?}",
+            std::env::var_os("CODEX_USAGE_LOG_DIR")
+        );
+    }
     let state = Arc::new(ProxyState {
         client: reqwest::Client::builder()
             .build()
@@ -389,6 +395,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         let mut response_stream = upstream_response.bytes_stream();
         let status_for_dump = status;
         let inflight_guard = state.inflight_requests.start();
+        let token_usage_recorded = Arc::new(AtomicBool::new(false));
 
         tokio::spawn(async move {
             let usage_task = tokio::spawn(record_usage_events(
@@ -410,7 +417,8 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                 state.usage_store.clone(),
                 account_id.clone(),
                 account_display.clone(),
-                request_model_slug,
+                request_model_slug.clone(),
+                Arc::clone(&token_usage_recorded),
             ));
 
             let mut response_bytes = Vec::new();
@@ -437,6 +445,49 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                     eprintln!("failed to write response dump: {err}");
                 }
             }
+            if let Some(usage_store) = state.usage_store.as_ref()
+                && !token_usage_recorded.load(Ordering::Acquire)
+                && let Some((response_id, token_usage)) =
+                    extract_completed_response_usage_from_sse(&response_bytes)
+            {
+                if token_usage_recorded
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    if debug_usage {
+                        eprintln!(
+                            "proxy usage: fallback parsed completed SSE usage response_id={:?}",
+                            response_id.as_deref()
+                        );
+                    }
+                    let model_slug = request_model_slug.as_deref();
+                    if let Err(err) = usage_store
+                        .record_account_token_usage(
+                            &account_id,
+                            &token_usage,
+                            AccountUsageEventMeta {
+                                query_id: response_id.as_deref(),
+                                model_slug,
+                                sent_bytes: Some(body_bytes.len() as i64),
+                                recv_bytes: Some(response_bytes.len() as i64),
+                                is_prewarm: false,
+                                is_regional_processing: false,
+                            },
+                        )
+                        .await
+                    {
+                        token_usage_recorded.store(false, Ordering::Release);
+                        eprintln!("failed to record fallback usage from SSE response: {err}");
+                    } else if debug_usage {
+                        eprintln!(
+                            "proxy usage: wrote fallback SSE usage account_id={account_id}"
+                        );
+                    }
+                }
+            } else if debug_usage && state.usage_store.is_some() {
+                eprintln!("proxy usage: no fallback SSE usage found");
+            }
+
             let _ = usage_task.await;
             drop(inflight_guard);
         });
@@ -622,6 +673,7 @@ async fn record_usage_events(
     account_id: String,
     account_display: String,
     request_model_slug: Option<String>,
+    token_usage_recorded: Arc<AtomicBool>,
 ) {
     let debug_usage = std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some();
     if let Some(store) = usage_store.as_ref() {
@@ -658,27 +710,33 @@ async fn record_usage_events(
                 }
                 if let Some(store) = usage_store.as_ref() {
                     let model_slug = last_server_model.as_deref();
-                    if let Err(err) = store
-                        .record_account_token_usage(
-                            &account_id,
-                            &token_usage,
-                            AccountUsageEventMeta {
-                                query_id: capture_id.as_deref(),
-                                model_slug,
-                                sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
-                                recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
-                                is_prewarm: false,
-                                is_regional_processing: false,
-                            },
-                        )
-                        .await
+                    if token_usage_recorded
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
                     {
-                        eprintln!("failed to record account token usage: {err}");
-                    } else if debug_usage {
-                        eprintln!(
-                            "proxy usage: wrote inline usage account_id={account_id} capture_id={:?}",
-                            capture_id.as_deref()
-                        );
+                        if let Err(err) = store
+                            .record_account_token_usage(
+                                &account_id,
+                                &token_usage,
+                                AccountUsageEventMeta {
+                                    query_id: capture_id.as_deref(),
+                                    model_slug,
+                                    sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
+                                    recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                    is_prewarm: false,
+                                    is_regional_processing: false,
+                                },
+                            )
+                            .await
+                        {
+                            token_usage_recorded.store(false, Ordering::Release);
+                            eprintln!("failed to record account token usage: {err}");
+                        } else if debug_usage {
+                            eprintln!(
+                                "proxy usage: wrote inline usage account_id={account_id} capture_id={:?}",
+                                capture_id.as_deref()
+                            );
+                        }
                     }
                 }
             }
@@ -705,27 +763,33 @@ async fn record_usage_events(
                                 );
                             }
                             let model_slug = last_server_model.as_deref();
-                            if let Err(err) = store
-                                .record_account_token_usage(
-                                    &account_id,
-                                    &token_usage,
-                                    AccountUsageEventMeta {
-                                        query_id: capture_id.as_deref(),
-                                        model_slug,
-                                        sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
-                                        recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
-                                        is_prewarm: false,
-                                        is_regional_processing: false,
-                                    },
-                                )
-                                .await
+                            if token_usage_recorded
+                                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                                .is_ok()
                             {
-                                eprintln!("failed to record account token usage: {err}");
-                            } else if debug_usage {
-                                eprintln!(
-                                    "proxy usage: wrote fetched usage account_id={account_id} response_id={response_id} capture_id={:?}",
-                                    capture_id.as_deref()
-                                );
+                                if let Err(err) = store
+                                    .record_account_token_usage(
+                                        &account_id,
+                                        &token_usage,
+                                        AccountUsageEventMeta {
+                                            query_id: capture_id.as_deref(),
+                                            model_slug,
+                                            sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
+                                            recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                            is_prewarm: false,
+                                            is_regional_processing: false,
+                                        },
+                                    )
+                                    .await
+                                {
+                                    token_usage_recorded.store(false, Ordering::Release);
+                                    eprintln!("failed to record account token usage: {err}");
+                                } else if debug_usage {
+                                    eprintln!(
+                                        "proxy usage: wrote fetched usage account_id={account_id} response_id={response_id} capture_id={:?}",
+                                        capture_id.as_deref()
+                                    );
+                                }
                             }
                         }
                         Ok(None) => {
@@ -760,6 +824,60 @@ async fn record_usage_events(
             }
         }
     }
+}
+
+fn extract_completed_response_usage_from_sse(
+    response_bytes: &[u8],
+) -> Option<(Option<String>, TokenUsage)> {
+    let response_text = std::str::from_utf8(response_bytes).ok()?;
+    let response_text = response_text.replace("\r\n", "\n");
+    for event_block in response_text.split("\n\n").collect::<Vec<_>>().into_iter().rev() {
+        if !event_block.contains("event: response.completed") {
+            continue;
+        }
+
+        let data = event_block
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("data:")
+                    .map(str::trim_start)
+                    .filter(|value| !value.is_empty())
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if data.is_empty() {
+            continue;
+        }
+
+        let value: Value = serde_json::from_str(&data).ok()?;
+        let response = value.get("response")?;
+        let response_id = response
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+        let usage = response.get("usage")?;
+        let token_usage = token_usage_from_value(usage)?;
+        return Some((response_id, token_usage));
+    }
+    None
+}
+
+fn token_usage_from_value(value: &Value) -> Option<TokenUsage> {
+    Some(TokenUsage {
+        input_tokens: value.get("input_tokens")?.as_i64()?,
+        cached_input_tokens: value
+            .get("input_tokens_details")
+            .and_then(|details| details.get("cached_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        output_tokens: value.get("output_tokens")?.as_i64()?,
+        reasoning_output_tokens: value
+            .get("output_tokens_details")
+            .and_then(|details| details.get("reasoning_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        total_tokens: value.get("total_tokens")?.as_i64()?,
+    })
 }
 
 async fn fetch_completed_response_usage(
@@ -1280,5 +1398,24 @@ mod tests {
         let normalized = normalize_request_body(body.clone(), &target_url);
 
         assert_eq!(normalized, body);
+    }
+
+    #[test]
+    fn extract_completed_response_usage_from_sse_parses_usage() {
+        let sse = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":12,\"input_tokens_details\":{\"cached_tokens\":3},\"output_tokens\":4,\"output_tokens_details\":{\"reasoning_tokens\":1},\"total_tokens\":16}}}\n\n",
+        );
+        let (response_id, token_usage) =
+            extract_completed_response_usage_from_sse(sse.as_bytes()).unwrap();
+
+        assert_eq!(response_id.as_deref(), Some("resp_1"));
+        assert_eq!(token_usage.input_tokens, 12);
+        assert_eq!(token_usage.cached_input_tokens, 3);
+        assert_eq!(token_usage.output_tokens, 4);
+        assert_eq!(token_usage.reasoning_output_tokens, 1);
+        assert_eq!(token_usage.total_tokens, 16);
     }
 }
