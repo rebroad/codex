@@ -30,6 +30,8 @@ use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_api::next_persistent_query_id;
 use codex_api::spawn_response_stream;
+use codex_api::set_prompt_debug_http_account_email;
+use codex_core::config::ConfigBuilder;
 use codex_login::AuthCredentialsStoreMode;
 use codex_client::StreamResponse;
 use codex_login::AuthManager;
@@ -117,6 +119,7 @@ struct ProxyState {
 struct AuthFileConfig {
     upstream_auth_header: String,
     account_identity: (String, String),
+    account_email: Option<String>,
 }
 
 struct InflightRequestTracker {
@@ -220,11 +223,19 @@ struct JsonResponseCompletedOutputTokensDetails {
 /// Entry point for the library main, for parity with other crates.
 pub async fn run_main(args: Args) -> Result<()> {
     let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
+    let codex_home = find_codex_home().context("resolving default CODEX_HOME")?;
+    let current_dir = std::env::current_dir().context("reading current directory")?;
     let auth_file_config = if let Some(auth_file) = args.auth_file.as_deref() {
         Some(resolve_auth_file_config(auth_file).await?)
     } else {
         None
     };
+    initialize_prompt_debug_http_from_codex_config(&codex_home, Some(current_dir)).await?;
+    set_prompt_debug_http_account_email(
+        auth_file_config
+            .as_ref()
+            .and_then(|config| config.account_email.clone()),
+    );
     let upstream_auth_header = Arc::new(RwLock::new(match auth_file_config.as_ref() {
         Some(config) => config.upstream_auth_header.clone(),
         None => read_auth_header_from_stdin().map(str::to_string)?,
@@ -1168,15 +1179,30 @@ async fn resolve_auth_file_config(auth_file: &std::path::Path) -> Result<AuthFil
         .get_token()
         .context("reading token from upstream auth file")?;
     let upstream_auth_header = format!("Bearer {token}");
+    let account_email = auth.get_account_email();
     let account_identity = derive_auth_file_account_identity(
         auth.get_account_id().as_deref(),
-        auth.get_account_email().as_deref(),
+        account_email.as_deref(),
         Some(&token),
     );
     Ok(AuthFileConfig {
         upstream_auth_header,
         account_identity,
+        account_email,
     })
+}
+
+async fn initialize_prompt_debug_http_from_codex_config(
+    codex_home: &std::path::Path,
+    current_dir: Option<PathBuf>,
+) -> Result<()> {
+    let _config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .fallback_cwd(current_dir)
+        .build()
+        .await
+        .context("loading Codex config for prompt-debug capture")?;
+    Ok(())
 }
 
 fn spawn_auth_reload_signal_handler(state: Arc<ProxyState>, auth_file: Option<PathBuf>) {
@@ -1369,6 +1395,83 @@ mod tests {
         let body = Bytes::from_static(br#"{"model":"gpt-5.4-mini"}"#);
 
         assert!(!extract_request_stream_flag(&body));
+    }
+
+    #[tokio::test]
+    async fn prompt_debug_capture_dir_loads_from_codex_config_without_touching_usage_logs() {
+        let suffix = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos(),
+        );
+        let codex_home = PathBuf::from(format!("/var/tmp/codex-home-{suffix}"));
+        let cwd = PathBuf::from(format!("/var/tmp/codex-cwd-{suffix}"));
+        let expected_capture_dir = codex_home.join("captures");
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        std::fs::create_dir_all(&expected_capture_dir).expect("create capture dir");
+        std::fs::write(
+            codex_home.join("config.toml"),
+            format!(
+                "[prompt_debug_http]\nenabled = true\ncapture_dir = \"{}\"\n",
+                expected_capture_dir.display()
+            ),
+        )
+        .expect("write config.toml");
+
+        let old_capture = env::var_os("CODEX_BACKEND_CAPTURE");
+        let old_capture_dir = env::var_os("CODEX_BACKEND_CAPTURE_DIR");
+        let old_capture_input = env::var_os("CODEX_BACKEND_CAPTURE_INPUT");
+        let old_capture_output = env::var_os("CODEX_BACKEND_CAPTURE_OUTPUT");
+        let old_usage_dir = env::var_os("CODEX_USAGE_LOG_DIR");
+
+        unsafe {
+            env::remove_var("CODEX_BACKEND_CAPTURE");
+            env::remove_var("CODEX_BACKEND_CAPTURE_DIR");
+            env::remove_var("CODEX_BACKEND_CAPTURE_INPUT");
+            env::remove_var("CODEX_BACKEND_CAPTURE_OUTPUT");
+            env::set_var("CODEX_USAGE_LOG_DIR", "/var/tmp/codex-usage-guard");
+        }
+
+        initialize_prompt_debug_http_from_codex_config(&codex_home, Some(cwd.clone()))
+            .await
+            .expect("load prompt_debug_http config");
+
+        assert_eq!(capture_dir().as_deref(), Some(expected_capture_dir.as_path()));
+        assert_eq!(
+            env::var_os("CODEX_USAGE_LOG_DIR"),
+            Some("/var/tmp/codex-usage-guard".into())
+        );
+
+        codex_api::configure_prompt_debug_http(codex_api::PromptDebugHttpConfig::default());
+        set_prompt_debug_http_account_email(None);
+
+        match old_capture {
+            Some(value) => unsafe { env::set_var("CODEX_BACKEND_CAPTURE", value) },
+            None => unsafe { env::remove_var("CODEX_BACKEND_CAPTURE") },
+        }
+        match old_capture_dir {
+            Some(value) => unsafe { env::set_var("CODEX_BACKEND_CAPTURE_DIR", value) },
+            None => unsafe { env::remove_var("CODEX_BACKEND_CAPTURE_DIR") },
+        }
+        match old_capture_input {
+            Some(value) => unsafe { env::set_var("CODEX_BACKEND_CAPTURE_INPUT", value) },
+            None => unsafe { env::remove_var("CODEX_BACKEND_CAPTURE_INPUT") },
+        }
+        match old_capture_output {
+            Some(value) => unsafe { env::set_var("CODEX_BACKEND_CAPTURE_OUTPUT", value) },
+            None => unsafe { env::remove_var("CODEX_BACKEND_CAPTURE_OUTPUT") },
+        }
+        match old_usage_dir {
+            Some(value) => unsafe { env::set_var("CODEX_USAGE_LOG_DIR", value) },
+            None => unsafe { env::remove_var("CODEX_USAGE_LOG_DIR") },
+        }
+
+        std::fs::remove_dir_all(&codex_home).ok();
+        std::fs::remove_dir_all(&cwd).ok();
     }
 
     #[test]
