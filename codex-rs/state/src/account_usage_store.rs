@@ -74,6 +74,18 @@ pub fn account_usage_display(account_email: Option<&str>) -> Option<String> {
     account_email.map(str::to_owned)
 }
 
+fn usage_log_pid_label_from_args(args: impl IntoIterator<Item = String>) -> &'static str {
+    let mut args = args.into_iter();
+    let argv0 = args.next().unwrap_or_default();
+    if argv0.contains("codex-responses-api-proxy") {
+        "pid≈"
+    } else if args.any(|arg| arg == "status" || arg == "exec") {
+        "pid:"
+    } else {
+        "pid="
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AccountUsageSnapshot {
     pub total_usage_usd: f64,
@@ -2280,11 +2292,7 @@ WHERE account_id = ? AND provider = ?
         };
         let account_display = self.resolve_account_display(account_id).await;
         let pid = std::process::id();
-        let pid_label = if std::env::args().any(|arg| arg == "status" || arg == "exec") {
-            "pid:"
-        } else {
-            "pid="
-        };
+        let pid_label = usage_log_pid_label_from_args(std::env::args());
         let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let usage_pct_suffix = if message.contains("usage_pct=") {
             String::new()
@@ -4743,6 +4751,28 @@ WHERE account_id = ? AND provider = ?
     fn credits_to_usd_matches_status_display_conversion() {
         assert_eq!(credits_to_usd(62.5), 2.5);
         assert_eq!(credits_to_usd(0.0), 0.0);
+    }
+
+    #[test]
+    fn usage_log_pid_label_uses_wavy_equals_for_proxy() {
+        assert_eq!(
+            usage_log_pid_label_from_args([
+                "/home/rebroad/.cargo/bin/codex-responses-api-proxy".to_string()
+            ]),
+            "pid≈"
+        );
+    }
+
+    #[test]
+    fn usage_log_pid_label_keeps_status_and_exec_convention() {
+        assert_eq!(
+            usage_log_pid_label_from_args(["codex".to_string(), "status".to_string()]),
+            "pid:"
+        );
+        assert_eq!(
+            usage_log_pid_label_from_args(["codex".to_string(), "exec".to_string()]),
+            "pid:"
+        );
     }
 
     #[test]
