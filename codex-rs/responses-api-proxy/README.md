@@ -11,6 +11,7 @@ This makes it a drop-in replacement for tools that normally talk directly to a C
 - Listens on `127.0.0.1` on the requested port, or an ephemeral port if `--port` is omitted.
 - Forwards arbitrary HTTP requests to the configured upstream URL.
 - Streams SSE responses and observes backend usage events.
+- If the backend omits usage on the initial completion, backfills it with `GET /responses/{response_id}` before writing usage logs.
 - Updates the same `account_usage` SQLite tables and writes the same `usage/*.log` files that Codex already uses.
 - Optionally writes request/response exchange dumps for debugging.
 - Optionally exposes `GET /shutdown` for environments that cannot send `SIGTERM`.
