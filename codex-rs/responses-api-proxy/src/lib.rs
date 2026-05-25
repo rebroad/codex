@@ -1,5 +1,8 @@
 use std::convert::Infallible;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,6 +42,7 @@ use sha2::Digest;
 use sha2::Sha256;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -102,11 +106,84 @@ struct ProxyState {
     upstream_url: Url,
     dump_dir: Option<Arc<ExchangeDumper>>,
     usage_store: Option<Arc<AccountUsageStore>>,
+    inflight_requests: Arc<InflightRequestTracker>,
+    shutdown_state: Arc<ShutdownState>,
 }
 
 struct AuthFileConfig {
     upstream_auth_header: String,
     account_identity: (String, String),
+}
+
+struct InflightRequestTracker {
+    count: AtomicUsize,
+    notify: Notify,
+}
+
+impl InflightRequestTracker {
+    fn new() -> Self {
+        Self {
+            count: AtomicUsize::new(0),
+            notify: Notify::new(),
+        }
+    }
+
+    fn start(self: &Arc<Self>) -> InflightRequestGuard {
+        self.count.fetch_add(1, Ordering::AcqRel);
+        InflightRequestGuard {
+            tracker: Arc::clone(self),
+        }
+    }
+
+    async fn wait_for_zero(&self) {
+        loop {
+            if self.count.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            self.notify.notified().await;
+        }
+    }
+}
+
+struct InflightRequestGuard {
+    tracker: Arc<InflightRequestTracker>,
+}
+
+impl Drop for InflightRequestGuard {
+    fn drop(&mut self) {
+        if self.tracker.count.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.tracker.notify.notify_waiters();
+        }
+    }
+}
+
+struct ShutdownState {
+    requested: AtomicBool,
+    notify: Notify,
+}
+
+impl ShutdownState {
+    fn new() -> Self {
+        Self {
+            requested: AtomicBool::new(false),
+            notify: Notify::new(),
+        }
+    }
+
+    fn request_shutdown(&self) {
+        if !self.requested.swap(true, Ordering::AcqRel) {
+            self.notify.notify_waiters();
+        }
+    }
+
+    async fn wait(&self) {
+        loop {
+            if self.requested.load(Ordering::Acquire) {
+                return;
+            }
+            self.notify.notified().await;
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -180,36 +257,50 @@ pub async fn run_main(args: Args) -> Result<()> {
         upstream_url,
         dump_dir,
         usage_store,
+        inflight_requests: Arc::new(InflightRequestTracker::new()),
+        shutdown_state: Arc::new(ShutdownState::new()),
     });
 
     spawn_auth_reload_signal_handler(Arc::clone(&state), args.auth_file.clone());
+    spawn_shutdown_signal_handler(Arc::clone(&state.shutdown_state));
 
     let listener = bind_listener(args.port).await?;
     if let Some(path) = args.server_info.as_ref() {
         write_server_info(path, listener.local_addr()?.port())?;
     }
 
+    let app_state = Arc::clone(&state);
     let app = if args.http_shutdown {
         Router::new()
             .route("/shutdown", get(shutdown))
             .fallback(any(proxy))
-            .with_state(state)
+            .with_state(app_state)
     } else {
-        Router::new().fallback(any(proxy)).with_state(state)
+        Router::new().fallback(any(proxy)).with_state(app_state)
     };
 
     eprintln!("responses-api-proxy listening on {}", listener.local_addr()?);
 
+    let shutdown_state = Arc::clone(&state.shutdown_state);
+    let inflight_requests = Arc::clone(&state.inflight_requests);
     axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_state.wait().await;
+        })
         .await
-        .context("serving proxy")
+        .context("serving proxy")?;
+
+    let _ = tokio::time::timeout(
+        Duration::from_secs(10),
+        inflight_requests.wait_for_zero(),
+    )
+    .await;
+
+    Ok(())
 }
 
-async fn shutdown() -> impl IntoResponse {
-    tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        std::process::exit(0);
-    });
+async fn shutdown(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
+    state.shutdown_state.request_shutdown();
     StatusCode::OK
 }
 
@@ -280,11 +371,36 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         let (client_tx, client_rx) = mpsc::channel::<Bytes>(16);
         let (parser_tx, parser_rx) = mpsc::channel::<Bytes>(16);
         let response_headers_for_dump = response_headers.clone();
+        let stream_response_headers_for_client = stream_response_headers.clone();
+        let stream_response_headers_for_task = stream_response_headers;
         let request_dump_path = request_dump;
         let mut response_stream = upstream_response.bytes_stream();
         let status_for_dump = status;
+        let inflight_guard = state.inflight_requests.start();
 
         tokio::spawn(async move {
+            let usage_task = tokio::spawn(record_usage_events(
+                Arc::clone(&state),
+                spawn_response_stream(
+                    StreamResponse {
+                        status,
+                        headers: stream_response_headers_for_task.clone(),
+                        bytes: ReceiverStream::new(parser_rx)
+                            .map(Ok::<Bytes, TransportError>)
+                            .boxed(),
+                    },
+                    STREAM_IDLE_TIMEOUT,
+                    None,
+                    None,
+                    None,
+                    body_bytes.len() as i64,
+                ),
+                state.usage_store.clone(),
+                account_id.clone(),
+                account_display.clone(),
+                request_model_slug,
+            ));
+
             let mut response_bytes = Vec::new();
             while let Some(chunk) = response_stream.next().await {
                 match chunk {
@@ -309,33 +425,15 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                     eprintln!("failed to write response dump: {err}");
                 }
             }
+            let _ = usage_task.await;
+            drop(inflight_guard);
         });
 
-        let parser_bytes = ReceiverStream::new(parser_rx)
-            .map(Ok::<Bytes, TransportError>)
-            .boxed();
-        let response_stream = StreamResponse {
+        return build_streaming_response(
             status,
-            headers: stream_response_headers.clone(),
-            bytes: parser_bytes,
-        };
-
-        tokio::spawn(record_usage_events(
-            spawn_response_stream(
-                response_stream,
-                STREAM_IDLE_TIMEOUT,
-                None,
-                None,
-                None,
-                body_bytes.len() as i64,
-            ),
-            state.usage_store.clone(),
-            account_id.clone(),
-            account_display.clone(),
-            request_model_slug,
-        ));
-
-        return build_streaming_response(status, stream_response_headers, client_rx);
+            stream_response_headers_for_client,
+            client_rx,
+        );
     }
 
     let response_bytes = match upstream_response.bytes().await {
@@ -414,6 +512,49 @@ fn build_streaming_response(
         .unwrap_or_else(|_| Response::new(Body::from("proxy response build failed")))
 }
 
+fn spawn_shutdown_signal_handler(state: Arc<ShutdownState>) {
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::signal;
+            use tokio::signal::unix::SignalKind;
+
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(err) => {
+                    eprintln!("failed to listen for SIGTERM shutdown signal: {err}");
+                    return;
+                }
+            };
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(signal) => signal,
+                Err(err) => {
+                    eprintln!("failed to listen for SIGINT shutdown signal: {err}");
+                    return;
+                }
+            };
+
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    state.request_shutdown();
+                }
+                _ = sigint.recv() => {
+                    state.request_shutdown();
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                eprintln!("failed to listen for shutdown signal: {err}");
+                return;
+            }
+            state.request_shutdown();
+        }
+    });
+}
+
 fn build_buffered_response(
     status: StatusCode,
     headers: HeaderMap,
@@ -453,6 +594,7 @@ async fn send_upstream_request(
 }
 
 async fn record_usage_events(
+    state: Arc<ProxyState>,
     mut response_stream: codex_api::ResponseStream,
     usage_store: Option<Arc<AccountUsageStore>>,
     account_id: String,
@@ -505,6 +647,44 @@ async fn record_usage_events(
                     }
                 }
             }
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                capture_id,
+                transport_bytes,
+                ..
+            }) => {
+                if let Some(store) = usage_store.as_ref() {
+                    match fetch_completed_response_usage(&state, &response_id).await {
+                        Ok(Some(token_usage)) => {
+                            let model_slug = last_server_model.as_deref();
+                            if let Err(err) = store
+                                .record_account_token_usage(
+                                    &account_id,
+                                    &token_usage,
+                                    AccountUsageEventMeta {
+                                        query_id: capture_id.as_deref(),
+                                        model_slug,
+                                        sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
+                                        recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                        is_prewarm: false,
+                                        is_regional_processing: false,
+                                    },
+                                )
+                                .await
+                            {
+                                eprintln!("failed to record account token usage: {err}");
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            eprintln!(
+                                "failed to fetch completed response usage for {response_id}: {err}"
+                            );
+                        }
+                    }
+                }
+            }
             Ok(ResponseEvent::Completed { .. })
             | Ok(ResponseEvent::Created)
             | Ok(ResponseEvent::OutputItemAdded(_))
@@ -521,6 +701,50 @@ async fn record_usage_events(
             }
         }
     }
+}
+
+async fn fetch_completed_response_usage(
+    state: &ProxyState,
+    response_id: &str,
+) -> anyhow::Result<Option<codex_protocol::protocol::TokenUsage>> {
+    let base = state.upstream_url.as_str().trim_end_matches('/');
+    let url = Url::parse(&format!("{base}/responses/{response_id}"))
+        .context("building completed response retrieval URL")?;
+    let upstream_auth_header = state.upstream_auth_header.read().await.clone();
+    let mut auth_header = HeaderValue::from_str(&upstream_auth_header)
+        .context("building upstream authorization header")?;
+    auth_header.set_sensitive(true);
+
+    let response = state
+        .client
+        .get(url)
+        .header(axum::http::header::AUTHORIZATION, auth_header)
+        .send()
+        .await
+        .context("sending completed response retrieval request")?;
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let completed = response
+        .json::<JsonResponseCompleted>()
+        .await
+        .context("decoding completed response retrieval payload")?;
+
+    Ok(completed.usage.map(|usage| codex_protocol::protocol::TokenUsage {
+        input_tokens: usage.input_tokens,
+        cached_input_tokens: usage
+            .input_tokens_details
+            .map(|details| details.cached_tokens)
+            .unwrap_or(0),
+        output_tokens: usage.output_tokens,
+        reasoning_output_tokens: usage
+            .output_tokens_details
+            .map(|details| details.reasoning_tokens)
+            .unwrap_or(0),
+        total_tokens: usage.total_tokens,
+    }))
 }
 
 fn proxy_error_response(status: StatusCode, message: &str) -> Response<Body> {

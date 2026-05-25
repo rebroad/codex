@@ -14,7 +14,7 @@ This makes it a drop-in replacement for tools that normally talk directly to a C
 - Updates the same `account_usage` SQLite tables and writes the same `usage/*.log` files that Codex already uses.
 - Optionally writes request/response exchange dumps for debugging.
 - Optionally exposes `GET /shutdown` for environments that cannot send `SIGTERM`.
-- Derives the account identity from the incoming client request, so no account-id or account-display CLI flags are needed.
+- Derives the account identity from `--auth-file` when set, otherwise from the incoming client request, so no account-id or account-display CLI flags are needed.
 
 ## Usage
 
@@ -71,7 +71,9 @@ Account identity is derived from the auth file when `--auth-file` is set; otherw
 3. A stable `auth:<fingerprint>` derived from the client request's `Authorization` header.
 4. The fixed fallback bucket `proxy`.
 
-That means `--auth-file` now keeps accounting and upstream auth aligned on the same stored account, while existing clients without `--auth-file` can still use request headers or a stable local usage bucket.
+That means `--auth-file` keeps accounting and upstream auth aligned on the same stored account, while existing clients without `--auth-file` can still use request headers or a stable local usage bucket.
+
+For streamed Responses requests, the proxy records usage from `response.completed` when the backend includes it. If the completed event omits usage, the proxy follows up with `GET /responses/{response_id}` and backfills the usage block before writing to the local accounting store.
 
 When finished:
 
