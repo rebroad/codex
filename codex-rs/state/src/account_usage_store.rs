@@ -715,6 +715,14 @@ LIMIT 200
         usage: &TokenUsage,
         meta: AccountUsageEventMeta<'_>,
     ) -> anyhow::Result<()> {
+        let debug_usage = std::env::var_os("CODEX_PROXY_DEBUG_USAGE").is_some();
+        if debug_usage {
+            eprintln!(
+                "proxy usage store: record_account_token_usage account_id={account_id} model={:?} query_id={:?}",
+                meta.model_slug,
+                meta.query_id
+            );
+        }
         let normalized_usage = normalize_usage_for_accounting(usage);
         let context_total_tokens = usage.total_tokens.max(0);
         let total_tokens = normalized_usage.total_tokens.max(0);
@@ -851,6 +859,11 @@ ON CONFLICT(account_id, provider) DO UPDATE SET
             usage_message,
         )
         .await;
+        if debug_usage {
+            eprintln!(
+                "proxy usage store: completed record_account_token_usage account_id={account_id}"
+            );
+        }
 
         Ok(())
     }
@@ -2226,6 +2239,7 @@ WHERE account_id = ? AND provider = ?
         reported_previous_percent_int: Option<i64>,
         message: String,
     ) {
+        let debug_usage = std::env::var_os("CODEX_PROXY_DEBUG_USAGE").is_some();
         let is_token_usage_event = message.starts_with('$') || message.starts_with("total=");
         let is_backend_delta_event = message.contains("tokens_per_pct=")
             || message.contains("avg_tokens_per_pct=")
@@ -2652,6 +2666,12 @@ WHERE account_id = ? AND provider = ?
             }
         };
         if let Some(path) = usage_log_path(&account_display) {
+            if debug_usage {
+                eprintln!(
+                    "proxy usage store: writing usage event account_id={account_id} account_display={account_display} path={}",
+                    path.display()
+                );
+            }
             let suffix = if message.is_empty() {
                 String::new()
             } else {
@@ -2670,11 +2690,30 @@ WHERE account_id = ? AND provider = ?
                 }
             };
             if should_skip_duplicate_usage_log_line(&path, &line_suffix, &message) {
+                if debug_usage {
+                    eprintln!(
+                        "proxy usage store: skipped duplicate usage event account_id={account_id} path={}",
+                        path.display()
+                    );
+                }
                 return;
             }
             if let Some(mut file) = open_usage_log_file_path(path) {
                 let _ = writeln!(file, "{ts} {pid_label}{pid}{line_suffix}");
+                if debug_usage {
+                    eprintln!(
+                        "proxy usage store: wrote usage event account_id={account_id} pid={pid}"
+                    );
+                }
+            } else if debug_usage {
+                eprintln!(
+                    "proxy usage store: failed to open usage log path account_id={account_id}"
+                );
             }
+        } else if debug_usage {
+            eprintln!(
+                "proxy usage store: no usage log path account_id={account_id} account_display={account_display}"
+            );
         }
     }
 
