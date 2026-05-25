@@ -38,6 +38,7 @@ use futures::StreamExt;
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
+use codex_protocol::protocol::TokenUsage;
 use sha2::Digest;
 use sha2::Sha256;
 use tokio::net::TcpListener;
@@ -467,27 +468,37 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         eprintln!("failed to write response dump: {err}");
     }
 
-    if let Some(usage_store) = state.usage_store.as_ref()
-        && let Ok(json) = serde_json::from_slice::<JsonResponseCompleted>(&response_bytes)
-        && let Some(usage) = json.usage
+    if let Ok(json) = serde_json::from_slice::<JsonResponseCompleted>(&response_bytes)
+        && let Some(model_slug) = json_model_slug(&response_headers).or(request_model_slug.as_deref())
     {
-        if let Some(model_slug) = json_model_slug(&response_headers).or(request_model_slug.as_deref()) {
+        let token_usage = if let Some(usage) = json.usage {
+            Some(TokenUsage {
+                input_tokens: usage.input_tokens,
+                cached_input_tokens: usage
+                    .input_tokens_details
+                    .map(|details| details.cached_tokens)
+                    .unwrap_or(0),
+                output_tokens: usage.output_tokens,
+                reasoning_output_tokens: usage
+                    .output_tokens_details
+                    .map(|details| details.reasoning_tokens)
+                    .unwrap_or(0),
+                total_tokens: usage.total_tokens,
+            })
+        } else if let Some(response_id) = json.id.as_deref() {
+            fetch_completed_response_usage(&state, response_id)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+
+        if let (Some(usage_store), Some(token_usage)) = (state.usage_store.as_ref(), token_usage) {
             if let Err(err) = usage_store
                 .record_account_token_usage(
                     &account_id,
-                    &codex_protocol::protocol::TokenUsage {
-                        input_tokens: usage.input_tokens,
-                        cached_input_tokens: usage
-                            .input_tokens_details
-                            .map(|details| details.cached_tokens)
-                            .unwrap_or(0),
-                        output_tokens: usage.output_tokens,
-                        reasoning_output_tokens: usage
-                            .output_tokens_details
-                            .map(|details| details.reasoning_tokens)
-                            .unwrap_or(0),
-                        total_tokens: usage.total_tokens,
-                    },
+                    &token_usage,
                     AccountUsageEventMeta {
                         query_id: json.id.as_deref(),
                         model_slug: Some(model_slug),
