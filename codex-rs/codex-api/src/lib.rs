@@ -66,6 +66,7 @@ pub use crate::prompt_debug_http::prompt_debug_http_enabled;
 pub use crate::prompt_debug_http::prompt_debug_http_log;
 pub use crate::prompt_debug_http::prompt_debug_http_log_tool_usage;
 pub use crate::prompt_debug_http::set_prompt_debug_http_account_email;
+pub use crate::prompt_debug_http::next_persistent_query_id;
 pub use crate::prompt_debug_http::start_prompt_capture;
 pub use crate::provider::Provider;
 pub use crate::provider::RetryConfig;

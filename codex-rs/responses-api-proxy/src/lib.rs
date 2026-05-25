@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -24,8 +25,10 @@ use axum::routing::get;
 use axum::Router;
 use bytes::Bytes;
 use clap::Parser;
+use codex_api::capture_dir;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
+use codex_api::next_persistent_query_id;
 use codex_api::spawn_response_stream;
 use codex_login::AuthCredentialsStoreMode;
 use codex_client::StreamResponse;
@@ -346,6 +349,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         .and_then(|dumper| dumper.dump_request(&incoming_method, &incoming_url, &parts.headers, &body_bytes).ok());
     let body_bytes = normalize_request_body(body_bytes, &target_url);
     let request_stream = extract_request_stream_flag(&body_bytes);
+    let usage_query_id = next_usage_query_id();
 
     let upstream_response = match send_upstream_request(&state, &parts, body_bytes.clone(), target_url.clone()).await {
         Ok(response) => response,
@@ -404,6 +408,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                 account_id.clone(),
                 account_display.clone(),
                 request_model_slug.clone(),
+                usage_query_id.clone(),
                 Arc::clone(&token_usage_recorded),
             ));
 
@@ -433,7 +438,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
             }
             if let Some(usage_store) = state.usage_store.as_ref()
                 && !token_usage_recorded.load(Ordering::Acquire)
-                && let Some((response_id, token_usage)) =
+                && let Some((_response_id, token_usage)) =
                     extract_completed_response_usage_from_sse(&response_bytes)
             {
                 if token_usage_recorded
@@ -446,7 +451,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                             &account_id,
                             &token_usage,
                             AccountUsageEventMeta {
-                                query_id: response_id.as_deref(),
+                                query_id: usage_query_id.as_deref(),
                                 model_slug,
                                 sent_bytes: Some(body_bytes.len() as i64),
                                 recv_bytes: Some(response_bytes.len() as i64),
@@ -523,12 +528,12 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
             if let Err(err) = usage_store
                 .record_account_token_usage(
                     &account_id,
-                    &token_usage,
-                    AccountUsageEventMeta {
-                        query_id: json.id.as_deref(),
-                        model_slug: Some(model_slug),
-                        sent_bytes: Some(body_bytes.len() as i64),
-                        recv_bytes: Some(response_bytes.len() as i64),
+                        &token_usage,
+                        AccountUsageEventMeta {
+                            query_id: usage_query_id.as_deref(),
+                            model_slug: Some(model_slug),
+                            sent_bytes: Some(body_bytes.len() as i64),
+                            recv_bytes: Some(response_bytes.len() as i64),
                         is_prewarm: false,
                         is_regional_processing: false,
                     },
@@ -647,6 +652,7 @@ async fn record_usage_events(
     account_id: String,
     account_display: String,
     request_model_slug: Option<String>,
+    usage_query_id: Option<String>,
     token_usage_recorded: Arc<AtomicBool>,
 ) {
     if let Some(store) = usage_store.as_ref() {
@@ -670,7 +676,7 @@ async fn record_usage_events(
             }
             Ok(ResponseEvent::Completed {
                 token_usage: Some(token_usage),
-                capture_id,
+                capture_id: _,
                 transport_bytes,
                 ..
             }) => {
@@ -685,7 +691,7 @@ async fn record_usage_events(
                                 &account_id,
                                 &token_usage,
                                 AccountUsageEventMeta {
-                                    query_id: capture_id.as_deref(),
+                                    query_id: usage_query_id.as_deref(),
                                     model_slug,
                                     sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
                                     recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
@@ -704,7 +710,7 @@ async fn record_usage_events(
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
-                capture_id,
+                capture_id: _,
                 transport_bytes,
                 ..
             }) => {
@@ -721,7 +727,7 @@ async fn record_usage_events(
                                         &account_id,
                                         &token_usage,
                                         AccountUsageEventMeta {
-                                            query_id: capture_id.as_deref(),
+                                            query_id: usage_query_id.as_deref(),
                                             model_slug,
                                             sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
                                             recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
@@ -1006,6 +1012,23 @@ fn extract_request_stream_flag(body_bytes: &[u8]) -> bool {
         .get("stream")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
+}
+
+fn next_usage_query_id() -> Option<String> {
+    let dir = usage_query_id_dir()?;
+    next_persistent_query_id(dir.as_path())
+}
+
+fn usage_query_id_dir() -> Option<PathBuf> {
+    if let Some(dir) = capture_dir() {
+        return Some(dir);
+    }
+
+    if let Some(value) = env::var_os("CODEX_USAGE_LOG_DIR").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(value));
+    }
+
+    Some(find_codex_home().ok()?.join("log"))
 }
 
 fn resolve_account_identity(
