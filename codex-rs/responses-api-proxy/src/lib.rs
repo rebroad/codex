@@ -30,7 +30,6 @@ use codex_api::spawn_response_stream;
 use codex_login::AuthCredentialsStoreMode;
 use codex_client::StreamResponse;
 use codex_login::AuthManager;
-use codex_models_manager::bundled_models_response;
 use codex_state::AccountUsageEstimatorConfig;
 use codex_state::AccountUsageEventMeta;
 use codex_state::AccountUsageStore;
@@ -57,7 +56,6 @@ use read_api_key::read_auth_header_from_stdin;
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_PROVIDER_ID: &str = "proxy";
 const DEFAULT_ACCOUNT_ID: &str = "proxy";
-const PROXY_USAGE_DEBUG_ENV_VAR: &str = "CODEX_PROXY_DEBUG_USAGE";
 
 /// CLI arguments for the proxy.
 #[derive(Debug, Clone, Parser)]
@@ -251,12 +249,6 @@ pub async fn run_main(args: Args) -> Result<()> {
             None
         }
     };
-    if std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some() {
-        eprintln!(
-            "proxy usage: startup CODEX_USAGE_LOG_DIR={:?}",
-            std::env::var_os("CODEX_USAGE_LOG_DIR")
-        );
-    }
     let state = Arc::new(ProxyState {
         client: reqwest::Client::builder()
             .build()
@@ -339,7 +331,6 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         resolve_account_identity(auth_file_account_identity.as_ref(), &parts.headers);
 
     let request_model_slug = extract_request_model_slug(&body_bytes);
-    let request_stream = extract_request_stream_flag(&body_bytes);
     let target_url = match resolve_upstream_url(&state.upstream_url, &incoming_uri) {
         Ok(url) => url,
         Err(err) => {
@@ -354,9 +345,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         .as_ref()
         .and_then(|dumper| dumper.dump_request(&incoming_method, &incoming_url, &parts.headers, &body_bytes).ok());
     let body_bytes = normalize_request_body(body_bytes, &target_url);
-    if let Some(response) = maybe_handle_local_probe(&incoming_method, &target_url) {
-        return response;
-    }
+    let request_stream = extract_request_stream_flag(&body_bytes);
 
     let upstream_response = match send_upstream_request(&state, &parts, body_bytes.clone(), target_url.clone()).await {
         Ok(response) => response,
@@ -381,16 +370,6 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
         .is_some_and(|value| value.contains("text/event-stream"));
     let is_sse = is_sse
         || (request_stream && target_url.path().ends_with("/responses"));
-    let debug_usage = std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some();
-    if debug_usage {
-        eprintln!(
-            "proxy usage: upstream status={} content_type={:?} is_sse={} target_path={}",
-            status,
-            response_content_type,
-            is_sse,
-            target_url.path(),
-        );
-    }
 
     if is_sse {
         let (client_tx, client_rx) = mpsc::channel::<Bytes>(16);
@@ -461,12 +440,6 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok()
                 {
-                    if debug_usage {
-                        eprintln!(
-                            "proxy usage: fallback parsed completed SSE usage response_id={:?}",
-                            response_id.as_deref()
-                        );
-                    }
                     let model_slug = request_model_slug.as_deref();
                     if let Err(err) = usage_store
                         .record_account_token_usage(
@@ -485,14 +458,8 @@ async fn proxy(State(state): State<Arc<ProxyState>>, req: Request<Body>) -> Resp
                     {
                         token_usage_recorded.store(false, Ordering::Release);
                         eprintln!("failed to record fallback usage from SSE response: {err}");
-                    } else if debug_usage {
-                        eprintln!(
-                            "proxy usage: wrote fallback SSE usage account_id={account_id}"
-                        );
                     }
                 }
-            } else if debug_usage && state.usage_store.is_some() {
-                eprintln!("proxy usage: no fallback SSE usage found");
             }
 
             let _ = usage_task.await;
@@ -682,7 +649,6 @@ async fn record_usage_events(
     request_model_slug: Option<String>,
     token_usage_recorded: Arc<AtomicBool>,
 ) {
-    let debug_usage = std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some();
     if let Some(store) = usage_store.as_ref() {
         store.cache_account_display(&account_id, account_display).await;
     }
@@ -708,13 +674,6 @@ async fn record_usage_events(
                 transport_bytes,
                 ..
             }) => {
-                if debug_usage {
-                    eprintln!(
-                        "proxy usage: completed event with inline usage response_id={:?} capture_id={:?}",
-                        None::<&str>,
-                        capture_id.as_deref(),
-                    );
-                }
                 if let Some(store) = usage_store.as_ref() {
                     let model_slug = last_server_model.as_deref();
                     if token_usage_recorded
@@ -738,11 +697,6 @@ async fn record_usage_events(
                         {
                             token_usage_recorded.store(false, Ordering::Release);
                             eprintln!("failed to record account token usage: {err}");
-                        } else if debug_usage {
-                            eprintln!(
-                                "proxy usage: wrote inline usage account_id={account_id} capture_id={:?}",
-                                capture_id.as_deref()
-                            );
                         }
                     }
                 }
@@ -754,21 +708,9 @@ async fn record_usage_events(
                 transport_bytes,
                 ..
             }) => {
-                if debug_usage {
-                    eprintln!(
-                        "proxy usage: completed event without inline usage response_id={response_id} capture_id={:?}",
-                        capture_id.as_deref()
-                    );
-                }
                 if let Some(store) = usage_store.as_ref() {
                     match fetch_completed_response_usage(&state, &response_id).await {
                         Ok(Some(token_usage)) => {
-                            if debug_usage {
-                                eprintln!(
-                                    "proxy usage: fetched completed usage response_id={response_id} capture_id={:?}",
-                                    capture_id.as_deref()
-                                );
-                            }
                             let model_slug = last_server_model.as_deref();
                             if token_usage_recorded
                                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -791,22 +733,10 @@ async fn record_usage_events(
                                 {
                                     token_usage_recorded.store(false, Ordering::Release);
                                     eprintln!("failed to record account token usage: {err}");
-                                } else if debug_usage {
-                                    eprintln!(
-                                        "proxy usage: wrote fetched usage account_id={account_id} response_id={response_id} capture_id={:?}",
-                                        capture_id.as_deref()
-                                    );
                                 }
                             }
                         }
-                        Ok(None) => {
-                            if debug_usage {
-                                eprintln!(
-                                    "proxy usage: no usage found for response_id={response_id} capture_id={:?}",
-                                    capture_id.as_deref()
-                                );
-                            }
-                        }
+                        Ok(None) => {}
                         Err(err) => {
                             eprintln!(
                                 "failed to fetch completed response usage for {response_id}: {err}"
@@ -907,12 +837,6 @@ async fn fetch_completed_response_usage(
         .context("sending completed response retrieval request")?;
 
     if !response.status().is_success() {
-        if std::env::var_os(PROXY_USAGE_DEBUG_ENV_VAR).is_some() {
-            eprintln!(
-                "proxy usage: response retrieval returned status={} for response_id={response_id}",
-                response.status()
-            );
-        }
         return Ok(None);
     }
 
@@ -1051,56 +975,6 @@ fn normalize_request_body(body_bytes: Bytes, target_url: &Url) -> Bytes {
     } else {
         body_bytes
     }
-}
-
-fn maybe_handle_local_probe(method: &Method, target_url: &Url) -> Option<Response<Body>> {
-    if method != Method::GET {
-        return None;
-    }
-
-    let path = target_url.path();
-    if path.contains("/v1/models/") {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("not found"))
-            .ok();
-    }
-
-    if path.ends_with("/models") {
-        if path == "/backend-api/codex/models" {
-            let response = bundled_models_response().ok()?;
-            let body = serde_json::to_vec(&response).ok()?;
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .ok();
-        }
-
-        if path.contains("/api/v1/models") || path.ends_with("/api/v1/models") {
-            return Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                .body(Body::from("not found"))
-                .ok();
-        }
-    }
-
-    if path.ends_with("/api/tags")
-        || path.ends_with("/v1/props")
-        || path.ends_with("/props")
-        || path.ends_with("/version")
-        || path.ends_with("/api/show")
-    {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("not found"))
-            .ok();
-    }
-
-    None
 }
 
 fn join_paths(base_path: &str, request_path: &str) -> String {
