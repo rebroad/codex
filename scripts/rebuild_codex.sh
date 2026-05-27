@@ -6,7 +6,6 @@ REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 RUST_WORKSPACE_DIR="${REPO_DIR}/codex-rs"
 TOOLCHAIN_FILE="${RUST_WORKSPACE_DIR}/rust-toolchain.toml"
 INSTALL_BIN="${HOME}/.cargo/bin/codex"
-INSTALL_PROXY_BIN="${HOME}/.cargo/bin/codex-responses-api-proxy"
 INSTALL_BIN_DIR="${HOME}/.cargo/bin"
 CARGO_LOCK_REL="codex-rs/Cargo.lock"
 PUBLISH_TIMEOUT_MINUTES_DEFAULT=45
@@ -1809,17 +1808,9 @@ if [[ "${MODE}" == "release" ]]; then
     echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
   fi
   run_release_build_with_locked_fallback codex-cli
-  run_release_build_with_locked_fallback codex-responses-api-proxy
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex"
   install_built_binary "release" "codex" "${release_bin}" "${INSTALL_BIN}" true
-
-  proxy_release_bin="${CARGO_TARGET_DIR_RESOLVED}/release/codex-responses-api-proxy"
-  if [[ ! -x "${proxy_release_bin}" ]]; then
-    echo "Build completed but proxy binary was not found at ${proxy_release_bin}" >&2
-    exit 1
-  fi
-  install_built_binary "release" "codex-responses-api-proxy" "${proxy_release_bin}" "${INSTALL_PROXY_BIN}" false
 else
   echo "[2/4] Building debug codex..."
   if [[ "${FAST_GATE}" == "true" ]]; then
@@ -1848,17 +1839,9 @@ else
   else
     run_debug_build_with_offline_fallback codex-cli
   fi
-  run_debug_build_with_offline_fallback codex-responses-api-proxy
   CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
   debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex"
   install_built_binary "debug" "codex" "${debug_bin}" "${INSTALL_BIN}" true
-
-  proxy_debug_bin="${CARGO_TARGET_DIR_RESOLVED}/debug/codex-responses-api-proxy"
-  if [[ ! -x "${proxy_debug_bin}" ]]; then
-    echo "Build completed but proxy binary was not found at ${proxy_debug_bin}" >&2
-    exit 1
-  fi
-  install_built_binary "debug" "codex-responses-api-proxy" "${proxy_debug_bin}" "${INSTALL_PROXY_BIN}" false
 fi
 
 offer_duplicate_cleanup_for_installed_binaries
@@ -1885,11 +1868,9 @@ fi
 echo "[4/4] Cleaning workspace codex binaries from target/..."
 CARGO_TARGET_DIR_RESOLVED="$(resolve_cargo_target_dir)"
 rm -f "${CARGO_TARGET_DIR_RESOLVED}/release/codex"
-rm -f "${CARGO_TARGET_DIR_RESOLVED}/release/codex-responses-api-proxy"
 
 echo "Final version:"
 echo "- Installed: $("${INSTALL_BIN}" --version)"
-echo "- Proxy: $("${INSTALL_PROXY_BIN}" --version)"
 
 if [[ "${publish_to_github}" == "true" ]]; then
 
