@@ -935,7 +935,15 @@ import os
 import tomllib
 from pathlib import Path
 
-toml_path = Path(os.environ["RUST_WORKSPACE_DIR"]) / "Cargo.toml"
+workspace_dir = Path(os.environ["RUST_WORKSPACE_DIR"])
+version_path = workspace_dir / "VERSION"
+if version_path.exists():
+    version = version_path.read_text(encoding="utf-8").strip()
+    if version:
+        print(version)
+        raise SystemExit(0)
+
+toml_path = workspace_dir / "Cargo.toml"
 data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
 version = data.get("workspace", {}).get("package", {}).get("version")
 if version:
@@ -1716,7 +1724,7 @@ TAG=""
 if [[ "${should_publish}" == "true" ]]; then
   VERSION="$(resolve_publish_version)"
   if [[ -z "${VERSION}" ]]; then
-    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml or ${INSTALL_BIN} --version"
+    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/VERSION, ${RUST_WORKSPACE_DIR}/Cargo.toml, or ${INSTALL_BIN} --version"
     exit 1
   fi
   if [[ "${publish_to_github}" == "true" ]]; then
@@ -1727,7 +1735,7 @@ fi
 if [[ "${BUILD_NPM_VENDOR}" == "true" && -z "${VERSION}" ]]; then
   VERSION="$(resolve_publish_version)"
   if [[ -z "${VERSION}" ]]; then
-    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/Cargo.toml or ${INSTALL_BIN} --version"
+    echo "Unable to read workspace version from ${RUST_WORKSPACE_DIR}/VERSION, ${RUST_WORKSPACE_DIR}/Cargo.toml, or ${INSTALL_BIN} --version"
     exit 1
   fi
 fi
