@@ -43,7 +43,8 @@ function renderSessions(data) {
   currentTarget = data.target;
   const list = $("sessions");
   list.innerHTML = "";
-  $("sessionsMeta").textContent = `target=${data.target}\nsessions=${data.sessions.length}`;
+  $("sessionsMeta").textContent =
+    `target=${data.target}\nsessions=${data.sessions.length}`;
 
   if (!data.sessions.length) {
     list.innerHTML = `<li class="empty">(no codex-super.* logs found)</li>`;
@@ -57,7 +58,8 @@ function renderSessions(data) {
       `<div>${escapeHtml(sessionLabel(session))}</div>` +
       `<div class="meta">key=${escapeHtml(session.key)}</div>`;
     li.addEventListener("click", async () => {
-      for (const node of list.querySelectorAll("li.active")) node.classList.remove("active");
+      for (const node of list.querySelectorAll("li.active"))
+        node.classList.remove("active");
       li.classList.add("active");
       await loadSession(session.key);
     });
@@ -88,7 +90,11 @@ function isSupervisorInjected(event) {
 
 function eventRequestId(event) {
   const parsed = event?.parsed;
-  if (!parsed || typeof parsed !== "object" || !Object.prototype.hasOwnProperty.call(parsed, "id")) {
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !Object.prototype.hasOwnProperty.call(parsed, "id")
+  ) {
     return null;
   }
   const id = parsed.id;
@@ -97,19 +103,26 @@ function eventRequestId(event) {
 }
 
 function isSupervisorReplayRequestId(requestId) {
-  return typeof requestId === "string" && requestId.startsWith("supervisor/replay/");
+  return (
+    typeof requestId === "string" && requestId.startsWith("supervisor/replay/")
+  );
 }
 
 function isSupervisorSuppressed(event) {
   if (event?.direction !== "s2c") return false;
   const parsed = event?.parsed;
   if (!parsed || typeof parsed !== "object") return false;
-  if (!Object.prototype.hasOwnProperty.call(parsed, "result") && !Object.prototype.hasOwnProperty.call(parsed, "error")) {
+  if (
+    !Object.prototype.hasOwnProperty.call(parsed, "result") &&
+    !Object.prototype.hasOwnProperty.call(parsed, "error")
+  ) {
     return false;
   }
   const requestId = eventRequestId(event);
   if (requestId === null) return false;
-  return isSupervisorReplayRequestId(requestId) || replayRequestIds.has(requestId);
+  return (
+    isSupervisorReplayRequestId(requestId) || replayRequestIds.has(requestId)
+  );
 }
 
 function renderCollapsedResultDataBody(event) {
@@ -118,7 +131,8 @@ function renderCollapsedResultDataBody(event) {
   const responseId = eventRequestId(event);
   if (responseId === null) return null;
   const result = parsed.result;
-  if (!result || typeof result !== "object" || !Array.isArray(result.data)) return null;
+  if (!result || typeof result !== "object" || !Array.isArray(result.data))
+    return null;
   if (
     result.data.some(
       (item) =>
@@ -217,13 +231,20 @@ function renderEvent(event, idx) {
   const supervisorInjected = isSupervisorInjected(event);
   const supervisorSuppressed = isSupervisorSuppressed(event);
   const collapsedResultBody =
-    renderCollapsedResultDataBody(event) || renderCollapsedResultThreadBody(event);
+    renderCollapsedResultDataBody(event) ||
+    renderCollapsedResultThreadBody(event);
   const chips = [
     `<span class="chip">#${idx + 1}</span>`,
     `<span class="chip">${escapeHtml(event.direction)}</span>`,
-    supervisorInjected ? `<span class="chip chip-supervisor">supervisor</span>` : "",
-    supervisorSuppressed ? `<span class="chip chip-suppressed">suppressed</span>` : "",
-    event.timestamp ? `<span class="chip">${escapeHtml(event.timestamp)}</span>` : "",
+    supervisorInjected
+      ? `<span class="chip chip-supervisor">supervisor</span>`
+      : "",
+    supervisorSuppressed
+      ? `<span class="chip chip-suppressed">suppressed</span>`
+      : "",
+    event.timestamp
+      ? `<span class="chip">${escapeHtml(event.timestamp)}</span>`
+      : "",
     `<span class="chip">line=${event.lineNo}</span>`,
     `<span class="chip">${escapeHtml(event.summary || "")}</span>`,
   ].join("");
