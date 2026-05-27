@@ -67,7 +67,7 @@ const DEFAULT_ACCOUNT_ID: &str = "proxy";
 #[command(
     name = "responses-api-proxy",
     about = "HTTP proxy for OpenAI/Codex responses traffic",
-    version
+    version = env!("CODEX_PROXY_VERSION")
 )]
 pub struct Args {
     /// Port to listen on. If not set, an ephemeral port is used.
