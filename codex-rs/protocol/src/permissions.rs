@@ -1635,7 +1635,7 @@ mod tests {
         symlink_dir(&real_git, &dot_git).expect("create .git symlink");
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
-        let expected_dot_git = root.join(".git").expect("absolute .git symlink");
+        let expected_dot_git = root.join(".git");
         let unexpected_real_git = AbsolutePathBuf::from_absolute_path(
             real_git.canonicalize().expect("canonicalize real git dir"),
         )
