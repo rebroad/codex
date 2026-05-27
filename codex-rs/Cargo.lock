@@ -449,7 +449,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1378,6 +1378,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http 1.4.0",
+ "libc",
  "pretty_assertions",
  "regex-lite",
  "reqwest",
@@ -2028,6 +2029,7 @@ dependencies = [
  "codex-git-utils",
  "codex-login",
  "codex-model-provider-info",
+ "codex-models-manager",
  "codex-otel",
  "codex-protocol",
  "codex-state",
@@ -2567,15 +2569,28 @@ name = "codex-responses-api-proxy"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "bytes",
  "clap",
+ "codex-api",
+ "codex-client",
+ "codex-core",
+ "codex-login",
  "codex-process-hardening",
+ "codex-protocol",
+ "codex-state",
+ "codex-utils-home-dir",
  "ctor 0.6.3",
+ "futures",
+ "http 1.4.0",
  "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
- "tiny_http",
+ "sha2",
+ "tokio",
+ "tokio-stream",
  "zeroize",
 ]
 
@@ -2735,6 +2750,7 @@ dependencies = [
  "clap",
  "codex-git-utils",
  "codex-protocol",
+ "codex-utils-home-dir",
  "dirs",
  "log",
  "owo-colors",
@@ -3978,7 +3994,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4223,7 +4239,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5650,7 +5666,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6428,7 +6444,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7657,7 +7673,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8493,7 +8509,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8536,9 +8552,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -9927,7 +9943,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
