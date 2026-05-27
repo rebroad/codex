@@ -5052,6 +5052,7 @@ async fn build_prompt_keeps_tool_specs_and_default_tool_choice() {
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
+            tool_namespaces: None,
             app_tools: None,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
