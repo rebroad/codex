@@ -104,8 +104,6 @@ codex-responses-api-proxy \
 
 When `--auth-file` is set, `kill -HUP <pid>` makes the proxy reload that file and swap in the updated upstream bearer token and accounting identity without restarting the process. If no `--auth-file` was configured, the proxy still handles `SIGHUP` but only logs that there is nothing to reload.
 
-After `rebuild_codex.sh`, the proxy binary is installed as `~/.cargo/bin/codex-responses-api-proxy` and acts as a thin wrapper over `codex responses-api-proxy`, so its versioned copies still track the shared Codex release version.
-
 ## Compatibility Notes
 
 - The proxy currently expects the backend to speak the same Responses/SSE shape that Codex already handles.
