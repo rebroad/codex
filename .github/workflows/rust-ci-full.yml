@@ -9,32 +9,6 @@ on:
 # CI builds in debug (dev) for faster signal.
 
 jobs:
-  armv7_build:
-    name: Build — ubuntu-22.04 - armv7-unknown-linux-gnueabihf
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180
-    permissions:
-      contents: write
-    defaults:
-      run:
-        working-directory: .
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Build codex-cli (armv7, docker-buster)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          short_sha="${GITHUB_SHA::12}"
-          release_tag="codex-armv7-main-${GITHUB_RUN_NUMBER}-${short_sha}"
-          scripts/build_armv7.sh \
-            --release \
-            --build-env=docker-buster \
-            --publish-github \
-            --github-release-repo="${GITHUB_REPOSITORY}" \
-            --github-release-tag="${release_tag}"
-
   # --- CI that doesn't need specific targets ---------------------------------
   general:
     name: Format / etc
@@ -776,7 +750,6 @@ jobs:
     name: Full CI results
     needs:
       [
-        armv7_build,
         general,
         cargo_shear,
         argument_comment_lint_package,
@@ -790,14 +763,12 @@ jobs:
       - name: Summarize
         shell: bash
         run: |
-          echo "armv7  : ${{ needs.armv7_build.result }}"
           echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
           echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "tests  : ${{ needs.tests.result }}"
-          [[ '${{ needs.armv7_build.result }}' == 'success' ]] || { echo 'armv7_build failed'; exit 1; }
 
           if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
             [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
