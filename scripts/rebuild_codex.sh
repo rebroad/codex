@@ -151,6 +151,17 @@ append_build_timestamp_env() {
   cargo_env_ref+=(CODEX_BUILD_TIMESTAMP="${BUILD_VERSION_SUFFIX_COMPILE}")
 }
 
+append_strict_warning_rustflags() {
+  local rustflags_value="${RUSTFLAGS:-}"
+  if [[ "${rustflags_value}" != *"-D warnings"* && "${rustflags_value}" != *"-Dwarnings"* ]]; then
+    if [[ -n "${rustflags_value}" ]]; then
+      rustflags_value+=" "
+    fi
+    rustflags_value+="-D warnings"
+    export RUSTFLAGS="${rustflags_value}"
+  fi
+}
+
 log_needs_network_retry() {
   local log_file="$1"
   grep -Eq "failed to download|attempting to make an HTTP request, but --offline was specified|can't checkout from '|unable to update|failed to get " "${log_file}"
@@ -1632,6 +1643,10 @@ if [[ -z "${TOOLCHAIN}" ]]; then
   echo "Unable to read pinned Rust toolchain from ${TOOLCHAIN_FILE}"
   exit 1
 fi
+
+# Make any compiler warning fail the build so bisect runs classify warning
+# commits as bad instead of letting them pass.
+append_strict_warning_rustflags
 
 schema_should_run="false"
 if [[ "${REGEN_SCHEMA}" == "true" ]]; then
