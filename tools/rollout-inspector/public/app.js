@@ -77,7 +77,8 @@ function renderThread(thread) {
           `${item.outputPreview || "(no output)"}`;
       } else if (item.type === "reasoning") {
         msgNode.innerHTML =
-          `<span class="kind">reasoning</span>` + `${item.text || "(empty reasoning)"}`;
+          `<span class="kind">reasoning</span>` +
+          `${item.text || "(empty reasoning)"}`;
       } else {
         msgNode.textContent = JSON.stringify(item);
       }
@@ -96,7 +97,10 @@ function renderTable(title, rows, columns) {
   const body = rows
     .map((row) => {
       const cells = columns
-        .map((c) => `<td>${String(c.value(row) ?? "").replaceAll("<", "&lt;")}</td>`)
+        .map(
+          (c) =>
+            `<td>${String(c.value(row) ?? "").replaceAll("<", "&lt;")}</td>`,
+        )
         .join("");
       return `<tr>${cells}</tr>`;
     })
@@ -123,19 +127,27 @@ function renderAnalysis(report) {
     { header: "kind", value: (r) => `${r.type}/${r.payloadType}` },
     { header: "preview", value: (r) => r.preview },
   ]);
-  html += renderTable("Exact Duplicate Large Payloads", report.exactDuplicateLargePayloads, [
-    { header: "count", value: (r) => r.count },
-    { header: "bytes each", value: (r) => formatBytes(r.bytes) },
-    { header: "total", value: (r) => formatBytes(r.bytes * r.count) },
-    { header: "lines", value: (r) => (r.lines || []).join(",") },
-    { header: "preview", value: (r) => r.preview },
-  ]);
-  html += renderTable("Near-Duplicate Large Payloads", report.nearDuplicateLargePayloads, [
-    { header: "count", value: (r) => r.count },
-    { header: "total", value: (r) => formatBytes(r.totalBytes) },
-    { header: "lines", value: (r) => (r.lines || []).join(",") },
-    { header: "normalized preview", value: (r) => r.normalizedPreview },
-  ]);
+  html += renderTable(
+    "Exact Duplicate Large Payloads",
+    report.exactDuplicateLargePayloads,
+    [
+      { header: "count", value: (r) => r.count },
+      { header: "bytes each", value: (r) => formatBytes(r.bytes) },
+      { header: "total", value: (r) => formatBytes(r.bytes * r.count) },
+      { header: "lines", value: (r) => (r.lines || []).join(",") },
+      { header: "preview", value: (r) => r.preview },
+    ],
+  );
+  html += renderTable(
+    "Near-Duplicate Large Payloads",
+    report.nearDuplicateLargePayloads,
+    [
+      { header: "count", value: (r) => r.count },
+      { header: "total", value: (r) => formatBytes(r.totalBytes) },
+      { header: "lines", value: (r) => (r.lines || []).join(",") },
+      { header: "normalized preview", value: (r) => r.normalizedPreview },
+    ],
+  );
   html += renderTable("Repeated Tool Calls", report.repetitiveToolCalls, [
     { header: "tool", value: (r) => r.callName },
     { header: "count", value: (r) => r.count },

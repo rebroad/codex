@@ -4,8 +4,7 @@ const { bytesOf, readJsonlLines, safeJsonParse } = require("./jsonl");
 
 const UUID_RE =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
-const ISO_RE =
-  /\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g;
+const ISO_RE = /\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g;
 const BIG_NUMBER_RE = /\b\d{3,}\b/g;
 const HOME_PATH_RE = /\/home\/[^\s"']+/g;
 
@@ -127,9 +126,12 @@ async function analyzeRollout(filePath, options = {}) {
     }
 
     const record = parsed.value;
-    const recordType = typeof record?.type === "string" ? record.type : "(unknown)";
+    const recordType =
+      typeof record?.type === "string" ? record.type : "(unknown)";
     const payloadType =
-      typeof record?.payload?.type === "string" ? record.payload.type : "(none)";
+      typeof record?.payload?.type === "string"
+        ? record.payload.type
+        : "(none)";
     const lineBytes = lineRec.lineBytes;
 
     pushTopN(
@@ -203,7 +205,10 @@ async function analyzeRollout(filePath, options = {}) {
       }
     }
 
-    if (recordType === "response_item" && payloadType === "function_call_output") {
+    if (
+      recordType === "response_item" &&
+      payloadType === "function_call_output"
+    ) {
       const callId = record?.payload?.call_id;
       const callMeta =
         typeof callId === "string" ? callById.get(callId) : undefined;
@@ -246,7 +251,9 @@ async function analyzeRollout(filePath, options = {}) {
     .filter((item) => item.count > 1)
     .sort(
       (a, b) =>
-        b.bytes * b.count - a.bytes * a.count || b.count - a.count || b.bytes - a.bytes,
+        b.bytes * b.count - a.bytes * a.count ||
+        b.count - a.count ||
+        b.bytes - a.bytes,
     )
     .slice(0, topN);
 
@@ -257,7 +264,9 @@ async function analyzeRollout(filePath, options = {}) {
 
   const repetitiveToolCalls = [...repetitiveCalls.values()]
     .filter((item) => item.count > 1)
-    .sort((a, b) => b.totalOutputBytes - a.totalOutputBytes || b.count - a.count)
+    .sort(
+      (a, b) => b.totalOutputBytes - a.totalOutputBytes || b.count - a.count,
+    )
     .slice(0, topN);
 
   pruneCandidates.sort((a, b) => b.bytes - a.bytes || a.line - b.line);
@@ -285,4 +294,3 @@ async function analyzeRollout(filePath, options = {}) {
 module.exports = {
   analyzeRollout,
 };
-

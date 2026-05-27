@@ -132,7 +132,11 @@ function canBind(port) {
 }
 
 async function selectPort(preferredPort) {
-  for (let port = preferredPort; port <= preferredPort + PORT_SCAN_WINDOW; port += 1) {
+  for (
+    let port = preferredPort;
+    port <= preferredPort + PORT_SCAN_WINDOW;
+    port += 1
+  ) {
     if (await isHealthy(port)) return { port, reuseExisting: true };
     if (await canBind(port)) return { port, reuseExisting: false };
   }
@@ -160,7 +164,9 @@ function waitForHealthy(port) {
             return;
           }
           if (Date.now() > deadline) {
-            reject(new Error("timed out waiting for codex-super-inspector to start"));
+            reject(
+              new Error("timed out waiting for codex-super-inspector to start"),
+            );
             return;
           }
           setTimeout(attempt, HEALTH_RETRY_MS);
@@ -169,7 +175,9 @@ function waitForHealthy(port) {
 
       req.on("error", () => {
         if (Date.now() > deadline) {
-          reject(new Error("timed out waiting for codex-super-inspector to start"));
+          reject(
+            new Error("timed out waiting for codex-super-inspector to start"),
+          );
           return;
         }
         setTimeout(attempt, HEALTH_RETRY_MS);

@@ -23,8 +23,7 @@ async function getJson(path) {
 
 function renderQueriesMeta(target, queries) {
   $("queriesMeta").textContent =
-    `target=${target}\n` +
-    `queries=${queries.length}`;
+    `target=${target}\n` + `queries=${queries.length}`;
 }
 
 function queryLabel(query) {
@@ -98,7 +97,9 @@ function renderJsonNode(key, value, depth) {
     const children =
       value.length === 0
         ? `<div class="json-leaf">(empty array)</div>`
-        : value.map((child, idx) => renderJsonNode(String(idx), child, depth + 1)).join("");
+        : value
+            .map((child, idx) => renderJsonNode(String(idx), child, depth + 1))
+            .join("");
     return (
       `<details class="json-node" ${depth <= 1 ? "open" : ""}>` +
       `<summary>${escapeHtml(title)}</summary>` +
@@ -113,7 +114,11 @@ function renderJsonNode(key, value, depth) {
     const children =
       keys.length === 0
         ? `<div class="json-leaf">(empty object)</div>`
-        : keys.map((childKey) => renderJsonNode(childKey, value[childKey], depth + 1)).join("");
+        : keys
+            .map((childKey) =>
+              renderJsonNode(childKey, value[childKey], depth + 1),
+            )
+            .join("");
     return (
       `<details class="json-node" ${depth <= 1 ? "open" : ""}>` +
       `<summary>${escapeHtml(title)}</summary>` +
@@ -232,7 +237,8 @@ function renderPromptView(view) {
     `output_lines=${view.output?.totals?.lines ?? 0} reasoning_lines=${view.reasoning?.totals?.lines ?? 0}`;
 
   if (!Array.isArray(view.prompts) || view.prompts.length === 0) {
-    $("promptView").innerHTML = `<div class="empty">(no response.create payloads detected)</div>`;
+    $("promptView").innerHTML =
+      `<div class="empty">(no response.create payloads detected)</div>`;
   } else {
     $("promptView").innerHTML = view.prompts.map(renderPrompt).join("");
     wirePreviousResponseLinks($("promptView"));
