@@ -35,7 +35,9 @@ function contentType(filePath) {
 
 async function serveStatic(res, requestedPath) {
   const relative = requestedPath === "/" ? "/index.html" : requestedPath;
-  const safeRelative = path.normalize(relative).replace(/^(\.\.(\/|\\|$))+/, "");
+  const safeRelative = path
+    .normalize(relative)
+    .replace(/^(\.\.(\/|\\|$))+/, "");
   const filePath = path.join(PUBLIC_DIR, safeRelative);
   if (!filePath.startsWith(PUBLIC_DIR)) {
     text(res, 400, "invalid path");
@@ -211,7 +213,8 @@ function buildMergedEvents(c2sEvents, s2cEvents) {
     // Some older captures don't include parseable timestamps. In that case, avoid
     // grouping by direction; interleave by line number so merged pages show both sides.
     if (a.lineNo !== b.lineNo) return a.lineNo - b.lineNo;
-    if (a.direction !== b.direction) return a.direction.localeCompare(b.direction);
+    if (a.direction !== b.direction)
+      return a.direction.localeCompare(b.direction);
     return a.lineNo - b.lineNo;
   });
   return all;
@@ -379,7 +382,9 @@ async function createServer(defaultTarget) {
       try {
         await handleSessions(res, path.resolve(target));
       } catch (error) {
-        json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        json(res, 400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -396,7 +401,9 @@ async function createServer(defaultTarget) {
       try {
         await handleSessionMeta(res, path.resolve(target), sessionKey);
       } catch (error) {
-        json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        json(res, 400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -407,7 +414,10 @@ async function createServer(defaultTarget) {
       if (!target) target = await latestTarget();
       const sessionKey = reqUrl.searchParams.get("session");
       const mode = reqUrl.searchParams.get("mode") || "merged";
-      const offset = Number.parseInt(reqUrl.searchParams.get("offset") ?? "0", 10);
+      const offset = Number.parseInt(
+        reqUrl.searchParams.get("offset") ?? "0",
+        10,
+      );
       const limit = Number.parseInt(
         reqUrl.searchParams.get("limit") ?? String(DEFAULT_PAGE_LIMIT),
         10,
@@ -429,9 +439,18 @@ async function createServer(defaultTarget) {
         return;
       }
       try {
-        await handleEventsPage(res, path.resolve(target), sessionKey, mode, offset, limit);
+        await handleEventsPage(
+          res,
+          path.resolve(target),
+          sessionKey,
+          mode,
+          offset,
+          limit,
+        );
       } catch (error) {
-        json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        json(res, 400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -450,7 +469,9 @@ async function main() {
   });
 
   const targetMessage = defaultTarget ? ` default target=${defaultTarget}` : "";
-  console.log(`codex-super-inspector listening on http://127.0.0.1:${port}${targetMessage}`);
+  console.log(
+    `codex-super-inspector listening on http://127.0.0.1:${port}${targetMessage}`,
+  );
 }
 
 main().catch((error) => {

@@ -47,7 +47,9 @@ function contentType(filePath) {
 
 async function serveStatic(res, requestedPath) {
   const relative = requestedPath === "/" ? "/index.html" : requestedPath;
-  const safeRelative = path.normalize(relative).replace(/^(\.\.(\/|\\|$))+/, "");
+  const safeRelative = path
+    .normalize(relative)
+    .replace(/^(\.\.(\/|\\|$))+/, "");
   const filePath = path.join(PUBLIC_DIR, safeRelative);
   if (!filePath.startsWith(PUBLIC_DIR)) {
     text(res, 400, "invalid path");
@@ -163,8 +165,14 @@ async function handleApi(req, res, urlObj, codexHome) {
       const root = urlObj.searchParams.get("root")
         ? path.resolve(urlObj.searchParams.get("root"))
         : codexHome;
-      const limit = Number.parseInt(urlObj.searchParams.get("limit") ?? "400", 10);
-      const files = await listRolloutFiles(root, Number.isFinite(limit) ? limit : 400);
+      const limit = Number.parseInt(
+        urlObj.searchParams.get("limit") ?? "400",
+        10,
+      );
+      const files = await listRolloutFiles(
+        root,
+        Number.isFinite(limit) ? limit : 400,
+      );
       json(res, 200, { root, files });
     } catch (error) {
       json(res, 500, {
@@ -178,14 +186,23 @@ async function handleApi(req, res, urlObj, codexHome) {
     try {
       const filePath = requireFileParam(urlObj);
       const thread = await buildThreadView(filePath, {
-        includeToolCalls: parseBoolean(urlObj.searchParams.get("includeTools"), true),
-        includeReasoning: parseBoolean(urlObj.searchParams.get("includeReasoning"), false),
+        includeToolCalls: parseBoolean(
+          urlObj.searchParams.get("includeTools"),
+          true,
+        ),
+        includeReasoning: parseBoolean(
+          urlObj.searchParams.get("includeReasoning"),
+          false,
+        ),
         includeSystemMessages: parseBoolean(
           urlObj.searchParams.get("includeSystemMessages"),
           false,
         ),
         maxToolChars:
-          Number.parseInt(urlObj.searchParams.get("maxToolChars") ?? "800", 10) || 800,
+          Number.parseInt(
+            urlObj.searchParams.get("maxToolChars") ?? "800",
+            10,
+          ) || 800,
       });
       json(res, 200, thread);
     } catch (error) {
@@ -201,7 +218,10 @@ async function handleApi(req, res, urlObj, codexHome) {
     try {
       const filePath = requireFileParam(urlObj);
       const top = Number.parseInt(urlObj.searchParams.get("top") ?? "20", 10);
-      const largeKb = Number.parseInt(urlObj.searchParams.get("largeKb") ?? "256", 10);
+      const largeKb = Number.parseInt(
+        urlObj.searchParams.get("largeKb") ?? "256",
+        10,
+      );
       const report = await analyzeRollout(filePath, {
         topN: Number.isFinite(top) && top > 0 ? top : 20,
         largeThresholdBytes:
@@ -245,4 +265,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
-

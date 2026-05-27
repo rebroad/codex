@@ -38,7 +38,9 @@ function contentType(filePath) {
 
 async function serveStatic(res, requestedPath) {
   const relative = requestedPath === "/" ? "/index.html" : requestedPath;
-  const safeRelative = path.normalize(relative).replace(/^(\.\.(\/|\\|$))+/, "");
+  const safeRelative = path
+    .normalize(relative)
+    .replace(/^(\.\.(\/|\\|$))+/, "");
   const filePath = path.join(PUBLIC_DIR, safeRelative);
   if (!filePath.startsWith(PUBLIC_DIR)) {
     text(res, 400, "invalid path");
@@ -152,7 +154,8 @@ function summarizeStreamRecord(record) {
   const transport = record.data?.transport || "";
   const payload = parseMaybeJson(record.data?.payload);
   const payloadType = Array.isArray(payload) ? "array" : typeof payload;
-  const eventType = isObject(payload) && typeof payload.type === "string" ? payload.type : "";
+  const eventType =
+    isObject(payload) && typeof payload.type === "string" ? payload.type : "";
   let summary = "";
 
   if (isObject(payload)) {
@@ -160,14 +163,24 @@ function summarizeStreamRecord(record) {
       summary = payload.delta;
     } else if (typeof payload.text === "string") {
       summary = payload.text;
-    } else if (isObject(payload.item) && typeof payload.item.type === "string") {
-      const phase = typeof payload.item.phase === "string" ? ` phase=${payload.item.phase}` : "";
+    } else if (
+      isObject(payload.item) &&
+      typeof payload.item.type === "string"
+    ) {
+      const phase =
+        typeof payload.item.phase === "string"
+          ? ` phase=${payload.item.phase}`
+          : "";
       const status =
-        typeof payload.item.status === "string" ? ` status=${payload.item.status}` : "";
+        typeof payload.item.status === "string"
+          ? ` status=${payload.item.status}`
+          : "";
       summary = `item=${payload.item.type}${phase}${status}`;
     } else if (isObject(payload.response)) {
       const status =
-        typeof payload.response.status === "string" ? ` status=${payload.response.status}` : "";
+        typeof payload.response.status === "string"
+          ? ` status=${payload.response.status}`
+          : "";
       summary = `${payload.type || "response"}${status}`;
     } else {
       summary = previewValue(payload, 240);
@@ -233,7 +246,9 @@ function summarizeInputItem(item, index) {
 
   if (item.type === "function_call_output") {
     const outputText =
-      typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
+      typeof item.output === "string"
+        ? item.output
+        : JSON.stringify(item.output ?? "");
     return {
       index,
       type: item.type,
@@ -350,7 +365,10 @@ async function responseIdFromOutputFile(outputFilePath) {
         continue;
       }
       const eventType = payload.type;
-      if (eventType !== "response.created" && eventType !== "response.completed") {
+      if (
+        eventType !== "response.created" &&
+        eventType !== "response.completed"
+      ) {
         continue;
       }
       const id = payload.response?.id || payload.id;
@@ -369,7 +387,10 @@ async function buildResponseIdIndex(targetPath) {
   const responseIdToQueryId = {};
   for (const filePath of files) {
     const queryId = queryIdFromPath(filePath);
-    const outputFilePath = filePath.replace(/_input\.ndjson$/, "_output.ndjson");
+    const outputFilePath = filePath.replace(
+      /_input\.ndjson$/,
+      "_output.ndjson",
+    );
     const responseId = await responseIdFromOutputFile(outputFilePath);
     if (responseId) {
       responseIdToQueryId[responseId] = queryId;
@@ -382,7 +403,10 @@ async function buildQueriesIndex(targetPath) {
   const files = await resolveInputFiles(targetPath);
   const responseIdToQueryId = await buildResponseIdIndex(targetPath);
   const queryToResponseId = Object.fromEntries(
-    Object.entries(responseIdToQueryId).map(([responseId, queryId]) => [queryId, responseId]),
+    Object.entries(responseIdToQueryId).map(([responseId, queryId]) => [
+      queryId,
+      responseId,
+    ]),
   );
   const queries = [];
 
@@ -403,7 +427,9 @@ async function buildQueriesIndex(targetPath) {
       records: records.length,
       parseErrors: parseErrors.length,
       model: latestPrompt?.model || "(unknown)",
-      inputItems: Array.isArray(latestPrompt?.input) ? latestPrompt.input.length : 0,
+      inputItems: Array.isArray(latestPrompt?.input)
+        ? latestPrompt.input.length
+        : 0,
       tools: Array.isArray(latestPrompt?.tools) ? latestPrompt.tools.length : 0,
       instructionsChars: (latestPrompt?.instructions || "").length,
       previousResponseId: latestPrompt?.previous_response_id || "",
@@ -417,7 +443,9 @@ async function buildQueriesIndex(targetPath) {
 async function buildPromptView(targetPath, queryId) {
   const files = await resolveInputFiles(targetPath);
   const responseIdToQueryId = await buildResponseIdIndex(targetPath);
-  const selected = files.find((filePath) => queryIdFromPath(filePath) === queryId);
+  const selected = files.find(
+    (filePath) => queryIdFromPath(filePath) === queryId,
+  );
   if (!selected) {
     const err = new Error(`query not found: ${queryId}`);
     err.statusCode = 404;
@@ -452,7 +480,8 @@ async function buildPromptView(targetPath, queryId) {
       model: payload.model || "",
       type: payload.type || "",
       previousResponseId: payload.previous_response_id || "",
-      previousResponseQueryId: responseIdToQueryId[payload.previous_response_id || ""] || null,
+      previousResponseQueryId:
+        responseIdToQueryId[payload.previous_response_id || ""] || null,
       instructions: payload.instructions || "",
       inputItems,
       tools,
@@ -463,7 +492,10 @@ async function buildPromptView(targetPath, queryId) {
   }
 
   const outputFile = selected.replace(/_input\.ndjson$/, "_output.ndjson");
-  const reasoningFile = selected.replace(/_input\.ndjson$/, "_reasoning.ndjson");
+  const reasoningFile = selected.replace(
+    /_input\.ndjson$/,
+    "_reasoning.ndjson",
+  );
   const output = await buildStreamView(outputFile);
   const reasoning = await buildStreamView(reasoningFile);
 
@@ -474,7 +506,10 @@ async function buildPromptView(targetPath, queryId) {
       lines: records.length,
       parseErrors: parseErrors.length,
       promptVariants: prompts.length,
-      promptOccurrences: prompts.reduce((acc, item) => acc + item.duplicateCount, 0),
+      promptOccurrences: prompts.reduce(
+        (acc, item) => acc + item.duplicateCount,
+        0,
+      ),
     },
     responseIdToQueryId,
     parseErrors,

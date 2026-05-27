@@ -113,7 +113,10 @@ async function buildThreadView(filePath, options = {}) {
           {
             type: "message",
             role: "user",
-            text: typeof payload.message === "string" ? payload.message : "(empty user message)",
+            text:
+              typeof payload.message === "string"
+                ? payload.message
+                : "(empty user message)",
           },
           "event",
         );
@@ -174,7 +177,10 @@ async function buildThreadView(filePath, options = {}) {
       continue;
     }
 
-    if (payload.type === "function_call" || payload.type === "custom_tool_call") {
+    if (
+      payload.type === "function_call" ||
+      payload.type === "custom_tool_call"
+    ) {
       if (!includeToolCalls) {
         continue;
       }
@@ -222,4 +228,3 @@ async function buildThreadView(filePath, options = {}) {
 module.exports = {
   buildThreadView,
 };
-

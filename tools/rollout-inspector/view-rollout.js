@@ -116,7 +116,9 @@ function waitForHealthy(port) {
             return;
           }
           if (Date.now() > deadline) {
-            reject(new Error("timed out waiting for rollout-inspector to start"));
+            reject(
+              new Error("timed out waiting for rollout-inspector to start"),
+            );
             return;
           }
           setTimeout(attempt, HEALTH_RETRY_MS);
