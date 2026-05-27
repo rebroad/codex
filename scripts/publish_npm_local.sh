@@ -54,7 +54,15 @@ import os
 import tomllib
 from pathlib import Path
 
-toml_path = Path(os.environ["REPO_DIR"]) / "codex-rs" / "Cargo.toml"
+workspace_dir = Path(os.environ["REPO_DIR"]) / "codex-rs"
+version_path = workspace_dir / "VERSION"
+if version_path.exists():
+    version = version_path.read_text(encoding="utf-8").strip()
+    if version:
+        print(version)
+        raise SystemExit(0)
+
+toml_path = workspace_dir / "Cargo.toml"
 data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
 version = data.get("workspace", {}).get("package", {}).get("version")
 if version:

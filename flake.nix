@@ -19,13 +19,22 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
 
-      # Read the version from the workspace Cargo.toml (the single source of
-      # truth used by the release workflow).
+      # Read the release version from codex-rs/VERSION. Cargo.toml stays on the
+      # placeholder version so local development changes there do not churn the
+      # Rust build graph.
+      versionFilePath = ./codex-rs/VERSION;
       cargoToml = builtins.fromTOML (builtins.readFile ./codex-rs/Cargo.toml);
-      cargoVersion = cargoToml.workspace.package.version;
+      cargoVersion =
+        let
+          versionFromFile =
+            builtins.replaceStrings ["\n"] [""] (builtins.readFile versionFilePath);
+        in
+          if builtins.pathExists versionFilePath && versionFromFile != ""
+          then versionFromFile
+          else cargoToml.workspace.package.version;
 
-      # When building from a release commit the Cargo.toml already carries the
-      # real version (e.g. "0.101.0").  On the main branch it is the placeholder
+      # When building from a release commit codex-rs/VERSION carries the real
+      # version (e.g. "0.101.0"). On the main branch it is the placeholder
       # "0.0.0", so we fall back to a dev version derived from the flake source.
       version =
         if cargoVersion != "0.0.0"
