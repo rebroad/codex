@@ -49,6 +49,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .bisect-test-results/
+.git-catchup-revert-decisions
 
 # env
 .env*
