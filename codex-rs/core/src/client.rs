@@ -52,10 +52,16 @@ use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::ResponsesWsRequest;
 use codex_api::SseTelemetry;
+use codex_api::PromptCaptureSession;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::build_conversation_headers;
 use codex_api::create_text_param_for_request;
+use codex_api::prompt_debug_http_enabled;
+use codex_api::prompt_debug_http_log;
+use codex_api::prompt_debug_http_log_tool_usage;
+use codex_api::set_prompt_debug_http_account_email;
+use codex_api::start_prompt_capture;
 use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
@@ -65,6 +71,7 @@ use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::build_reqwest_client;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::protocol::TokenUsage;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -153,6 +160,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    allow_previous_response_id: AtomicBool,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -221,6 +229,13 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrewarmCompletionStats {
+    pub token_usage: Option<TokenUsage>,
+    pub capture_id: Option<String>,
+    pub transport_bytes: Option<codex_api::TransportByteStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -293,6 +308,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                allow_previous_response_id: AtomicBool::new(true),
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -309,6 +325,12 @@ impl ModelClient {
             websocket_session: self.take_cached_websocket_session(),
             turn_state: Arc::new(OnceLock::new()),
         }
+    }
+
+    pub(crate) fn set_previous_response_id_allowed(&self, allowed: bool) {
+        self.state
+            .allow_previous_response_id
+            .store(allowed, Ordering::Relaxed);
     }
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -629,9 +651,18 @@ impl ModelClient {
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
         let auth = match self.state.auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
+            Some(manager) => manager
+                .auth_with_refresh_if_expired_strict()
+                .await
+                .map_err(|err| match err {
+                    RefreshTokenError::Permanent(failed) => {
+                        CodexErr::RefreshTokenFailed(failed)
+                    }
+                    RefreshTokenError::Transient(other) => CodexErr::Io(other),
+                })?,
             None => None,
         };
+        set_prompt_debug_http_account_email(auth.as_ref().and_then(CodexAuth::get_account_email));
         let api_provider = self
             .state
             .provider
@@ -656,6 +687,7 @@ impl ModelClient {
         api_auth: CoreAuthProvider,
         turn_state: Option<Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
+        capture: Option<&PromptCaptureSession>,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
@@ -674,6 +706,7 @@ impl ModelClient {
                 headers,
                 codex_login::default_client::default_headers(),
                 turn_state,
+                capture,
                 Some(websocket_telemetry),
             ),
         )
@@ -796,6 +829,18 @@ impl ModelClientSession {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        if prompt_debug_http_enabled() {
+            prompt_debug_http_log(format!(
+                "responses request route: model={} personality={:?} base_instructions_len={} allow_previous_response_id={}",
+                model_info.slug,
+                prompt.personality,
+                instructions.len(),
+                self.client
+                    .state
+                    .allow_previous_response_id
+                    .load(Ordering::Relaxed)
+            ));
+        }
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
@@ -835,7 +880,7 @@ impl ModelClientSession {
             instructions: instructions.clone(),
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice: prompt.tool_choice.clone(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: provider.is_azure_responses_endpoint(),
@@ -939,7 +984,21 @@ impl ModelClientSession {
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
     ) -> ResponsesWsRequest {
+        if !self
+            .client
+            .state
+            .allow_previous_response_id
+            .load(Ordering::Relaxed)
+        {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log("previous_response_id route: disabled by client state");
+            }
+            return ResponsesWsRequest::ResponseCreate(payload);
+        }
         let Some(last_response) = self.get_last_response() else {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log("previous_response_id route: no prior response available");
+            }
             return ResponsesWsRequest::ResponseCreate(payload);
         };
         let Some(incremental_items) = self.get_incremental_items(
@@ -947,12 +1006,29 @@ impl ModelClientSession {
             Some(&last_response),
             /*allow_empty_delta*/ true,
         ) else {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log(
+                    "previous_response_id route: request was not incremental, sending full request",
+                );
+            }
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
         if last_response.response_id.is_empty() {
+            if prompt_debug_http_enabled() {
+                prompt_debug_http_log(
+                    "previous_response_id route: prior response id was empty, sending full request",
+                );
+            }
             trace!("incremental request failed, no previous response id");
             return ResponsesWsRequest::ResponseCreate(payload);
+        }
+
+        if prompt_debug_http_enabled() {
+            prompt_debug_http_log(format!(
+                "previous_response_id route: attaching {}",
+                last_response.response_id
+            ));
         }
 
         ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
@@ -995,6 +1071,7 @@ impl ModelClientSession {
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
                 /*turn_metadata_header*/ None,
+                /*capture*/ None,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
@@ -1027,6 +1104,7 @@ impl ModelClientSession {
             api_auth,
             turn_metadata_header,
             options,
+            capture,
             auth_context,
             request_route_telemetry,
         } = params;
@@ -1050,6 +1128,7 @@ impl ModelClientSession {
                     api_auth,
                     Some(turn_state),
                     turn_metadata_header,
+                    capture,
                     auth_context,
                     request_route_telemetry,
                 )
@@ -1175,6 +1254,9 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
+                    if prompt_debug_http_enabled() {
+                        prompt_debug_http_log(format!("Response error: {unauthorized_transport}"));
+                    }
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
@@ -1185,7 +1267,12 @@ impl ModelClientSession {
                     );
                     continue;
                 }
-                Err(err) => return Err(map_api_error(err)),
+                Err(err) => {
+                    if prompt_debug_http_enabled() {
+                        prompt_debug_http_log(format!("Response error: {err}"));
+                    }
+                    return Err(map_api_error(err));
+                }
             }
         }
     }
@@ -1251,6 +1338,9 @@ impl ModelClientSession {
             if warmup {
                 ws_payload.generate = Some(false);
             }
+            let ws_request_json = serde_json::to_string_pretty(&ws_payload)
+                .unwrap_or_else(|_| "<unable to serialize websocket payload>".to_string());
+            let capture = start_prompt_capture("responses_websocket", Some(ws_request_json.as_str()));
 
             match self
                 .websocket_connection(WebsocketConnectParams {
@@ -1263,6 +1353,7 @@ impl ModelClientSession {
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
                         RESPONSES_ENDPOINT,
                     ),
+                    capture: capture.as_ref(),
                 })
                 .await
             {
@@ -1275,6 +1366,9 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
+                    if prompt_debug_http_enabled() {
+                        prompt_debug_http_log(format!("Response error: {unauthorized_transport}"));
+                    }
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
@@ -1296,7 +1390,11 @@ impl ModelClientSession {
                 ))
             })?;
             let stream_result = stream_result
-                .stream_request(ws_request, self.websocket_session.connection_reused())
+                .stream_request(
+                    ws_request,
+                    self.websocket_session.connection_reused(),
+                    capture,
+                )
                 .await
                 .map_err(map_api_error)?;
             let (stream, last_request_rx) =
@@ -1351,12 +1449,12 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<PrewarmCompletionStats>> {
         if !self.client.responses_websocket_enabled() {
-            return Ok(());
+            return Ok(None);
         }
         if self.websocket_session.last_request.is_some() {
-            return Ok(());
+            return Ok(None);
         }
 
         match self
@@ -1377,16 +1475,27 @@ impl ModelClientSession {
                 // Wait for the v2 warmup request to complete before sending the first turn request.
                 while let Some(event) = stream.next().await {
                     match event {
-                        Ok(ResponseEvent::Completed { .. }) => break,
+                        Ok(ResponseEvent::Completed {
+                            token_usage,
+                            capture_id,
+                            transport_bytes,
+                            ..
+                        }) => {
+                            return Ok(Some(PrewarmCompletionStats {
+                                token_usage,
+                                capture_id,
+                                transport_bytes,
+                            }));
+                        }
                         Err(err) => return Err(err),
                         _ => {}
                     }
                 }
-                Ok(())
+                Ok(None)
             }
             Ok(WebsocketStreamOutcome::FallbackToHttp) => {
                 self.try_switch_fallback_transport(session_telemetry, model_info);
-                Ok(())
+                Ok(None)
             }
             Err(err) => Err(err),
         }
@@ -1568,6 +1677,8 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    capture_id,
+                    transport_bytes,
                 }) => {
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
@@ -1588,6 +1699,8 @@ where
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            capture_id,
+                            transport_bytes,
                         }))
                         .await
                         .is_err()
@@ -1680,6 +1793,7 @@ struct WebsocketConnectParams<'a> {
     api_auth: CoreAuthProvider,
     turn_metadata_header: Option<&'a str>,
     options: &'a ApiResponsesOptions,
+    capture: Option<&'a PromptCaptureSession>,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
 }
@@ -1830,6 +1944,21 @@ impl ApiTelemetry {
     }
 }
 
+fn log_transport_poll(tool_name: &str, status: &str, duration: Duration) {
+    prompt_debug_http_log_tool_usage(
+        "poll",
+        None,
+        tool_name,
+        None,
+        None,
+        Some(duration.as_millis()),
+        None,
+        Some(status),
+        None,
+        None,
+    );
+}
+
 impl RequestTelemetry for ApiTelemetry {
     fn on_request(
         &self,
@@ -1897,6 +2026,15 @@ impl SseTelemetry for ApiTelemetry {
         >,
         duration: Duration,
     ) {
+        let status = match result {
+            Err(_) => Some("timeout"),
+            Ok(None) => Some("closed"),
+            Ok(Some(Err(_))) => Some("error"),
+            Ok(Some(Ok(_))) => None,
+        };
+        if let Some(status) = status {
+            log_transport_poll("responses_sse", status, duration);
+        }
         self.session_telemetry.log_sse_event(result, duration);
     }
 }
@@ -1946,6 +2084,15 @@ impl WebsocketTelemetry for ApiTelemetry {
         result: &std::result::Result<Option<std::result::Result<Message, Error>>, ApiError>,
         duration: Duration,
     ) {
+        let status = match result {
+            Err(_) => Some("timeout"),
+            Ok(None) => Some("closed"),
+            Ok(Some(Err(_))) => Some("error"),
+            Ok(Some(Ok(_))) => None,
+        };
+        if let Some(status) = status {
+            log_transport_poll("responses_websocket", status, duration);
+        }
         self.session_telemetry
             .record_websocket_event(result, duration);
     }

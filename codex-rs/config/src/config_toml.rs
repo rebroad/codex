@@ -8,9 +8,11 @@ use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
 use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
+use crate::types::AppServerLogToml;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
+use crate::types::ExecPolicyRuleWriteScope;
 use crate::types::History;
 use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
@@ -18,6 +20,7 @@ use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
 use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
+use crate::types::PromptDebugHttpToml;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
@@ -82,6 +85,10 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
+    /// Where newly approved exec-policy prefix rules should be written.
+    /// Defaults to `project`.
+    pub exec_policy_rule_write_scope: Option<ExecPolicyRuleWriteScope>,
+
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
@@ -102,6 +109,10 @@ pub struct ConfigToml {
 
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
+
+    /// When false, disable Linux sandbox debug logging written to /tmp.
+    /// Defaults to true when unset.
+    pub sandbox_debug: Option<bool>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
@@ -142,6 +153,14 @@ pub struct ConfigToml {
 
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
+
+    /// Optional text inserted after the compaction summary marker and before
+    /// the generated compacted summary body.
+    pub compact_summary_preamble: Option<String>,
+
+    /// When set to `true`, disable built-in/system and contextual prompt
+    /// scaffolding so only user text is sent.
+    pub bare_prompt: Option<bool>,
 
     /// Optional commit attribution text for commit message co-author trailers.
     ///
@@ -201,6 +220,15 @@ pub struct ConfigToml {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Explicit allow-list of built-in (non-MCP) tools.
+    /// When set, only listed built-in tools are exposed.
+    pub builtin_enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of built-in (non-MCP) tools.
+    /// Applied after `builtin_enabled_tools`.
+    #[serde(default)]
+    pub builtin_disabled_tools: Option<Vec<String>>,
+
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
@@ -232,6 +260,15 @@ pub struct ConfigToml {
     /// Directory where Codex writes log files, for example `codex-tui.log`.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
+    /// Tuning for account-usage estimation and `usage_pct` display.
+    #[serde(default)]
+    pub account_usage_estimator: AccountUsageEstimatorConfigToml,
+    /// App-server tracing output configuration.
+    pub app_server_log: Option<AppServerLogToml>,
+
+    /// HTTP/SSE request debug tracing settings.
+    #[serde(default)]
+    pub prompt_debug_http: Option<PromptDebugHttpToml>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -419,6 +456,8 @@ impl From<ConfigToml> for UserSavedConfig {
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    /// Optional VS Code workspace file to import additional writable roots from.
+    pub workspace_file: Option<AbsolutePathBuf>,
 }
 
 impl ProjectConfig {
@@ -428,6 +467,49 @@ impl ProjectConfig {
 
     pub fn is_untrusted(&self) -> bool {
         matches!(self.trust_level, Some(TrustLevel::Untrusted))
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountUsageEstimatorConfig {
+    pub min_usage_pct_sample_count: i64,
+    pub max_usage_pct_display_percent_before_full: f64,
+    pub stable_backend_percent_window: i64,
+}
+
+impl Default for AccountUsageEstimatorConfig {
+    fn default() -> Self {
+        Self {
+            min_usage_pct_sample_count: 1,
+            max_usage_pct_display_percent_before_full: 0.0,
+            stable_backend_percent_window: 5,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountUsageEstimatorConfigToml {
+    pub min_usage_pct_sample_count: Option<i64>,
+    pub max_usage_pct_display_percent_before_full: Option<f64>,
+    pub stable_backend_percent_window: Option<i64>,
+}
+
+impl AccountUsageEstimatorConfigToml {
+    pub fn resolve_with_defaults(self) -> AccountUsageEstimatorConfig {
+        let defaults = AccountUsageEstimatorConfig::default();
+        AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: self
+                .min_usage_pct_sample_count
+                .unwrap_or(defaults.min_usage_pct_sample_count),
+            max_usage_pct_display_percent_before_full: self
+                .max_usage_pct_display_percent_before_full
+                .unwrap_or(defaults.max_usage_pct_display_percent_before_full),
+            stable_backend_percent_window: self
+                .stable_backend_percent_window
+                .unwrap_or(defaults.stable_backend_percent_window),
+        }
     }
 }
 

@@ -3,6 +3,9 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::prompt_debug_http::prompt_capture_append_input;
+use crate::prompt_debug_http::prompt_capture_record_input_tool_usage;
+use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use crate::requests::Compression;
 use crate::requests::attach_item_ids;
@@ -71,6 +74,11 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        let request_json = serde_json::to_string_pretty(&request)
+            .unwrap_or_else(|_| "<unable to serialize payload>".to_string());
+        let capture = start_prompt_capture("responses_http", Some(request_json.as_str()));
+        prompt_capture_record_input_tool_usage(capture.as_ref(), &request.input);
+
         let ResponsesOptions {
             conversation_id,
             session_source,
@@ -94,7 +102,8 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream(body, headers, compression, turn_state).await
+        self.stream(body, headers, compression, turn_state, capture)
+            .await
     }
 
     fn path() -> &'static str {
@@ -118,11 +127,20 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
+        capture: Option<crate::prompt_debug_http::PromptCaptureSession>,
     ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
             Compression::Zstd => RequestCompression::Zstd,
         };
+        if let Some(capture_session) = capture.as_ref()
+            && let Ok(raw_body) = serde_json::to_string(&body)
+        {
+            prompt_capture_append_input(capture_session, "responses_http", &raw_body);
+        }
+        let sent_bytes = serde_json::to_vec(&body)
+            .map(|bytes| bytes.len() as i64)
+            .unwrap_or(0);
 
         let stream_response = self
             .session
@@ -131,6 +149,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                 Self::path(),
                 extra_headers,
                 Some(body),
+                capture.as_ref(),
                 |req| {
                     req.headers.insert(
                         http::header::ACCEPT,
@@ -146,6 +165,8 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            capture,
+            sent_bytes,
         ))
     }
 }

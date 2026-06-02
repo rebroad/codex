@@ -1,3 +1,4 @@
+use codex_api::ToolChoice;
 pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
 use codex_protocol::error::Result;
@@ -34,6 +35,9 @@ pub struct Prompt {
 
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
+
+    /// Controls which of the advertised tools are actually callable this turn.
+    pub(crate) tool_choice: ToolChoice,
 
     pub base_instructions: BaseInstructions,
 

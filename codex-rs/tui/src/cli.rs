@@ -53,6 +53,10 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_show_all: bool,
 
+    /// Internal: when present, fork before this 0-based user prompt index.
+    #[clap(skip)]
+    pub fork_nth_user_message: Option<usize>,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
@@ -102,6 +106,11 @@ pub struct Cli {
     /// Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
+
+    /// Send only the user prompt text by disabling built-in and contextual
+    /// prompt scaffolding for this session.
+    #[arg(long = "bare-prompt", default_value_t = false)]
+    pub bare_prompt: bool,
 
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]

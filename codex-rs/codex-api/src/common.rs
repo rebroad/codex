@@ -77,6 +77,8 @@ pub enum ResponseEvent {
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
+        capture_id: Option<String>,
+        transport_bytes: Option<TransportByteStats>,
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta {
@@ -92,6 +94,12 @@ pub enum ResponseEvent {
     },
     RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportByteStats {
+    pub sent: i64,
+    pub recv: i64,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
@@ -151,12 +159,48 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    Mode(String),
+    AllowedTools {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        mode: String,
+        tools: Vec<Value>,
+    },
+}
+
+impl Default for ToolChoice {
+    fn default() -> Self {
+        Self::auto()
+    }
+}
+
+impl ToolChoice {
+    pub fn auto() -> Self {
+        Self::Mode("auto".to_string())
+    }
+
+    pub fn none() -> Self {
+        Self::Mode("none".to_string())
+    }
+
+    pub fn allowed_tools(mode: impl Into<String>, tools: Vec<Value>) -> Self {
+        Self::AllowedTools {
+            kind: "allowed_tools",
+            mode: mode.into(),
+            tools,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     pub model: String,
     pub instructions: String,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<serde_json::Value>,
-    pub tool_choice: String,
+    pub tool_choice: ToolChoice,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     pub store: bool,
@@ -203,7 +247,7 @@ pub struct ResponseCreateWsRequest {
     pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<Value>,
-    pub tool_choice: String,
+    pub tool_choice: ToolChoice,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     pub store: bool,

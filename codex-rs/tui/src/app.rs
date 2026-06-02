@@ -93,6 +93,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::personality::personality_display_name;
 use codex_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -2343,7 +2344,7 @@ impl App {
                             *summary,
                             *service_tier,
                             collaboration_mode.clone(),
-                            *personality,
+                            personality.clone(),
                             final_output_json_schema.clone(),
                         )
                         .await?;
@@ -3590,6 +3591,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
+        fork_nth_user_message: Option<usize>,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
@@ -3741,13 +3743,29 @@ impl App {
                     /*inc*/ 1,
                     &[("source", "cli_subcommand")],
                 );
-                let forked = app_server
+                let mut forked = app_server
                     .fork_thread(config.clone(), target_session.thread_id)
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
                         format!("Failed to fork session from {target_label}")
                     })?;
+                if let Some(nth_user_message) = fork_nth_user_message {
+                    let rollback_turns = forked.turns.len().saturating_sub(nth_user_message);
+                    if rollback_turns > 0 {
+                        let rollback_turns = u32::try_from(rollback_turns).unwrap_or(u32::MAX);
+                        let thread_id = forked.session.thread_id;
+                        let response = app_server
+                            .thread_rollback(thread_id, rollback_turns)
+                            .await
+                            .wrap_err_with(|| {
+                                format!(
+                                    "Failed to apply --pick rollback ({rollback_turns} turns) to forked thread {thread_id}"
+                                )
+                            })?;
+                        forked.turns = response.thread.turns;
+                    }
+                }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -4083,7 +4101,7 @@ impl App {
                     tui,
                     &self.config,
                     /*show_all*/ false,
-                    /*include_non_interactive*/ false,
+                    /*include_non_interactive*/ true,
                     picker_app_server,
                 )
                 .await?
@@ -4977,12 +4995,12 @@ impl App {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_personality(Some(personality))
+                    .set_personality(Some(personality.clone()))
                     .apply()
                     .await
                 {
                     Ok(()) => {
-                        let label = Self::personality_label(personality);
+                        let label = Self::personality_label(&personality);
                         let mut message = format!("Personality set to {label}");
                         if let Some(profile) = profile {
                             message.push_str(" for ");
@@ -5795,7 +5813,7 @@ impl App {
     }
 
     fn on_update_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
+        self.config.personality = Some(personality.clone());
         self.chat_widget.set_personality(personality);
     }
 
@@ -5822,11 +5840,13 @@ impl App {
         }
     }
 
-    fn personality_label(personality: Personality) -> &'static str {
+    fn personality_label(personality: &Personality) -> String {
         match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
+            Personality::None => "None".to_string(),
+            Personality::Friendly => "Friendly".to_string(),
+            Personality::Pragmatic => "Pragmatic".to_string(),
+            Personality::Comedic => "Comedic".to_string(),
+            Personality::Custom(name) => personality_display_name(name),
         }
     }
 
@@ -9362,6 +9382,7 @@ guardian_approval = true
                 },
                 model_context_window,
             },
+            query_id: None,
         })
     }
 

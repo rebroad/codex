@@ -99,18 +99,55 @@ write-app-server-schema *args:
 write-hooks-schema:
     cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
+# Keep graphify focused on codex-rs and wire the Codex hook integration.
+[no-cd]
+graphify-setup:
+    cd "{{ justfile_directory() }}" && "${GRAPHIFY_BIN:-graphify}" codex install && "${GRAPHIFY_BIN:-graphify}" hook install && just graphify-link
+
+[no-cd]
+graphify-link:
+    ln -sfn "{{ justfile_directory() }}.build/codex-rs/graphify-out" "{{ justfile_directory() }}/graphify-out"
+
+[no-cd]
+graphify-update:
+    "${GRAPHIFY_BIN:-graphify}" update "{{ justfile_directory() }}.build/codex-rs"
+
+[no-cd]
+graphify-query question:
+    "${GRAPHIFY_BIN:-graphify}" query "{{question}}" --graph "{{ justfile_directory() }}.build/codex-rs/graphify-out/graph.json"
+
+[no-cd]
+graphify-watch:
+    "${GRAPHIFY_BIN:-graphify}" watch "{{ justfile_directory() }}.build/codex-rs"
+
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
 argument-comment-lint *args:
     if [ "$#" -eq 0 ]; then \
-      bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh); \
+      just argument-comment-lint-remote; \
     else \
-      ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
+      "{{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py" "$@"; \
+    fi
+
+[no-cd]
+argument-comment-lint-local *args:
+    if [ "$#" -eq 0 ]; then \
+      bazel build --config=argument-comment-lint -- $("{{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh"); \
+    else \
+      "{{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py" "$@"; \
+    fi
+
+[no-cd]
+argument-comment-lint-remote *args:
+    if [ "$#" -eq 0 ]; then \
+      bazel build --config=argument-comment-lint --config=ci-linux -- $("{{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh"); \
+    else \
+      "{{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py" "$@"; \
     fi
 
 [no-cd]
 argument-comment-lint-from-source *args:
-    ./tools/argument-comment-lint/run.py "$@"
+    "{{ justfile_directory() }}/tools/argument-comment-lint/run.py" "$@"
 
 # Tail logs from the state SQLite database
 log *args:

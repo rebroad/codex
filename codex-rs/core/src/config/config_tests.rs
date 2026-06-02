@@ -27,6 +27,7 @@ use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
+use codex_config::types::ExecPolicyRuleWriteScope;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
 use codex_config::types::McpServerToolConfig;
@@ -36,6 +37,8 @@ use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
+use codex_config::types::PromptDebugHttpConfig;
+use codex_config::types::PromptDebugHttpToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -262,6 +265,125 @@ consolidation_model = "gpt-5"
             consolidation_model: Some("gpt-5".to_string()),
         }
     );
+
+    let prompt_debug_http = r#"
+[prompt_debug_http]
+enabled = true
+capture_input = false
+capture_output = true
+capture_dir = "/tmp/prompt-debug-http"
+tool_usage_log = "/tmp/prompt-debug-http/tool_usage.log"
+"#;
+    let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        Some(PromptDebugHttpToml {
+            enabled: Some(true),
+            capture_input: Some(false),
+            capture_output: Some(true),
+            capture_dir: Some(test_absolute_path("/tmp/prompt-debug-http")),
+            tool_usage_log: Some(test_absolute_path("/tmp/prompt-debug-http/tool_usage.log")),
+        }),
+        prompt_debug_http_cfg.prompt_debug_http
+    );
+
+    let prompt_debug_http_effective: PromptDebugHttpConfig = prompt_debug_http_cfg
+        .prompt_debug_http
+        .expect("prompt_debug_http should be set")
+        .into();
+    assert_eq!(
+        prompt_debug_http_effective,
+        PromptDebugHttpConfig {
+            enabled: true,
+            capture_input: false,
+            capture_output: true,
+            capture_dir: Some("/tmp/prompt-debug-http".into()),
+            tool_usage_log: Some("/tmp/prompt-debug-http/tool_usage.log".into()),
+        }
+    );
+
+    let pid = std::process::id();
+    let prompt_debug_http_with_pid = r#"
+[prompt_debug_http]
+enabled = true
+capture_input = true
+capture_output = false
+capture_dir = "/tmp/prompt-debug-$$"
+tool_usage_log = "/tmp/prompt-debug-$$/tool_usage.log"
+"#;
+    let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_pid)
+        .expect("TOML deserialization should succeed");
+    let prompt_debug_http_effective: PromptDebugHttpConfig = prompt_debug_http_cfg
+        .prompt_debug_http
+        .expect("prompt_debug_http should be set")
+        .into();
+    assert_eq!(
+        prompt_debug_http_effective,
+        PromptDebugHttpConfig {
+            enabled: true,
+            capture_input: true,
+            capture_output: false,
+            capture_dir: Some(format!("/tmp/prompt-debug-{pid}").into()),
+            tool_usage_log: Some(format!("/tmp/prompt-debug-{pid}/tool_usage.log").into()),
+        }
+    );
+
+    let prompt_debug_http_with_email = r#"
+[prompt_debug_http]
+enabled = true
+capture_input = true
+capture_output = true
+capture_dir = "/var/tmp/prompt-debug-$EMAIL"
+tool_usage_log = "/var/tmp/prompt-debug-$EMAIL/tool_usage.log"
+"#;
+    let prompt_debug_http_cfg = toml::from_str::<ConfigToml>(prompt_debug_http_with_email)
+        .expect("TOML deserialization should succeed");
+    let prompt_debug_http_effective: PromptDebugHttpConfig = prompt_debug_http_cfg
+        .prompt_debug_http
+        .expect("prompt_debug_http should be set")
+        .into();
+    assert_eq!(
+        prompt_debug_http_effective,
+        PromptDebugHttpConfig {
+            enabled: true,
+            capture_input: true,
+            capture_output: true,
+            capture_dir: Some("/var/tmp/prompt-debug-$EMAIL".into()),
+            tool_usage_log: Some("/var/tmp/prompt-debug-$EMAIL/tool_usage.log".into()),
+        }
+    );
+
+    let exec_policy_project = r#"exec_policy_rule_write_scope = "project""#;
+    let exec_policy_project_cfg = toml::from_str::<ConfigToml>(exec_policy_project)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        exec_policy_project_cfg.exec_policy_rule_write_scope,
+        Some(ExecPolicyRuleWriteScope::Project)
+    );
+
+    let exec_policy_global = r#"exec_policy_rule_write_scope = "global""#;
+    let exec_policy_global_cfg = toml::from_str::<ConfigToml>(exec_policy_global)
+        .expect("TOML deserialization should succeed");
+    assert_eq!(
+        exec_policy_global_cfg.exec_policy_rule_write_scope,
+        Some(ExecPolicyRuleWriteScope::Global)
+    );
+}
+
+#[test]
+fn exec_policy_rule_write_scope_defaults_to_project() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.exec_policy_rule_write_scope,
+        ExecPolicyRuleWriteScope::Project
+    );
+    Ok(())
 }
 
 #[test]
@@ -1438,6 +1560,113 @@ fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
 }
 
 #[test]
+fn project_workspace_file_extends_workspace_writable_roots() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let project_root = temp_dir.path().join("project");
+    let shared_root = temp_dir.path().join("shared");
+    let absolute_extra_root = temp_dir.path().join("extra");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&project_root)?;
+    std::fs::create_dir_all(&shared_root)?;
+    std::fs::create_dir_all(&absolute_extra_root)?;
+
+    let workspace_file = temp_dir.path().join("codex.code-workspace");
+    let workspace_json = serde_json::json!({
+        "folders": [
+            { "path": "../shared" },
+            { "path": absolute_extra_root }
+        ]
+    });
+    std::fs::write(
+        &workspace_file,
+        serde_json::to_string(&workspace_json).expect("workspace json should serialize"),
+    )?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_root.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                    workspace_file: Some(workspace_file.abs()),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(project_root.clone()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        codex_home,
+    )?;
+
+    if cfg!(target_os = "windows") {
+        match config.permissions.sandbox_policy.get() {
+            SandboxPolicy::ReadOnly { .. } => {}
+            other => panic!("expected read-only policy on Windows, got {other:?}"),
+        }
+    } else {
+        let expected_shared_root = shared_root.abs();
+        let expected_absolute_extra_root = absolute_extra_root.abs();
+        match config.permissions.sandbox_policy.get() {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert!(
+                    writable_roots.contains(&expected_shared_root),
+                    "expected workspace writable roots to include {}",
+                    expected_shared_root.display()
+                );
+                assert!(
+                    writable_roots.contains(&expected_absolute_extra_root),
+                    "expected workspace writable roots to include {}",
+                    expected_absolute_extra_root.display()
+                );
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn project_workspace_file_invalid_json_is_rejected_for_workspace_write() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&project_root)?;
+
+    let workspace_file = temp_dir.path().join("codex.code-workspace");
+    std::fs::write(&workspace_file, "not json")?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_root.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                    workspace_file: Some(workspace_file.abs()),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(project_root),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        codex_home,
+    )
+    .expect_err("invalid workspace file JSON should fail config loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("project.workspace_file"));
+    Ok(())
+}
+
+#[test]
 fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
@@ -1455,15 +1684,12 @@ fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<(
 }
 
 #[test]
-fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
+fn workspace_write_does_not_auto_add_memories_root() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let memories_root = codex_home.path().join("memories");
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
-                writable_roots: vec![memories_root.abs()],
-                ..Default::default()
-            }),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite::default()),
             ..Default::default()
         },
         ConfigOverrides {
@@ -1479,22 +1705,13 @@ fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
             other => panic!("expected read-only policy on Windows, got {other:?}"),
         }
     } else {
-        assert!(
-            memories_root.is_dir(),
-            "expected memories root directory to exist at {}",
-            memories_root.display()
-        );
         let expected_memories_root = memories_root.abs();
         match config.permissions.sandbox_policy.get() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_memories_root)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_memories_root.display()
+                assert!(
+                    !writable_roots.contains(&expected_memories_root),
+                    "did not expect writable roots to include {} unless explicitly configured",
+                    expected_memories_root.display(),
                 );
             }
             other => panic!("expected workspace-write policy, got {other:?}"),
@@ -4489,9 +4706,11 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            compact_summary_preamble: None,
             service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
+            account_usage_estimator: Default::default(),
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
@@ -4505,6 +4724,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_mode: None,
                 windows_sandbox_private_desktop: true,
             },
+            exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
@@ -4520,6 +4740,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            builtin_enabled_tools: None,
+            builtin_disabled_tools: Vec::new(),
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
@@ -4528,6 +4750,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
+            app_server_log: Default::default(),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
@@ -4563,6 +4786,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apps_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
+            bare_prompt: false,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -4575,8 +4799,12 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             multi_agent_v2: MultiAgentV2Config::default(),
             features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
+            sandbox_debug: true,
             active_profile: Some("o3".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                workspace_file: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4636,9 +4864,11 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        compact_summary_preamble: None,
         service_tier: None,
         model_provider_id: "openai-custom".to_string(),
         model_provider: fixture.openai_custom_provider.clone(),
+        account_usage_estimator: Default::default(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
@@ -4652,6 +4882,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -4667,6 +4898,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
+        builtin_enabled_tools: None,
+        builtin_disabled_tools: Vec::new(),
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
@@ -4675,6 +4908,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home(),
         log_dir: fixture.codex_home().join("log"),
+        app_server_log: Default::default(),
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -4690,7 +4924,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         show_raw_agent_reasoning: false,
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
-        model_reasoning_summary: None,
+        model_reasoning_summary: Some(ReasoningSummary::Auto),
         model_supports_reasoning_summaries: None,
         model_catalog: None,
         model_verbosity: None,
@@ -4710,6 +4944,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        bare_prompt: false,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -4722,8 +4957,12 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
+        sandbox_debug: true,
         active_profile: Some("gpt3".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        },
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -4781,9 +5020,11 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        compact_summary_preamble: None,
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
+        account_usage_estimator: Default::default(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
@@ -4797,6 +5038,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -4812,6 +5054,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
+        builtin_enabled_tools: None,
+        builtin_disabled_tools: Vec::new(),
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
@@ -4820,6 +5064,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home(),
         log_dir: fixture.codex_home().join("log"),
+        app_server_log: Default::default(),
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -4835,7 +5080,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         show_raw_agent_reasoning: false,
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
-        model_reasoning_summary: None,
+        model_reasoning_summary: Some(ReasoningSummary::Auto),
         model_supports_reasoning_summaries: None,
         model_catalog: None,
         model_verbosity: None,
@@ -4855,6 +5100,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        bare_prompt: false,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -4867,8 +5113,12 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
+        sandbox_debug: true,
         active_profile: Some("zdr".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        },
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -4912,9 +5162,11 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        compact_summary_preamble: None,
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
+        account_usage_estimator: Default::default(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
@@ -4928,6 +5180,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        exec_policy_rule_write_scope: ExecPolicyRuleWriteScope::Project,
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -4943,6 +5196,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
+        builtin_enabled_tools: None,
+        builtin_disabled_tools: Vec::new(),
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
@@ -4951,6 +5206,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home(),
         log_dir: fixture.codex_home().join("log"),
+        app_server_log: Default::default(),
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -4986,6 +5242,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        bare_prompt: false,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -4998,8 +5255,12 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         multi_agent_v2: MultiAgentV2Config::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
+        sandbox_debug: true,
         active_profile: Some("gpt5".to_string()),
-        active_project: ProjectConfig { trust_level: None },
+        active_project: ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        },
         windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
@@ -5311,6 +5572,7 @@ fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defaults() 
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                workspace_file: None,
             },
         )])),
         ..Default::default()
@@ -5351,6 +5613,7 @@ fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallback() 
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                workspace_file: None,
             },
         )])),
         ..Default::default()
@@ -5578,6 +5841,7 @@ fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Resul
                 test_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    workspace_file: None,
                 },
             )])),
             ..Default::default()

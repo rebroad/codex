@@ -80,6 +80,9 @@ ignore = [
     { id = "RUSTSEC-2026-0047", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
     { id = "RUSTSEC-2026-0048", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
     { id = "RUSTSEC-2026-0049", reason = "aws-lc-rs/aws-lc-sys are pulled in transitively via rustls stack dependencies; upgrade will be handled separately from this hooks PR" },
+    # TODO: remove once rama-dns can move off hickory-resolver ^0.25 and pick up the fixed hickory-proto release.
+    { id = "RUSTSEC-2026-0118", reason = "hickory-proto 0.25.2 is pulled in through rama-dns 0.3.0-alpha.4, which pins hickory-resolver ^0.25; no safe upgrade is available yet" },
+    { id = "RUSTSEC-2026-0119", reason = "hickory-proto 0.25.2 is pulled in through rama-dns 0.3.0-alpha.4, which pins hickory-resolver ^0.25; no safe upgrade is available yet" },
     # TODO(fcoury): remove this exception when syntect drops yaml-rust and bincode, or updates to versions that have fixed the vulnerabilities.
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },

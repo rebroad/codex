@@ -354,6 +354,7 @@ struct ThreadListFilters {
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+#[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -487,6 +488,64 @@ impl CodexMessageProcessor {
     fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
+    }
+
+    pub(crate) async fn maybe_start_plugin_startup_tasks_for_latest_config(&self) {
+        match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => self
+                .thread_manager
+                .plugins_manager()
+                .maybe_start_plugin_startup_tasks_for_config(
+                    &config,
+                    self.thread_manager.auth_manager(),
+                ),
+            Err(err) => warn!("failed to load latest config for plugin startup tasks: {err:?}"),
+        }
+    }
+
+    pub(crate) async fn reload_user_config(&self) {
+        let thread_ids = self.thread_manager.list_thread_ids().await;
+        for thread_id in thread_ids {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                continue;
+            };
+            if let Err(err) = thread.submit(Op::ReloadUserConfig).await {
+                warn!("failed to request user config reload: {err}");
+            }
+        }
+    }
+
+    pub(crate) async fn reload_auth_and_notify(&self) -> bool {
+        let changed = self.auth_manager.reload();
+        if !changed {
+            return false;
+        }
+
+        replace_cloud_requirements_loader(
+            self.cloud_requirements.as_ref(),
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            self.config.codex_home.clone(),
+        );
+        let cli_overrides = self.current_cli_overrides();
+        sync_default_client_residency_requirement(&cli_overrides, self.cloud_requirements.as_ref())
+            .await;
+
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
+        true
+    }
+
+    pub(crate) async fn reload_runtime_state(&self) -> bool {
+        let auth_changed = self.reload_auth_and_notify().await;
+        self.reload_user_config().await;
+        self.clear_plugin_related_caches();
+        self.maybe_start_plugin_startup_tasks_for_latest_config()
+            .await;
+        auth_changed
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -955,7 +1014,8 @@ impl CodexMessageProcessor {
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
             | ClientRequest::ConfigBatchWrite { .. }
-            | ClientRequest::ExperimentalFeatureEnablementSet { .. } => {
+            | ClientRequest::ExperimentalFeatureEnablementSet { .. }
+            | ClientRequest::ConfigReload { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
             ClientRequest::FsReadFile { .. }
@@ -1122,7 +1182,18 @@ impl CodexMessageProcessor {
             });
         }
 
+        #[cfg(debug_assertions)]
         let mut opts = LoginServerOptions {
+            open_browser: false,
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.forced_chatgpt_workspace_id.clone(),
+                config.cli_auth_credentials_store_mode,
+            )
+        };
+        #[cfg(not(debug_assertions))]
+        let opts = LoginServerOptions {
             open_browser: false,
             ..LoginServerOptions::new(
                 config.codex_home.clone(),
@@ -6561,11 +6632,24 @@ impl CodexMessageProcessor {
     async fn turn_start(
         &self,
         request_id: ConnectionRequestId,
-        params: TurnStartParams,
+        mut params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+        if params.input.len() == 1
+            && let Some(V2UserInput::Text { text, .. }) = params.input.first()
+            && text.trim().eq_ignore_ascii_case("/reload")
+        {
+            let auth_changed = self.reload_runtime_state().await;
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("Reloaded config and auth (authChanged={auth_changed})."),
+                data: None,
+            };
             self.outgoing.send_error(request_id, error).await;
             return;
         }
@@ -6585,6 +6669,10 @@ impl CodexMessageProcessor {
         {
             self.outgoing.send_error(request_id, error).await;
             return;
+        }
+        if let Some(requested_sandbox_policy) = params.sandbox_policy.as_mut() {
+            let session_sandbox_policy = thread.config_snapshot().await.sandbox_policy;
+            merge_workspace_write_roots(requested_sandbox_policy, &session_sandbox_policy);
         }
 
         let collaboration_modes_config = CollaborationModesConfig {
@@ -6609,8 +6697,7 @@ impl CodexMessageProcessor {
             || params.service_tier.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
-            || collaboration_mode.is_some()
-            || params.personality.is_some();
+            || collaboration_mode.is_some();
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
@@ -6631,7 +6718,7 @@ impl CodexMessageProcessor {
                         summary: params.summary,
                         service_tier: params.service_tier,
                         collaboration_mode,
-                        personality: params.personality,
+                        personality: None,
                     },
                 )
                 .await;
@@ -8259,15 +8346,6 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
-    if let Some(requested_personality) = request.personality.as_ref()
-        && config_snapshot.personality.as_ref() != Some(requested_personality)
-    {
-        mismatch_details.push(format!(
-            "personality requested={requested_personality:?} active={:?}",
-            config_snapshot.personality
-        ));
-    }
-
     if request.config.is_some() {
         mismatch_details
             .push("config overrides were provided and ignored while running".to_string());
@@ -8288,6 +8366,32 @@ fn collect_resume_override_mismatches(
     }
 
     mismatch_details
+}
+
+fn merge_workspace_write_roots(
+    requested_policy: &mut codex_app_server_protocol::SandboxPolicy,
+    session_policy: &codex_protocol::protocol::SandboxPolicy,
+) {
+    let codex_app_server_protocol::SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
+        requested_policy
+    else {
+        return;
+    };
+    let codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+        writable_roots: session_roots,
+        ..
+    } = session_policy
+    else {
+        return;
+    };
+
+    let mut seen = HashSet::new();
+    writable_roots.retain(|root| seen.insert(root.clone()));
+    for root in session_roots {
+        if seen.insert(root.clone()) {
+            writable_roots.push(root.clone());
+        }
+    }
 }
 
 fn merge_persisted_resume_metadata(
@@ -9253,6 +9357,54 @@ mod tests {
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
             vec!["service_tier requested=Some(Fast) active=Some(Flex)".to_string()]
+        );
+    }
+
+    #[test]
+    fn merge_workspace_write_roots_unions_with_session_roots() {
+        let workspace_root = if cfg!(windows) {
+            r"C:\workspace"
+        } else {
+            "/workspace"
+        };
+        let temp_root = if cfg!(windows) {
+            r"C:\var\tmp"
+        } else {
+            "/var/tmp"
+        };
+        let mut requested = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path(workspace_root).expect("absolute path"),
+            ],
+            read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let session = codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path(workspace_root).expect("absolute path"),
+                AbsolutePathBuf::from_absolute_path(temp_root).expect("absolute path"),
+            ],
+            read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        merge_workspace_write_roots(&mut requested, &session);
+
+        let codex_app_server_protocol::SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
+            requested
+        else {
+            panic!("expected workspace-write policy");
+        };
+        assert_eq!(
+            writable_roots,
+            vec![
+                AbsolutePathBuf::from_absolute_path(workspace_root).expect("absolute path"),
+                AbsolutePathBuf::from_absolute_path(temp_root).expect("absolute path"),
+            ]
         );
     }
 

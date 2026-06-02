@@ -19,6 +19,7 @@ use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_state::AccountUsageSnapshot;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
@@ -60,9 +61,36 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
+    fn normalize_version_line(line: String) -> String {
+        if !line.contains("OpenAI Codex (v") {
+            return line;
+        }
+        let Some(first_border) = line.find('│') else {
+            return line;
+        };
+        let Some(last_border) = line.rfind('│') else {
+            return line;
+        };
+        if last_border <= first_border {
+            return line;
+        }
+        let border_len = '│'.len_utf8();
+        let inner_width = last_border.saturating_sub(first_border + border_len);
+        let canonical = "  >_ OpenAI Codex (v0.0.0)";
+        let mut rebuilt = String::with_capacity(line.len());
+        rebuilt.push_str(&line[..first_border + border_len]);
+        rebuilt.push_str(canonical);
+        if inner_width > canonical.len() {
+            rebuilt.push_str(&" ".repeat(inner_width - canonical.len()));
+        }
+        rebuilt.push_str(&line[last_border..]);
+        rebuilt
+    }
+
     lines
         .into_iter()
         .map(|line| {
+            let line = normalize_version_line(line);
             if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];
@@ -86,6 +114,182 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
         .timestamp()
+}
+
+#[test]
+fn account_usage_estimate_can_exceed_100_percent() {
+    let usage = AccountUsageSnapshot {
+        total_usage_usd: 2_950.0,
+        total_usage_usd_with_prewarm: 2_950.0,
+        total_tokens: 2_500,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        sent_bytes: 0,
+        recv_bytes: 0,
+        sent_recv_bytes: 0,
+        prewarm_sent_bytes: 0,
+        prewarm_recv_bytes: 0,
+        prewarm_sent_recv_bytes: 0,
+        updated_at: 0,
+        last_backend_limit_id: None,
+        last_backend_limit_name: None,
+        last_backend_used_percent: Some(95.0),
+        last_snapshot_total_tokens: None,
+        last_snapshot_percent_int: Some(95),
+        window_start_percent_int: Some(95),
+        window_start_total_tokens: Some(500),
+        window_start_input_tokens: Some(0),
+        window_start_cached_input_tokens: Some(0),
+        window_start_output_tokens: Some(500),
+        window_start_sent_bytes: Some(0),
+        window_start_recv_bytes: Some(0),
+        window_start_sent_recv_bytes: Some(0),
+        window_start_prewarm_sent_bytes: Some(0),
+        window_start_prewarm_recv_bytes: Some(0),
+        window_start_prewarm_sent_recv_bytes: Some(0),
+        last_backend_resets_at: None,
+        last_backend_window_minutes: None,
+        last_backend_seen_at: None,
+        last_reported_percent_int: None,
+        last_reported_usage_usd: None,
+        usd_per_reported_percent: None,
+        backend_percent_history: Some("91,92,93,94,95".to_string()),
+        cached_q_limit: None,
+        cached_q_limit_sample_count: None,
+        cached_q_limit_computed_at: None,
+        cached_q_limit_for_updated_at: None,
+    };
+    let estimated_percent = super::estimate_account_usage_percent(&usage, Some(1_000.0));
+    assert_eq!(estimated_percent, Some(295.0));
+}
+
+#[test]
+fn account_usage_display_prefers_fractional_estimate_over_backend_percent() {
+    let usage = AccountUsageSnapshot {
+        total_usage_usd: 1_250.0,
+        total_usage_usd_with_prewarm: 1_250.0,
+        total_tokens: 2_500,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        sent_bytes: 0,
+        recv_bytes: 0,
+        sent_recv_bytes: 0,
+        prewarm_sent_bytes: 0,
+        prewarm_recv_bytes: 0,
+        prewarm_sent_recv_bytes: 0,
+        updated_at: 0,
+        last_backend_limit_id: None,
+        last_backend_limit_name: None,
+        last_backend_used_percent: Some(100.0),
+        last_snapshot_total_tokens: None,
+        last_snapshot_percent_int: Some(100),
+        window_start_percent_int: Some(100),
+        window_start_total_tokens: Some(500),
+        window_start_input_tokens: Some(0),
+        window_start_cached_input_tokens: Some(0),
+        window_start_output_tokens: Some(500),
+        window_start_sent_bytes: Some(0),
+        window_start_recv_bytes: Some(0),
+        window_start_sent_recv_bytes: Some(0),
+        window_start_prewarm_sent_bytes: Some(0),
+        window_start_prewarm_recv_bytes: Some(0),
+        window_start_prewarm_sent_recv_bytes: Some(0),
+        last_backend_resets_at: None,
+        last_backend_window_minutes: None,
+        last_backend_seen_at: None,
+        last_reported_percent_int: Some(100),
+        last_reported_usage_usd: Some(1_000.0),
+        usd_per_reported_percent: Some(10.0),
+        backend_percent_history: Some("98,99,100".to_string()),
+        cached_q_limit: None,
+        cached_q_limit_sample_count: None,
+        cached_q_limit_computed_at: None,
+        cached_q_limit_for_updated_at: None,
+    };
+    let display = super::build_account_usage_display(&usage, (Some(1_000.0), 3));
+    assert_eq!(display.estimated_percent, Some(125.0));
+}
+
+#[test]
+fn credits_are_converted_to_dollars_for_display() {
+    assert_eq!(super::credits_to_usd(2_500.0), 100.0);
+    assert_eq!(super::credits_to_usd(62.5), 2.5);
+}
+
+#[test]
+fn compact_status_prefers_codex_weekly_window() {
+    let snapshots = vec![
+        RateLimitSnapshot {
+            limit_id: Some("codex-other".to_string()),
+            limit_name: None,
+            primary: None,
+            secondary: Some(RateLimitWindow {
+                used_percent: 9.0,
+                window_minutes: Some(10080),
+                resets_at: Some(111),
+            }),
+            credits: None,
+            plan_type: None,
+        },
+        RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 60.0,
+                window_minutes: Some(300),
+                resets_at: Some(222),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 89.0,
+                window_minutes: Some(10080),
+                resets_at: Some(333),
+            }),
+            credits: None,
+            plan_type: None,
+        },
+    ];
+
+    let selected = super::select_compact_usage_window(&snapshots).expect("weekly window");
+    assert_eq!(selected.used_percent, 89.0);
+    assert_eq!(selected.resets_at, Some(333));
+}
+
+#[tokio::test]
+async fn compact_status_unknown_mode_uses_question_mark_placeholders() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home).await;
+
+    let line = super::render_compact_status_for_cli(
+        &config,
+        /*auth*/ None,
+        /*use_utc*/ false,
+        super::CompactStatusOutputMode::UnknownUsage,
+        super::CliStatusRateLimitMode::LiveOnly,
+    )
+    .await;
+
+    assert_eq!(line, "?????????????? - ???%");
+}
+
+#[tokio::test]
+async fn compact_status_missing_usage_uses_question_mark_placeholders() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home).await;
+
+    let line = super::render_compact_status_for_cli(
+        &config,
+        /*auth*/ None,
+        /*use_utc*/ false,
+        super::CompactStatusOutputMode::Normal,
+        super::CliStatusRateLimitMode::LiveOnly,
+    )
+    .await;
+
+    assert_eq!(line, "?????????????? - ???%");
 }
 
 #[tokio::test]
@@ -152,8 +356,9 @@ async fn status_snapshot_includes_reasoning_details() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -209,8 +414,9 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         /*rate_limits*/ None,
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -271,8 +477,9 @@ async fn status_snapshot_includes_forked_from() {
         &Some(session_id),
         /*thread_name*/ None,
         Some(forked_from),
+        /*account_usage*/ None,
         /*rate_limits*/ None,
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -333,8 +540,9 @@ async fn status_snapshot_includes_monthly_limit() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -383,8 +591,9 @@ async fn status_snapshot_shows_unlimited_credits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -432,8 +641,9 @@ async fn status_snapshot_shows_positive_credits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -481,8 +691,9 @@ async fn status_snapshot_hides_zero_credits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -528,8 +739,9 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -573,8 +785,9 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         /*rate_limits*/ None,
-        None,
+        /*plan_type*/ None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -635,8 +848,9 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -684,8 +898,9 @@ async fn status_snapshot_shows_missing_limits_message() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         /*rate_limits*/ None,
-        None,
+        /*plan_type*/ None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -747,8 +962,9 @@ async fn status_snapshot_shows_refreshing_limits_notice() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         std::slice::from_ref(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -817,8 +1033,9 @@ async fn status_snapshot_includes_credits_and_limits() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -874,8 +1091,9 @@ async fn status_snapshot_shows_unavailable_limits_message() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -997,8 +1215,9 @@ async fn status_snapshot_shows_stale_limits_message() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -1067,8 +1286,9 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         Some(&rate_display),
-        None,
+        /*plan_type*/ None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -1125,8 +1345,9 @@ async fn status_context_window_uses_last_usage() {
         &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
+        /*account_usage*/ None,
         /*rate_limits*/ None,
-        None,
+        /*plan_type*/ None,
         now,
         &model_slug,
         /*collaboration_mode*/ None,

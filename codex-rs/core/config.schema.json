@@ -6,6 +6,24 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountUsageEstimatorConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "max_usage_pct_display_percent_before_full": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_usage_pct_sample_count": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "stable_backend_percent_window": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -130,6 +148,36 @@
             }
           ],
           "description": "Per-tool settings for this app."
+        }
+      },
+      "type": "object"
+    },
+    "AppServerLogMode": {
+      "enum": [
+        "stderr",
+        "log",
+        "log_and_stderr"
+      ],
+      "type": "string"
+    },
+    "AppServerLogToml": {
+      "additionalProperties": false,
+      "properties": {
+        "log_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute log file path for app-server tracing output."
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppServerLogMode"
+            }
+          ],
+          "description": "Log output mode: stderr, log, or log_and_stderr."
         }
       },
       "type": "object"
@@ -413,6 +461,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "local_compaction": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -617,6 +668,13 @@
         }
       },
       "type": "object"
+    },
+    "ExecPolicyRuleWriteScope": {
+      "enum": [
+        "global",
+        "project"
+      ],
+      "type": "string"
     },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
@@ -1331,12 +1389,29 @@
       "type": "object"
     },
     "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "None",
+            "Friendly",
+            "Pragmatic",
+            "Comedic"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Custom"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "PluginConfig": {
       "additionalProperties": false,
@@ -1353,6 +1428,49 @@
       "properties": {
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
+        },
+        "workspace_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional VS Code workspace file to import additional writable roots from."
+        }
+      },
+      "type": "object"
+    },
+    "PromptDebugHttpToml": {
+      "additionalProperties": false,
+      "description": "HTTP/SSE request debug tracing settings.",
+      "properties": {
+        "capture_dir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Directory used for captured backend files."
+        },
+        "capture_input": {
+          "description": "Capture query input payloads.",
+          "type": "boolean"
+        },
+        "capture_output": {
+          "description": "Capture model output stream payloads.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "When `true`, captures backend query payloads.",
+          "type": "boolean"
+        },
+        "tool_usage_log": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute path to a dedicated tool usage log file."
         }
       },
       "type": "object"
@@ -1948,6 +2066,19 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "account_usage_estimator": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountUsageEstimatorConfigToml"
+        }
+      ],
+      "default": {
+        "max_usage_pct_display_percent_before_full": null,
+        "min_usage_pct_sample_count": null,
+        "stable_backend_percent_window": null
+      },
+      "description": "Tuning for account-usage estimation and `usage_pct` display."
+    },
     "agents": {
       "allOf": [
         {
@@ -1967,6 +2098,14 @@
         }
       ],
       "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
+    },
+    "app_server_log": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AppServerLogToml"
+        }
+      ],
+      "description": "App-server tracing output configuration."
     },
     "approval_policy": {
       "allOf": [
@@ -2008,6 +2147,25 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "bare_prompt": {
+      "description": "When set to `true`, disable built-in/system and contextual prompt scaffolding so only user text is sent.",
+      "type": "boolean"
+    },
+    "builtin_disabled_tools": {
+      "default": null,
+      "description": "Explicit deny-list of built-in (non-MCP) tools. Applied after `builtin_enabled_tools`.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "builtin_enabled_tools": {
+      "description": "Explicit allow-list of built-in (non-MCP) tools. When set, only listed built-in tools are exposed.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
@@ -2033,6 +2191,10 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "compact_summary_preamble": {
+      "description": "Optional text inserted after the compaction summary marker and before the generated compacted summary body.",
+      "type": "string"
+    },
     "default_permissions": {
       "description": "Default named permissions profile to apply from the `[permissions]` table.",
       "type": "string"
@@ -2045,6 +2207,14 @@
     "disable_paste_burst": {
       "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
       "type": "boolean"
+    },
+    "exec_policy_rule_write_scope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ExecPolicyRuleWriteScope"
+        }
+      ],
+      "description": "Where newly approved exec-policy prefix rules should be written. Defaults to `project`."
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
@@ -2159,6 +2329,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "local_compaction": {
           "type": "boolean"
         },
         "memories": {
@@ -2554,6 +2727,15 @@
       },
       "type": "object"
     },
+    "prompt_debug_http": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PromptDebugHttpToml"
+        }
+      ],
+      "default": null,
+      "description": "HTTP/SSE request debug tracing settings."
+    },
     "realtime": {
       "allOf": [
         {
@@ -2566,6 +2748,10 @@
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
+    },
+    "sandbox_debug": {
+      "description": "When false, disable Linux sandbox debug logging written to /tmp. Defaults to true when unset.",
+      "type": "boolean"
     },
     "sandbox_mode": {
       "allOf": [

@@ -24,6 +24,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -33,6 +34,7 @@ use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -89,12 +91,64 @@ impl ApplyPatchRuntime {
 
     #[cfg(not(target_os = "windows"))]
     fn resolve_apply_patch_program(codex_self_exe: Option<&PathBuf>) -> Result<PathBuf, ToolError> {
-        if let Some(path) = codex_self_exe {
+        if let Some(path) = codex_self_exe
+            && !Self::is_deleted_executable(path)
+        {
             return Ok(path.clone());
         }
 
-        std::env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
+        if let Some(path) = Self::resolve_from_argv0() {
+            return Ok(path);
+        }
+
+        if let Ok(path) = std::env::current_exe()
+            && Self::is_usable_executable(&path)
+        {
+            return Ok(path);
+        }
+
+        if let Ok(path) = which::which("codex")
+            && Self::is_usable_executable(&path)
+        {
+            return Ok(path);
+        }
+
+        Err(ToolError::Rejected(
+            "failed to determine a live codex executable for apply_patch".to_string(),
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_from_argv0() -> Option<PathBuf> {
+        let argv0 = std::env::args_os().next()?;
+        let argv0_path = PathBuf::from(argv0);
+        if argv0_path.as_os_str().is_empty() {
+            return None;
+        }
+
+        if argv0_path.is_absolute() {
+            return Self::is_usable_executable(&argv0_path).then_some(argv0_path);
+        }
+
+        if argv0_path.components().count() > 1 {
+            let cwd = std::env::current_dir().ok()?;
+            let candidate = cwd.join(argv0_path);
+            return Self::is_usable_executable(&candidate).then_some(candidate);
+        }
+
+        which::which(&argv0_path)
+            .ok()
+            .filter(|path| Self::is_usable_executable(path))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn is_usable_executable(path: &Path) -> bool {
+        !Self::is_deleted_executable(path) && path.is_file()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn is_deleted_executable(path: &Path) -> bool {
+        path.to_string_lossy().ends_with(" (deleted)")
     }
 
     fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
@@ -147,6 +201,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let retry_reason = ctx.retry_reason.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
+        let grant_root = patch_grant_root(req);
         Box::pin(async move {
             if req.permissions_preapproved && retry_reason.is_none() {
                 return ReviewDecision::Approved;
@@ -162,7 +217,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         call_id,
                         changes.clone(),
                         Some(reason),
-                        /*grant_root*/ None,
+                        grant_root.clone(),
                     )
                     .await;
                 return rx_approve.await.unwrap_or_default();
@@ -175,7 +230,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 || async move {
                     let rx_approve = session
                         .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
+                            turn, call_id, changes, /*reason*/ None, grant_root,
                         )
                         .await;
                     rx_approve.await.unwrap_or_default()
@@ -205,6 +260,19 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     ) -> Option<ExecApprovalRequirement> {
         Some(req.exec_approval_requirement.clone())
     }
+}
+
+fn file_system_write_roots(file_system: &FileSystemPermissions) -> Vec<PathBuf> {
+    file_system
+        .write
+        .as_ref()
+        .map(|roots| {
+            roots
+                .iter()
+                .map(|path| path.as_path().to_path_buf())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
@@ -261,3 +329,14 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
 #[cfg(test)]
 #[path = "apply_patch_tests.rs"]
 mod tests;
+fn patch_grant_root(req: &ApplyPatchRequest) -> Option<PathBuf> {
+    let file_system = req
+        .additional_permissions
+        .as_ref()
+        .and_then(|permissions| permissions.file_system.as_ref())?;
+    let write_roots = file_system_write_roots(file_system);
+    if write_roots.len() == 1 {
+        return write_roots.into_iter().next();
+    }
+    None
+}

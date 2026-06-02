@@ -16,6 +16,8 @@ use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
 use codex_cli::run_logout;
+use codex_cli::run_tlogin_complete;
+use codex_cli::run_tlogin_start;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
@@ -23,14 +25,19 @@ use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_state::StateRuntime;
+use codex_state::account_usage_key;
 use codex_state::state_db_path;
+use codex_state::usage_db_path;
+use codex_tui::render_status_for_cli;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use codex_tui::CliStatusRateLimitMode;
 use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -39,21 +46,43 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod status_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::status_cmd::ThreadStatusOutputFormat;
+use crate::status_cmd::ThreadStatusSelector;
+use crate::status_cmd::load_thread_status_snapshot;
+use crate::status_cmd::render_thread_status;
 
+use codex_core::INTERACTIVE_SESSION_SOURCES;
+use codex_core::RolloutRecorder;
+use codex_core::ThreadSortKey;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::find_thread_names_by_ids;
+use codex_core::find_thread_path_by_id_str;
+use codex_core::find_thread_path_by_name_str;
+use codex_core::parse_turn_item;
+use codex_core::prompt_preview_line;
+use codex_core::version::CODEX_BUILD_VERSION;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
+use codex_login::AuthManager;
+use codex_login::RefreshTokenError;
+use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
+use std::collections::HashSet;
 
 /// Codex CLI
 ///
@@ -61,7 +90,7 @@ use codex_terminal_detection::TerminalName;
 #[derive(Debug, Parser)]
 #[clap(
     author,
-    version,
+    version = CODEX_BUILD_VERSION,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
@@ -83,6 +112,10 @@ struct MultitoolCli {
     #[clap(flatten)]
     interactive: TuiCli,
 
+    /// Override the auth file location (defaults to `$CODEX_HOME/auth.json`).
+    #[arg(long = "auth-file", value_name = "FILE", global = true)]
+    auth_file: Option<PathBuf>,
+
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
 }
@@ -99,6 +132,9 @@ enum Subcommand {
     /// Manage login.
     Login(LoginCommand),
 
+    /// Telegram-oriented two-phase login (for bot orchestration).
+    Tlogin(TloginCommand),
+
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
@@ -107,6 +143,12 @@ enum Subcommand {
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
+
+    /// Show local session configuration status and exit.
+    Status(StatusCommand),
+
+    /// Manage local account usage tracking data.
+    Usage(UsageCommand),
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
@@ -155,10 +197,58 @@ enum Subcommand {
 }
 
 #[derive(Debug, Parser)]
+struct StatusCommand {
+    /// Use locally cached usage/rate-limit values when available.
+    #[arg(long, default_value_t = false)]
+    cached: bool,
+
+    /// Inspect a specific thread.
+    #[arg(long, value_name = "THREAD_ID", conflicts_with = "last")]
+    thread_id: Option<String>,
+
+    /// Inspect the most recently updated matching thread.
+    #[arg(long, default_value_t = false, conflicts_with = "thread_id")]
+    last: bool,
+
+    /// Emit a compact Telegram-friendly thread status. When used without
+    /// `--thread-id`, this selects the most recently updated CLI/VSCode/exec
+    /// thread.
+    #[arg(long, default_value_t = false)]
+    telegram: bool,
+
+    /// Extra arguments accepted after `--` for machine-readable output mode.
+    #[arg(last = true, allow_hyphen_values = true, value_name = "ARG")]
+    trailing_args: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
 struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct UsageCommand {
+    #[command(subcommand)]
+    subcommand: UsageSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum UsageSubcommand {
+    /// Clear locally tracked account usage samples and totals.
+    Clear(UsageClearCommand),
+}
+
+#[derive(Debug, Parser)]
+struct UsageClearCommand {
+    /// Clear usage for all locally tracked accounts on the active provider.
+    #[arg(long = "all-accounts", default_value_t = false)]
+    all_accounts: bool,
+
+    /// Accepted for compatibility; `usage clear` no longer prompts interactively.
+    #[arg(long = "yes", short = 'y', default_value_t = false)]
+    yes: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -225,8 +315,20 @@ struct ResumeCommand {
     all: bool,
 
     /// Include non-interactive sessions in the resume picker and --last selection.
-    #[arg(long = "include-non-interactive", default_value_t = false)]
+    #[arg(
+        long = "include-non-interactive",
+        default_value_t = true,
+        overrides_with = "exclude_non_interactive"
+    )]
     include_non_interactive: bool,
+
+    /// Exclude non-interactive sessions from the resume picker and --last selection.
+    #[arg(
+        long = "exclude-non-interactive",
+        default_value_t = false,
+        overrides_with = "include_non_interactive"
+    )]
+    exclude_non_interactive: bool,
 
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
@@ -249,6 +351,14 @@ struct ForkCommand {
     /// Show all sessions (disables cwd filtering and shows CWD column).
     #[arg(long = "all", default_value_t = false)]
     all: bool,
+
+    /// Show available fork points (numbered) for the selected session and exit.
+    #[arg(long = "show", default_value_t = false, conflicts_with = "pick")]
+    show: bool,
+
+    /// Fork before the Nth user prompt in the selected session (1-based).
+    #[arg(long = "pick", value_name = "POINT", conflicts_with = "show")]
+    pick: Option<usize>,
 
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
@@ -337,6 +447,43 @@ enum LoginSubcommand {
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct TloginCommand {
+    #[command(subcommand)]
+    action: TloginSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum TloginSubcommand {
+    /// Start a Telegram login flow and print authorization details.
+    Start(TloginStartCommand),
+    /// Complete a Telegram login flow.
+    Complete(TloginCompleteCommand),
+}
+
+#[derive(Debug, Parser)]
+struct TloginStartCommand {
+    /// Stable bot user identifier for caching pending login state.
+    #[arg(long = "user-id", value_name = "USER_ID")]
+    user_id: String,
+    /// Use legacy device-auth flow instead of browser OAuth callback flow.
+    #[arg(long = "device-auth", default_value_t = false)]
+    device_auth: bool,
+    /// Emit machine-readable JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+struct TloginCompleteCommand {
+    /// Stable bot user identifier used during `tlogin start`.
+    #[arg(long = "user-id", value_name = "USER_ID")]
+    user_id: String,
+    /// Localhost callback URL copied from browser (required for non-device flow).
+    #[arg(long = "callback-url", value_name = "URL")]
+    callback_url: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -617,13 +764,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    let raw_argv: Vec<String> = std::env::args().collect();
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
+        auth_file,
         subcommand,
     } = MultitoolCli::parse();
+
+    codex_login::set_auth_file_override(auth_file);
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
@@ -633,6 +784,22 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 
     match subcommand {
         None => {
+            if let Some(prompt) = interactive.prompt.as_deref() {
+                if is_status_shortcut_prompt(prompt) && interactive.images.is_empty() {
+                    run_status_command(
+                        &root_config_overrides,
+                        &interactive,
+                        StatusOutputMode::default(),
+                        CliStatusRateLimitMode::LiveOnly,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                let candidate = prompt.trim();
+                anyhow::bail!(
+                    "Unknown command `{candidate}`. Positional prompts are only supported via `codex exec`."
+                );
+            }
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
@@ -739,6 +906,53 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
+        Some(Subcommand::Status(status_command)) => {
+            let default_rate_limit_mode = if status_command.cached {
+                CliStatusRateLimitMode::AllowCached
+            } else {
+                CliStatusRateLimitMode::LiveOnly
+            };
+            let mut status_options = parse_status_invocation_options(
+                &raw_argv,
+                default_rate_limit_mode,
+                &status_command.trailing_args,
+            )?;
+            if status_command.thread_id.is_some() || status_command.last || status_command.telegram {
+                status_options.output_mode.thread_selector = Some(ThreadStatusSelector {
+                    thread_id: status_command.thread_id.clone(),
+                    last: status_command.last || status_command.telegram,
+                    include_exec: status_command.telegram,
+                });
+                status_options.output_mode.thread_output = Some(if status_command.telegram {
+                    ThreadStatusOutputFormat::Telegram
+                } else {
+                    ThreadStatusOutputFormat::Human
+                });
+            }
+            if let Some(auth_file_override) = status_options.auth_file_override {
+                codex_login::set_auth_file_override(Some(auth_file_override));
+            }
+            run_status_command(
+                &root_config_overrides,
+                &interactive,
+                status_options.output_mode,
+                status_options.rate_limit_mode,
+            )
+            .await?;
+        }
+        Some(Subcommand::Usage(usage_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "usage",
+            )?;
+            match usage_cli.subcommand {
+                UsageSubcommand::Clear(clear_command) => {
+                    run_usage_clear_command(&root_config_overrides, &interactive, clear_command)
+                        .await?;
+                }
+            }
+        }
         #[cfg(target_os = "macos")]
         Some(Subcommand::App(app_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -753,9 +967,18 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             last,
             all,
             include_non_interactive,
+            exclude_non_interactive,
             remote,
             config_overrides,
         })) => {
+            let include_non_interactive = resolve_resume_include_non_interactive(
+                include_non_interactive,
+                exclude_non_interactive,
+            );
+            if all && !std::io::stdout().is_terminal() {
+                print_resume_sessions_non_interactive(all, include_non_interactive).await?;
+                return Ok(());
+            }
             interactive = finalize_resume_interactive(
                 interactive,
                 root_config_overrides.clone(),
@@ -780,15 +1003,129 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             session_id,
             last,
             all,
+            show,
+            pick,
             remote,
             config_overrides,
         })) => {
+            if show {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "fork --show",
+                )?;
+                reject_remote_mode_for_subcommand(
+                    remote.remote.as_deref(),
+                    remote.remote_auth_token_env.as_deref(),
+                    "fork --show",
+                )?;
+                if last {
+                    anyhow::bail!(
+                        "`codex fork --show` requires SESSION_ID and does not support `--last`."
+                    );
+                }
+                let Some(session_id) = session_id else {
+                    anyhow::bail!("`codex fork --show` requires SESSION_ID.");
+                };
+                let path = resolve_fork_rollout_path(&session_id)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No saved session found with ID {session_id}. Run `codex fork` without an ID to choose from existing sessions."
+                        )
+                    })?;
+                let prompts = load_user_prompt_points(path.as_path()).await?;
+                if let Some(item) = load_thread_item_by_rollout_path(path.as_path()).await? {
+                    let conversation_name = if let Some(thread_id) = item.thread_id {
+                        let mut ids = HashSet::new();
+                        ids.insert(thread_id);
+                        find_thread_names_by_ids(find_codex_home()?.as_path(), &ids)
+                            .await
+                            .ok()
+                            .and_then(|names| names.get(&thread_id).cloned())
+                            .unwrap_or_else(|| {
+                                item.first_user_message
+                                    .clone()
+                                    .unwrap_or_else(|| "(no message yet)".to_string())
+                            })
+                    } else {
+                        item.first_user_message
+                            .clone()
+                            .unwrap_or_else(|| "(no message yet)".to_string())
+                    };
+                    println!("Conversation: {conversation_name}");
+                    println!("Created at: {}", item.created_at.as_deref().unwrap_or("-"));
+                    println!("Updated at: {}", item.updated_at.as_deref().unwrap_or("-"));
+                    println!("Branch: {}", item.git_branch.as_deref().unwrap_or("-"));
+                    println!(
+                        "CWD: {}",
+                        item.cwd
+                            .as_deref()
+                            .map(|cwd| cwd.display().to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    );
+                    println!();
+                }
+                if prompts.is_empty() {
+                    println!("No fork points found for session {session_id}.");
+                } else {
+                    for (idx, prompt) in prompts.iter().enumerate() {
+                        let preview = prompt_preview_line(prompt);
+                        println!("{}. {preview}", idx + 1);
+                    }
+                }
+                return Ok(());
+            }
+
+            let fork_nth_user_message = if let Some(point) = pick {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "fork --pick",
+                )?;
+                reject_remote_mode_for_subcommand(
+                    remote.remote.as_deref(),
+                    remote.remote_auth_token_env.as_deref(),
+                    "fork --pick",
+                )?;
+                if last {
+                    anyhow::bail!(
+                        "`codex fork --pick` requires SESSION_ID and does not support `--last`."
+                    );
+                }
+                let Some(session_id) = session_id.as_deref() else {
+                    anyhow::bail!("`codex fork --pick` requires SESSION_ID.");
+                };
+                let path = resolve_fork_rollout_path(session_id).await?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No saved session found with ID {session_id}. Run `codex fork` without an ID to choose from existing sessions."
+                    )
+                })?;
+                let prompts = load_user_prompt_points(path.as_path()).await?;
+                if prompts.is_empty() {
+                    anyhow::bail!("Session {session_id} has no fork points.");
+                }
+                if point == 0 {
+                    anyhow::bail!("`--pick` must be a positive integer (1-based).");
+                }
+                if point > prompts.len() {
+                    anyhow::bail!(
+                        "`--pick {point}` is out of range for session {session_id}. Valid range is 1..={}.",
+                        prompts.len()
+                    );
+                }
+                Some(point - 1)
+            } else {
+                None
+            };
+
             interactive = finalize_fork_interactive(
                 interactive,
                 root_config_overrides.clone(),
                 session_id,
                 last,
                 all,
+                fork_nth_user_message,
                 config_overrides,
             );
             let exit_info = run_interactive_tui(
@@ -835,6 +1172,45 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
+                }
+            }
+        }
+        Some(Subcommand::Tlogin(tlogin_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "tlogin",
+            )?;
+            match tlogin_cli.action {
+                TloginSubcommand::Start(start) => {
+                    let result = run_tlogin_start(
+                        root_config_overrides.clone(),
+                        start.user_id,
+                        start.device_auth,
+                    )
+                    .await?;
+                    if start.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "authorizationUrl": result.authorization_url,
+                                "verificationUrl": result.verification_url,
+                                "userCode": result.user_code,
+                                "message": result.message,
+                            }))?
+                        );
+                    } else {
+                        println!("{}", result.message);
+                    }
+                }
+                TloginSubcommand::Complete(complete) => {
+                    run_tlogin_complete(
+                        root_config_overrides.clone(),
+                        complete.user_id,
+                        complete.callback_url,
+                    )
+                    .await?;
+                    eprintln!("Successfully logged in");
                 }
             }
         }
@@ -981,8 +1357,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "responses-api-proxy",
             )?;
-            tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
-                .await??;
+            codex_responses_api_proxy::run_main(args).await?;
         }
         Some(Subcommand::StdioToUds(cmd)) => {
             reject_remote_mode_for_subcommand(
@@ -1294,6 +1669,493 @@ fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<Str
     read_remote_auth_token_from_env_var_with(env_var_name, |name| std::env::var(name))
 }
 
+fn is_status_shortcut_prompt(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    trimmed == "/status" || trimmed == "status"
+}
+
+async fn resolve_fork_rollout_path(session_id: &str) -> anyhow::Result<Option<PathBuf>> {
+    let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
+    if ThreadId::from_string(session_id).is_ok() {
+        find_thread_path_by_id_str(codex_home.as_path(), session_id)
+            .await
+            .map_err(anyhow::Error::from)
+    } else {
+        find_thread_path_by_name_str(codex_home.as_path(), session_id)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+}
+
+async fn load_user_prompt_points(rollout_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .map_err(anyhow::Error::from)?;
+    let items = history.get_rollout_items();
+    let mut prompts = Vec::new();
+    for item in items {
+        match item {
+            RolloutItem::ResponseItem(response_item) => {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    prompts.push(user_message.message());
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let new_len = prompts.len().saturating_sub(num_turns);
+                prompts.truncate(new_len);
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+    Ok(prompts)
+}
+
+async fn load_thread_item_by_rollout_path(
+    rollout_path: &std::path::Path,
+) -> anyhow::Result<Option<codex_core::ThreadItem>> {
+    let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    let mut cursor = None;
+    loop {
+        let page = RolloutRecorder::list_threads(
+            &config,
+            /*page_size*/ 100,
+            cursor.as_ref(),
+            ThreadSortKey::UpdatedAt,
+            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            /*model_providers*/ None,
+            &config.model_provider_id,
+            /*search_term*/ None,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+        if let Some(item) = page
+            .items
+            .into_iter()
+            .find(|item| item.path.as_path() == rollout_path)
+        {
+            return Ok(Some(item));
+        }
+        if page.next_cursor.is_none() {
+            return Ok(None);
+        }
+        cursor = page.next_cursor;
+    }
+}
+
+async fn print_resume_sessions_non_interactive(
+    show_all: bool,
+    include_non_interactive: bool,
+) -> anyhow::Result<()> {
+    let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    let provider_filter = vec![config.model_provider_id.clone()];
+    let allowed_sources = if include_non_interactive {
+        &[][..]
+    } else {
+        INTERACTIVE_SESSION_SOURCES.as_slice()
+    };
+    let filter_cwd = if show_all {
+        None
+    } else {
+        Some(config.cwd.as_path())
+    };
+
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    let mut cursor = None;
+    loop {
+        let page = RolloutRecorder::list_threads(
+            &config,
+            /*page_size*/ 100,
+            cursor.as_ref(),
+            ThreadSortKey::UpdatedAt,
+            allowed_sources,
+            Some(provider_filter.as_slice()),
+            &config.model_provider_id,
+            /*search_term*/ None,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+
+        for item in page.items.into_iter().filter(|item| {
+            filter_cwd.is_none()
+                || item
+                    .cwd
+                    .as_deref()
+                    .is_some_and(|cwd| cwd == config.cwd.as_path())
+        }) {
+            let thread = item
+                .thread_id
+                .map(|thread_id| thread_id.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let updated_at = item.updated_at.unwrap_or_else(|| "-".to_string());
+            let cwd = item
+                .cwd
+                .as_deref()
+                .map(|cwd| cwd.display().to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let preview = item.first_user_message.unwrap_or_else(|| "-".to_string());
+            if !write_stdout_line(&mut stdout, &format!("{thread}\t{updated_at}\t{cwd}\t{preview}"))?
+            {
+                return Ok(());
+            }
+        }
+
+        if page.next_cursor.is_none() {
+            break;
+        }
+        cursor = page.next_cursor;
+    }
+
+    Ok(())
+}
+
+fn write_stdout_line(stdout: &mut impl Write, line: &str) -> anyhow::Result<bool> {
+    match writeln!(stdout, "{line}") {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn write_stdout_lines(lines: &[String]) -> anyhow::Result<()> {
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    for line in lines {
+        if !write_stdout_line(&mut stdout, line)? {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn strip_ansi_escape_codes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            while let Some(next) = chars.next() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn sanitize_status_line_for_telegram(line: &str) -> Option<String> {
+    let line = strip_ansi_escape_codes(line);
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('╭') || trimmed.starts_with('╰') {
+        return None;
+    }
+
+    let content = trimmed
+        .trim_start_matches('│')
+        .trim_end_matches('│')
+        .trim()
+        .to_string();
+    (!content.is_empty()).then_some(content)
+}
+
+async fn render_telegram_status_lines(
+    config: &Config,
+    auth: Option<&codex_login::CodexAuth>,
+    rate_limit_mode: CliStatusRateLimitMode,
+    snapshot: &status_cmd::ThreadStatusSnapshot,
+) -> Vec<String> {
+    let model_name = config.model.as_deref().unwrap_or("<unknown>");
+    let mut lines = render_status_for_cli(
+        config,
+        auth.cloned(),
+        model_name,
+        /*width*/ 80,
+        rate_limit_mode,
+    )
+    .await
+    .into_iter()
+    .filter_map(|line| sanitize_status_line_for_telegram(&line))
+    .collect::<Vec<_>>();
+    let context_usage = snapshot
+        .used_percent
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(|| "n/a".to_string());
+    lines.push(format!("Context window: {context_usage} used"));
+    lines
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct StatusOutputMode {
+    compact: bool,
+    utc: bool,
+    thread_output: Option<ThreadStatusOutputFormat>,
+    thread_selector: Option<ThreadStatusSelector>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StatusInvocationOptions {
+    output_mode: StatusOutputMode,
+    auth_file_override: Option<PathBuf>,
+    rate_limit_mode: CliStatusRateLimitMode,
+}
+
+fn parse_status_invocation_options(
+    raw_argv: &[String],
+    default_rate_limit_mode: CliStatusRateLimitMode,
+    trailing_args: &[String],
+) -> anyhow::Result<StatusInvocationOptions> {
+    let Some(status_index) = raw_argv.iter().position(|arg| arg == "status") else {
+        if trailing_args.is_empty() {
+            return Ok(StatusInvocationOptions {
+                rate_limit_mode: default_rate_limit_mode,
+                ..StatusInvocationOptions::default()
+            });
+        }
+        anyhow::bail!("Unknown arguments for `codex status`.");
+    };
+    let has_double_dash = raw_argv[status_index + 1..].iter().any(|arg| arg == "--");
+    if !has_double_dash {
+        if trailing_args.is_empty() {
+            return Ok(StatusInvocationOptions {
+                rate_limit_mode: default_rate_limit_mode,
+                ..StatusInvocationOptions::default()
+            });
+        }
+        let provided = trailing_args.join(" ");
+        anyhow::bail!(
+            "Unknown arguments for `codex status`: {provided}. Use `codex status [--cached]` or `codex status -- [--utc] [--cached]`."
+        );
+    }
+
+    let mut options = StatusInvocationOptions {
+        output_mode: StatusOutputMode {
+            compact: true,
+            utc: false,
+            thread_output: None,
+            thread_selector: None,
+        },
+        auth_file_override: None,
+        rate_limit_mode: default_rate_limit_mode,
+    };
+    let mut i = 0usize;
+    while i < trailing_args.len() {
+        match trailing_args[i].as_str() {
+            "--utc" => {
+                options.output_mode.utc = true;
+            }
+            "--cached" => {
+                options.rate_limit_mode = CliStatusRateLimitMode::AllowCached;
+            }
+            flag if flag.starts_with("--auth-file=") => {
+                let value = flag.trim_start_matches("--auth-file=");
+                if !value.is_empty() {
+                    options.auth_file_override = Some(PathBuf::from(value));
+                }
+            }
+            "--auth-file" => {
+                if let Some(value) = trailing_args.get(i + 1) {
+                    options.auth_file_override = Some(PathBuf::from(value));
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    Ok(options)
+}
+
+async fn run_status_command(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+    status_output_mode: StatusOutputMode,
+    rate_limit_mode: CliStatusRateLimitMode,
+) -> anyhow::Result<()> {
+    let mut cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    if interactive.web_search {
+        cli_kv_overrides.push((
+            "web_search".to_string(),
+            toml::Value::String("live".to_string()),
+        ));
+    }
+
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        ..Default::default()
+    };
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let thread_snapshot = if let Some(selector) = status_output_mode.thread_selector.as_ref() {
+        Some(load_thread_status_snapshot(&config, selector).await?)
+    } else {
+        None
+    };
+    if let Some(snapshot) = thread_snapshot.as_ref()
+        && status_output_mode.thread_output == Some(ThreadStatusOutputFormat::Human)
+    {
+        let lines = render_thread_status(snapshot, ThreadStatusOutputFormat::Human)?;
+        write_stdout_lines(&lines)?;
+        return Ok(());
+    }
+    let auth_manager = std::sync::Arc::new(AuthManager::new(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+    ));
+    let (auth, compact_output_mode) = match auth_manager.auth_with_refresh_if_expired_strict().await {
+        Ok(auth) => (auth, codex_tui::CompactStatusOutputMode::Normal),
+        Err(err) => {
+            eprintln!("proactive auth refresh failed: {err}");
+            tracing::warn!("proactive auth refresh failed: {err}");
+            let compact_mode = match err {
+                RefreshTokenError::Permanent(_) => codex_tui::CompactStatusOutputMode::UnknownUsage,
+                RefreshTokenError::Transient(_) => codex_tui::CompactStatusOutputMode::Normal,
+            };
+            (auth_manager.auth_cached(), compact_mode)
+        }
+    };
+    if let Some(snapshot) = thread_snapshot.as_ref()
+        && status_output_mode.thread_output == Some(ThreadStatusOutputFormat::Telegram)
+    {
+        let lines =
+            render_telegram_status_lines(&config, auth.as_ref(), rate_limit_mode, snapshot).await;
+        write_stdout_lines(&lines)?;
+        return Ok(());
+    }
+    if status_output_mode.compact {
+        let compact_line = codex_tui::render_compact_status_for_cli(
+            &config,
+            auth.as_ref(),
+            status_output_mode.utc,
+            compact_output_mode,
+            rate_limit_mode,
+        )
+        .await;
+        write_stdout_lines(&[compact_line])?;
+        return Ok(());
+    }
+
+    let model_name = config.model.as_deref().unwrap_or("<unknown>");
+    let lines = render_status_for_cli(
+        &config,
+        auth,
+        model_name,
+        /*width*/ 80,
+        rate_limit_mode,
+    )
+    .await;
+    write_stdout_lines(&lines)?;
+    Ok(())
+}
+
+async fn run_usage_clear_command(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+    clear_command: UsageClearCommand,
+) -> anyhow::Result<()> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        ..Default::default()
+    };
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let usage_path = usage_db_path(config.sqlite_home.as_path());
+    let current_account = if clear_command.all_accounts {
+        None
+    } else {
+        let auth_manager = AuthManager::new(
+            config.codex_home.clone(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let auth = auth_manager.auth().await;
+        let account_id = auth
+            .as_ref()
+            .and_then(|auth| {
+                account_usage_key(
+                    auth.get_account_id().as_deref(),
+                    auth.get_account_email().as_deref(),
+                )
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No current account ID could be resolved from active credentials. Use `codex usage clear --all-accounts` to clear all locally tracked accounts."
+                )
+            })?;
+        let account_email = auth.as_ref().and_then(|auth| auth.get_account_email());
+        Some((account_id, account_email))
+    };
+
+    let usage_store = codex_state::AccountUsageStore::init_with_estimator_config(
+        config.sqlite_home.clone(),
+        config.model_provider_id,
+        codex_state::AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: config.account_usage_estimator.min_usage_pct_sample_count,
+            max_usage_pct_display_percent_before_full: config
+                .account_usage_estimator
+                .max_usage_pct_display_percent_before_full,
+            stable_backend_percent_window: config
+                .account_usage_estimator
+                .stable_backend_percent_window,
+        },
+    )
+    .await?;
+
+    let (usage_rows_deleted, sample_rows_deleted, scope) = if clear_command.all_accounts {
+        let (usage_rows_deleted, sample_rows_deleted) =
+            usage_store.clear_usage_for_all_accounts().await?;
+        (
+            usage_rows_deleted,
+            sample_rows_deleted,
+            "all accounts".to_string(),
+        )
+    } else {
+        let (account_id, account_email) = current_account
+            .ok_or_else(|| anyhow::anyhow!("Missing current account resolution state."))?;
+        let (usage_rows_deleted, sample_rows_deleted) = usage_store
+            .clear_usage_for_account(account_id.as_str())
+            .await?;
+        let scope = if let Some(account_email) = account_email {
+            format!("account `{account_email}`")
+        } else {
+            format!("account `{account_id}`")
+        };
+        (usage_rows_deleted, sample_rows_deleted, scope)
+    };
+
+    println!(
+        "Cleared usage tracking for {scope} from {} (account_usage rows: {usage_rows_deleted}, account_usage_samples rows: {sample_rows_deleted}).",
+        usage_path.display()
+    );
+
+    Ok(())
+}
+
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     remote: Option<String>,
@@ -1385,6 +2247,13 @@ fn finalize_resume_interactive(
     interactive
 }
 
+fn resolve_resume_include_non_interactive(
+    include_non_interactive: bool,
+    exclude_non_interactive: bool,
+) -> bool {
+    include_non_interactive && !exclude_non_interactive
+}
+
 /// Build the final `TuiCli` for a `codex fork` invocation.
 fn finalize_fork_interactive(
     mut interactive: TuiCli,
@@ -1392,6 +2261,7 @@ fn finalize_fork_interactive(
     session_id: Option<String>,
     last: bool,
     show_all: bool,
+    fork_nth_user_message: Option<usize>,
     fork_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so fork shares the same
@@ -1401,6 +2271,7 @@ fn finalize_fork_interactive(
     interactive.fork_last = last;
     interactive.fork_session_id = fork_session_id;
     interactive.fork_show_all = show_all;
+    interactive.fork_nth_user_message = fork_nth_user_message;
 
     // Merge fork-scoped flags and overrides with highest precedence.
     merge_interactive_cli_flags(&mut interactive, fork_cli);
@@ -1442,6 +2313,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if subcommand_cli.web_search {
         interactive.web_search = true;
     }
+    if subcommand_cli.bare_prompt {
+        interactive.bare_prompt = true;
+    }
     if !subcommand_cli.images.is_empty() {
         interactive.images = subcommand_cli.images;
     }
@@ -1481,6 +2355,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -1488,12 +2363,17 @@ mod tests {
             last,
             all,
             include_non_interactive,
+            exclude_non_interactive,
             remote: _,
             config_overrides: resume_cli,
         }) = subcommand.expect("resume present")
         else {
             unreachable!()
         };
+        let include_non_interactive = resolve_resume_include_non_interactive(
+            include_non_interactive,
+            exclude_non_interactive,
+        );
 
         finalize_resume_interactive(
             interactive,
@@ -1514,12 +2394,15 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
 
         let Subcommand::Fork(ForkCommand {
             session_id,
             last,
             all,
+            show: _,
+            pick: _,
             remote: _,
             config_overrides: fork_cli,
         }) = subcommand.expect("fork present")
@@ -1527,7 +2410,299 @@ mod tests {
             unreachable!()
         };
 
-        finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+        finalize_fork_interactive(
+            interactive,
+            root_overrides,
+            session_id,
+            last,
+            all,
+            None,
+            fork_cli,
+        )
+    }
+
+    #[test]
+    fn status_shortcut_prompt_matches_expected_values() {
+        assert_eq!(is_status_shortcut_prompt("/status"), true);
+        assert_eq!(is_status_shortcut_prompt("status"), true);
+        assert_eq!(is_status_shortcut_prompt(" /status "), true);
+    }
+
+    #[test]
+    fn status_shortcut_prompt_rejects_other_inputs() {
+        assert_eq!(is_status_shortcut_prompt("/status now"), false);
+        assert_eq!(is_status_shortcut_prompt("status please"), false);
+        assert_eq!(is_status_shortcut_prompt("/model"), false);
+    }
+
+    #[test]
+    fn status_output_mode_defaults_without_double_dash() {
+        let options = parse_status_invocation_options(
+            &["codex".to_string(), "status".to_string()],
+            CliStatusRateLimitMode::LiveOnly,
+            &[],
+        )
+        .expect("status mode");
+        assert_eq!(options.output_mode, StatusOutputMode::default());
+        assert_eq!(options.auth_file_override, None);
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
+    }
+
+    #[test]
+    fn status_output_mode_compact_with_double_dash() {
+        let options = parse_status_invocation_options(
+            &["codex".to_string(), "status".to_string(), "--".to_string()],
+            CliStatusRateLimitMode::LiveOnly,
+            &[],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.output_mode,
+            StatusOutputMode {
+                compact: true,
+                utc: false,
+                thread_output: None,
+                thread_selector: None,
+            }
+        );
+        assert_eq!(options.auth_file_override, None);
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
+    }
+
+    #[test]
+    fn status_output_mode_compact_with_utc() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--utc".to_string(),
+            ],
+            CliStatusRateLimitMode::LiveOnly,
+            &["--utc".to_string()],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.output_mode,
+            StatusOutputMode {
+                compact: true,
+                utc: true,
+                thread_output: None,
+                thread_selector: None,
+            }
+        );
+        assert_eq!(options.auth_file_override, None);
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
+    }
+
+    #[test]
+    fn status_output_mode_compact_ignores_other_trailing_args() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--auth-file=roger@gmail.com".to_string(),
+                "--utc".to_string(),
+            ],
+            CliStatusRateLimitMode::LiveOnly,
+            &[
+                "--auth-file=roger@gmail.com".to_string(),
+                "--utc".to_string(),
+            ],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.output_mode,
+            StatusOutputMode {
+                compact: true,
+                utc: true,
+                thread_output: None,
+                thread_selector: None,
+            }
+        );
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
+    }
+
+    #[test]
+    fn status_output_mode_compact_parses_auth_file() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--auth-file=/tmp/alt-auth.json".to_string(),
+            ],
+            CliStatusRateLimitMode::LiveOnly,
+            &["--auth-file=/tmp/alt-auth.json".to_string()],
+        )
+        .expect("status mode");
+        assert_eq!(
+            options.auth_file_override,
+            Some(std::path::PathBuf::from("/tmp/alt-auth.json"))
+        );
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::LiveOnly);
+    }
+
+    #[test]
+    fn status_output_mode_compact_parses_cached_flag() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--".to_string(),
+                "--cached".to_string(),
+            ],
+            CliStatusRateLimitMode::LiveOnly,
+            &["--cached".to_string()],
+        )
+        .expect("status mode");
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::AllowCached);
+    }
+
+    #[test]
+    fn status_output_mode_uses_cached_flag_from_subcommand() {
+        let options = parse_status_invocation_options(
+            &[
+                "codex".to_string(),
+                "status".to_string(),
+                "--cached".to_string(),
+            ],
+            CliStatusRateLimitMode::AllowCached,
+            &[],
+        )
+        .expect("status mode");
+        assert_eq!(options.rate_limit_mode, CliStatusRateLimitMode::AllowCached);
+    }
+
+    #[test]
+    fn status_subcommand_accepts_trailing_args_after_double_dash() {
+        let cli = MultitoolCli::try_parse_from(["codex", "status", "--", "--utc"]).expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            cached,
+            thread_id,
+            last,
+            telegram,
+            trailing_args,
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert_eq!(cached, false);
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(!telegram);
+        assert_eq!(trailing_args, vec!["--utc".to_string()]);
+    }
+
+    #[test]
+    fn status_subcommand_accepts_cached_flag() {
+        let cli = MultitoolCli::try_parse_from(["codex", "status", "--cached"]).expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            cached,
+            thread_id,
+            last,
+            telegram,
+            trailing_args,
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert_eq!(cached, true);
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(!telegram);
+        assert_eq!(trailing_args, Vec::<String>::new());
+    }
+
+    #[test]
+    fn status_subcommand_accepts_thread_id_and_telegram() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "status",
+            "--thread-id",
+            "thread_123",
+            "--telegram",
+        ])
+        .expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            cached,
+            thread_id,
+            last,
+            telegram,
+            trailing_args,
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert!(!cached);
+        assert_eq!(thread_id.as_deref(), Some("thread_123"));
+        assert!(!last);
+        assert!(telegram);
+        assert_eq!(trailing_args, Vec::<String>::new());
+    }
+
+    #[test]
+    fn status_subcommand_accepts_telegram_without_last() {
+        let cli = MultitoolCli::try_parse_from(["codex", "status", "--telegram"]).expect("parse");
+        let Some(Subcommand::Status(StatusCommand {
+            thread_id,
+            last,
+            telegram,
+            ..
+        })) = cli.subcommand
+        else {
+            panic!("expected status subcommand");
+        };
+        assert_eq!(thread_id, None);
+        assert!(!last);
+        assert!(telegram);
+    }
+
+    #[test]
+    fn sanitize_status_line_for_telegram_drops_borders_and_trims_content() {
+        assert_eq!(
+            sanitize_status_line_for_telegram("│  Model: gpt-5.4-mini                           │"),
+            Some("Model: gpt-5.4-mini".to_string())
+        );
+        assert_eq!(sanitize_status_line_for_telegram("╭────────────╮"), None);
+        assert_eq!(sanitize_status_line_for_telegram("│                                              │"), None);
+    }
+
+    #[test]
+    fn strip_ansi_escape_codes_removes_sgr_sequences() {
+        assert_eq!(
+            strip_ansi_escape_codes("\u{1b}[32mgreen\u{1b}[0m text"),
+            "green text"
+        );
+    }
+
+    #[test]
+    fn status_subcommand_rejects_thread_id_with_last() {
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "status",
+            "--thread-id",
+            "thread_123",
+            "--last",
+        ])
+        .expect_err("parse should fail");
+        let message = err.to_string();
+        assert!(message.contains("--thread-id"));
+        assert!(message.contains("--last"));
+    }
+
+    #[test]
+    fn root_prompt_is_rejected_outside_exec() {
+        let err =
+            MultitoolCli::try_parse_from(["codex", "hello world"]).expect("parse should succeed");
+        let MultitoolCli {
+            subcommand,
+            interactive,
+            ..
+        } = err;
+        assert!(subcommand.is_none());
+        assert_eq!(interactive.prompt.as_deref(), Some("hello world"));
     }
 
     #[test]
@@ -1702,6 +2877,7 @@ mod tests {
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
         assert!(!interactive.resume_show_all);
+        assert!(interactive.resume_include_non_interactive);
     }
 
     #[test]
@@ -1739,6 +2915,29 @@ mod tests {
     }
 
     #[test]
+    fn resume_exclude_non_interactive_flag_sets_source_filter_override() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "--exclude-non-interactive"].as_ref());
+
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_include_non_interactive);
+    }
+
+    #[test]
+    fn resume_last_non_interactive_flag_wins_when_both_are_passed() {
+        let interactive = finalize_resume_from_args(
+            [
+                "codex",
+                "resume",
+                "--exclude-non-interactive",
+                "--include-non-interactive",
+            ]
+            .as_ref(),
+        );
+        assert!(interactive.resume_include_non_interactive);
+    }
+
+    #[test]
     fn resume_merges_option_flags_and_full_auto() {
         let interactive = finalize_resume_from_args(
             [
@@ -1748,6 +2947,7 @@ mod tests {
                 "--oss",
                 "--full-auto",
                 "--search",
+                "--bare-prompt",
                 "--sandbox",
                 "workspace-write",
                 "--ask-for-approval",
@@ -1781,6 +2981,7 @@ mod tests {
             Some(std::path::Path::new("/tmp"))
         );
         assert!(interactive.web_search);
+        assert!(interactive.bare_prompt);
         let has_a = interactive
             .images
             .iter()
@@ -2068,6 +3269,122 @@ mod tests {
             "--allow-unauthenticated-non-loopback-ws",
         ]);
         assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn usage_clear_parses_flags() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "usage", "clear", "--all-accounts", "--yes"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Usage(UsageCommand { subcommand })) = cli.subcommand else {
+            panic!("expected usage subcommand");
+        };
+        let UsageSubcommand::Clear(UsageClearCommand { all_accounts, yes }) = subcommand;
+        assert!(all_accounts);
+        assert!(yes);
+    }
+
+    #[test]
+    fn tlogin_start_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "start",
+            "--user-id",
+            "1234",
+            "--json",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Start(TloginStartCommand {
+            user_id,
+            json,
+            device_auth,
+        }) = action
+        else {
+            panic!("expected tlogin start");
+        };
+        assert_eq!(user_id, "1234");
+        assert!(json);
+        assert!(!device_auth);
+    }
+
+    #[test]
+    fn tlogin_start_device_auth_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "start",
+            "--user-id",
+            "1234",
+            "--device-auth",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Start(TloginStartCommand { device_auth, .. }) = action else {
+            panic!("expected tlogin start");
+        };
+        assert!(device_auth);
+    }
+
+    #[test]
+    fn tlogin_complete_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "complete",
+            "--user-id",
+            "1234",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Complete(TloginCompleteCommand {
+            user_id,
+            callback_url,
+        }) = action
+        else {
+            panic!("expected tlogin complete");
+        };
+        assert_eq!(user_id, "1234");
+        assert_eq!(callback_url, None);
+    }
+
+    #[test]
+    fn tlogin_complete_with_callback_url_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--auth-file",
+            "/tmp/auth.json",
+            "tlogin",
+            "complete",
+            "--user-id",
+            "1234",
+            "--callback-url",
+            "http://localhost:1455/auth/callback?code=abc&state=xyz",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Tlogin(TloginCommand { action })) = cli.subcommand else {
+            panic!("expected tlogin subcommand");
+        };
+        let TloginSubcommand::Complete(TloginCompleteCommand { callback_url, .. }) = action else {
+            panic!("expected tlogin complete");
+        };
+        assert_eq!(
+            callback_url.as_deref(),
+            Some("http://localhost:1455/auth/callback?code=abc&state=xyz")
+        );
     }
 
     #[test]

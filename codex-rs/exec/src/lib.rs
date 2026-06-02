@@ -49,6 +49,10 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_core::ModelClient;
+use codex_core::Prompt;
+use codex_core::ResponseEvent;
+use codex_core::ResponseStream;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -56,22 +60,36 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
+use codex_core::resolve_installation_id;
+use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthConfig;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 use codex_login::enforce_login_restrictions;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::RefreshStrategy;
+use codex_otel::SessionTelemetry;
+use codex_otel::TelemetryAuthMode;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -81,10 +99,20 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_state::AccountUsageEventMeta;
+use codex_state::AccountUsageEstimatorConfig;
+use codex_state::AccountUsageStore;
+use codex_state::account_usage_display;
+use codex_state::account_usage_key;
+use codex_state::estimate_usage_usd_for_model;
+use codex_state::load_model_pricing;
+use codex_state::ModelPricingFile;
+use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
+use std::fmt::Write as _;
 pub use event_processor_with_jsonl_output::CodexStatus;
 pub use event_processor_with_jsonl_output::CollectedThreadEvents;
 pub use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
@@ -121,10 +149,14 @@ pub use exec_events::TurnFailedEvent;
 pub use exec_events::TurnStartedEvent;
 pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
+use futures::StreamExt;
+use owo_colors::OwoColorize;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -143,6 +175,11 @@ use crate::cli::Command as ExecCommand;
 use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const CODEX_BACKEND_CAPTURE_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE";
+const CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_INPUT";
+const CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_OUTPUT";
+const CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR: &str = "CODEX_BACKEND_CAPTURE_STDERR";
+const DEFAULT_DIRECT_SYSTEM_PROMPT: &str = "You are a helpful assistant. Respond directly to the user request without running tools or shell commands.";
 
 enum InitialOperation {
     UserTurn {
@@ -182,7 +219,147 @@ impl RequestIdSequencer {
     }
 }
 
+struct BackendCaptureGuard {
+    prior_capture_enabled: Option<std::ffi::OsString>,
+    prior_capture_input: Option<std::ffi::OsString>,
+    prior_capture_output: Option<std::ffi::OsString>,
+    prior_capture_stderr: Option<std::ffi::OsString>,
+}
+
+fn format_exec_debug_route(config: &Config) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "codex exec debug route");
+    let _ = writeln!(out, "  codex_home: {}", config.codex_home.display());
+    let _ = writeln!(out, "  active_profile: {:?}", config.active_profile);
+    let _ = writeln!(out, "  resolved personality: {:?}", config.personality);
+    let _ = writeln!(
+        out,
+        "  personality feature enabled: {}",
+        config.features.enabled(Feature::Personality)
+    );
+
+    let origins = config.config_layer_stack.origins();
+    let _ = writeln!(
+        out,
+        "  personality origin metadata: {:?}",
+        origins.get("personality")
+    );
+
+    let user_layer = config.config_layer_stack.get_user_layer();
+    let _ = writeln!(out, "  user layer present: {}", user_layer.is_some());
+    if let Some(user_layer) = user_layer {
+        let _ = writeln!(out, "  user layer: {:?}", user_layer.name);
+        let _ = writeln!(
+            out,
+            "  user layer personality: {:?}",
+            user_layer.config.get("personality")
+        );
+        let _ = writeln!(
+            out,
+            "  user layer profile: {:?}",
+            user_layer.config.get("profile")
+        );
+        let _ = writeln!(out, "  user layer raw_toml: {:?}", user_layer.raw_toml());
+        if let Some(profile_name) = user_layer
+            .config
+            .get("profile")
+            .and_then(|value| value.as_str())
+        {
+            match config.active_profile.as_deref() {
+                Some(active_profile) if active_profile == profile_name => {
+                    let _ = writeln!(
+                        out,
+                        "  active profile `{profile_name}` is selected by config"
+                    );
+                }
+                Some(active_profile) => {
+                    let _ = writeln!(
+                        out,
+                        "  active profile mismatch: config selected `{active_profile}`, user layer requested `{profile_name}`"
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        out,
+                        "  active profile mismatch: config selected `<none>`, user layer requested `{profile_name}`"
+                    );
+                }
+            }
+        }
+    }
+
+    for layer in config
+        .config_layer_stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, /*include_disabled*/ false)
+    {
+        if let Some(personality) = layer.config.get("personality") {
+            let _ = writeln!(out, "  layer {:?}: personality = {personality}", layer.name);
+        }
+    }
+
+    out
+}
+
+impl BackendCaptureGuard {
+    fn new() -> Self {
+        let prior_capture_enabled = std::env::var_os(CODEX_BACKEND_CAPTURE_ENV_VAR);
+        let prior_capture_input = std::env::var_os(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR);
+        let prior_capture_output = std::env::var_os(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR);
+        let prior_capture_stderr = std::env::var_os(CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR);
+        // SAFETY: This is used by a single-process `codex exec` invocation to
+        // coordinate backend capture with downstream async tasks.
+        unsafe {
+            std::env::set_var(CODEX_BACKEND_CAPTURE_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR, "1");
+            std::env::set_var(CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR, "1");
+        };
+        Self {
+            prior_capture_enabled,
+            prior_capture_input,
+            prior_capture_output,
+            prior_capture_stderr,
+        }
+    }
+}
+
+impl Drop for BackendCaptureGuard {
+    fn drop(&mut self) {
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_ENV_VAR,
+            self.prior_capture_enabled.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_INPUT_ENV_VAR,
+            self.prior_capture_input.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_OUTPUT_ENV_VAR,
+            self.prior_capture_output.take(),
+        );
+        restore_env_var(
+            CODEX_BACKEND_CAPTURE_STDERR_ENV_VAR,
+            self.prior_capture_stderr.take(),
+        );
+    }
+}
+
+fn restore_env_var(name: &str, value: Option<std::ffi::OsString>) {
+    match value {
+        Some(value) => {
+            // SAFETY: Restores prior process environment on command exit.
+            unsafe { std::env::set_var(name, value) };
+        }
+        None => {
+            // SAFETY: Restores prior process environment on command exit.
+            unsafe { std::env::remove_var(name) };
+        }
+    }
+}
+
 struct ExecRunArgs {
+    bare_prompt: bool,
+    developer_instructions_cli_override: bool,
     in_process_start_args: InProcessClientStartArgs,
     command: Option<ExecCommand>,
     config: Config,
@@ -196,6 +373,7 @@ struct ExecRunArgs {
     output_schema_path: Option<PathBuf>,
     prompt: Option<String>,
     skip_git_repo_check: bool,
+    developer_instructions_override_from_file: Option<String>,
     stderr_with_ansi: bool,
 }
 
@@ -229,11 +407,28 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         color,
         last_message_file,
         json: json_mode,
+        list_models,
+        direct,
+        bare_prompt,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        developer_instructions_file,
+        base_instructions_file,
+        personality,
+        compact_prompt_file,
+        compact_summary_preamble_file,
+        debug,
     } = cli;
+
+    let _backend_capture_guard = debug.then(BackendCaptureGuard::new);
+
+    if command.is_some() && (direct || list_models) {
+        anyhow::bail!(
+            "`--direct` and `--models` are only valid for top-level `codex exec` runs, not subcommands"
+        );
+    }
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -273,6 +468,22 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
+    let developer_instructions_override_from_file = read_override_text_file(
+        developer_instructions_file.as_deref(),
+        "developer instructions",
+    )?;
+    let base_instructions_override_from_file =
+        read_override_text_file(base_instructions_file.as_deref(), "base instructions")?;
+    let compact_prompt_override_from_file =
+        read_override_text_file(compact_prompt_file.as_deref(), "compact prompt")?;
+    let compact_summary_preamble_override_from_file = read_override_text_file(
+        compact_summary_preamble_file.as_deref(),
+        "compact summary preamble",
+    )?;
+    let developer_instructions_cli_override = developer_instructions_override_from_file.is_some()
+        || cli_kv_overrides
+            .iter()
+            .any(|(key, _)| key == "developer_instructions");
 
     let resolved_cwd = cwd.clone();
     let config_cwd = match resolved_cwd.as_deref() {
@@ -379,10 +590,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         js_repl_node_path: None,
         js_repl_node_module_dirs: None,
         zsh_path: None,
-        base_instructions: None,
-        developer_instructions: None,
-        personality: None,
-        compact_prompt: None,
+        base_instructions: base_instructions_override_from_file,
+        developer_instructions: developer_instructions_override_from_file.clone(),
+        personality: personality.map(Into::into),
+        compact_prompt: compact_prompt_override_from_file,
+        compact_summary_preamble: compact_summary_preamble_override_from_file,
+        bare_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
@@ -396,6 +609,52 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
+
+    if debug {
+        eprintln!("{}", format_exec_debug_route(&config));
+    }
+
+    if list_models {
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            /*enable_codex_api_key_env*/ true,
+            config.cli_auth_credentials_store_mode,
+        );
+        let models_manager = ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager,
+            config.model_catalog.clone(),
+            CollaborationModesConfig::default(),
+        );
+        let presets = models_manager
+            .list_models(RefreshStrategy::OnlineIfUncached)
+            .await;
+        if presets.is_empty() {
+            println!("No models are currently available.");
+            return Ok(());
+        }
+
+        println!("Available models:");
+        for preset in presets {
+            let default_marker = if preset.is_default { " (default)" } else { "" };
+            println!(
+                "  {}{} - {}",
+                preset.model, default_marker, preset.description
+            );
+            println!(
+                "    Default reasoning effort: {}",
+                preset.default_reasoning_effort
+            );
+            if !preset.supported_reasoning_efforts.is_empty() {
+                println!("    Supported reasoning efforts:");
+                for option in preset.supported_reasoning_efforts {
+                    println!("      - {}: {}", option.effort, option.description);
+                }
+            }
+        }
+
+        return Ok(());
+    }
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -419,6 +678,18 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     }) {
         eprintln!("{err}");
         std::process::exit(1);
+    }
+
+    if direct {
+        let prompt_text = resolve_prompt(prompt.clone());
+        return run_direct_request(
+            prompt_text,
+            &config,
+            bare_prompt,
+            developer_instructions_override_from_file.clone(),
+            developer_instructions_cli_override,
+        )
+        .await;
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -481,6 +752,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     };
     run_exec_session(ExecRunArgs {
+        bare_prompt,
+        developer_instructions_cli_override,
         in_process_start_args,
         command,
         config,
@@ -494,6 +767,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema_path,
         prompt,
         skip_git_repo_check,
+        developer_instructions_override_from_file,
         stderr_with_ansi,
     })
     .instrument(exec_span)
@@ -502,6 +776,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let ExecRunArgs {
+        bare_prompt,
+        developer_instructions_cli_override,
         in_process_start_args,
         command,
         config,
@@ -515,6 +791,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         output_schema_path,
         prompt,
         skip_git_repo_check,
+        developer_instructions_override_from_file,
         stderr_with_ansi,
     } = args;
 
@@ -547,6 +824,14 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
+    let bare_prompt_developer_instructions = if bare_prompt
+        && (developer_instructions_override_from_file.is_some()
+            || developer_instructions_cli_override)
+    {
+        config.developer_instructions.clone()
+    } else {
+        None
+    };
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
@@ -611,6 +896,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
     if !skip_git_repo_check
+        && !bare_prompt
         && !dangerously_bypass_approvals_and_sandbox
         && get_git_repo_root(&default_cwd).is_none()
     {
@@ -634,7 +920,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadResume {
                         request_id: request_ids.next(),
-                        params: thread_resume_params_from_config(&config, thread_id),
+                        params: thread_resume_params_from_config(
+                            &config,
+                            thread_id,
+                            bare_prompt,
+                            bare_prompt_developer_instructions.clone(),
+                        ),
                     },
                     "thread/resume",
                 )
@@ -648,7 +939,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadStart {
                         request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config),
+                        params: thread_start_params_from_config(
+                            &config,
+                            bare_prompt,
+                            bare_prompt_developer_instructions.clone(),
+                        ),
                     },
                     "thread/start",
                 )
@@ -663,7 +958,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadStart {
                     request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config),
+                    params: thread_start_params_from_config(
+                        &config,
+                        bare_prompt,
+                        bare_prompt_developer_instructions,
+                    ),
                 },
                 "thread/start",
             )
@@ -890,7 +1189,11 @@ fn sandbox_mode_from_policy(
     }
 }
 
-fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+fn thread_start_params_from_config(
+    config: &Config,
+    bare_prompt: bool,
+    bare_prompt_developer_instructions: Option<String>,
+) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
@@ -898,13 +1201,29 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
-        config: config_request_overrides_from_config(config),
+        config: config_request_overrides_from_config(config, bare_prompt),
         ephemeral: Some(config.ephemeral),
+        personality: config.personality.clone(),
+        base_instructions: if bare_prompt {
+            Some(String::new())
+        } else {
+            config.base_instructions.clone()
+        },
+        developer_instructions: if bare_prompt {
+            Some(bare_prompt_developer_instructions.unwrap_or_default())
+        } else {
+            None
+        },
         ..ThreadStartParams::default()
     }
 }
 
-fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
+fn thread_resume_params_from_config(
+    config: &Config,
+    thread_id: String,
+    bare_prompt: bool,
+    bare_prompt_developer_instructions: Option<String>,
+) -> ThreadResumeParams {
     ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
@@ -913,16 +1232,41 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
-        config: config_request_overrides_from_config(config),
+        config: config_request_overrides_from_config(config, bare_prompt),
+        personality: config.personality.clone(),
+        base_instructions: if bare_prompt {
+            Some(String::new())
+        } else {
+            config.base_instructions.clone()
+        },
+        developer_instructions: if bare_prompt {
+            Some(bare_prompt_developer_instructions.unwrap_or_default())
+        } else {
+            None
+        },
         ..ThreadResumeParams::default()
     }
 }
 
-fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .active_profile
-        .as_ref()
-        .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
+fn config_request_overrides_from_config(
+    config: &Config,
+    bare_prompt: bool,
+) -> Option<HashMap<String, Value>> {
+    let mut overrides = HashMap::new();
+
+    if let Some(profile) = config.active_profile.as_ref() {
+        overrides.insert("profile".to_string(), Value::String(profile.clone()));
+    }
+
+    if bare_prompt {
+        overrides.insert("bare_prompt".to_string(), json!(true));
+    }
+
+    if overrides.is_empty() {
+        None
+    } else {
+        Some(overrides)
+    }
 }
 
 fn approvals_reviewer_override_from_config(
@@ -1683,6 +2027,386 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
     }
 }
 
+fn read_override_text_file(path: Option<&Path>, label: &str) -> anyhow::Result<Option<String>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let text = std::fs::read_to_string(path).map_err(|err| {
+        anyhow::anyhow!("failed to read {label} file at {}: {err}", path.display())
+    })?;
+    Ok(Some(text))
+}
+
+async fn run_direct_request(
+    prompt_text: String,
+    config: &Config,
+    bare_prompt: bool,
+    developer_instructions_override: Option<String>,
+    developer_instructions_cli_override: bool,
+) -> anyhow::Result<()> {
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ true,
+        config.cli_auth_credentials_store_mode,
+    );
+    let models_manager = ModelsManager::new(
+        config.codex_home.clone(),
+        auth_manager.clone(),
+        config.model_catalog.clone(),
+        CollaborationModesConfig::default(),
+    );
+    let auth_snapshot = auth_manager.auth().await;
+    codex_core::set_prompt_debug_http_account_email(
+        auth_snapshot
+            .as_ref()
+            .and_then(CodexAuth::get_account_email),
+    );
+    let provider = config.model_provider.clone();
+    let conversation_id = ThreadId::new();
+    let model = models_manager
+        .get_default_model(&config.model, RefreshStrategy::OnlineIfUncached)
+        .await;
+    let models_manager_config = config.to_models_manager_config();
+    let model_info: ModelInfo = models_manager
+        .get_model_info(&model, &models_manager_config)
+        .await;
+    let model_pricing = load_model_pricing(config.codex_home.as_path()).unwrap_or_else(|err| {
+        eprintln!(
+            "failed to load model pricing from {}: {err}",
+            config.codex_home.display()
+        );
+        ModelPricingFile::bundled_default().expect("load bundled fallback model pricing")
+    });
+    let telemetry_auth_mode = auth_snapshot
+        .as_ref()
+        .map(|auth| TelemetryAuthMode::from(auth.auth_mode()));
+    let session_telemetry = SessionTelemetry::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        auth_snapshot
+            .as_ref()
+            .and_then(CodexAuth::get_account_id),
+        auth_snapshot
+            .as_ref()
+            .and_then(CodexAuth::get_account_email),
+        telemetry_auth_mode,
+        "codex exec --direct".to_string(),
+        config.otel.log_user_prompt,
+        user_agent(),
+        SessionSource::Exec,
+    );
+    let effective_reasoning_effort = config
+        .model_reasoning_effort
+        .or(model_info.default_reasoning_level)
+        .map(|effort| effort.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    eprintln!("model: {}", model_info.slug);
+    eprintln!("provider: {}", config.model_provider_id);
+    eprintln!("reasoning effort: {effective_reasoning_effort}");
+
+    let effective_system_prompt = if bare_prompt {
+        developer_instructions_override.or_else(|| {
+            if developer_instructions_cli_override {
+                config.developer_instructions.clone()
+            } else {
+                None
+            }
+        })
+    } else {
+        developer_instructions_override
+            .or_else(|| config.developer_instructions.clone())
+            .or_else(|| Some(DEFAULT_DIRECT_SYSTEM_PROMPT.to_string()))
+    };
+
+    let mut prompt = Prompt::default();
+    prompt.input = build_direct_prompt_inputs(effective_system_prompt.as_deref(), &prompt_text);
+    prompt.personality = config.personality.clone();
+    if bare_prompt {
+        prompt.base_instructions.text = String::new();
+    } else if let Some(base_instructions) = &config.base_instructions {
+        prompt.base_instructions.text = base_instructions.clone();
+    }
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let mut client_session = ModelClient::new(
+        Some(auth_manager),
+        conversation_id,
+        installation_id,
+        provider,
+        SessionSource::Exec,
+        config.model_verbosity,
+        config.features.enabled(Feature::EnableRequestCompression),
+        config.features.enabled(Feature::RuntimeMetrics),
+        /*beta_features_header*/ None,
+    )
+    .new_session();
+    let reasoning_summary = config
+        .model_reasoning_summary
+        .unwrap_or(model_info.default_reasoning_summary);
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            config.model_reasoning_effort,
+            reasoning_summary,
+            config.service_tier,
+            /*turn_metadata_header*/ None,
+        )
+        .await?;
+
+    let usage_store = AccountUsageStore::init_with_estimator_config(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+        AccountUsageEstimatorConfig {
+            min_usage_pct_sample_count: config.account_usage_estimator.min_usage_pct_sample_count,
+            max_usage_pct_display_percent_before_full: config
+                .account_usage_estimator
+                .max_usage_pct_display_percent_before_full,
+            stable_backend_percent_window: config
+                .account_usage_estimator
+                .stable_backend_percent_window,
+        },
+    )
+    .await
+    .ok();
+    let account_key = auth_snapshot
+        .as_ref()
+        .and_then(|auth| {
+            account_usage_key(
+                auth.get_account_id().as_deref(),
+                auth.get_account_email().as_deref(),
+            )
+        })
+        .or_else(|| Some(format!("direct:{}", config.model_provider_id)));
+    let account_display = auth_snapshot
+        .as_ref()
+        .and_then(|auth| account_usage_display(auth.get_account_email().as_deref()))
+        .or_else(|| Some(format!("direct-{}", config.model_provider_id)));
+
+    consume_direct_stream(
+        &mut stream,
+        usage_store,
+        account_key,
+        account_display,
+        config.model.as_deref(),
+        &model_info.slug,
+        &model_pricing,
+    )
+    .await
+}
+
+fn build_direct_prompt_inputs(system_prompt: Option<&str>, prompt_text: &str) -> Vec<ResponseItem> {
+    let mut items = Vec::with_capacity(2);
+    if let Some(system_prompt) = system_prompt {
+        items.push(ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: system_prompt.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+    }
+    items.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: prompt_text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    });
+    items
+}
+
+async fn consume_direct_stream(
+    stream: &mut ResponseStream,
+    usage_store: Option<std::sync::Arc<AccountUsageStore>>,
+    account_key: Option<String>,
+    account_display: Option<String>,
+    model_slug: Option<&str>,
+    display_model_slug: &str,
+    model_pricing: &ModelPricingFile,
+) -> anyhow::Result<()> {
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
+    let mut printed_response = false;
+    let mut reasoning_summary_line = String::new();
+    let mut summary_active = false;
+
+    let flush_summary = |summary_active: &mut bool, reasoning_summary_line: &mut String| -> bool {
+        if *summary_active {
+            if !reasoning_summary_line.is_empty() {
+                eprintln!();
+                reasoning_summary_line.clear();
+            } else {
+                eprintln!();
+            }
+            *summary_active = false;
+            true
+        } else {
+            false
+        }
+    };
+
+    while let Some(event) = stream.next().await {
+        match event? {
+            ResponseEvent::Created => {}
+            ResponseEvent::OutputTextDelta(delta) => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+                stdout.write_all(delta.as_bytes())?;
+                stdout.flush()?;
+                printed_response = true;
+            }
+            ResponseEvent::OutputItemAdded(item) | ResponseEvent::OutputItemDone(item) => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+                if let Some(text) = assistant_text(&item)
+                    && !printed_response
+                {
+                    stdout.write_all(text.as_bytes())?;
+                    stdout.flush()?;
+                    printed_response = true;
+                }
+            }
+            ResponseEvent::ReasoningSummaryDelta { delta, .. } => {
+                reasoning_summary_line.push_str(&delta);
+                summary_active = true;
+                let colored = format!("(reasoning summary) {reasoning_summary_line}");
+                eprint!("\r{}", colored.yellow());
+                stderr.flush()?;
+            }
+            ResponseEvent::ReasoningContentDelta { delta, .. } => {
+                eprintln!("(reasoning detail) {delta}");
+            }
+            ResponseEvent::ReasoningSummaryPartAdded { .. } => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+            }
+            ResponseEvent::RateLimits(snapshot) => {
+                eprintln!("Rate limits: {snapshot:?}");
+            }
+            ResponseEvent::ServerModel(_)
+            | ResponseEvent::ServerReasoningIncluded(_)
+            | ResponseEvent::ModelsEtag(_) => {}
+            ResponseEvent::Completed {
+                token_usage,
+                capture_id,
+                transport_bytes,
+                ..
+            } => {
+                if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+                    stderr.flush()?;
+                }
+                if printed_response {
+                    stdout.write_all(b"\n")?;
+                    stdout.flush()?;
+                    printed_response = false;
+                }
+                if let Some(usage) = token_usage {
+                    print_token_usage(
+                        &usage,
+                        display_model_slug,
+                        model_pricing,
+                        capture_id.as_deref(),
+                    );
+                    if let (Some(usage_store), Some(account_key)) =
+                        (usage_store.as_ref(), account_key.as_ref())
+                    {
+                        if let Some(account_display) = account_display.as_ref() {
+                            usage_store
+                                .cache_account_display(
+                                    account_key.as_str(),
+                                    account_display.clone(),
+                                )
+                                .await;
+                        }
+                        if let Err(err) = usage_store
+                            .record_account_token_usage(
+                                account_key.as_str(),
+                                &usage,
+                                AccountUsageEventMeta {
+                                    query_id: capture_id.as_deref(),
+                                    model_slug,
+                                    sent_bytes: transport_bytes.as_ref().map(|value| value.sent),
+                                    recv_bytes: transport_bytes.as_ref().map(|value| value.recv),
+                                    is_prewarm: false,
+                                    is_regional_processing: false,
+                                },
+                            )
+                            .await
+                        {
+                            eprintln!("failed to record account token usage: {err}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if printed_response {
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+    }
+    if flush_summary(&mut summary_active, &mut reasoning_summary_line) {
+        stderr.flush()?;
+    }
+    Ok(())
+}
+
+fn assistant_text(item: &ResponseItem) -> Option<String> {
+    if let ResponseItem::Message { role, content, .. } = item
+        && role == "assistant"
+    {
+        let mut text = String::new();
+        for chunk in content {
+            match chunk {
+                ContentItem::InputText { text: value }
+                | ContentItem::OutputText { text: value } => text.push_str(value),
+                ContentItem::InputImage { .. } => {}
+            }
+        }
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn print_token_usage(
+    usage: &codex_protocol::protocol::TokenUsage,
+    model_slug: &str,
+    model_pricing: &ModelPricingFile,
+    query_id: Option<&str>,
+) {
+    let usage_usd = estimate_usage_usd_for_model(
+        model_pricing,
+        Some(model_slug),
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        /*regional_processing*/ false,
+    );
+    let query_id_suffix = query_id
+        .map(|query_id| format!(" query_id={query_id}"))
+        .unwrap_or_default();
+    eprintln!(
+        "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}{}",
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        usage.reasoning_output_tokens,
+        query_id_suffix
+    );
+}
+
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
     let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
@@ -1714,5 +2438,489 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 }
 
 #[cfg(test)]
-#[path = "lib_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use codex_otel::set_parent_from_w3c_trace_context;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::config_types::Personality;
+    use opentelemetry::trace::TraceContextExt;
+    use opentelemetry::trace::TraceId;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("codex-exec-tests");
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
+    }
+
+    #[test]
+    fn exec_defaults_analytics_to_enabled() {
+        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+    }
+
+    #[test]
+    fn exec_root_span_can_be_parented_from_trace_context() {
+        let subscriber = test_tracing_subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let parent = codex_protocol::protocol::W3cTraceContext {
+            traceparent: Some("00-00000000000000000000000000000077-0000000000000088-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let exec_span = exec_root_span();
+        assert!(set_parent_from_w3c_trace_context(&exec_span, &parent));
+
+        let trace_id = exec_span.context().span().span_context().trace_id();
+        assert_eq!(
+            trace_id,
+            TraceId::from_hex("00000000000000000000000000000077").expect("trace id")
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_debug_route_includes_personality_provenance() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "personality = \"comedic\"\n",
+        )
+        .expect("write user config");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build config");
+
+        let route = format_exec_debug_route(&config);
+
+        assert!(
+            route.contains("resolved personality: Some(Comedic)"),
+            "expected resolved personality in debug route, got: {route}"
+        );
+        assert!(
+            route.contains("user layer present: true"),
+            "expected user layer presence in debug route, got: {route}"
+        );
+        assert!(
+            route.contains("user layer personality: Some(String(\"comedic\"))"),
+            "expected raw user personality in debug route, got: {route}"
+        );
+        assert!(
+            route.contains("layer User"),
+            "expected user layer provenance in debug route, got: {route}"
+        );
+    }
+
+    #[test]
+    fn builds_uncommitted_review_request() {
+        let args = ReviewArgs {
+            uncommitted: true,
+            base: None,
+            commit: None,
+            commit_title: None,
+            prompt: None,
+        };
+        let request = build_review_request(&args).expect("builds uncommitted review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_commit_review_request_with_title() {
+        let args = ReviewArgs {
+            uncommitted: false,
+            base: None,
+            commit: Some("123456789".to_string()),
+            commit_title: Some("Add review command".to_string()),
+            prompt: None,
+        };
+        let request = build_review_request(&args).expect("builds commit review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::Commit {
+                sha: "123456789".to_string(),
+                title: Some("Add review command".to_string()),
+            },
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_custom_review_request_trims_prompt() {
+        let args = ReviewArgs {
+            uncommitted: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            prompt: Some("  custom review instructions  ".to_string()),
+        };
+        let request = build_review_request(&args).expect("builds custom review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: "custom review instructions".to_string(),
+            },
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn decode_prompt_bytes_strips_utf8_bom() {
+        let input = [0xEF, 0xBB, 0xBF, b'h', b'i', b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-8 with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16le_bom() {
+        // UTF-16LE BOM + "hi\n"
+        let input = [0xFF, 0xFE, b'h', 0x00, b'i', 0x00, b'\n', 0x00];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16le with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16be_bom() {
+        // UTF-16BE BOM + "hi\n"
+        let input = [0xFE, 0xFF, 0x00, b'h', 0x00, b'i', 0x00, b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16be with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32le_bom() {
+        // UTF-32LE BOM + "hi\n"
+        let input = [
+            0xFF, 0xFE, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00, 0x00, b'\n', 0x00,
+            0x00, 0x00,
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32le should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32LE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32be_bom() {
+        // UTF-32BE BOM + "hi\n"
+        let input = [
+            0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00,
+            0x00, b'\n',
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32be should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32BE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_invalid_utf8() {
+        // Invalid UTF-8 sequence: 0xC3 0x28
+        let input = [0xC3, 0x28];
+
+        let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
+
+        assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
+    }
+
+    #[test]
+    fn prompt_with_stdin_context_wraps_stdin_block() {
+        let combined = prompt_with_stdin_context("Summarize this concisely", "my output");
+
+        assert_eq!(
+            combined,
+            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
+        );
+    }
+
+    #[test]
+    fn prompt_with_stdin_context_preserves_trailing_newline() {
+        let combined = prompt_with_stdin_context("Summarize this concisely", "my output\n");
+
+        assert_eq!(
+            combined,
+            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
+        );
+    }
+
+    #[test]
+    fn lagged_event_warning_message_is_explicit() {
+        assert_eq!(
+            lagged_event_warning_message(/*skipped*/ 7),
+            "in-process app-server event stream lagged; dropped 7 events".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_lookup_model_providers_filters_only_last_lookup() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build default config");
+        config.model_provider_id = "test-provider".to_string();
+
+        let last_args = crate::cli::ResumeArgs {
+            session_id: None,
+            last: true,
+            all: false,
+            images: vec![],
+            prompt: None,
+        };
+        let named_args = crate::cli::ResumeArgs {
+            session_id: Some("named-session".to_string()),
+            last: false,
+            all: false,
+            images: vec![],
+            prompt: None,
+        };
+
+        assert_eq!(
+            resume_lookup_model_providers(&config, &last_args),
+            Some(vec!["test-provider".to_string()])
+        );
+        assert_eq!(resume_lookup_model_providers(&config, &named_args), None);
+    }
+
+    #[test]
+    fn turn_items_for_thread_returns_matching_turn_items() {
+        let thread = AppServerThread {
+            id: "thread-1".to_string(),
+            forked_from_id: None,
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: PathBuf::from("/tmp/project"),
+            cli_version: "0.0.0-test".to_string(),
+            source: codex_app_server_protocol::SessionSource::Exec,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: vec![
+                codex_app_server_protocol::Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![AppServerThreadItem::AgentMessage {
+                        id: "msg-1".to_string(),
+                        text: "hello".to_string(),
+                        phase: None,
+                        memory_citation: None,
+                    }],
+                    status: codex_app_server_protocol::TurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+                codex_app_server_protocol::Turn {
+                    id: "turn-2".to_string(),
+                    items: vec![AppServerThreadItem::Plan {
+                        id: "plan-1".to_string(),
+                        text: "ship it".to_string(),
+                    }],
+                    status: codex_app_server_protocol::TurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            turn_items_for_thread(&thread, "turn-1"),
+            Some(vec![AppServerThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            }])
+        );
+        assert_eq!(turn_items_for_thread(&thread, "missing-turn"), None);
+    }
+
+    #[test]
+    fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
+        let value = canceled_mcp_server_elicitation_response()
+            .expect("mcp elicitation cancel response should serialize");
+        let response: McpServerElicitationRequestResponse =
+            serde_json::from_value(value).expect("cancel response should deserialize");
+
+        assert_eq!(
+            response,
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Cancel,
+                content: None,
+                meta: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_include_review_policy_when_review_policy_is_manual_only() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build config with manual-only review policy");
+
+        let params = thread_start_params_from_config(
+            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
+        );
+
+        assert_eq!(
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::User)
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_include_review_policy_when_auto_review_is_enabled() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build config with guardian review policy");
+
+        let params = thread_start_params_from_config(
+            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
+        );
+
+        assert_eq!(
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_start_and_resume_params_include_personality_override() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                base_instructions: Some("shared base".to_string()),
+                personality: Some(Personality::Pragmatic),
+                ..Default::default()
+            })
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build config with personality");
+
+        let start_params = thread_start_params_from_config(
+            &config, /*bare_prompt*/ false, /*bare_prompt_developer_instructions*/ None,
+        );
+        assert_eq!(start_params.base_instructions.as_deref(), Some("shared base"));
+        assert_eq!(start_params.personality, Some(Personality::Pragmatic));
+
+        let resume_params = thread_resume_params_from_config(
+            &config,
+            "thread-id".to_string(),
+            /*bare_prompt*/ false,
+            /*bare_prompt_developer_instructions*/ None,
+        );
+        assert_eq!(resume_params.base_instructions.as_deref(), Some("shared base"));
+        assert_eq!(resume_params.personality, Some(Personality::Pragmatic));
+    }
+
+    #[test]
+    fn session_configured_from_thread_response_uses_review_policy_from_response() {
+        let response = ThreadStartResponse {
+            thread: codex_app_server_protocol::Thread {
+                id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                forked_from_id: None,
+                preview: String::new(),
+                ephemeral: false,
+                model_provider: "openai".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: codex_app_server_protocol::ThreadStatus::Idle,
+                path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+                cwd: PathBuf::from("/tmp"),
+                cli_version: "0.0.0".to_string(),
+                source: codex_app_server_protocol::SessionSource::Cli,
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("thread".to_string()),
+                turns: vec![],
+            },
+            model: "gpt-5.4".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
+            sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            reasoning_effort: None,
+        };
+
+        let event = session_configured_from_thread_start_response(&response)
+            .expect("build bootstrap session configured event");
+
+        assert_eq!(
+            event.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
+        );
+    }
+}

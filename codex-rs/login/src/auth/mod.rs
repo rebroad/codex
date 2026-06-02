@@ -9,3 +9,6 @@ mod manager;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;
+pub use storage::AUTH_FILE_ENV_VAR;
+pub use storage::auth_file_path;
+pub use storage::set_auth_file_override;

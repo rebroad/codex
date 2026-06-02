@@ -472,6 +472,7 @@ fn server_notification_thread_events(
                         model_context_window: notification.token_usage.model_context_window,
                     }),
                     rate_limits: None,
+                    query_id: notification.query_id.clone(),
                 }),
             }],
         )),

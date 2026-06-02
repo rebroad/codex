@@ -7,9 +7,7 @@ on:
 
 jobs:
   sdks:
-    runs-on:
-      group: codex-runners
-      labels: codex-linux-x64
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -45,12 +43,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Use the shared CI wrapper so fork PRs fall back cleanly when
-          # BuildBuddy credentials are unavailable. This workflow needs the
-          # built `codex` binary on disk afterwards, so ask the wrapper to
-          # override CI's default remote_download_minimal behavior.
+          bazel_wrapper_args=()
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            # Only request a top-level download when BuildBuddy remote
+            # execution/cache is active. The local fallback path explicitly
+            # disables remote caching, so the remote downloader flag is invalid
+            # there.
+            bazel_wrapper_args+=(--remote-download-toplevel)
+          fi
           ./.github/scripts/run-bazel-ci.sh \
-            --remote-download-toplevel \
+            "${bazel_wrapper_args[@]}" \
             -- \
             build \
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \

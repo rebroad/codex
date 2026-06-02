@@ -12,6 +12,7 @@ use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigReloadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -670,6 +671,27 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
         .expect("sandbox workspace write");
     assert_eq!(sandbox.writable_roots, vec![writable_root]);
     assert!(!sandbox.network_access);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_reload_returns_auth_changed_flag() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, "")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let reload_id = mcp.send_config_reload_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(reload_id)),
+    )
+    .await??;
+    let response: ConfigReloadResponse = to_response(resp)?;
+
+    assert_eq!(response.auth_changed, false);
 
     Ok(())
 }

@@ -772,6 +772,10 @@ impl McpProcess {
         self.send_request("config/batchWrite", params).await
     }
 
+    pub async fn send_config_reload_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("config/reload", /*params*/ None).await
+    }
+
     pub async fn send_fs_read_file_request(
         &mut self,
         params: FsReadFileParams,
@@ -1084,6 +1088,13 @@ impl McpProcess {
             unreachable!("expected JSONRPCMessage::Error, got {message:?}");
         };
         Ok(err)
+    }
+
+    pub async fn wait_for_exit(&mut self) -> anyhow::Result<std::process::ExitStatus> {
+        self.process
+            .wait()
+            .await
+            .context("waiting for codex-app-server to exit")
     }
 
     pub async fn read_stream_until_notification_message(

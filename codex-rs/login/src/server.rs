@@ -465,7 +465,7 @@ fn send_response_with_disconnect(
     writer.flush()
 }
 
-fn build_authorize_url(
+pub fn build_authorize_url(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -507,6 +507,132 @@ fn generate_state() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+pub fn generate_oauth_state() -> String {
+    generate_state()
+}
+
+/// Completes browser OAuth login from a pasted localhost callback URL.
+pub async fn complete_oauth_login_with_callback_url(
+    opts: &ServerOptions,
+    callback_url: &str,
+    redirect_uri: &str,
+    expected_state: &str,
+    pkce: &PkceCodes,
+) -> io::Result<()> {
+    let parsed_callback_url = parse_manual_callback_url(callback_url)?;
+    let parsed_redirect_uri = url::Url::parse(redirect_uri).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid redirect URI in pending login state: {err}"),
+        )
+    })?;
+
+    let callback_origin = (
+        parsed_callback_url.scheme(),
+        parsed_callback_url.host_str(),
+        parsed_callback_url.port_or_known_default(),
+        parsed_callback_url.path(),
+    );
+    let expected_origin = (
+        parsed_redirect_uri.scheme(),
+        parsed_redirect_uri.host_str(),
+        parsed_redirect_uri.port_or_known_default(),
+        parsed_redirect_uri.path(),
+    );
+    if callback_origin.0 != expected_origin.0
+        || !hosts_match_for_loopback(callback_origin.1, expected_origin.1)
+        || callback_origin.2 != expected_origin.2
+        || callback_origin.3 != expected_origin.3
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "callback URL must target {}",
+                parsed_redirect_uri.as_str()
+            ),
+        ));
+    }
+
+    let params: std::collections::HashMap<String, String> =
+        parsed_callback_url.query_pairs().into_owned().collect();
+    let Some(state) = params.get("state") else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "callback URL is missing state",
+        ));
+    };
+    if state != expected_state {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "callback state mismatch",
+        ));
+    }
+    if let Some(error_code) = params.get("error") {
+        let error_description = params.get("error_description").map(String::as_str);
+        let message = oauth_callback_error_message(error_code, error_description);
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+    }
+    let Some(code) = params.get("code").filter(|code| !code.is_empty()) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "callback URL is missing authorization code",
+        ));
+    };
+
+    let tokens = exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, code)
+        .await
+        .map_err(|err| io::Error::other(format!("oauth callback exchange failed: {err}")))?;
+    if let Err(message) = ensure_workspace_allowed(
+        opts.forced_chatgpt_workspace_id.as_deref(),
+        &tokens.id_token,
+    ) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+    }
+    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
+        .await
+        .ok();
+    persist_tokens_async(
+        &opts.codex_home,
+        api_key,
+        tokens.id_token,
+        tokens.access_token,
+        tokens.refresh_token,
+        opts.cli_auth_credentials_store_mode,
+    )
+    .await
+}
+
+fn parse_manual_callback_url(callback_url: &str) -> io::Result<url::Url> {
+    let trimmed = callback_url.trim();
+    if let Ok(parsed) = url::Url::parse(trimmed) {
+        return Ok(parsed);
+    }
+
+    let with_default_scheme = format!("http://{trimmed}");
+    url::Url::parse(&with_default_scheme).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid callback URL: {err}"),
+        )
+    })
+}
+
+fn hosts_match_for_loopback(actual: Option<&str>, expected: Option<&str>) -> bool {
+    if actual == expected {
+        return true;
+    }
+
+    matches!(
+        (actual, expected),
+        (Some("localhost"), Some("127.0.0.1"))
+            | (Some("127.0.0.1"), Some("localhost"))
+            | (Some("localhost"), Some("::1"))
+            | (Some("::1"), Some("localhost"))
+            | (Some("127.0.0.1"), Some("::1"))
+            | (Some("::1"), Some("127.0.0.1"))
+    )
 }
 
 fn send_cancel_request(port: u16) -> io::Result<()> {
@@ -572,7 +698,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
 }
 
 /// Tokens returned by the OAuth authorization-code exchange.
-pub(crate) struct ExchangedTokens {
+pub struct ExchangedTokens {
     pub id_token: String,
     pub access_token: String,
     pub refresh_token: String,
@@ -681,7 +807,7 @@ fn sanitize_url_for_logging(url: &str) -> String {
 /// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
 /// fields from parsed token responses and redacted transport errors, but does not log the final
 /// callback-layer `%err` string.
-pub(crate) async fn exchange_code_for_tokens(
+pub async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -753,7 +879,7 @@ pub(crate) async fn exchange_code_for_tokens(
 }
 
 /// Persists exchanged credentials using the configured local auth store.
-pub(crate) async fn persist_tokens_async(
+pub async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
@@ -868,10 +994,7 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
 }
 
 /// Validates the ID token against an optional workspace restriction.
-pub(crate) fn ensure_workspace_allowed(
-    expected: Option<&str>,
-    id_token: &str,
-) -> Result<(), String> {
+pub fn ensure_workspace_allowed(expected: Option<&str>, id_token: &str) -> Result<(), String> {
     let Some(expected) = expected else {
         return Ok(());
     };
@@ -1095,6 +1218,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::TokenEndpointErrorDetail;
+    use super::parse_manual_callback_url;
     use super::html_escape;
     use super::is_missing_codex_entitlement_error;
     use super::parse_token_endpoint_error;
@@ -1234,5 +1358,16 @@ mod tests {
         assert!(body.contains("You do not have access to Codex"));
         assert!(body.contains("Contact your workspace administrator"));
         assert!(!body.contains("missing_codex_entitlement"));
+    }
+
+    #[test]
+    fn parse_manual_callback_url_accepts_url_without_scheme() {
+        let parsed = parse_manual_callback_url("localhost:1455/auth/callback?code=test&state=s1")
+            .expect("callback url should parse with default scheme");
+
+        assert_eq!(parsed.scheme(), "http");
+        assert_eq!(parsed.host_str(), Some("localhost"));
+        assert_eq!(parsed.port_or_known_default(), Some(1455));
+        assert_eq!(parsed.path(), "/auth/callback");
     }
 }

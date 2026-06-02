@@ -19,8 +19,19 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::Verbosity;
 
-const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+pub const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 pub const SPEED_TIER_FAST: &str = "fast";
+const BUILTIN_FRIENDLY_PERSONALITY: &str = "# Personality\n\nYou optimize for team morale and being a supportive teammate as much as code quality.  You are consistent, reliable, and kind. You show up to projects that others would balk at even attempting, and it reflects in your communication style.\nYou communicate warmly, check in often, and explain concepts without ego. You excel at pairing, onboarding, and unblocking others. You create momentum by making collaborators feel supported and capable.\n\n## Values\nYou are guided by these core values:\n* Empathy: Interprets empathy as meeting people where they are - adjusting explanations, pacing, and tone to maximize understanding and confidence.\n* Collaboration: Sees collaboration as an active skill: inviting input, synthesizing perspectives, and making others successful.\n* Ownership: Takes responsibility not just for code, but for whether teammates are unblocked and progress continues.\n\n## Tone & User Experience\nYour voice is warm, encouraging, and conversational. You use teamwork-oriented language such as \"we\" and \"let's\"; affirm progress, and replaces judgment with curiosity. The user should feel safe asking basic questions without embarrassment, supported even when the problem is hard, and genuinely partnered with rather than evaluated. Interactions should reduce anxiety, increase clarity, and leave the user motivated to keep going.\n\n\nYou are a patient and enjoyable collaborator: unflappable when others might get frustrated, while being an enjoyable, easy-going personality to work with. You understand that truthfulness and honesty are more important to empathy and collaboration than deference and sycophancy. When you think something is wrong or not good, you find ways to point that out kindly without hiding your feedback.\n\nYou never make the user work for you. You can ask clarifying questions only when they are substantial. Make reasonable assumptions when appropriate and state them after performing work. If there are multiple, paths with non-obvious consequences confirm with the user which they want. Avoid open-ended questions, and prefer a list of options when possible.\n\n## Escalation\nYou escalate gently and deliberately when decisions have non-obvious consequences or hidden risk. Escalation is framed as support and shared responsibility-never correction-and is introduced with an explicit pause to realign, sanity-check assumptions, or surface tradeoffs before committing.\n";
+const BUILTIN_PRAGMATIC_PERSONALITY: &str = "# Personality\n\nYou are a deeply pragmatic, effective software engineer. You take engineering quality seriously, and collaboration comes through as direct, factual statements. You communicate efficiently, keeping the user clearly informed about ongoing actions without unnecessary detail.\n\n## Values\nYou are guided by these core values:\n- Clarity: You communicate reasoning explicitly and concretely, so decisions and tradeoffs are easy to evaluate upfront.\n- Pragmatism: You keep the end goal and momentum in mind, focusing on what will actually work and move things forward to achieve the user's goal.\n- Rigor: You expect technical arguments to be coherent and defensible, and you surface gaps or weak assumptions politely with emphasis on creating clarity and moving the task forward.\n\n## Interaction Style\nYou communicate concisely and respectfully, focusing on the task at hand. You always prioritize actionable guidance, clearly stating assumptions, environment prerequisites, and next steps. Unless explicitly asked, you avoid excessively verbose explanations about your work.\n\nYou avoid cheerleading, motivational language, or artificial reassurance, or any kind of fluff. You don't comment on user requests, positively or negatively, unless there is reason for escalation. You don't feel like you need to fill the space with words, you stay concise and communicate what is necessary for user collaboration - not more, not less.\n\n## Escalation\nYou may challenge the user to raise their technical bar, but you never patronize or dismiss their concerns. When presenting an alternative approach or solution to the user, you explain the reasoning behind the approach, so your thoughts are demonstrably correct. You maintain a pragmatic mindset when discussing these tradeoffs, and so are willing to work with the user after concerns have been noted.\n";
+
+pub fn builtin_personality_message(personality: Personality) -> Option<&'static str> {
+    match personality {
+        Personality::None => Some(""),
+        Personality::Friendly => Some(BUILTIN_FRIENDLY_PERSONALITY),
+        Personality::Pragmatic => Some(BUILTIN_PRAGMATIC_PERSONALITY),
+        Personality::Comedic | Personality::Custom(_) => None,
+    }
+}
 
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
@@ -359,10 +370,6 @@ impl ModelMessages {
 
     fn supports_personality(&self) -> bool {
         self.has_personality_placeholder()
-            && self
-                .instructions_variables
-                .as_ref()
-                .is_some_and(ModelInstructionsVariables::is_complete)
     }
 
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
@@ -377,6 +384,7 @@ pub struct ModelInstructionsVariables {
     pub personality_default: Option<String>,
     pub personality_friendly: Option<String>,
     pub personality_pragmatic: Option<String>,
+    pub personality_comedic: Option<String>,
 }
 
 impl ModelInstructionsVariables {
@@ -389,9 +397,23 @@ impl ModelInstructionsVariables {
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
         if let Some(personality) = personality {
             match personality {
-                Personality::None => Some(String::new()),
-                Personality::Friendly => self.personality_friendly.clone(),
-                Personality::Pragmatic => self.personality_pragmatic.clone(),
+                Personality::None => self
+                    .personality_default
+                    .clone()
+                    .or_else(|| Some(String::new())),
+                Personality::Friendly => self
+                    .personality_friendly
+                    .clone()
+                    .or_else(|| {
+                        builtin_personality_message(Personality::Friendly).map(str::to_string)
+                    }),
+                Personality::Pragmatic => self
+                    .personality_pragmatic
+                    .clone()
+                    .or_else(|| {
+                        builtin_personality_message(Personality::Pragmatic).map(str::to_string)
+                    }),
+                Personality::Comedic | Personality::Custom(_) => None,
             }
         } else {
             self.personality_default.clone()
@@ -569,6 +591,7 @@ mod tests {
             personality_default: Some("default".to_string()),
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
+            personality_comedic: Some("comedic".to_string()),
         }
     }
 
@@ -606,6 +629,7 @@ mod tests {
                 personality_default: None,
                 personality_friendly: Some("friendly".to_string()),
                 personality_pragmatic: None,
+                personality_comedic: None,
             }),
         }));
         assert_eq!(
@@ -614,7 +638,7 @@ mod tests {
         );
         assert_eq!(
             model.get_model_instructions(Some(Personality::Pragmatic)),
-            "Hello\n"
+            "Hello\npragmatic"
         );
         assert_eq!(
             model.get_model_instructions(Some(Personality::None)),
@@ -631,15 +655,16 @@ mod tests {
                 personality_default: None,
                 personality_friendly: None,
                 personality_pragmatic: None,
+                personality_comedic: None,
             }),
         }));
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Friendly)),
-            "Hello\n"
+            "Hello\nfriendly"
         );
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Pragmatic)),
-            "Hello\n"
+            "Hello\npragmatic"
         );
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::None)),
@@ -659,6 +684,7 @@ mod tests {
                 personality_default: None,
                 personality_friendly: None,
                 personality_pragmatic: None,
+                personality_comedic: None,
             }),
         }));
 
@@ -681,11 +707,15 @@ mod tests {
         let personality_variables = personality_variables();
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Friendly)),
-            Some("friendly".to_string())
+            Some(BUILTIN_FRIENDLY_PERSONALITY.to_string())
         );
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Pragmatic)),
-            Some("pragmatic".to_string())
+            Some(BUILTIN_PRAGMATIC_PERSONALITY.to_string())
+        );
+        assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::Comedic)),
+            None
         );
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::None)),
@@ -700,6 +730,7 @@ mod tests {
             personality_default: Some("default".to_string()),
             personality_friendly: None,
             personality_pragmatic: None,
+            personality_comedic: None,
         };
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Friendly)),
@@ -707,6 +738,10 @@ mod tests {
         );
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Pragmatic)),
+            None
+        );
+        assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::Comedic)),
             None
         );
         assert_eq!(
@@ -722,14 +757,19 @@ mod tests {
             personality_default: None,
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
+            personality_comedic: None,
         };
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Friendly)),
-            Some("friendly".to_string())
+            Some(BUILTIN_FRIENDLY_PERSONALITY.to_string())
         );
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Pragmatic)),
-            Some("pragmatic".to_string())
+            Some(BUILTIN_PRAGMATIC_PERSONALITY.to_string())
+        );
+        assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::Comedic)),
+            None
         );
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::None)),

@@ -13,6 +13,9 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
+use crate::prompt_debug_http::PromptCaptureSession;
+use crate::prompt_debug_http::backend_capture_append_event;
+use crate::prompt_debug_http::capture_headers_json;
 use crate::provider::Provider;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -197,6 +200,7 @@ pub struct RealtimeWebsocketWriter {
     stream: Arc<WsStream>,
     is_closed: Arc<AtomicBool>,
     event_parser: RealtimeEventParser,
+    capture: Option<PromptCaptureSession>,
 }
 
 #[derive(Clone)]
@@ -205,6 +209,7 @@ pub struct RealtimeWebsocketEvents {
     active_transcript: Arc<Mutex<ActiveTranscriptState>>,
     event_parser: RealtimeEventParser,
     is_closed: Arc<AtomicBool>,
+    capture: Option<PromptCaptureSession>,
 }
 
 #[derive(Default)]
@@ -251,6 +256,7 @@ impl RealtimeWebsocketConnection {
         stream: WsStream,
         rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
         event_parser: RealtimeEventParser,
+        capture: Option<PromptCaptureSession>,
     ) -> Self {
         let stream = Arc::new(stream);
         let is_closed = Arc::new(AtomicBool::new(false));
@@ -259,12 +265,14 @@ impl RealtimeWebsocketConnection {
                 stream: Arc::clone(&stream),
                 is_closed: Arc::clone(&is_closed),
                 event_parser,
+                capture: capture.clone(),
             },
             events: RealtimeWebsocketEvents {
                 rx_message: Arc::new(Mutex::new(rx_message)),
                 active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
                 event_parser,
                 is_closed,
+                capture,
             },
         }
     }
@@ -328,6 +336,11 @@ impl RealtimeWebsocketWriter {
         let payload = serde_json::to_string(message)
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime request: {err}")))?;
         debug!(?message, "realtime websocket request");
+        backend_capture_append_event(self.capture.as_ref(), serde_json::json!({
+            "kind": "websocket_outbound_message",
+            "transport": "realtime_websocket",
+            "payload": payload.clone(),
+        }));
         self.send_payload(payload).await
     }
 
@@ -371,6 +384,11 @@ impl RealtimeWebsocketEvents {
 
             match msg {
                 Message::Text(text) => {
+                    backend_capture_append_event(self.capture.as_ref(), serde_json::json!({
+                        "kind": "websocket_inbound_message",
+                        "transport": "realtime_websocket",
+                        "payload": text.to_string(),
+                    }));
                     if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
                         debug!(?event, "realtime websocket parsed event");
@@ -379,6 +397,10 @@ impl RealtimeWebsocketEvents {
                     debug!("realtime websocket ignored unsupported text frame");
                 }
                 Message::Close(frame) => {
+                    backend_capture_append_event(self.capture.as_ref(), serde_json::json!({
+                        "kind": "websocket_inbound_close",
+                        "transport": "realtime_websocket",
+                    }));
                     self.is_closed.store(true, Ordering::SeqCst);
                     info!(
                         "realtime websocket closed: code={:?} reason={:?}",
@@ -388,6 +410,10 @@ impl RealtimeWebsocketEvents {
                     return Ok(None);
                 }
                 Message::Binary(_) => {
+                    backend_capture_append_event(self.capture.as_ref(), serde_json::json!({
+                        "kind": "websocket_inbound_binary",
+                        "transport": "realtime_websocket",
+                    }));
                     return Ok(Some(RealtimeEvent::Error(
                         "unexpected binary realtime websocket event".to_string(),
                     )));
@@ -455,6 +481,17 @@ impl RealtimeWebsocketClient {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        self.connect_with_capture(config, extra_headers, default_headers, None)
+            .await
+    }
+
+    pub async fn connect_with_capture(
+        &self,
+        config: RealtimeSessionConfig,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+        capture: Option<PromptCaptureSession>,
+    ) -> Result<RealtimeWebsocketConnection, ApiError> {
         ensure_rustls_crypto_provider();
         let ws_url = websocket_url_from_api_url(
             self.provider.base_url.as_str(),
@@ -473,6 +510,12 @@ impl RealtimeWebsocketClient {
             with_session_id_header(extra_headers, config.session_id.as_deref())?,
             default_headers,
         );
+        backend_capture_append_event(capture.as_ref(), serde_json::json!({
+            "kind": "websocket_connect_request",
+            "transport": "realtime_websocket",
+            "url": ws_url.as_str(),
+            "headers": capture_headers_json(&headers),
+        }));
         request.headers_mut().extend(headers);
 
         info!("connecting realtime websocket: {ws_url}");
@@ -488,7 +531,22 @@ impl RealtimeWebsocketClient {
             connector,
         )
         .await
-        .map_err(|err| ApiError::Stream(format!("failed to connect realtime websocket: {err}")))?;
+        .map_err(|err| {
+            backend_capture_append_event(capture.as_ref(), serde_json::json!({
+                "kind": "websocket_connect_error",
+                "transport": "realtime_websocket",
+                "url": ws_url.as_str(),
+                "error": err.to_string(),
+            }));
+            ApiError::Stream(format!("failed to connect realtime websocket: {err}"))
+        })?;
+        backend_capture_append_event(capture.as_ref(), serde_json::json!({
+            "kind": "websocket_connect_response",
+            "transport": "realtime_websocket",
+            "url": ws_url.as_str(),
+            "status": response.status().as_u16(),
+            "headers": capture_headers_json(response.headers()),
+        }));
         info!(
             ws_url = %ws_url,
             status = %response.status(),
@@ -496,7 +554,8 @@ impl RealtimeWebsocketClient {
         );
 
         let (stream, rx_message) = WsStream::new(stream);
-        let connection = RealtimeWebsocketConnection::new(stream, rx_message, config.event_parser);
+        let connection =
+            RealtimeWebsocketConnection::new(stream, rx_message, config.event_parser, capture);
         debug!(
             session_id = config.session_id.as_deref().unwrap_or("<none>"),
             "realtime websocket sending session.update"

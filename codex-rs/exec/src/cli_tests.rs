@@ -53,3 +53,38 @@ fn resume_accepts_output_last_message_flag_after_subcommand() {
     assert_eq!(args.session_id.as_deref(), Some("session-123"));
     assert_eq!(args.prompt.as_deref(), Some(PROMPT));
 }
+
+#[test]
+fn parses_instruction_and_personality_overrides() {
+    let cli = Cli::parse_from([
+        "codex-exec",
+        "--base-instructions-file",
+        "/tmp/base.md",
+        "--developer-instructions-file",
+        "/tmp/dev.md",
+        "--compact-prompt-file",
+        "/tmp/compact.md",
+        "--compact-summary-preamble-file",
+        "/tmp/compact-after.md",
+        "--personality",
+        "pragmatic",
+        "hello",
+    ]);
+    assert_eq!(
+        cli.base_instructions_file,
+        Some(PathBuf::from("/tmp/base.md"))
+    );
+    assert_eq!(
+        cli.developer_instructions_file,
+        Some(PathBuf::from("/tmp/dev.md"))
+    );
+    assert_eq!(
+        cli.compact_prompt_file,
+        Some(PathBuf::from("/tmp/compact.md"))
+    );
+    assert_eq!(
+        cli.compact_summary_preamble_file,
+        Some(PathBuf::from("/tmp/compact-after.md"))
+    );
+    assert_eq!(cli.personality, Some(Personality::Pragmatic));
+}

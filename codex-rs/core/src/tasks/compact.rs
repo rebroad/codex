@@ -4,6 +4,7 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use crate::codex::TurnContext;
 use crate::state::TaskKind;
+use codex_features::Feature;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
@@ -27,8 +28,11 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
-        let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider) {
-            session.services.session_telemetry.counter(
+        let use_local_compaction = ctx.config.features.enabled(Feature::LocalCompaction);
+        let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider)
+            && !use_local_compaction
+        {
+            let _ = session.services.session_telemetry.counter(
                 "codex.task.compact",
                 /*inc*/ 1,
                 &[("type", "remote")],

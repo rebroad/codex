@@ -9,3 +9,9 @@ rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "link-arg=/arm64hazardfree"]
 
 [target.'cfg(all(windows, target_env = "gnu"))']
 rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
+
+# Some networks/proxies intermittently break HTTP/2 streams when Cargo talks to
+# crates.io index endpoints. Disable multiplexing to avoid repeated framing
+# layer retry warnings.
+[http]
+multiplexing = false

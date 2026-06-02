@@ -38,6 +38,7 @@ use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_login::AuthConfig;
+use codex_login::CodexAuth;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
@@ -229,6 +230,8 @@ use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
+pub use status::CliStatusRateLimitMode;
+pub use status::CompactStatusOutputMode;
 // (tests access modules directly within the crate)
 
 async fn start_embedded_app_server(
@@ -477,6 +480,7 @@ fn session_target_from_app_server_thread(
 async fn lookup_session_target_by_name_with_app_server(
     app_server: &mut AppServerSession,
     name: &str,
+    include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let mut cursor = None;
     loop {
@@ -486,7 +490,8 @@ async fn lookup_session_target_by_name_with_app_server(
                 limit: Some(100),
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
                 model_providers: None,
-                source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+                source_kinds: (!include_non_interactive)
+                    .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 cwd: None,
                 // Thread names are hydrated after `thread/list` resolves rollout metadata, so
@@ -512,6 +517,7 @@ async fn lookup_session_target_by_name_with_app_server(
 async fn lookup_session_target_with_app_server(
     app_server: &mut AppServerSession,
     id_or_name: &str,
+    include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     if Uuid::parse_str(id_or_name).is_ok() {
         let thread_id = match ThreadId::from_string(id_or_name) {
@@ -541,7 +547,8 @@ async fn lookup_session_target_with_app_server(
         };
     }
 
-    lookup_session_target_by_name_with_app_server(app_server, id_or_name).await
+    lookup_session_target_by_name_with_app_server(app_server, id_or_name, include_non_interactive)
+        .await
 }
 
 async fn lookup_latest_session_target_with_app_server(
@@ -585,6 +592,26 @@ fn latest_session_lookup_params(
         cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
         search_term: None,
     }
+}
+
+pub async fn render_status_for_cli(
+    config: &Config,
+    auth: Option<CodexAuth>,
+    model_name: &str,
+    width: u16,
+    rate_limit_mode: CliStatusRateLimitMode,
+) -> Vec<String> {
+    status::render_status_lines_for_cli(config, auth, model_name, width, rate_limit_mode).await
+}
+
+pub async fn render_compact_status_for_cli(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    use_utc: bool,
+    output_mode: CompactStatusOutputMode,
+    rate_limit_mode: CliStatusRateLimitMode,
+) -> String {
+    status::render_compact_status_for_cli(config, auth, use_utc, output_mode, rate_limit_mode).await
 }
 
 fn config_cwd_for_app_server_target(
@@ -783,6 +810,7 @@ pub async fn run_main(
         } else {
             cwd
         },
+        bare_prompt: cli.bare_prompt.then_some(true),
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
@@ -959,7 +987,7 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
@@ -1138,7 +1166,13 @@ async fn run_ratatui_app(
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+            match lookup_session_target_with_app_server(
+                startup_app_server,
+                id_str,
+                /*include_non_interactive*/ false,
+            )
+            .await?
+            {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
                     shutdown_app_server_if_present(app_server.take()).await;
@@ -1190,6 +1224,19 @@ async fn run_ratatui_app(
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
+                resume_picker::SessionSelection::Fork(target_session) => {
+                    if let Some(path) = target_session.path.as_deref() {
+                        match resume_picker::run_fork_prompt_picker(&mut tui, path).await? {
+                            Some(nth_user_message) => {
+                                cli.fork_nth_user_message = Some(nth_user_message);
+                                resume_picker::SessionSelection::Fork(target_session)
+                            }
+                            None => resume_picker::SessionSelection::Exit,
+                        }
+                    } else {
+                        resume_picker::SessionSelection::Fork(target_session)
+                    }
+                }
                 other => other,
             }
         } else {
@@ -1199,7 +1246,13 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+        match lookup_session_target_with_app_server(
+            startup_app_server,
+            id_str,
+            cli.resume_include_non_interactive,
+        )
+        .await?
+        {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
                 shutdown_app_server_if_present(app_server.take()).await;
@@ -1336,6 +1389,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         no_alt_screen,
+        fork_nth_user_message,
         ..
     } = cli;
 
@@ -1374,6 +1428,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         session_selection,
+        fork_nth_user_message,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_prompt_windows_sandbox_nux_at_startup,
@@ -1913,7 +1968,10 @@ mod tests {
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        };
         config.set_windows_sandbox_enabled(/*value*/ false);
 
         let should_show = should_show_trust_screen(&config);
@@ -1996,11 +2054,88 @@ mod tests {
             AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
                 start_test_embedded_app_server(config).await?,
             ));
-        let target =
-            lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session").await?;
+        let target = lookup_session_target_by_name_with_app_server(
+            &mut app_server,
+            "saved-session",
+            /*include_non_interactive*/ true,
+        )
+        .await?;
         let target = target.expect("name lookup should find the saved thread");
         assert_eq!(target.path, Some(rollout_path));
         assert_eq!(target.thread_id, thread_id);
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lookup_session_target_by_name_honors_non_interactive_filter() -> color_eyre::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let thread_id = ThreadId::new();
+        let rollout_path = temp_dir
+            .path()
+            .join("sessions/2025/02/01")
+            .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
+        let rollout_dir = rollout_path.parent().expect("rollout parent");
+        std::fs::create_dir_all(rollout_dir)?;
+        std::fs::write(&rollout_path, "")?;
+
+        let state_runtime = codex_state::StateRuntime::init(
+            config.codex_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .map_err(std::io::Error::other)?;
+        state_runtime
+            .mark_backfill_complete(/*last_watermark*/ None)
+            .await
+            .map_err(std::io::Error::other)?;
+
+        let session_cwd = temp_dir.path().join("project");
+        std::fs::create_dir_all(&session_cwd)?;
+        let created_at = chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")
+            .expect("timestamp should parse")
+            .with_timezone(&chrono::Utc);
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path.clone(),
+            created_at,
+            SessionSource::Exec,
+        );
+        builder.cwd = session_cwd;
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.first_user_message = Some("preview text".to_string());
+        state_runtime
+            .upsert_thread(&metadata)
+            .await
+            .map_err(std::io::Error::other)?;
+        codex_core::append_thread_name(&config.codex_home, thread_id, "saved-exec-session").await?;
+
+        let mut app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config).await?,
+            ));
+
+        let interactive_only = lookup_session_target_by_name_with_app_server(
+            &mut app_server,
+            "saved-exec-session",
+            /*include_non_interactive*/ false,
+        )
+        .await?;
+        assert!(interactive_only.is_none());
+
+        let include_non_interactive = lookup_session_target_by_name_with_app_server(
+            &mut app_server,
+            "saved-exec-session",
+            /*include_non_interactive*/ true,
+        )
+        .await?;
+        let include_non_interactive =
+            include_non_interactive.expect("name lookup should find saved exec thread");
+        assert_eq!(include_non_interactive.path, Some(rollout_path));
+        assert_eq!(include_non_interactive.thread_id, thread_id);
 
         app_server.shutdown().await?;
         Ok(())
@@ -2037,7 +2172,10 @@ mod tests {
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig {
+            trust_level: None,
+            workspace_file: None,
+        };
         config.set_windows_sandbox_enabled(/*value*/ true);
 
         let should_show = should_show_trust_screen(&config);
@@ -2061,6 +2199,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
+            workspace_file: None,
         };
 
         let should_show = should_show_trust_screen(&config);

@@ -96,6 +96,13 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
     *guard = enforce_residency;
 }
 
+pub fn default_client_residency_requirement() -> Option<ResidencyRequirement> {
+    REQUIREMENTS_RESIDENCY
+        .read()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
 pub fn originator() -> Originator {
     if let Ok(guard) = ORIGINATOR.read()
         && let Some(originator) = guard.as_ref()
@@ -128,12 +135,11 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
 }
 
-pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+fn codex_user_agent_for_version(version: &str) -> String {
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
-        "{}/{build_version} ({} {}; {}) {}",
+        "{}/{version} ({} {}; {}) {}",
         originator.value.as_str(),
         os_info.os_type(),
         os_info.version(),
@@ -152,6 +158,10 @@ pub fn get_codex_user_agent() -> String {
 
     let candidate = format!("{prefix}{suffix}");
     sanitize_user_agent(candidate, &prefix)
+}
+
+pub fn get_codex_user_agent() -> String {
+    codex_user_agent_for_version(env!("CARGO_PKG_VERSION"))
 }
 
 /// Sanitize the user agent string.

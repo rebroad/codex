@@ -19,6 +19,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
 use schemars::JsonSchema;
@@ -31,6 +32,14 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecPolicyRuleWriteScope {
+    Global,
+    #[default]
+    Project,
+}
 
 const fn default_enabled() -> bool {
     true
@@ -172,6 +181,99 @@ pub struct ToolSuggestDiscoverable {
 pub struct ToolSuggestConfig {
     #[serde(default)]
     pub discoverables: Vec<ToolSuggestDiscoverable>,
+}
+
+/// HTTP/SSE request debug tracing settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PromptDebugHttpToml {
+    /// When `true`, captures backend query payloads.
+    pub enabled: Option<bool>,
+    /// Capture query input payloads.
+    pub capture_input: Option<bool>,
+    /// Capture model output stream payloads.
+    pub capture_output: Option<bool>,
+    /// Directory used for captured backend files.
+    pub capture_dir: Option<AbsolutePathBuf>,
+    /// Optional absolute path to a dedicated tool usage log file.
+    pub tool_usage_log: Option<AbsolutePathBuf>,
+}
+
+/// Effective HTTP/SSE request debug tracing settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PromptDebugHttpConfig {
+    pub enabled: bool,
+    pub capture_input: bool,
+    pub capture_output: bool,
+    pub capture_dir: Option<PathBuf>,
+    pub tool_usage_log: Option<PathBuf>,
+}
+
+fn replace_pid_placeholder(path: PathBuf) -> PathBuf {
+    let path_str = path.to_string_lossy();
+    if !path_str.contains("$$") {
+        return path;
+    }
+    let pid = std::process::id();
+    let pid_str = pid.to_string();
+    PathBuf::from(path_str.replace("$$", &pid_str))
+}
+
+impl From<PromptDebugHttpToml> for PromptDebugHttpConfig {
+    fn from(toml: PromptDebugHttpToml) -> Self {
+        let capture_dir = toml
+            .capture_dir
+            .map(AbsolutePathBuf::into)
+            .map(replace_pid_placeholder);
+        Self {
+            enabled: toml.enabled.unwrap_or(false),
+            capture_input: toml.capture_input.unwrap_or(false),
+            capture_output: toml.capture_output.unwrap_or(false),
+            capture_dir,
+            tool_usage_log: toml
+                .tool_usage_log
+                .map(AbsolutePathBuf::into)
+                .map(replace_pid_placeholder),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum AppServerLogMode {
+    #[default]
+    Stderr,
+    Log,
+    LogAndStderr,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppServerLogToml {
+    /// Log output mode: stderr, log, or log_and_stderr.
+    pub mode: Option<AppServerLogMode>,
+    /// Optional absolute log file path for app-server tracing output.
+    pub log_file: Option<AbsolutePathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppServerLogConfig {
+    pub mode: AppServerLogMode,
+    pub log_file: Option<PathBuf>,
+}
+
+impl From<AppServerLogToml> for AppServerLogConfig {
+    fn from(toml: AppServerLogToml) -> Self {
+        let log_file = toml
+            .log_file
+            .map(AbsolutePathBuf::into)
+            .map(replace_pid_placeholder);
+        Self {
+            mode: toml.mode.unwrap_or_default(),
+            log_file,
+        }
+    }
 }
 
 /// Memories settings loaded from config.toml.

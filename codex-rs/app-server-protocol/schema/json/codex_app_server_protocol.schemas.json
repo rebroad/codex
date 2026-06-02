@@ -1594,6 +1594,29 @@
             },
             "method": {
               "enum": [
+                "config/reload"
+              ],
+              "title": "Config/reloadRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Config/reloadRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "configRequirements/read"
               ],
               "title": "ConfigRequirements/readRequestMethod",
@@ -6760,6 +6783,20 @@
         "title": "ConfigReadResponse",
         "type": "object"
       },
+      "ConfigReloadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "authChanged": {
+            "description": "True when reloading auth.json changed the cached account information.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "authChanged"
+        ],
+        "title": "ConfigReloadResponse",
+        "type": "object"
+      },
       "ConfigRequirements": {
         "properties": {
           "allowedApprovalPolicies": {
@@ -9762,7 +9799,8 @@
         "enum": [
           "none",
           "friendly",
-          "pragmatic"
+          "pragmatic",
+          "comedic"
         ],
         "type": "string"
       },
@@ -14371,6 +14409,12 @@
       "ThreadTokenUsageUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "queryId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "threadId": {
             "type": "string"
           },

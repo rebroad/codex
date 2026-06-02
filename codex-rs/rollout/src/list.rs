@@ -26,6 +26,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_state::StateRuntime;
 
 /// Returned page of thread (thread) summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -1234,13 +1235,19 @@ async fn find_thread_path_by_id_str_in_subdir(
         tracing::warn!(
             "state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back"
         );
-        state_db::read_repair_rollout_path(
-            state_db_ctx.as_deref(),
-            thread_id,
-            archived_only,
-            found_path.as_path(),
-        )
-        .await;
+        if let Some(state_db_ctx) = state_db_ctx {
+            let rollout_path = found_path.clone();
+            tokio::spawn(async move {
+                let state_db_ctx: &StateRuntime = state_db_ctx.as_ref();
+                state_db::read_repair_rollout_path(
+                    Some(state_db_ctx),
+                    thread_id,
+                    archived_only,
+                    rollout_path.as_path(),
+                )
+                .await;
+            });
+        }
     }
 
     Ok(found)

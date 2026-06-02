@@ -3,4 +3,15 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "responses-api-proxy",
     crate_name = "codex_responses_api_proxy",
+    compile_data = glob(
+        include = ["**"],
+        exclude = [
+            "**/* *",
+            "BUILD.bazel",
+            "Cargo.toml",
+        ],
+        allow_empty = True,
+    ) + [
+        "//codex-rs:VERSION",
+    ],
 )

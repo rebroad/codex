@@ -429,11 +429,20 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].path, real_path);
 
-    let repaired_path = runtime
-        .find_rollout_path_by_id(thread_id, Some(false))
-        .await
-        .expect("state db lookup should succeed");
-    assert_eq!(repaired_path, Some(real_path));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let repaired_path = runtime
+                .find_rollout_path_by_id(thread_id, Some(false))
+                .await
+                .expect("state db lookup should succeed");
+            if repaired_path == Some(real_path.clone()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("background repair should finish in time");
     Ok(())
 }
 

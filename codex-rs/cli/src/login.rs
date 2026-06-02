@@ -13,16 +13,27 @@ use codex_core::config::Config;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
+use codex_login::auth_file_path;
+use codex_login::build_authorize_url;
+use codex_login::complete_device_code_login;
+use codex_login::complete_oauth_login_with_callback_url;
 use codex_login::login_with_api_key;
 use codex_login::logout;
+use codex_login::generate_oauth_state;
+use codex_login::generate_pkce;
+use codex_login::request_device_code;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_login::token_data::parse_jwt_expiration;
+use codex_login::PkceCodes;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tracing_appender::non_blocking;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
@@ -35,6 +46,13 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const TELEGRAM_LOGIN_PENDING_DIR: &str = "telegram-login";
+
+enum LocalAuthHealth {
+    Healthy,
+    Expired,
+    Unknown,
+}
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -329,18 +347,93 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT");
-                std::process::exit(0);
+                let health = local_auth_health(&auth);
+                let mut details = Vec::new();
+
+                if let Some(email) = auth.get_account_email() {
+                    details.push(format!("email={email}"));
+                }
+                if let Some(account_id) = auth.get_account_id() {
+                    details.push(format!("account_id={account_id}"));
+                }
+                if let Some(plan_type) = auth.account_plan_type() {
+                    details.push(format!("plan={}", plan_type.as_wire_name()));
+                }
+
+                let detail_suffix = if details.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", details.join(", "))
+                };
+                match health {
+                    LocalAuthHealth::Healthy => {
+                        eprintln!("Logged in using ChatGPT{detail_suffix}");
+                        std::process::exit(0);
+                    }
+                    LocalAuthHealth::Expired => {
+                        eprintln!("Stored ChatGPT credentials are expired{detail_suffix}",);
+                        eprintln!(
+                            "Local auth health: expired access token (re-login may be required)"
+                        );
+                        std::process::exit(1);
+                    }
+                    LocalAuthHealth::Unknown => {
+                        eprintln!(
+                            "Stored ChatGPT credentials are incomplete/invalid{detail_suffix}"
+                        );
+                        eprintln!(
+                            "Local auth health: unknown (missing/invalid token claims in local auth file)"
+                        );
+                        std::process::exit(1);
+                    }
+                }
             }
         },
         Ok(None) => {
-            eprintln!("Not logged in");
+            let auth_file = auth_file_path(&config.codex_home);
+            let auth_file_exists = auth_file.exists();
+            eprintln!(
+                "Not logged in (checked auth file: {}, exists={auth_file_exists})",
+                auth_file.display()
+            );
+            if !auth_file_exists {
+                eprintln!(
+                    "No local credentials were found at that path, so status cannot show token/account details."
+                );
+                if auth_file.to_str().is_some_and(|path| path.starts_with('~')) {
+                    eprintln!(
+                        "Hint: '~' is not expanded in '--auth-file=...'; use '$HOME/...', an absolute path, or '--auth-file ~/.codex/...'."
+                    );
+                }
+            }
             std::process::exit(1);
         }
         Err(e) => {
             eprintln!("Error checking login status: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+fn local_auth_health(auth: &CodexAuth) -> LocalAuthHealth {
+    if auth.is_api_key_auth() {
+        return LocalAuthHealth::Healthy;
+    }
+    let token_data = match auth.get_token_data() {
+        Ok(token_data) => token_data,
+        Err(_) => return LocalAuthHealth::Unknown,
+    };
+    match parse_jwt_expiration(&token_data.access_token) {
+        Ok(Some(exp)) if exp.timestamp() <= now_epoch_secs() => LocalAuthHealth::Expired,
+        Ok(Some(_)) => LocalAuthHealth::Healthy,
+        Ok(None) | Err(_) => LocalAuthHealth::Unknown,
+    }
+}
+
+fn now_epoch_secs() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs() as i64,
+        Err(_) => 0,
     }
 }
 
@@ -388,6 +481,220 @@ fn safe_format_key(key: &str) -> String {
     let prefix = &key[..8];
     let suffix = &key[key.len() - 5..];
     format!("{prefix}***{suffix}")
+}
+
+pub struct TelegramLoginStartResult {
+    pub authorization_url: String,
+    pub verification_url: String,
+    pub user_code: String,
+    pub message: String,
+}
+
+pub async fn run_tlogin_start(
+    cli_config_overrides: CliConfigOverrides,
+    user_id: String,
+    use_device_auth: bool,
+) -> std::io::Result<TelegramLoginStartResult> {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("starting telegram login flow");
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        return Err(std::io::Error::other(CHATGPT_LOGIN_DISABLED_MESSAGE));
+    }
+
+    let opts = ServerOptions::new(
+        config.codex_home.clone(),
+        CLIENT_ID.to_string(),
+        config.forced_chatgpt_workspace_id.clone(),
+        config.cli_auth_credentials_store_mode,
+    );
+    let pending_root = config.codex_home.join(TELEGRAM_LOGIN_PENDING_DIR);
+    std::fs::create_dir_all(&pending_root)?;
+    let pending_file = pending_root.join(format!("{user_id}.json"));
+    if use_device_auth {
+        let device_code = request_device_code(&opts).await?;
+        let pending = serde_json::json!({
+            "mode": "device_auth",
+            "issuer": opts.issuer,
+            "client_id": opts.client_id,
+            "device_code": device_code,
+            "forced_chatgpt_workspace_id": opts.forced_chatgpt_workspace_id,
+            "created_at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0),
+        });
+        write_json_secure(&pending_file, &pending)?;
+
+        return Ok(TelegramLoginStartResult {
+            authorization_url: device_code.verification_url.clone(),
+            verification_url: device_code.verification_url.clone(),
+            user_code: device_code.user_code.clone(),
+            message: format!(
+                "Open this link and enter the one-time code:\n\n{}\n\nCode: {}",
+                device_code.verification_url, device_code.user_code
+            ),
+        });
+    }
+
+    let pkce = generate_pkce();
+    let state = generate_oauth_state();
+    let redirect_uri = format!("http://localhost:{}/auth/callback", opts.port);
+    let authorization_url = build_authorize_url(
+        &opts.issuer,
+        &opts.client_id,
+        &redirect_uri,
+        &pkce,
+        &state,
+        opts.forced_chatgpt_workspace_id.as_deref(),
+    );
+    let pending = serde_json::json!({
+        "mode": "oauth",
+        "issuer": opts.issuer,
+        "client_id": opts.client_id,
+        "forced_chatgpt_workspace_id": opts.forced_chatgpt_workspace_id,
+        "oauth": {
+            "state": state,
+            "redirect_uri": redirect_uri,
+            "code_verifier": pkce.code_verifier,
+            "code_challenge": pkce.code_challenge,
+        },
+        "created_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0),
+    });
+    write_json_secure(&pending_file, &pending)?;
+
+    Ok(TelegramLoginStartResult {
+        authorization_url: authorization_url.clone(),
+        verification_url: authorization_url.clone(),
+        user_code: String::new(),
+        message: format!(
+            "Open this link and complete sign-in:\n\n{}\n\nThen paste the localhost callback URL here.",
+            authorization_url
+        ),
+    })
+}
+
+pub async fn run_tlogin_complete(
+    cli_config_overrides: CliConfigOverrides,
+    user_id: String,
+    callback_url: Option<String>,
+) -> std::io::Result<()> {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("completing telegram login flow");
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        return Err(std::io::Error::other(CHATGPT_LOGIN_DISABLED_MESSAGE));
+    }
+
+    let pending_file = config
+        .codex_home
+        .join(TELEGRAM_LOGIN_PENDING_DIR)
+        .join(format!("{user_id}.json"));
+    let pending = read_pending_login(pending_file.as_path())?;
+    let mode = pending
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("device_auth");
+
+    let issuer = pending
+        .get("issuer")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| std::io::Error::other("missing issuer in pending login"))?;
+    let client_id = pending
+        .get("client_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| std::io::Error::other("missing client_id in pending login"))?;
+    let forced_workspace = pending
+        .get("forced_chatgpt_workspace_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+
+    let mut opts = ServerOptions::new(
+        config.codex_home.clone(),
+        client_id.to_string(),
+        forced_workspace,
+        config.cli_auth_credentials_store_mode,
+    );
+    opts.issuer = issuer.to_string();
+    opts.open_browser = false;
+
+    match mode {
+        "oauth" => {
+            let callback_url = callback_url.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "missing --callback-url for oauth pending login",
+                )
+            })?;
+            let oauth = pending.get("oauth").and_then(serde_json::Value::as_object).ok_or_else(
+                || std::io::Error::other("missing oauth state in pending login"),
+            )?;
+            let redirect_uri = oauth
+                .get("redirect_uri")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| std::io::Error::other("missing oauth.redirect_uri"))?;
+            let state = oauth
+                .get("state")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| std::io::Error::other("missing oauth.state"))?;
+            let code_verifier = oauth
+                .get("code_verifier")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| std::io::Error::other("missing oauth.code_verifier"))?;
+            let code_challenge = oauth
+                .get("code_challenge")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| std::io::Error::other("missing oauth.code_challenge"))?;
+            let pkce = PkceCodes {
+                code_verifier: code_verifier.to_string(),
+                code_challenge: code_challenge.to_string(),
+            };
+            complete_oauth_login_with_callback_url(&opts, &callback_url, redirect_uri, state, &pkce)
+                .await?;
+        }
+        "device_auth" => {
+            let device_code: codex_login::DeviceCode = serde_json::from_value(
+                pending["device_code"].clone(),
+            )
+            .map_err(std::io::Error::other)?;
+            complete_device_code_login(opts, device_code).await?;
+        }
+        other => {
+            return Err(std::io::Error::other(format!(
+                "unknown telegram login pending mode: {other}"
+            )));
+        }
+    }
+
+    let _ = std::fs::remove_file(&pending_file);
+    Ok(())
+}
+
+fn read_pending_login(path: &std::path::Path) -> std::io::Result<serde_json::Value> {
+    let raw = std::fs::read_to_string(path)?;
+    serde_json::from_str(&raw).map_err(std::io::Error::other)
+}
+
+fn write_json_secure(path: &std::path::Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path)?;
+    use std::io::Write;
+    file.write_all(
+        serde_json::to_string_pretty(value)
+            .map_err(std::io::Error::other)?
+            .as_bytes(),
+    )?;
+    file.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]

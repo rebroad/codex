@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex as AsyncMutex;
 
 use codex_app_server_protocol::AuthMode;
@@ -1258,6 +1260,44 @@ impl AuthManager {
             return Some(auth);
         }
         self.auth_cached()
+    }
+
+    /// Current auth (clone), proactively refreshing expired ChatGPT access tokens once.
+    ///
+    /// This is intended for status-style surfaces that can safely attempt a one-shot refresh
+    /// before presenting auth health.
+    pub async fn auth_with_refresh_if_expired(&self) -> Option<CodexAuth> {
+        match self.auth_with_refresh_if_expired_strict().await {
+            Ok(auth) => auth,
+            Err(err) => {
+                tracing::warn!("proactive auth refresh failed: {err}");
+                self.auth_cached()
+            }
+        }
+    }
+
+    /// Current auth (clone), proactively refreshing expired ChatGPT access tokens once.
+    ///
+    /// Unlike [`Self::auth_with_refresh_if_expired`], this returns refresh failures so callers can
+    /// short-circuit request fan-out when auth is known to be permanently invalid.
+    pub async fn auth_with_refresh_if_expired_strict(
+        &self,
+    ) -> Result<Option<CodexAuth>, RefreshTokenError> {
+        let auth = match self.auth().await {
+            Some(auth) => auth,
+            None => return Ok(None),
+        };
+
+        if let Some(error) = self.refresh_failure_for_auth(&auth) {
+            return Err(RefreshTokenError::Permanent(error));
+        }
+
+        if !Self::is_access_token_expired(&auth) {
+            return Ok(Some(auth));
+        }
+
+        self.refresh_token().await?;
+        Ok(self.auth_cached())
     }
 
     /// Force a reload of the auth information from auth.json. Returns

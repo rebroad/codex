@@ -128,6 +128,12 @@ fn tool_search_is_under_development_and_disabled_by_default() {
 }
 
 #[test]
+fn local_compaction_is_stable_and_disabled_by_default() {
+    assert_eq!(Feature::LocalCompaction.stage(), Stage::Stable);
+    assert_eq!(Feature::LocalCompaction.default_enabled(), false);
+}
+
+#[test]
 fn general_analytics_is_under_development_and_disabled_by_default() {
     assert_eq!(Feature::GeneralAnalytics.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::GeneralAnalytics.default_enabled(), false);

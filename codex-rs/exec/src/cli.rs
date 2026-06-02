@@ -2,6 +2,7 @@ use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
+use codex_protocol::config_types::Personality;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
@@ -97,6 +98,68 @@ pub struct Cli {
         global = true
     )]
     pub json: bool,
+
+    /// List models that can be used with `codex exec`.
+    #[arg(long = "models", conflicts_with = "prompt", default_value_t = false)]
+    pub list_models: bool,
+
+    /// Send one direct model request (no session/tool loop).
+    #[arg(long = "direct", default_value_t = false)]
+    pub direct: bool,
+
+    /// Send only the user prompt text to the model by disabling built-in and
+    /// contextual prompt scaffolding for this session.
+    #[arg(long = "bare-prompt", default_value_t = false, global = true)]
+    pub bare_prompt: bool,
+
+    /// Override developer instructions for this run using a file.
+    /// Alias: `--system` (legacy naming).
+    #[arg(
+        long = "developer-instructions-file",
+        alias = "system",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub developer_instructions_file: Option<PathBuf>,
+
+    /// Override base instructions for this run using a file.
+    #[arg(
+        long = "base-instructions-file",
+        alias = "base-instructions",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub base_instructions_file: Option<PathBuf>,
+
+    /// Override model personality for this run.
+    #[arg(long = "personality", global = true)]
+    pub personality: Option<Personality>,
+
+    /// Override compaction prompt instructions for this run using a file.
+    #[arg(
+        long = "compact-prompt-file",
+        alias = "compact-prompt",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub compact_prompt_file: Option<PathBuf>,
+
+    /// Override post-compaction summary preamble text for this run using a
+    /// file.
+    #[arg(
+        long = "compact-summary-preamble-file",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        global = true
+    )]
+    pub compact_summary_preamble_file: Option<PathBuf>,
+
+    /// Force-enable backend capture and print the resolved config/personality route.
+    #[arg(long = "debug", default_value_t = false, global = true)]
+    pub debug: bool,
 
     /// Specifies file where the last message from the agent should be written.
     #[arg(

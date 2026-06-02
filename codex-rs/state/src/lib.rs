@@ -4,11 +4,14 @@
 //! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
 //! orchestration and rollout scanning live in `codex-core`.
 
+mod account_usage_store;
 mod extract;
 pub mod log_db;
 mod migrations;
 mod model;
+mod model_pricing;
 mod paths;
+mod rollout_snapshot;
 mod runtime;
 
 pub use model::LogEntry;
@@ -19,6 +22,14 @@ pub use model::Phase2JobClaimOutcome;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 
+pub use account_usage_store::AccountUsageEventMeta;
+pub use account_usage_store::AccountUsageEstimatorConfig;
+pub use account_usage_store::AccountUsageSnapshot;
+pub use account_usage_store::AccountUsageStore;
+pub use account_usage_store::account_usage_display;
+pub use account_usage_store::account_usage_key;
+pub use account_usage_store::usage_db_filename;
+pub use account_usage_store::usage_db_path;
 /// Low-level storage engine: useful for focused tests.
 ///
 /// Most consumers should prefer [`StateRuntime`].
@@ -46,6 +57,17 @@ pub use model::Stage1StartupClaimParams;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
+pub use model_pricing::CREDITS_PER_USD;
+pub use model_pricing::MODEL_PRICING_FILENAME;
+pub use model_pricing::estimate_usage_credits_for_model;
+pub use model_pricing::estimate_usage_usd_for_model;
+pub use model_pricing::ModelPricingEntry;
+pub use model_pricing::ModelPricingFile;
+pub use model_pricing::load_model_pricing;
+pub use model_pricing::model_pricing_path;
+pub use model_pricing::write_model_pricing;
+pub use rollout_snapshot::RolloutThreadSnapshot;
+pub use rollout_snapshot::read_rollout_thread_snapshot;
 pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;

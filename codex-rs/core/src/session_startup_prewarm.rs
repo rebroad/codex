@@ -225,7 +225,7 @@ async fn schedule_startup_prewarm_inner(
         .turn_metadata_state
         .current_header_value();
     let mut client_session = session.services.model_client.new_session();
-    client_session
+    let prewarm_completion = client_session
         .prewarm_websocket(
             &startup_prompt,
             &startup_turn_context.model_info,
@@ -236,6 +236,11 @@ async fn schedule_startup_prewarm_inner(
             startup_turn_metadata_header.as_deref(),
         )
         .await?;
+    if let Some(prewarm_completion) = prewarm_completion {
+        session
+            .record_startup_prewarm_usage(prewarm_completion)
+            .await;
+    }
 
     Ok(client_session)
 }

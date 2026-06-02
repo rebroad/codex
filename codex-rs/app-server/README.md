@@ -48,6 +48,7 @@ Tracing/log output:
 
 - `RUST_LOG` controls log filtering/verbosity.
 - Set `LOG_FORMAT=json` to emit app-server tracing logs to `stderr` as JSON (one event per line).
+- Use `[app_server_log]` in `config.toml` to switch output to a file or to both stderr and a file.
 
 Backpressure behavior:
 
@@ -196,6 +197,7 @@ Example with notification opt-out:
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads.
+- `config/reload` — reload `config.toml` and `auth.json` from disk, hot-reload user config into loaded threads, and emit `account/updated` if the cached auth changes; returns `{ authChanged }`.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
 
 ### Example: Start or resume a thread
@@ -208,6 +210,7 @@ Start a fresh thread when you need a new Codex conversation.
     // current config settings.
     "model": "gpt-5.1-codex",
     "cwd": "/Users/me/project",
+    "config": { "bare_prompt": true }, // optional: send only user prompt text
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
@@ -239,7 +242,7 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
+Valid `personality` values are `"friendly"`, `"pragmatic"`, `"comedic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`.
 
@@ -250,7 +253,8 @@ Example:
 ```json
 { "method": "thread/resume", "id": 11, "params": {
     "threadId": "thr_123",
-    "personality": "friendly"
+    "personality": "friendly",
+    "config": { "bare_prompt": true }
 } }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```

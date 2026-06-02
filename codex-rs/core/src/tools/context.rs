@@ -75,6 +75,34 @@ impl ToolPayload {
             ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
         }
     }
+
+    pub fn timeout_ms(&self) -> Option<u64> {
+        match self {
+            ToolPayload::LocalShell { params } => params.timeout_ms,
+            ToolPayload::Function { arguments } | ToolPayload::Mcp { raw_arguments: arguments, .. } => {
+                extract_timeout_ms(arguments)
+            }
+            ToolPayload::ToolSearch { .. } | ToolPayload::Custom { .. } => None,
+        }
+    }
+}
+
+fn extract_timeout_ms(text: &str) -> Option<u64> {
+    serde_json::from_str::<JsonValue>(text)
+        .ok()
+        .and_then(|value| find_timeout_ms(&value))
+}
+
+fn find_timeout_ms(value: &JsonValue) -> Option<u64> {
+    match value {
+        JsonValue::Object(map) => map
+            .get("timeout_ms")
+            .or_else(|| map.get("timeout"))
+            .and_then(JsonValue::as_u64)
+            .or_else(|| map.values().find_map(find_timeout_ms)),
+        JsonValue::Array(values) => values.iter().find_map(find_timeout_ms),
+        _ => None,
+    }
 }
 
 pub trait ToolOutput: Send {

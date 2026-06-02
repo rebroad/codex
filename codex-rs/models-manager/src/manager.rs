@@ -14,6 +14,7 @@ use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::RefreshTokenError;
 use codex_login::auth_provider_from_auth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
@@ -432,7 +433,16 @@ impl ModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth_with_refresh_if_expired_strict()
+            .await
+            .map_err(|err| match err {
+                RefreshTokenError::Permanent(failed) => {
+                    CodexErr::RefreshTokenFailed(failed)
+                }
+                RefreshTokenError::Transient(other) => CodexErr::Io(other),
+            })?;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider.to_api_provider(auth_mode)?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;

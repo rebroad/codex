@@ -1,5 +1,7 @@
 use crate::shell::Shell;
 use crate::shell::ShellType;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
+use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
@@ -8,15 +10,20 @@ use crate::tools::registry::ToolRegistryBuilder;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::TOOL_SUGGEST_TOOL_NAME;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolHandlerKind;
 use codex_tools::ToolNamespace;
 use codex_tools::ToolRegistryPlanAppTool;
 use codex_tools::ToolRegistryPlanParams;
+use codex_tools::ToolSpec;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
 use codex_tools::WaitAgentTimeoutOptions;
+use codex_tools::augment_tool_spec_for_code_mode;
 use codex_tools::build_tool_registry_plan;
+use codex_tools::dynamic_tool_to_responses_api_tool;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,6 +35,87 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
         ShellType::Sh => ToolUserShellType::Sh,
         ShellType::Cmd => ToolUserShellType::Cmd,
     }
+}
+
+fn push_tool_spec(
+    builder: &mut ToolRegistryBuilder,
+    spec: ToolSpec,
+    supports_parallel_tool_calls: bool,
+    code_mode_enabled: bool,
+) {
+    let spec = if code_mode_enabled {
+        augment_tool_spec_for_code_mode(spec)
+    } else {
+        spec
+    };
+    if supports_parallel_tool_calls {
+        builder.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ true);
+    } else {
+        builder.push_spec(spec);
+    }
+}
+
+fn canonical_builtin_tool_name(name: &str) -> Option<&str> {
+    match name {
+        "shell" | "local_shell" | "container.exec" | "shell_command" => Some("shell_command"),
+        "exec_command" => Some("exec_command"),
+        "write_stdin" => Some("write_stdin"),
+        "update_plan" => Some("update_plan"),
+        "request_user_input" => Some("request_user_input"),
+        "request_permissions" => Some("request_permissions"),
+        TOOL_SEARCH_TOOL_NAME => Some(TOOL_SEARCH_TOOL_NAME),
+        TOOL_SUGGEST_TOOL_NAME => Some(TOOL_SUGGEST_TOOL_NAME),
+        "apply_patch" => Some("apply_patch"),
+        "web_search" => Some("web_search"),
+        "image_generation" => Some("image_generation"),
+        "view_image" => Some("view_image"),
+        "spawn_agent" => Some("spawn_agent"),
+        "send_input" => Some("send_input"),
+        "send_message" => Some("send_message"),
+        "assign_task" => Some("assign_task"),
+        "resume_agent" => Some("resume_agent"),
+        "wait_agent" => Some("wait_agent"),
+        "close_agent" => Some("close_agent"),
+        "list_agents" => Some("list_agents"),
+        "spawn_agents_on_csv" => Some("spawn_agents_on_csv"),
+        "report_agent_job_result" => Some("report_agent_job_result"),
+        "list_mcp_resources" => Some("list_mcp_resources"),
+        "list_mcp_resource_templates" => Some("list_mcp_resource_templates"),
+        "read_mcp_resource" => Some("read_mcp_resource"),
+        "js_repl" => Some("js_repl"),
+        "js_repl_reset" => Some("js_repl_reset"),
+        "list_dir" => Some("list_dir"),
+        "test_sync_tool" => Some("test_sync_tool"),
+        PUBLIC_TOOL_NAME => Some(PUBLIC_TOOL_NAME),
+        WAIT_TOOL_NAME => Some(WAIT_TOOL_NAME),
+        _ => None,
+    }
+}
+
+fn builtin_tool_allowed(config: &ToolsConfig, canonical_name: &str) -> bool {
+    if let Some(enabled_tools) = config.builtin_enabled_tools.as_ref()
+        && !enabled_tools.contains(canonical_name)
+    {
+        return false;
+    }
+
+    !config.builtin_disabled_tools.contains(canonical_name)
+}
+
+fn apply_builtin_tool_policy(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
+    builder.retain_specs(|spec| {
+        let Some(canonical_name) = canonical_builtin_tool_name(spec.name()) else {
+            return true;
+        };
+        builtin_tool_allowed(config, canonical_name)
+    });
+
+    builder.retain_handlers(|name| {
+        let Some(canonical_name) = canonical_builtin_tool_name(name) else {
+            return true;
+        };
+        builtin_tool_allowed(config, canonical_name)
+    });
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(
@@ -235,6 +323,30 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
         }
     }
+
+    if !dynamic_tools.is_empty() {
+        for tool in dynamic_tools {
+            match dynamic_tool_to_responses_api_tool(tool) {
+                Ok(converted_tool) => {
+                    push_tool_spec(
+                        &mut builder,
+                        ToolSpec::Function(converted_tool),
+                        /*supports_parallel_tool_calls*/ false,
+                        config.code_mode_enabled,
+                    );
+                    builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
+                        tool.name
+                    );
+                }
+            }
+        }
+    }
+
+    apply_builtin_tool_policy(&mut builder, config);
     builder
 }
 

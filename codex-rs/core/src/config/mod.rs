@@ -13,7 +13,6 @@ use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
-use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
@@ -22,6 +21,9 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
+use codex_api::PromptDebugHttpConfig as ApiPromptDebugHttpConfig;
+use codex_api::configure_prompt_debug_http;
+use codex_config::config_toml::AccountUsageEstimatorConfig;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -29,8 +31,10 @@ use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::AppServerLogConfig;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
+use codex_config::types::ExecPolicyRuleWriteScope;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -44,6 +48,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::PromptDebugHttpConfig as PromptDebugHttpSettings;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -92,9 +97,11 @@ use std::path::PathBuf;
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_from_profile_network;
+use crate::personality::ensure_personality_starter_files;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+use tracing::warn;
 
 pub(crate) mod agent_roles;
 pub mod edit;
@@ -223,6 +230,12 @@ pub struct Config {
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
+    /// Where to write newly approved exec-policy prefix rules.
+    pub exec_policy_rule_write_scope: ExecPolicyRuleWriteScope,
+
+    /// Whether Linux sandbox debug logging is enabled (default true).
+    pub sandbox_debug: bool,
+
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
@@ -268,6 +281,14 @@ pub struct Config {
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
+
+    /// Optional text inserted after the compaction summary marker and before
+    /// the generated compacted summary body.
+    pub compact_summary_preamble: Option<String>,
+
+    /// When true, send only user prompt text without base/developer/contextual
+    /// prompt scaffolding.
+    pub bare_prompt: bool,
 
     /// Optional commit attribution text for commit message co-author trailers.
     ///
@@ -385,6 +406,14 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Explicit allow-list of built-in (non-MCP) tools.
+    /// When set, only listed built-in tools are exposed.
+    pub builtin_enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of built-in (non-MCP) tools.
+    /// Applied after `builtin_enabled_tools`.
+    pub builtin_disabled_tools: Vec<String>,
+
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
@@ -408,6 +437,10 @@ pub struct Config {
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
+    /// Tuning for account-usage estimation and `usage_pct` display.
+    pub account_usage_estimator: AccountUsageEstimatorConfig,
+    /// App-server tracing output configuration.
+    pub app_server_log: AppServerLogConfig,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -867,6 +900,64 @@ fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> 
     Ok(catalog)
 }
 
+#[derive(Deserialize)]
+struct CodeWorkspaceConfig {
+    #[serde(default)]
+    folders: Vec<CodeWorkspaceFolder>,
+}
+
+#[derive(Deserialize)]
+struct CodeWorkspaceFolder {
+    path: Option<PathBuf>,
+}
+
+fn load_workspace_writable_roots(
+    workspace_file: &AbsolutePathBuf,
+) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    let file_contents = std::fs::read_to_string(workspace_file)?;
+    let workspace_config =
+        serde_json::from_str::<CodeWorkspaceConfig>(&file_contents).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to parse project.workspace_file `{}` as JSON: {err}",
+                    workspace_file.display()
+                ),
+            )
+        })?;
+    let workspace_base = workspace_file.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "project.workspace_file `{}` has no parent directory",
+                workspace_file.display()
+            ),
+        )
+    })?;
+    let roots = workspace_config
+        .folders
+        .into_iter()
+        .filter_map(|folder| folder.path)
+        .map(|path| AbsolutePathBuf::resolve_path_against_base(path, workspace_base.as_path()))
+        .collect::<Vec<_>>();
+    Ok(roots)
+}
+
+fn merged_additional_writable_roots(
+    additional_writable_roots: &[AbsolutePathBuf],
+    workspace_file: Option<&AbsolutePathBuf>,
+) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    let mut merged = additional_writable_roots.to_vec();
+    if let Some(workspace_file) = workspace_file {
+        for path in load_workspace_writable_roots(workspace_file)? {
+            if !merged.iter().any(|existing| existing == &path) {
+                merged.push(path);
+            }
+        }
+    }
+    Ok(merged)
+}
+
 fn load_model_catalog(
     model_catalog_json: Option<AbsolutePathBuf>,
 ) -> std::io::Result<Option<ModelsResponse>> {
@@ -1230,6 +1321,8 @@ pub struct ConfigOverrides {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
+    pub compact_summary_preamble: Option<String>,
+    pub bare_prompt: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
@@ -1397,6 +1490,13 @@ impl Config {
     ) -> std::io::Result<Self> {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        if let Err(err) = ensure_personality_starter_files(&codex_home) {
+            warn!(
+                error = %err,
+                codex_home = %codex_home.display(),
+                "failed to bootstrap starter personalities"
+            );
+        }
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -1438,6 +1538,8 @@ impl Config {
             developer_instructions,
             personality,
             compact_prompt,
+            compact_summary_preamble,
+            bare_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
@@ -1507,13 +1609,16 @@ impl Config {
                 }
             }
         }))?;
-        let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
+        let active_project = cfg
+            .get_active_project(resolved_cwd.as_path())
+            .unwrap_or(ProjectConfig {
+                trust_level: None,
+                workspace_file: None,
+            });
+        let additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
-        let active_project = cfg
-            .get_active_project(resolved_cwd.as_path())
-            .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
             &cfg,
@@ -1542,16 +1647,6 @@ impl Config {
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
             None => WindowsSandboxLevel::from_features(&features),
         };
-        let memories_root = memory_root(&codex_home);
-        std::fs::create_dir_all(&memories_root)?;
-        let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
-        if !additional_writable_roots
-            .iter()
-            .any(|existing| existing == &memories_root)
-        {
-            additional_writable_roots.push(memories_root);
-        }
-
         let profiles_are_active = matches!(
             permission_config_syntax,
             Some(PermissionConfigSyntax::Profiles)
@@ -1587,10 +1682,14 @@ impl Config {
             let mut sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+                let merged_writable_roots = merged_additional_writable_roots(
+                    &additional_writable_roots,
+                    active_project.workspace_file.as_ref(),
+                )?;
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
-                        &additional_writable_roots,
+                        &merged_writable_roots,
                     );
                 sandbox_policy = file_system_sandbox_policy
                     .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
@@ -1611,7 +1710,11 @@ impl Config {
                 Some(&constrained_sandbox_policy),
             );
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
-                for path in &additional_writable_roots {
+                let merged_writable_roots = merged_additional_writable_roots(
+                    &additional_writable_roots,
+                    active_project.workspace_file.as_ref(),
+                )?;
+                for path in &merged_writable_roots {
                     if !writable_roots.iter().any(|existing| existing == path) {
                         writable_roots.push(path.clone());
                     }
@@ -1706,6 +1809,13 @@ impl Config {
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
+        let sandbox_debug = cfg.sandbox_debug.unwrap_or(true);
+
+        if !sandbox_debug {
+            unsafe {
+                std::env::set_var("CODEX_SANDBOX_DEBUG", "0");
+            }
+        }
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1814,6 +1924,16 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
+        let compact_summary_preamble = compact_summary_preamble
+            .or(cfg.compact_summary_preamble)
+            .and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
 
         let commit_attribution = cfg.commit_attribution;
 
@@ -1851,6 +1971,10 @@ impl Config {
                     .enabled(Feature::Personality)
                     .then_some(Personality::Pragmatic)
             });
+        let personality = features
+            .enabled(Feature::Personality)
+            .then_some(personality)
+            .flatten();
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
@@ -1861,6 +1985,7 @@ impl Config {
             "experimental compact prompt file",
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
+        let bare_prompt = bare_prompt.or(cfg.bare_prompt).unwrap_or(false);
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
             .or(cfg.js_repl_node_path.map(Into::into));
@@ -1898,6 +2023,11 @@ impl Config {
                 p.push("log");
                 p
             });
+        let app_server_log: AppServerLogConfig = cfg.app_server_log.unwrap_or_default().into();
+        let account_usage_estimator = cfg
+            .account_usage_estimator
+            .clone()
+            .resolve_with_defaults();
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
@@ -2003,6 +2133,8 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            exec_policy_rule_write_scope: cfg.exec_policy_rule_write_scope.unwrap_or_default(),
+            sandbox_debug,
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
@@ -2012,6 +2144,8 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            compact_summary_preamble,
+            bare_prompt,
             commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
@@ -2041,6 +2175,8 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            builtin_enabled_tools: cfg.builtin_enabled_tools,
+            builtin_disabled_tools: cfg.builtin_disabled_tools.unwrap_or_default(),
             agent_max_threads,
             agent_max_depth,
             agent_roles,
@@ -2049,6 +2185,8 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
+            account_usage_estimator,
+            app_server_log,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
@@ -2074,7 +2212,8 @@ impl Config {
                 .or(cfg.plan_mode_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
-                .or(cfg.model_reasoning_summary),
+                .or(cfg.model_reasoning_summary)
+                .or(Some(ReasoningSummary::Auto)),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_catalog,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
@@ -2173,6 +2312,15 @@ impl Config {
                 }
             },
         };
+        let prompt_debug_http: PromptDebugHttpSettings =
+            cfg.prompt_debug_http.unwrap_or_default().into();
+        configure_prompt_debug_http(ApiPromptDebugHttpConfig {
+            enabled: prompt_debug_http.enabled,
+            capture_input: prompt_debug_http.capture_input,
+            capture_output: prompt_debug_http.capture_output,
+            capture_dir: prompt_debug_http.capture_dir,
+            tool_usage_log: prompt_debug_http.tool_usage_log,
+        });
         Ok(config)
     }
 

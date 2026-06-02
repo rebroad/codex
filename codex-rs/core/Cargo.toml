@@ -2,10 +2,10 @@
 edition.workspace = true
 license.workspace = true
 name = "codex-core"
+build = "build.rs"
 version.workspace = true
 
 [lib]
-doctest = false
 name = "codex_core"
 path = "src/lib.rs"
 

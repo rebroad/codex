@@ -23,6 +23,7 @@ tungstenite = { workspace = true }
 tracing = { workspace = true }
 eventsource-stream = { workspace = true }
 regex-lite = { workspace = true }
+libc = { workspace = true }
 tokio-util = { workspace = true, features = ["codec"] }
 url = { workspace = true }
 
@@ -36,3 +37,6 @@ reqwest = { workspace = true }
 
 [lints]
 workspace = true
+
+[lib]
+doctest = false

@@ -43,6 +43,7 @@ impl ToolHandler for Handler {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
+        let normalized_model = normalize_spawn_agent_requested_model(args.model.as_deref());
 
         let initial_operation = parse_collab_input(Some(args.message), /*items*/ None)?;
         let prompt = render_input_preview(&initial_operation);
@@ -62,7 +63,7 @@ impl ToolHandler for Handler {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
-                    model: args.model.clone().unwrap_or_default(),
+                    model: normalized_model.clone().unwrap_or_default(),
                     reasoning_effort: args.reasoning_effort.unwrap_or_default(),
                 }
                 .into(),
@@ -74,7 +75,7 @@ impl ToolHandler for Handler {
             &session,
             turn.as_ref(),
             &mut config,
-            args.model.as_deref(),
+            normalized_model.as_deref(),
             args.reasoning_effort,
         )
         .await?;
@@ -170,7 +171,7 @@ impl ToolHandler for Handler {
         let effective_model = agent_snapshot
             .as_ref()
             .map(|snapshot| snapshot.model.clone())
-            .unwrap_or_else(|| args.model.clone().unwrap_or_default());
+            .unwrap_or_else(|| normalized_model.clone().unwrap_or_default());
         let effective_reasoning_effort = agent_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.reasoning_effort)

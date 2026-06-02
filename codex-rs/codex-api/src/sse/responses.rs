@@ -1,11 +1,16 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::TransportByteStats;
 use crate::error::ApiError;
+use crate::prompt_debug_http::PromptCaptureSession;
+use crate::prompt_debug_http::prompt_capture_append_output;
+use crate::prompt_debug_http::prompt_capture_write_output_json;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
@@ -50,6 +55,8 @@ pub fn stream_from_fixture(
         tx_event,
         idle_timeout,
         /*telemetry*/ None,
+        /*capture*/ None,
+        /*sent_bytes*/ 0,
     ));
     Ok(ResponseStream { rx_event })
 }
@@ -59,6 +66,8 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+    capture: Option<PromptCaptureSession>,
+    sent_bytes: i64,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -99,7 +108,15 @@ pub fn spawn_response_stream(
                 .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                 .await;
         }
-        process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        process_sse(
+            stream_response.bytes,
+            tx_event,
+            idle_timeout,
+            telemetry,
+            capture,
+            sent_bytes,
+        )
+        .await;
     });
 
     ResponseStream { rx_event }
@@ -321,6 +338,8 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
+                            capture_id: None,
+                            transport_bytes: None,
                         }));
                     }
                     Err(err) => {
@@ -359,10 +378,14 @@ pub async fn process_sse(
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    capture: Option<PromptCaptureSession>,
+    sent_bytes: i64,
 ) {
+    let capture_id = capture.as_ref().map(|session| session.id().to_string());
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut recv_bytes = 0_i64;
 
     loop {
         let start = Instant::now();
@@ -393,6 +416,10 @@ pub async fn process_sse(
         };
 
         trace!("SSE event: {}", &sse.data);
+        recv_bytes = recv_bytes.saturating_add(sse.data.len() as i64);
+        if let Some(capture) = capture.as_ref() {
+            prompt_capture_append_output(capture, "responses_sse", &sse.data);
+        }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -401,7 +428,6 @@ pub async fn process_sse(
                 continue;
             }
         };
-
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
         {
@@ -416,7 +442,58 @@ pub async fn process_sse(
         }
 
         match process_responses_event(event) {
-            Ok(Some(event)) => {
+            Ok(Some(mut event)) => {
+                match &event {
+                    ResponseEvent::OutputTextDelta(delta) => {
+                        if let Some(capture) = capture.as_ref() {
+                            prompt_capture_append_output(
+                                capture,
+                                "responses_sse_output_text_delta",
+                                delta,
+                            );
+                        }
+                    }
+                    ResponseEvent::OutputItemAdded(item) => {
+                        maybe_capture_response_item(capture.as_ref(), "Output item added", item);
+                    }
+                    ResponseEvent::OutputItemDone(item) => {
+                        maybe_capture_response_item(capture.as_ref(), "Output item done", item);
+                    }
+                    ResponseEvent::ReasoningSummaryDelta {
+                        delta,
+                        summary_index,
+                    } => {
+                        let _ = (delta, summary_index);
+                    }
+                    ResponseEvent::ReasoningContentDelta {
+                        delta,
+                        content_index,
+                    } => {
+                        let _ = (delta, content_index);
+                    }
+                    ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                        let _ = summary_index;
+                    }
+                    ResponseEvent::Completed { .. } => {
+                        if let ResponseEvent::Completed {
+                            capture_id: id,
+                            transport_bytes,
+                            ..
+                        } = &mut event
+                        {
+                            *id = capture_id.clone();
+                            *transport_bytes = Some(TransportByteStats {
+                                sent: sent_bytes.max(0),
+                                recv: recv_bytes.max(0),
+                            });
+                        }
+                    }
+                    ResponseEvent::Created
+                    | ResponseEvent::ServerModel(_)
+                    | ResponseEvent::ServerReasoningIncluded(_)
+                    | ResponseEvent::RateLimits(_)
+                    | ResponseEvent::ModelsEtag(_) => {}
+                }
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
                 if tx_event.send(Ok(event)).await.is_err() {
                     return;
@@ -430,6 +507,48 @@ pub async fn process_sse(
                 response_error = Some(error.into_api_error());
             }
         };
+    }
+}
+
+fn maybe_capture_response_item(
+    capture: Option<&PromptCaptureSession>,
+    label: &str,
+    item: &ResponseItem,
+) {
+    let Some(capture) = capture else {
+        return;
+    };
+
+    let output_text = capture_sections_from_response_item(item);
+    if let Some(output_text) = output_text {
+        prompt_capture_append_output(capture, "responses_sse_output_text", output_text.as_str());
+    }
+
+    if let Ok(item_json) = serde_json::to_value(item) {
+        prompt_capture_write_output_json(Some(capture), label, &item_json);
+    }
+}
+
+pub(crate) fn capture_sections_from_response_item(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::Message { role, content, .. } if role == "assistant" => {
+            let output_text = content
+                .iter()
+                .filter_map(|chunk| match chunk {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        Some(text.as_str())
+                    }
+                    ContentItem::InputImage { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            if output_text.is_empty() {
+                None
+            } else {
+                Some(output_text)
+            }
+        }
+        _ => None,
     }
 }
 
@@ -520,6 +639,8 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*capture*/ None,
+            /*sent_bytes*/ 0,
         ));
 
         let mut events = Vec::new();
@@ -551,6 +672,8 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*capture*/ None,
+            /*sent_bytes*/ 0,
         ));
 
         let mut out = Vec::new();
@@ -620,6 +743,7 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                ..
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
@@ -710,6 +834,8 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*capture*/ None,
+            /*sent_bytes*/ 0,
         ));
 
         let events = tokio::time::timeout(Duration::from_millis(1000), async {
@@ -727,6 +853,7 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                ..
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
@@ -914,6 +1041,8 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            /*capture*/ None,
+            /*sent_bytes*/ 0,
         );
         let event = stream
             .rx_event
@@ -956,7 +1085,8 @@ mod tests {
             &events[1],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                ..
             } if response_id == "resp-1"
         );
     }
@@ -992,7 +1122,8 @@ mod tests {
             &events[2],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                ..
             } if response_id == "resp-1"
         );
     }
@@ -1073,6 +1204,52 @@ mod tests {
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs(35)));
+    }
+
+    #[test]
+    fn response_completed_usage_maps_cached_tokens_without_double_counting() {
+        let usage = ResponseCompletedUsage {
+            input_tokens: 100,
+            input_tokens_details: Some(ResponseCompletedInputTokensDetails { cached_tokens: 25 }),
+            output_tokens: 40,
+            output_tokens_details: Some(ResponseCompletedOutputTokensDetails {
+                reasoning_tokens: 10,
+            }),
+            total_tokens: 140,
+        };
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 25,
+                output_tokens: 40,
+                reasoning_output_tokens: 10,
+                total_tokens: 140,
+            }
+        );
+    }
+
+    #[test]
+    fn response_completed_usage_defaults_cached_tokens_to_zero() {
+        let usage = ResponseCompletedUsage {
+            input_tokens: 12,
+            input_tokens_details: None,
+            output_tokens: 3,
+            output_tokens_details: None,
+            total_tokens: 15,
+        };
+
+        assert_eq!(
+            TokenUsage::from(usage),
+            TokenUsage {
+                input_tokens: 12,
+                cached_input_tokens: 0,
+                output_tokens: 3,
+                reasoning_output_tokens: 0,
+                total_tokens: 15,
+            }
+        );
     }
 
     const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";

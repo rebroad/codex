@@ -9,10 +9,13 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
+use codex_core::version::CODEX_BUILD_VERSION;
 use codex_model_provider_info::WireApi;
-use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_state::estimate_usage_usd_for_model;
+use codex_state::load_model_pricing;
+use codex_state::ModelPricingFile;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 
@@ -36,6 +39,9 @@ pub(crate) struct EventProcessorWithHumanOutput {
     final_message_rendered: bool,
     emit_final_message_on_shutdown: bool,
     last_total_token_usage: Option<ThreadTokenUsage>,
+    last_query_id: Option<String>,
+    model_slug: Option<String>,
+    model_pricing: ModelPricingFile,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -44,6 +50,8 @@ impl EventProcessorWithHumanOutput {
         config: &Config,
         last_message_path: Option<PathBuf>,
     ) -> Self {
+        let model_pricing = load_model_pricing(config.codex_home.as_path())
+            .unwrap_or_else(|_| ModelPricingFile::bundled_default().expect("bundled pricing"));
         let style = |styled: Style, plain: Style| if with_ansi { styled } else { plain };
         Self {
             bold: style(Style::new().bold(), Style::new()),
@@ -61,6 +69,9 @@ impl EventProcessorWithHumanOutput {
             final_message_rendered: false,
             emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
+            last_query_id: None,
+            model_slug: config.model.clone(),
+            model_pricing,
         }
     }
 
@@ -215,8 +226,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
     ) {
-        const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("OpenAI Codex v{VERSION} (research preview)\n--------");
+        eprintln!("OpenAI Codex v{CODEX_BUILD_VERSION} (research preview)\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
@@ -294,6 +304,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.last_total_token_usage = Some(notification.token_usage);
+                if notification.query_id.is_some() {
+                    // Keep the most recent real query id. Some token-usage refreshes do not
+                    // carry one, and those should not erase the id we want to surface in the
+                    // shutdown footer.
+                    self.last_query_id = notification.query_id;
+                }
                 CodexStatus::Running
             }
             ServerNotification::TurnCompleted(notification) => match notification.turn.status {
@@ -380,10 +396,28 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         }
 
         if let Some(usage) = &self.last_total_token_usage {
+            let usage_usd = estimate_usage_usd_for_model(
+                &self.model_pricing,
+                self.model_slug.as_deref(),
+                usage.total.input_tokens,
+                usage.total.cached_input_tokens,
+                usage.total.output_tokens,
+                /*regional_processing*/ false,
+            );
             eprintln!(
                 "{}\n{}",
                 "tokens used".style(self.dimmed),
-                format_with_separators(blended_total(usage))
+                format!(
+                    "Token usage: ${usage_usd:.3} input={} cached_input={} output={} reasoning_output={}{}",
+                    usage.total.input_tokens,
+                    usage.total.cached_input_tokens,
+                    usage.total.output_tokens,
+                    usage.total.reasoning_output_tokens,
+                    self.last_query_id
+                        .as_deref()
+                        .map(|query_id| format!(" query_id={query_id}"))
+                        .unwrap_or_default(),
+                )
             );
         }
 
@@ -489,6 +523,7 @@ fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             let mut writable_entries = vec!["workdir".to_string()];
             if !*exclude_slash_tmp {
                 writable_entries.push("/tmp".to_string());
+                writable_entries.push("/var/tmp".to_string());
             }
             if !*exclude_tmpdir_env_var {
                 writable_entries.push("$TMPDIR".to_string());
@@ -538,12 +573,6 @@ fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
                 _ => None,
             })
         })
-}
-
-fn blended_total(usage: &ThreadTokenUsage) -> i64 {
-    let cached_input = usage.total.cached_input_tokens.max(0);
-    let non_cached_input = (usage.total.input_tokens - cached_input).max(0);
-    (non_cached_input + usage.total.output_tokens.max(0)).max(0)
 }
 
 fn should_print_final_message_to_stdout(

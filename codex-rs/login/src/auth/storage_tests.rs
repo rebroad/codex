@@ -4,10 +4,26 @@ use anyhow::Context;
 use base64::Engine;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 use codex_keyring_store::tests::MockKeyringStore;
 use keyring::Error as KeyringError;
+
+#[test]
+fn expand_home_tilde_expands_home_prefix() {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let expanded = expand_home_tilde(PathBuf::from("~/.codex/auth.json"));
+    assert_eq!(expanded, PathBuf::from(home).join(".codex/auth.json"));
+}
+
+#[test]
+fn expand_home_tilde_keeps_non_tilde_paths_unchanged() {
+    let path = PathBuf::from("/tmp/auth.json");
+    assert_eq!(expand_home_tilde(path.clone()), path);
+}
 
 #[tokio::test]
 async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
@@ -53,6 +69,90 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
 }
 
 #[test]
+fn file_storage_save_with_email_creates_profile_file_and_keeps_auth_contents_in_sync()
+-> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: id_token_with_prefix("alice"),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            account_id: Some("acct".to_string()),
+        }),
+        last_refresh: Some(Utc::now()),
+    };
+
+    storage.save(&auth_dot_json)?;
+
+    let profile_path = auth_profile_file_for_email(codex_home.path(), "alice@example.com");
+    assert!(profile_path.exists(), "profile file should be created");
+    let auth_file = get_auth_file(codex_home.path());
+    assert!(auth_file.exists(), "auth.json should exist");
+
+    let loaded = storage.load()?.context("auth should load")?;
+    assert_eq!(loaded, auth_dot_json);
+
+    let default_contents = std::fs::read_to_string(&auth_file)?;
+    let profile_contents = std::fs::read_to_string(&profile_path)?;
+    assert_eq!(default_contents, profile_contents);
+
+    Ok(())
+}
+
+#[test]
+fn file_storage_save_uses_payload_email_for_profile_mirror() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let current_auth = auth_with_prefix("current");
+    storage.save(&current_auth)?;
+
+    let previous_profile = auth_profile_file_for_email(codex_home.path(), "previous@example.com");
+    let current_profile = auth_profile_file_for_email(codex_home.path(), "current@example.com");
+    assert!(current_profile.exists(), "current profile should exist");
+
+    let updated_auth = auth_with_prefix("previous");
+    storage.save(&updated_auth)?;
+
+    assert!(
+        previous_profile.exists(),
+        "save should mirror auth.json into the profile derived from payload email"
+    );
+
+    let persisted = storage.try_read_auth_json(previous_profile.as_path())?;
+    assert_eq!(persisted, updated_auth);
+    Ok(())
+}
+
+#[test]
+fn editing_profile_file_does_not_change_auth_json() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let initial_auth = auth_with_prefix("one-way");
+    storage.save(&initial_auth)?;
+
+    let auth_file = get_auth_file(codex_home.path());
+    let profile_path = auth_profile_file_for_email(codex_home.path(), "one-way@example.com");
+    let before = std::fs::read_to_string(&auth_file)?;
+
+    let tampered_profile = auth_with_prefix("tampered");
+    std::fs::write(
+        &profile_path,
+        serde_json::to_string_pretty(&tampered_profile)?,
+    )?;
+
+    let after = std::fs::read_to_string(&auth_file)?;
+    assert_eq!(before, after);
+    let loaded = storage
+        .load()?
+        .context("auth should still load from auth.json")?;
+    assert_eq!(loaded, initial_auth);
+    Ok(())
+}
+
+#[test]
 fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let auth_dot_json = AuthDotJson {
@@ -68,6 +168,33 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let removed = storage.delete()?;
     assert!(removed);
     assert!(!dir.path().join("auth.json").exists());
+    Ok(())
+}
+
+#[test]
+fn file_storage_delete_removes_active_profile_file() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: id_token_with_prefix("delete-me"),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            account_id: Some("acct".to_string()),
+        }),
+        last_refresh: None,
+    };
+    storage.save(&auth_dot_json)?;
+    let profile_path = auth_profile_file_for_email(dir.path(), "delete-me@example.com");
+    assert!(profile_path.exists(), "profile should exist before delete");
+    assert!(dir.path().join("auth.json").exists());
+
+    let removed = storage.delete()?;
+    assert!(removed);
+    assert!(!dir.path().join("auth.json").exists());
+    assert!(!profile_path.exists());
     Ok(())
 }
 
@@ -412,4 +539,62 @@ fn auto_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
         "fallback auth.json should be removed after delete"
     );
     Ok(())
+}
+
+#[test]
+fn create_auth_storage_with_override_updates_keyring_in_auto_mode() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let override_file = codex_home.path().join("auth.json.d").join("profile@example.com");
+    set_auth_file_override(Some(override_file.clone()));
+
+    let result = (|| -> anyhow::Result<()> {
+        let mock_keyring = MockKeyringStore::default();
+        std::fs::create_dir_all(override_file.parent().expect("override parent"))?;
+        std::fs::write(&override_file, "sentinel")?;
+        let storage = create_auth_storage_with_keyring_store(
+            codex_home.path().to_path_buf(),
+            AuthCredentialsStoreMode::Auto,
+            Arc::new(mock_keyring.clone()),
+        );
+
+        let auth = auth_with_prefix("override-auto");
+        storage.save(&auth)?;
+
+        let key = compute_store_key(codex_home.path())?;
+        assert_eq!(mock_keyring.saved_value(&key), Some(serde_json::to_string(&auth)?));
+        assert_eq!(std::fs::read_to_string(&override_file)?, "sentinel");
+        Ok(())
+    })();
+
+    set_auth_file_override(None);
+    result
+}
+
+#[test]
+fn create_auth_storage_with_override_updates_keyring_in_keyring_mode() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let override_file = codex_home.path().join("auth.json.d").join("profile@example.com");
+    set_auth_file_override(Some(override_file.clone()));
+
+    let result = (|| -> anyhow::Result<()> {
+        let mock_keyring = MockKeyringStore::default();
+        std::fs::create_dir_all(override_file.parent().expect("override parent"))?;
+        std::fs::write(&override_file, "sentinel")?;
+        let storage = create_auth_storage_with_keyring_store(
+            codex_home.path().to_path_buf(),
+            AuthCredentialsStoreMode::Keyring,
+            Arc::new(mock_keyring.clone()),
+        );
+
+        let auth = auth_with_prefix("override-keyring");
+        storage.save(&auth)?;
+
+        let key = compute_store_key(codex_home.path())?;
+        assert_eq!(mock_keyring.saved_value(&key), Some(serde_json::to_string(&auth)?));
+        assert_eq!(std::fs::read_to_string(&override_file)?, "sentinel");
+        Ok(())
+    })();
+
+    set_auth_file_override(None);
+    result
 }

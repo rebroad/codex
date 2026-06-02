@@ -11,6 +11,7 @@
 //! - bubblewrap used to construct the filesystem view before exec.
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::fs;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -210,13 +211,24 @@ fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> Result<BwrapArgs> {
-    // Bubblewrap requires bind mount targets to exist. Skip missing writable
-    // roots so mixed-platform configs can keep harmless paths for other
-    // environments without breaking Linux command startup.
+    // Bubblewrap requires bind mount targets to exist. If a writable root is
+    // explicitly approved but missing, create it so write operations like
+    // apply_patch can add files beneath newly approved directories.
+    // If creation fails (for example, mixed-platform placeholder paths),
+    // preserve previous behavior by skipping that root.
     let writable_roots = file_system_sandbox_policy
         .get_writable_roots_with_cwd(cwd)
         .into_iter()
-        .filter(|writable_root| writable_root.root.as_path().exists())
+        .filter_map(|writable_root| {
+            let root = writable_root.root.as_path();
+            if root.exists() {
+                return Some(writable_root);
+            }
+            if std::fs::create_dir_all(root).is_ok() {
+                return Some(writable_root);
+            }
+            None
+        })
         .collect::<Vec<_>>();
     let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
 
@@ -282,10 +294,14 @@ fn create_filesystem_args(
         args
     };
     let mut preserved_files = Vec::new();
-    let allowed_write_paths: Vec<PathBuf> = writable_roots
-        .iter()
-        .map(|writable_root| writable_root.root.as_path().to_path_buf())
-        .collect();
+    let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
+    for writable_root in &writable_roots {
+        let root = writable_root.root.as_path();
+        allowed_write_paths.push(root.to_path_buf());
+        if let Some(target) = symlink_target(root) {
+            allowed_write_paths.push(target);
+        }
+    }
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots
         .iter()
         .map(|path| path.as_path().to_path_buf())
@@ -321,6 +337,7 @@ fn create_filesystem_args(
 
     for writable_root in &sorted_writable_roots {
         let root = writable_root.root.as_path();
+        let symlink_target = symlink_target(root);
         // If a denied ancestor was already masked, recreate any missing mount
         // target parents before binding the narrower writable descendant.
         if let Some(masking_root) = unreadable_roots
@@ -332,9 +349,10 @@ fn create_filesystem_args(
             append_mount_target_parent_dir_args(&mut args, root, masking_root);
         }
 
+        let mount_root = symlink_target.as_deref().unwrap_or(root);
         args.push("--bind".to_string());
-        args.push(path_to_string(root));
-        args.push(path_to_string(root));
+        args.push(path_to_string(mount_root));
+        args.push(path_to_string(mount_root));
 
         let mut read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
@@ -342,6 +360,9 @@ fn create_filesystem_args(
             .map(|path| path.as_path().to_path_buf())
             .filter(|path| !unreadable_paths.contains(path))
             .collect();
+        if let Some(target) = &symlink_target {
+            read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, target);
+        }
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
             append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
@@ -351,6 +372,10 @@ fn create_filesystem_args(
             .filter(|path| path.as_path().starts_with(root))
             .map(|path| path.as_path().to_path_buf())
             .collect();
+        if let Some(target) = &symlink_target {
+            nested_unreadable_roots =
+                remap_paths_for_symlink_target(nested_unreadable_roots, root, target);
+        }
         nested_unreadable_roots.sort_by_key(|path| path_depth(path));
         for unreadable_root in nested_unreadable_roots {
             append_unreadable_root_args(
@@ -386,6 +411,31 @@ fn create_filesystem_args(
         args,
         preserved_files,
     })
+}
+
+fn symlink_target(root: &Path) -> Option<PathBuf> {
+    let meta = fs::symlink_metadata(root).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    let target = fs::canonicalize(root).ok()?;
+    if target.as_path() == root {
+        return None;
+    }
+    Some(target)
+}
+
+fn remap_paths_for_symlink_target(paths: Vec<PathBuf>, root: &Path, target: &Path) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .map(|path| {
+            if let Ok(rel) = path.strip_prefix(root) {
+                target.join(rel)
+            } else {
+                path
+            }
+        })
+        .collect()
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -428,9 +478,11 @@ fn append_read_only_subpath_args(
     allowed_write_paths: &[PathBuf],
 ) {
     if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
+        if should_mask_symlink_with_dev_null(&symlink_path, allowed_write_paths) {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&symlink_path));
+        }
         return;
     }
 
@@ -459,9 +511,11 @@ fn append_unreadable_root_args(
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
     if let Some(symlink_path) = find_symlink_in_path(unreadable_root, allowed_write_paths) {
-        args.push("--ro-bind".to_string());
-        args.push("/dev/null".to_string());
-        args.push(path_to_string(&symlink_path));
+        if should_mask_symlink_with_dev_null(&symlink_path, allowed_write_paths) {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&symlink_path));
+        }
         return Ok(());
     }
 
@@ -562,6 +616,38 @@ fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> 
     }
 
     None
+}
+
+fn should_mask_symlink_with_dev_null(
+    symlink_path: &Path,
+    allowed_write_paths: &[PathBuf],
+) -> bool {
+    let Ok(link_target) = std::fs::read_link(symlink_path) else {
+        return false;
+    };
+
+    // `ro-bind /dev/null <symlink>` can fail when the symlink resolves to a
+    // directory, or to a path outside writable roots. In those cases, skip the
+    // direct symlink mask instead of hard-failing sandbox startup.
+    let resolved_target = if link_target.is_absolute() {
+        link_target
+    } else {
+        let Some(parent) = symlink_path.parent() else {
+            return false;
+        };
+        parent.join(link_target)
+    };
+    let Ok(canonical_target) = resolved_target.canonicalize() else {
+        return false;
+    };
+    if !is_within_allowed_write_paths(&canonical_target, allowed_write_paths) {
+        return false;
+    }
+    let Ok(target_metadata) = std::fs::metadata(&canonical_target) else {
+        return false;
+    };
+
+    !target_metadata.is_dir()
 }
 
 /// Find the first missing path component while walking `target_path`.
@@ -717,8 +803,88 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn ignores_missing_writable_roots() {
+    fn read_only_subpath_skips_dev_null_mask_for_absolute_symlink_outside_writable_root() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        let outside_root = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&writable_root).expect("create writable root");
+        std::fs::create_dir_all(&outside_root).expect("create outside root");
+
+        let protected_path = writable_root.join(".git");
+        std::os::unix::fs::symlink(outside_root.join("git"), &protected_path)
+            .expect("create absolute symlink");
+
+        let mut args = Vec::new();
+        append_read_only_subpath_args(
+            &mut args,
+            &protected_path,
+            std::slice::from_ref(&writable_root),
+        );
+
+        assert!(
+            args.is_empty(),
+            "absolute symlink outside writable roots should skip /dev/null mask: {args:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_subpath_skips_dev_null_mask_for_relative_directory_symlink() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        std::fs::create_dir_all(&writable_root).expect("create writable root");
+
+        let real_git = writable_root.join("real-git");
+        std::fs::create_dir_all(&real_git).expect("create real git dir");
+        let protected_path = writable_root.join(".git");
+        std::os::unix::fs::symlink("real-git", &protected_path).expect("create relative symlink");
+
+        let mut args = Vec::new();
+        append_read_only_subpath_args(
+            &mut args,
+            &protected_path,
+            std::slice::from_ref(&writable_root),
+        );
+
+        assert!(
+            args.is_empty(),
+            "directory symlink should skip /dev/null mask to avoid bwrap file-vs-dir mount errors: {args:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_subpath_masks_relative_file_symlink_in_writable_root_with_dev_null() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        std::fs::create_dir_all(&writable_root).expect("create writable root");
+
+        let real_git = writable_root.join("real-git");
+        std::fs::write(&real_git, "gitdir: somewhere\n").expect("create real git file");
+        let protected_path = writable_root.join(".git");
+        std::os::unix::fs::symlink("real-git", &protected_path).expect("create relative symlink");
+
+        let mut args = Vec::new();
+        append_read_only_subpath_args(
+            &mut args,
+            &protected_path,
+            std::slice::from_ref(&writable_root),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "--ro-bind".to_string(),
+                "/dev/null".to_string(),
+                path_to_string(&protected_path),
+            ]
+        );
+    }
+
+    #[test]
+    fn creates_missing_writable_roots() {
         let temp_dir = TempDir::new().expect("temp dir");
         let existing_root = temp_dir.path().join("existing");
         let missing_root = temp_dir.path().join("missing");
@@ -747,9 +913,12 @@ mod tests {
             "existing writable root should be rebound writable",
         );
         assert!(
-            !args.args.iter().any(|arg| arg == &missing_root),
-            "missing writable root should be skipped",
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--bind", missing_root.as_str(), missing_root.as_str()] }),
+            "missing writable root should be created and rebound writable",
         );
+        assert!(Path::new(&missing_root).exists());
     }
 
     #[test]
@@ -767,33 +936,33 @@ mod tests {
             Path::new("/"),
         )
         .expect("bwrap fs args");
-        assert_eq!(
-            args.args,
-            vec![
-                // Start from a read-only view of the full filesystem.
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Recreate a writable /dev inside the sandbox.
-                "--dev".to_string(),
-                "/dev".to_string(),
-                // Make the writable root itself writable again.
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Mask the default protected .codex subpath under that writable
-                // root. Because the root is `/` in this test, the carveout path
-                // appears as `/.codex`.
-                "--ro-bind".to_string(),
-                "/dev/null".to_string(),
-                "/.codex".to_string(),
-                // Rebind /dev after the root bind so device nodes remain
-                // writable/usable inside the writable root.
-                "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
-            ]
+
+        let dev_mount_idx = args
+            .args
+            .windows(2)
+            .position(|window| window == ["--dev", "/dev"])
+            .expect("expected --dev /dev mount");
+        let dev_bind_idx = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", "/dev", "/dev"])
+            .expect("expected writable /dev bind");
+
+        assert!(
+            dev_mount_idx < dev_bind_idx,
+            "expected /dev mount to occur before writable /dev bind: {:?}",
+            args.args
         );
+
+        if Path::new("/.git").exists() {
+            assert!(
+                args.args
+                    .windows(3)
+                    .any(|window| window == ["--ro-bind", "/.git", "/.git"]),
+                "expected /.git read-only carveout when /.git exists: {:?}",
+                args.args
+            );
+        }
     }
 
     #[test]

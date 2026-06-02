@@ -39,12 +39,14 @@ mod git_info_tests;
 mod guardian;
 mod hook_runtime;
 mod installation_id;
+pub use installation_id::resolve_installation_id;
 pub(crate) mod instructions;
 pub(crate) mod landlock;
 pub use landlock::spawn_command_under_linux_sandbox;
 pub(crate) mod mcp;
 mod mcp_skill_dependencies;
 mod mcp_tool_approval_templates;
+mod mempalace_writeback;
 mod network_policy_decision;
 pub(crate) mod network_proxy_loader;
 pub use mcp::McpManager;
@@ -56,6 +58,7 @@ pub use codex_mcp::MCP_SANDBOX_STATE_CAPABILITY;
 pub use codex_mcp::MCP_SANDBOX_STATE_METHOD;
 pub use codex_mcp::SandboxState;
 mod mcp_tool_call;
+pub mod personality;
 mod memories;
 pub(crate) mod mention_syntax;
 pub(crate) mod message_history;
@@ -80,6 +83,7 @@ pub(crate) mod mentions {
     pub(crate) use crate::plugins::collect_explicit_plugin_mentions;
     pub(crate) use crate::plugins::collect_tool_mentions_from_messages;
 }
+mod prompt_preview;
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
@@ -177,6 +181,7 @@ mod state;
 mod tasks;
 mod user_shell_command;
 pub mod util;
+pub mod version;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
@@ -193,9 +198,14 @@ pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::format_exec_policy_error_with_source;
 pub use exec_policy::load_exec_policy;
 pub use file_watcher::FileWatcherEvent;
+pub use prompt_preview::prompt_preview_line;
 pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;
 pub(crate) mod memory_trace;
 pub use memory_trace::BuiltMemory;
 pub use memory_trace::build_memories_from_trace_files;
 pub mod otel_init;
+
+pub fn set_prompt_debug_http_account_email(account_email: Option<String>) {
+    codex_api::set_prompt_debug_http_account_email(account_email);
+}

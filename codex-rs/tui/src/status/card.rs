@@ -17,12 +17,15 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_sandbox_summary::summarize_sandbox_policy;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use url::Url;
 
+use super::AccountUsageDisplay;
 use super::account::StatusAccountDisplay;
+use super::credits_to_usd;
 use super::format::FieldFormatter;
 use super::format::line_display_width;
 use super::format::push_label;
@@ -39,10 +42,24 @@ use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
+use crate::terminal_palette::best_color;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use std::sync::Arc;
 use std::sync::RwLock;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusCardVariant {
+    Chat,
+    Cli,
+}
+
+const SEXTANT_BLOCKS: [&str; 64] = [
+    "█", "🬻", "🬺", "🬹", "🬸", "🬷", "🬶", "🬵", "🬴", "🬳", "🬲", "🬱", "🬰", "🬯", "🬮", "🬭", "🬬", "🬫", "🬪",
+    "🬩", "🬨", "▐", "🬧", "🬦", "🬥", "🬤", "🬣", "🬢", "🬡", "🬠", "🬟", "🬞", "🬝", "🬜", "🬛", "🬚", "🬙", "🬘",
+    "🬗", "🬖", "🬕", "🬔", "▌", "🬓", "🬒", "🬑", "🬐", "🬏", "🬎", "🬍", "🬌", "🬋", "🬊", "🬉", "🬈", "🬇", "🬆",
+    "🬅", "🬄", "🬃", "🬂", "🬁", "🬀", " ",
+];
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -111,11 +128,13 @@ struct StatusHistoryCell {
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
+    account_usage: Option<AccountUsageDisplay>,
     thread_name: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
+    variant: StatusCardVariant,
 }
 
 #[cfg(test)]
@@ -128,6 +147,7 @@ pub(crate) fn new_status_output(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     _plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -144,6 +164,7 @@ pub(crate) fn new_status_output(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         snapshots,
         _plan_type,
         now,
@@ -164,6 +185,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: &[RateLimitSnapshotDisplay],
     _plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -172,7 +194,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
     refreshing_rate_limits: bool,
 ) -> CompositeHistoryCell {
-    new_status_output_with_rate_limits_handle(
+    new_status_output_with_rate_limits_handle_variant(
         config,
         account_display,
         token_info,
@@ -180,6 +202,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         rate_limits,
         _plan_type,
         now,
@@ -188,8 +211,59 @@ pub(crate) fn new_status_output_with_rate_limits(
         reasoning_effort_override,
         "<none>".to_string(),
         refreshing_rate_limits,
+        StatusCardVariant::Chat,
     )
     .0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn new_status_output_with_rate_limits_handle_variant(
+    config: &Config,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    _plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    agents_summary: String,
+    refreshing_rate_limits: bool,
+    variant: StatusCardVariant,
+) -> (CompositeHistoryCell, StatusHistoryHandle) {
+    let (card, handle) = StatusHistoryCell::new(
+        config,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        account_usage,
+        rate_limits,
+        _plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        agents_summary,
+        refreshing_rate_limits,
+        variant,
+    );
+
+    let composite = if variant == StatusCardVariant::Chat {
+        let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
+        CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
+    } else {
+        CompositeHistoryCell::new(vec![Box::new(card)])
+    };
+
+    (composite, handle)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -201,6 +275,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
     rate_limits: &[RateLimitSnapshotDisplay],
     _plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -210,8 +285,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     agents_summary: String,
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
-    let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
-    let (card, handle) = StatusHistoryCell::new(
+    new_status_output_with_rate_limits_handle_variant(
         config,
         account_display,
         token_info,
@@ -219,6 +293,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         session_id,
         thread_name,
         forked_from,
+        account_usage,
         rate_limits,
         _plan_type,
         now,
@@ -227,15 +302,60 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         reasoning_effort_override,
         agents_summary,
         refreshing_rate_limits,
-    );
-
-    (
-        CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)]),
-        handle,
+        StatusCardVariant::Chat,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_rate_limits_variant(
+    config: &Config,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    account_usage: Option<&AccountUsageDisplay>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    _plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    variant: StatusCardVariant,
+) -> CompositeHistoryCell {
+    new_status_output_with_rate_limits_handle_variant(
+        config,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        account_usage,
+        rate_limits,
+        _plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+        variant,
+    )
+    .0
+}
+
 impl StatusHistoryCell {
+    fn format_usage_usd(usage_credits: f64) -> String {
+        let usage_usd = credits_to_usd(usage_credits);
+        if usage_usd.is_finite() {
+            format!("${usage_usd:.2}")
+        } else {
+            "$0.00".to_string()
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
@@ -245,6 +365,7 @@ impl StatusHistoryCell {
         session_id: &Option<ThreadId>,
         thread_name: Option<String>,
         forked_from: Option<ThreadId>,
+        account_usage: Option<&AccountUsageDisplay>,
         rate_limits: &[RateLimitSnapshotDisplay],
         _plan_type: Option<PlanType>,
         now: DateTime<Local>,
@@ -253,6 +374,7 @@ impl StatusHistoryCell {
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
         agents_summary: String,
         refreshing_rate_limits: bool,
+        variant: StatusCardVariant,
     ) -> (Self, StatusHistoryHandle) {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
@@ -317,6 +439,7 @@ impl StatusHistoryCell {
         };
         let model_provider = format_model_provider(config);
         let account = compose_account_display(account_display);
+        let account_usage = account_usage.cloned();
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
@@ -356,10 +479,12 @@ impl StatusHistoryCell {
                 collaboration_mode: collaboration_mode.map(ToString::to_string),
                 model_provider,
                 account,
+                account_usage,
                 thread_name,
                 session_id,
                 forked_from,
                 token_usage,
+                variant,
                 agents_summary: agents_summary.clone(),
                 rate_limit_state: rate_limit_state.clone(),
             },
@@ -553,9 +678,26 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         let account_value = self.account.as_ref().map(|account| match account {
-            StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
-                (Some(email), Some(plan)) => format!("{email} ({plan})"),
-                (Some(email), None) => email.clone(),
+            StatusAccountDisplay::ChatGpt {
+                email_prefix_emoji,
+                email,
+                plan,
+            } => match (email, plan) {
+                (Some(email), Some(plan)) => {
+                    let decorated_email = if let Some(emoji) = email_prefix_emoji {
+                        format!("{emoji} {email}")
+                    } else {
+                        email.clone()
+                    };
+                    format!("{decorated_email} ({plan})")
+                }
+                (Some(email), None) => {
+                    if let Some(emoji) = email_prefix_emoji {
+                        format!("{emoji} {email}")
+                    } else {
+                        email.clone()
+                    }
+                }
                 (None, Some(plan)) => plan.clone(),
                 (None, None) => "ChatGPT".to_string(),
             },
@@ -563,11 +705,71 @@ impl HistoryCell for StatusHistoryCell {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
         });
+        let account_usage = self.account_usage.as_ref().map(|usage| {
+            let usage_usd = Self::format_usage_usd(usage.usage_credits);
+            let mut spans = Vec::new();
+            match usage.estimated_percent {
+                Some(percent) => {
+                    spans.push(Span::from(format!("usage {usage_usd} ({percent:.2}%)")))
+                }
+                None => spans.push(Span::from(format!("usage {usage_usd}"))),
+            }
+            if let Some(sample_count) = usage.sample_count
+                && (1..64).contains(&sample_count)
+            {
+                let count = sample_count as u8;
+                // Sextant bit order: upper-left, upper-right, middle-left, middle-right,
+                // bottom-left, bottom-right.
+                let mut pattern = 0u8;
+                if count & 1 != 0 {
+                    pattern |= 0b0000_0001;
+                }
+                if count & 2 != 0 {
+                    pattern |= 0b0000_0010;
+                }
+                if count & 4 != 0 {
+                    pattern |= 0b0000_0100;
+                }
+                if count & 8 != 0 {
+                    pattern |= 0b0000_1000;
+                }
+                if count & 16 != 0 {
+                    pattern |= 0b0001_0000;
+                }
+                if count & 32 != 0 {
+                    pattern |= 0b0010_0000;
+                }
+                let missing = (!pattern) & 0b0011_1111;
+                let glyph = SEXTANT_BLOCKS[missing as usize];
+                let fg = match best_color((255, 255, 0)) {
+                    Color::Reset => Color::LightYellow,
+                    color => color,
+                };
+                let bg = match best_color((80, 80, 0)) {
+                    Color::Reset => Color::Yellow,
+                    color => color,
+                };
+                spans.push(Span::from(" "));
+                spans.push(Span::styled(glyph, Style::default().fg(fg).bg(bg)));
+            }
+            spans
+        });
+        let account_value = account_value.map(|account_value| {
+            let mut spans = Vec::new();
+            spans.push(Span::from(account_value));
+            if let Some(account_usage) = account_usage {
+                spans.push(Span::from(" — "));
+                spans.extend(account_usage);
+            }
+            spans
+        });
 
-        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut labels: Vec<String> = vec!["Model".to_string()];
+        if self.variant == StatusCardVariant::Chat {
+            labels.push("Directory".to_string());
+            labels.push("Permissions".to_string());
+            labels.push("Agents.md".to_string());
+        }
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
         #[expect(clippy::expect_used)]
@@ -610,22 +812,24 @@ impl HistoryCell for StatusHistoryCell {
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
 
-        let note_first_line = Line::from(vec![
-            Span::from("Visit ").cyan(),
-            "https://chatgpt.com/codex/settings/usage"
-                .cyan()
-                .underlined(),
-            Span::from(" for up-to-date").cyan(),
-        ]);
-        let note_second_line = Line::from(vec![
-            Span::from("information on rate limits and credits").cyan(),
-        ]);
-        let note_lines = adaptive_wrap_lines(
-            [note_first_line, note_second_line],
-            RtOptions::new(available_inner_width),
-        );
-        lines.extend(note_lines);
-        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        if self.variant == StatusCardVariant::Chat {
+            let note_first_line = Line::from(vec![
+                Span::from("Visit ").cyan(),
+                "https://chatgpt.com/codex/settings/usage"
+                    .cyan()
+                    .underlined(),
+                Span::from(" for up-to-date").cyan(),
+            ]);
+            let note_second_line = Line::from(vec![
+                Span::from("information on rate limits and credits").cyan(),
+            ]);
+            let note_lines = adaptive_wrap_lines(
+                [note_first_line, note_second_line],
+                RtOptions::new(available_inner_width),
+            );
+            lines.extend(note_lines);
+            lines.push(Line::from(Vec::<Span<'static>>::new()));
+        }
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {
@@ -634,18 +838,19 @@ impl HistoryCell for StatusHistoryCell {
             model_spans.push(Span::from(")").dim());
         }
 
-        let directory_value = format_directory_display(&self.directory, Some(value_width));
-
         lines.push(formatter.line("Model", model_spans));
         if let Some(model_provider) = self.model_provider.as_ref() {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
-        lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
-        lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
-        lines.push(formatter.line("Agents.md", vec![Span::from(agents_summary)]));
+        if self.variant == StatusCardVariant::Chat {
+            let directory_value = format_directory_display(&self.directory, Some(value_width));
+            lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
+            lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
+            lines.push(formatter.line("Agents.md", vec![Span::from(agents_summary)]));
+        }
 
         if let Some(account_value) = account_value {
-            lines.push(formatter.line("Account", vec![Span::from(account_value)]));
+            lines.push(formatter.line("Account", account_value));
         }
 
         if let Some(thread_name) = thread_name {

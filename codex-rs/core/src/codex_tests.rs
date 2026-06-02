@@ -50,6 +50,7 @@ use crate::tools::handlers::UnifiedExecHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_api::ToolChoice;
 use codex_app_server_protocol::AppInfo;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
@@ -118,6 +119,55 @@ use std::time::Duration as StdDuration;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
+
+#[test]
+fn mempalace_guidance_is_added_only_when_visible_tools_include_mempalace() {
+    let base = "Base instructions".to_string();
+    let mempalace_tool = "mcp__mempalace__mempalace_status".to_string();
+    let other_tool = "mcp__other__search".to_string();
+
+    let with_guidance = append_mempalace_memory_guidance(
+        base.clone(),
+        /*bare_prompt*/ false,
+        has_visible_mempalace_tools([&mempalace_tool]),
+    );
+    assert!(with_guidance.contains("mempalace"));
+    assert!(with_guidance.contains("durable recall"));
+
+    let without_guidance = append_mempalace_memory_guidance(
+        base.clone(),
+        /*bare_prompt*/ false,
+        has_visible_mempalace_tools([&other_tool]),
+    );
+    assert_eq!(without_guidance, base);
+}
+
+#[test]
+fn mempalace_guidance_respects_bare_prompt() {
+    let base = "Base instructions".to_string();
+    let mempalace_tool = "mcp__mempalace__search".to_string();
+
+    let result = append_mempalace_memory_guidance(
+        base.clone(),
+        /*bare_prompt*/ true,
+        has_visible_mempalace_tools([&mempalace_tool]),
+    );
+    assert_eq!(result, base);
+}
+
+#[test]
+fn previous_response_id_is_only_disabled_for_non_resumed_bare_prompts() {
+    let new_history = InitialHistory::New;
+    assert!(super::should_allow_previous_response_id(&new_history, false));
+    assert!(!super::should_allow_previous_response_id(&new_history, true));
+
+    let resumed_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: ThreadId::default(),
+        history: Vec::new(),
+        rollout_path: PathBuf::from("/var/tmp/codex-resume-test"),
+    });
+    assert!(super::should_allow_previous_response_id(&resumed_history, true));
+}
 
 struct InstructionsTestCase {
     slug: &'static str,
@@ -1187,24 +1237,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
         TokenCountEvent {
             info: Some(info1),
             rate_limits: None,
+            query_id: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: None,
             rate_limits: None,
+            query_id: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: Some(info2.clone()),
             rate_limits: None,
+            query_id: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: None,
             rate_limits: None,
+            query_id: None,
         },
     )));
 
@@ -1424,7 +1478,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
-        personality: turn_context.personality,
+        personality: turn_context.personality.clone(),
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort,
@@ -1987,12 +2041,13 @@ async fn set_rate_limits_retains_previous_credits() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
+        compact_summary_preamble: config.compact_summary_preamble.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2089,12 +2144,13 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
+        compact_summary_preamble: config.compact_summary_preamble.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2438,12 +2494,13 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
+        compact_summary_preamble: config.compact_summary_preamble.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2701,12 +2758,13 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
+        compact_summary_preamble: config.compact_summary_preamble.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2804,12 +2862,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
+        compact_summary_preamble: config.compact_summary_preamble.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -2956,6 +3015,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        account_usage_store: None,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -3303,7 +3363,7 @@ async fn user_turn_updates_approvals_reviewer() {
             service_tier: None,
             final_output_json_schema: None,
             collaboration_mode: None,
-            personality: config.personality,
+            personality: config.personality.clone(),
         },
     )
     .await;
@@ -3646,12 +3706,13 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
+        compact_summary_preamble: config.compact_summary_preamble.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -3798,6 +3859,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        account_usage_store: None,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
     });
@@ -4917,6 +4979,107 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
+async fn steer_input_after_rejection_cancels_active_sampling_request() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let sampling_token = CancellationToken::new();
+    sess.set_sampling_request_cancellation_token(&tc.sub_id, sampling_token.clone())
+        .await;
+
+    sess.notify_approval("call-decline", ReviewDecision::Denied)
+        .await;
+    assert!(sess.tool_calls_blocked_pending_steer(&tc.sub_id).await);
+
+    let steer_input = vec![UserInput::Text {
+        text: "steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.steer_input(steer_input, Some(&tc.sub_id))
+        .await
+        .expect("steer should be accepted");
+
+    assert!(sampling_token.is_cancelled());
+    assert!(!sess.tool_calls_blocked_pending_steer(&tc.sub_id).await);
+    assert!(sess.take_sampling_restart_after_steer(&tc.sub_id).await);
+    assert!(!sess.take_sampling_restart_after_steer(&tc.sub_id).await);
+}
+
+#[tokio::test]
+async fn steer_input_without_rejection_does_not_mark_sampling_restart() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let steer_input = vec![UserInput::Text {
+        text: "steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.steer_input(steer_input, Some(&tc.sub_id))
+        .await
+        .expect("steer should be accepted");
+
+    assert!(!sess.take_sampling_restart_after_steer(&tc.sub_id).await);
+}
+
+#[tokio::test]
+async fn build_prompt_keeps_tool_specs_and_default_tool_choice() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let router = ToolRouter::from_config(
+        &turn_context.tools_config,
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: None,
+            tool_namespaces: None,
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
+    );
+
+    let prompt = build_prompt(
+        Vec::new(),
+        &router,
+        &turn_context,
+        BaseInstructions {
+            text: "base".to_string(),
+        },
+    );
+
+    assert!(
+        !prompt.tools.is_empty(),
+        "tool list should stay stable for caching"
+    );
+    assert_eq!(
+        prompt.parallel_tool_calls,
+        turn_context.model_info.supports_parallel_tool_calls
+    );
+    assert_eq!(prompt.tool_choice, ToolChoice::auto());
+}
+
+#[tokio::test]
 async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
@@ -5359,7 +5522,7 @@ async fn sample_rollout(
             && content.iter().any(|c| {
                 matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
             }))
-    }) && let Some(p) = reconstruction_turn.personality
+    }) && let Some(p) = reconstruction_turn.personality.clone()
         && session.features.enabled(Feature::Personality)
         && let Some(personality_message) = reconstruction_turn
             .model_info

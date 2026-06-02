@@ -101,6 +101,9 @@ use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
+use codex_core::personality::discover_custom_personalities;
+use codex_core::personality::personality_display_name;
+use codex_core::personality::read_personality_description;
 use codex_core::plugins::PluginsManager;
 use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
@@ -5760,6 +5763,7 @@ impl ChatWidget {
         let personality = self
             .config
             .personality
+            .clone()
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = Some(self.config.service_tier);
@@ -7316,6 +7320,7 @@ impl ChatWidget {
             &self.thread_id,
             self.thread_name.clone(),
             self.forked_from,
+            /*account_usage*/ None,
             rate_limit_snapshots.as_slice(),
             self.plan_type,
             Local::now(),
@@ -7738,15 +7743,22 @@ impl ChatWidget {
     }
 
     fn open_personality_popup_for_current_model(&mut self) {
-        let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
-        let personalities = [Personality::Friendly, Personality::Pragmatic];
+        let current_personality = self
+            .config
+            .personality
+            .clone()
+            .unwrap_or(Personality::Friendly);
+        let mut personalities = vec![Personality::Friendly, Personality::Pragmatic];
+        personalities.extend(discover_custom_personalities(&self.config.codex_home));
         let supports_personality = self.current_model_supports_personality();
 
         let items: Vec<SelectionItem> = personalities
             .into_iter()
             .map(|personality| {
-                let name = Self::personality_label(personality).to_string();
-                let description = Some(Self::personality_description(personality).to_string());
+                let name = Self::personality_label(&personality);
+                let description =
+                    Some(Self::personality_description(&personality, &self.config.codex_home));
+                let selected_personality = personality.clone();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::CodexOp(
                         AppCommand::override_turn_context(
@@ -7760,17 +7772,19 @@ impl ChatWidget {
                             /*summary*/ None,
                             /*service_tier*/ None,
                             /*collaboration_mode*/ None,
-                            Some(personality),
+                            Some(selected_personality.clone()),
                         )
                         .into_core(),
                     ));
-                    tx.send(AppEvent::UpdatePersonality(personality));
-                    tx.send(AppEvent::PersistPersonalitySelection { personality });
+                    tx.send(AppEvent::UpdatePersonality(selected_personality.clone()));
+                    tx.send(AppEvent::PersistPersonalitySelection {
+                        personality: selected_personality.clone(),
+                    });
                 })];
                 SelectionItem {
                     name,
                     description,
-                    is_current: current_personality == personality,
+                    is_current: Self::personality_matches(&current_personality, &personality),
                     is_disabled: !supports_personality,
                     actions,
                     dismiss_on_select: true,
@@ -9778,20 +9792,30 @@ impl ChatWidget {
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
     }
 
-    fn personality_label(personality: Personality) -> &'static str {
+    fn personality_label(personality: &Personality) -> String {
         match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
+            Personality::None => "None".to_string(),
+            Personality::Friendly => "Friendly".to_string(),
+            Personality::Pragmatic => "Pragmatic".to_string(),
+            Personality::Comedic => "Comedic".to_string(),
+            Personality::Custom(name) => personality_display_name(name),
         }
     }
 
-    fn personality_description(personality: Personality) -> &'static str {
+    fn personality_description(personality: &Personality, codex_home: &Path) -> String {
         match personality {
-            Personality::None => "No personality instructions.",
-            Personality::Friendly => "Warm, collaborative, and helpful.",
-            Personality::Pragmatic => "Concise, task-focused, and direct.",
+            Personality::None => "No personality instructions.".to_string(),
+            Personality::Friendly => "Warm, collaborative, and helpful.".to_string(),
+            Personality::Pragmatic => "Concise, task-focused, and direct.".to_string(),
+            Personality::Comedic => "Playful, exaggerated, and sarcastic.".to_string(),
+            Personality::Custom(name) => read_personality_description(codex_home, name).unwrap_or_else(|| {
+                format!("Custom personality loaded from ~/.codex/personalities/{name}.md.")
+            }),
         }
+    }
+
+    fn personality_matches(lhs: &Personality, rhs: &Personality) -> bool {
+        lhs.as_str().eq_ignore_ascii_case(rhs.as_str())
     }
 
     /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).

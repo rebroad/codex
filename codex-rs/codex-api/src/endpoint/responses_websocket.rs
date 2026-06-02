@@ -3,11 +3,21 @@ use crate::auth::add_auth_headers_to_header_map;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::common::TransportByteStats;
 use crate::error::ApiError;
+use crate::prompt_debug_http::PromptCaptureSession;
+use crate::prompt_debug_http::backend_capture_append_event;
+use crate::prompt_debug_http::capture_headers_json;
+use crate::prompt_debug_http::prompt_capture_append_input;
+use crate::prompt_debug_http::prompt_capture_append_output;
+use crate::prompt_debug_http::prompt_capture_record_input_tool_usage;
+use crate::prompt_debug_http::prompt_capture_write_output_json;
+use crate::prompt_debug_http::start_prompt_capture;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
-use crate::sse::ResponsesStreamEvent;
-use crate::sse::process_responses_event;
+use crate::sse::responses::ResponsesStreamEvent;
+use crate::sse::responses::capture_sections_from_response_item;
+use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
@@ -215,6 +225,7 @@ impl ResponsesWebsocketConnection {
         &self,
         request: ResponsesWsRequest,
         connection_reused: bool,
+        capture: Option<PromptCaptureSession>,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -227,6 +238,12 @@ impl ResponsesWebsocketConnection {
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+        let request_json = serde_json::to_string_pretty(&request_body)
+            .unwrap_or_else(|_| "<unable to serialize websocket payload>".to_string());
+        let capture = capture
+            .or_else(|| start_prompt_capture("responses_websocket", Some(request_json.as_str())));
+        let ResponsesWsRequest::ResponseCreate(request_create) = &request;
+        prompt_capture_record_input_tool_usage(capture.as_ref(), &request_create.input);
 
         let current_span = Span::current();
         tokio::spawn(
@@ -260,6 +277,7 @@ impl ResponsesWebsocketConnection {
                         idle_timeout,
                         telemetry,
                         connection_reused,
+                        capture,
                     )
                     .await
                 };
@@ -301,6 +319,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
+        capture: Option<&PromptCaptureSession>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
         let ws_url = self
@@ -313,7 +332,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         add_auth_headers_to_header_map(&self.auth, &mut headers);
 
         let (stream, server_reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url, headers, turn_state.clone()).await?;
+            connect_websocket(ws_url, headers, turn_state.clone(), capture).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
@@ -344,9 +363,19 @@ async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
+    capture: Option<&PromptCaptureSession>,
 ) -> Result<(WsStream, bool, Option<String>, Option<String>), ApiError> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
+    backend_capture_append_event(
+        capture,
+        serde_json::json!({
+            "kind": "websocket_connect_request",
+            "transport": "responses_websocket",
+            "url": url.as_str(),
+            "headers": capture_headers_json(&headers),
+        }),
+    );
 
     let mut request = url
         .as_str()
@@ -375,10 +404,29 @@ async fn connect_websocket(
                 "successfully connected to websocket: {url}, headers: {:?}",
                 response.headers()
             );
+            backend_capture_append_event(
+                capture,
+                serde_json::json!({
+                    "kind": "websocket_connect_response",
+                    "transport": "responses_websocket",
+                    "url": url.as_str(),
+                    "status": response.status().as_u16(),
+                    "headers": capture_headers_json(response.headers()),
+                }),
+            );
             (stream, response)
         }
         Err(err) => {
             error!("failed to connect to websocket: {err}, url: {url}");
+            backend_capture_append_event(
+                capture,
+                serde_json::json!({
+                    "kind": "websocket_connect_error",
+                    "transport": "responses_websocket",
+                    "url": url.as_str(),
+                    "error": err.to_string(),
+                }),
+            );
             return Err(map_ws_error(err, &url));
         }
     };
@@ -537,7 +585,9 @@ async fn run_websocket_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
+    capture: Option<crate::prompt_debug_http::PromptCaptureSession>,
 ) -> Result<(), ApiError> {
+    let capture_id = capture.as_ref().map(|session| session.id().to_string());
     let mut last_server_model: Option<String> = None;
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
@@ -548,6 +598,19 @@ async fn run_websocket_response_stream(
         }
     };
     trace!("websocket request: {request_text}");
+    backend_capture_append_event(
+        capture.as_ref(),
+        serde_json::json!({
+            "kind": "websocket_outbound_message",
+            "transport": "responses_websocket",
+            "payload": request_text.clone(),
+        }),
+    );
+    let sent_bytes = request_text.len() as i64;
+    let mut recv_bytes = 0_i64;
+    if let Some(capture_session) = capture.as_ref() {
+        prompt_capture_append_input(capture_session, "responses_websocket", &request_text);
+    }
 
     let request_start = Instant::now();
     let result = ws_stream
@@ -590,6 +653,18 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
+                recv_bytes = recv_bytes.saturating_add(text.len() as i64);
+                if let Some(capture) = capture.as_ref() {
+                    prompt_capture_append_output(capture, "responses_websocket", &text);
+                }
+                backend_capture_append_event(
+                    capture.as_ref(),
+                    serde_json::json!({
+                        "kind": "websocket_inbound_message",
+                        "transport": "responses_websocket",
+                        "payload": text.to_string(),
+                    }),
+                );
                 trace!("websocket event: {text}");
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
@@ -620,7 +695,66 @@ async fn run_websocket_response_stream(
                     last_server_model = Some(model);
                 }
                 match process_responses_event(event) {
-                    Ok(Some(event)) => {
+                    Ok(Some(mut event)) => {
+                        match &event {
+                            ResponseEvent::OutputTextDelta(delta) => {
+                                if let Some(capture) = capture.as_ref() {
+                                    prompt_capture_append_output(
+                                        capture,
+                                        "responses_websocket_output_text_delta",
+                                        delta,
+                                    );
+                                }
+                            }
+                            ResponseEvent::OutputItemAdded(item) => {
+                                maybe_capture_response_item(
+                                    capture.as_ref(),
+                                    "Output item added",
+                                    item,
+                                );
+                            }
+                            ResponseEvent::OutputItemDone(item) => {
+                                maybe_capture_response_item(
+                                    capture.as_ref(),
+                                    "Output item done",
+                                    item,
+                                );
+                            }
+                            ResponseEvent::ReasoningSummaryDelta {
+                                delta,
+                                summary_index,
+                            } => {
+                                let _ = (delta, summary_index);
+                            }
+                            ResponseEvent::ReasoningContentDelta {
+                                delta,
+                                content_index,
+                            } => {
+                                let _ = (delta, content_index);
+                            }
+                            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+                                let _ = summary_index;
+                            }
+                            ResponseEvent::Completed { .. } => {
+                                if let ResponseEvent::Completed {
+                                    capture_id: id,
+                                    transport_bytes,
+                                    ..
+                                } = &mut event
+                                {
+                                    *id = capture_id.clone();
+                                    *transport_bytes = Some(TransportByteStats {
+                                        sent: sent_bytes.max(0),
+                                        recv: recv_bytes.max(0),
+                                    });
+                                }
+                            }
+                            ResponseEvent::Created
+                            | ResponseEvent::ServerModel(_)
+                            | ResponseEvent::ServerReasoningIncluded(_)
+                            | ResponseEvent::RateLimits(_)
+                            | ResponseEvent::ModelsEtag(_) => {}
+                        }
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;
                         if is_completed {
@@ -634,9 +768,23 @@ async fn run_websocket_response_stream(
                 }
             }
             Message::Binary(_) => {
+                backend_capture_append_event(
+                    capture.as_ref(),
+                    serde_json::json!({
+                        "kind": "websocket_inbound_binary",
+                        "transport": "responses_websocket",
+                    }),
+                );
                 return Err(ApiError::Stream("unexpected binary websocket event".into()));
             }
             Message::Close(_) => {
+                backend_capture_append_event(
+                    capture.as_ref(),
+                    serde_json::json!({
+                        "kind": "websocket_inbound_close",
+                        "transport": "responses_websocket",
+                    }),
+                );
                 return Err(ApiError::Stream(
                     "websocket closed by server before response.completed".into(),
                 ));
@@ -647,6 +795,28 @@ async fn run_websocket_response_stream(
     }
 
     Ok(())
+}
+
+fn maybe_capture_response_item(
+    capture: Option<&crate::prompt_debug_http::PromptCaptureSession>,
+    label: &str,
+    item: &codex_protocol::models::ResponseItem,
+) {
+    let Some(capture) = capture else {
+        return;
+    };
+
+    let output_text = capture_sections_from_response_item(item);
+    if let Some(output_text) = output_text {
+        prompt_capture_append_output(
+            capture,
+            "responses_websocket_output_text",
+            output_text.as_str(),
+        );
+    }
+    if let Ok(item_json) = serde_json::to_value(item) {
+        prompt_capture_write_output_json(Some(capture), label, &item_json);
+    }
 }
 
 #[cfg(test)]
