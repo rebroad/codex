@@ -2,64 +2,106 @@
 
 ### System requirements
 
-| Requirement                 | Details                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
-| RAM                         | 4-GB minimum (8-GB recommended)                                 |
+### Requirements
 
-### DotSlash
+| Requirement | Details |
+| --- | --- |
+| Android | Android 10+ / API 29+ (release target) |
+| CPU | ARM64 |
+| Shell | Termux |
+| Node.js | 18+ |
 
-The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
+### One-command install from a clone
+
+The repository includes an installer for Termux. After cloning this repository,
+run:
+
+```bash
+sh scripts/install-termux.sh
+```
+
+The script installs Node.js if necessary, then installs the published Android
+ARM64 package globally with npm and verifies `codex --version`. To select an
+exact published version:
+
+```bash
+CODEX_TERMUX_PACKAGE='@mmmbuto/codex-cli-termux@0.146.0' sh scripts/install-termux.sh
+```
+
+### One-command build and install from source
+
+To compile the checkout on the Android device and make the npm wrapper use
+that newly compiled binary, run:
+
+```bash
+sh scripts/build-and-install-termux.sh
+```
+
+This installs missing Termux build tools, fetches the pinned and
+checksum-verified Android V8 artifacts, builds the CLI, stages the native
+binary plus `libc++_shared.so`, installs the local npm package globally, and
+verifies the installed `codex` wrapper. It uses a faster debug profile with
+debug information disabled. For a release build:
+
+```bash
+CODEX_BUILD_PROFILE=release sh scripts/build-and-install-termux.sh
+```
+
+### Install directly from npm
+
+```bash
+pkg update && pkg upgrade -y
+pkg install nodejs-lts -y
+npm install -g @mmmbuto/codex-cli-termux@latest
+codex --version
+codex login
+```
+
+The npm package includes one native Android ARM64 `codex` binary, `codex` and
+`codex-exec` launcher scripts, and the bundled `libc++_shared.so` runtime
+library. The npm `codex` command points to `bin/codex.js`; that wrapper sets up
+the native runtime and launches `bin/codex.bin`. The package also includes the
+shell launcher at `bin/codex` for direct native invocation. The `codex-exec`
+launcher dispatches the native binary's `exec` subcommand instead of
+duplicating the V8-linked ELF.
+
+### What is in the repository?
+
+The wrapper and package metadata are tracked here:
+
+```text
+npm-package/bin/codex.js       npm entry-point wrapper
+npm-package/bin/codex          direct shell launcher
+npm-package/bin/codex-exec     direct exec launcher
+npm-package/package.json       npm command mapping
+```
+
+The large native files `npm-package/bin/codex.bin` and
+`npm-package/bin/libc++_shared.so` are generated release artifacts and are
+ignored in Git. The Android build workflow copies them into the package before
+creating the npm tarball. Therefore `npm install` is the normal end-user path;
+`npm install -g ./npm-package` is only valid after a native binary has been
+built and copied there as described in [BUILDING.md](../BUILDING.md).
+
+### Install from a published GitHub release
+
+Download the `mmmbuto-codex-cli-termux-<version>.tgz` asset from the matching
+GitHub release, then install it with npm:
+
+```bash
+npm install -g ./mmmbuto-codex-cli-termux-<published-version>.tgz
+codex --version
+```
+
+Each release also publishes a `.sha256` checksum file for the npm tarball.
 
 ### Build from source
 
-```bash
-# Clone the repository and navigate to the root of the Cargo workspace.
-git clone https://github.com/openai/codex.git
-cd codex/codex-rs
+For the same device build command plus maintainer cross-build notes, see
+[BUILDING.md](../BUILDING.md).
 
-# Install the Rust toolchain, if necessary.
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-rustup component add rustfmt
-rustup component add clippy
-# Install helper tools used by the workspace justfile:
-cargo install --locked just
-# DotSlash fetches pinned development tools such as buildifier on first use.
-cargo install --locked dotslash
-# Install nextest for the `just test` helper.
-cargo install --locked cargo-nextest
+## Logging
 
-# Build Codex.
-cargo build
-
-# Launch the TUI with a sample prompt.
-cargo run --bin codex -- "explain this codebase to me"
-
-# After making changes, use the root justfile helpers (they default to codex-rs):
-just fmt
-just fix -p <crate-you-touched>
-
-# Run the relevant tests (project-specific is fastest), for example:
-just test -p codex-tui
-# `just test` runs the test suite via nextest:
-just test
-# Avoid `--all-features` for routine local runs because it increases build
-# time and `target/` disk usage by compiling additional feature combinations.
-```
-
-## Tracing / verbose logging
-
-Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.
-
-The TUI records diagnostics in bounded local stores by default. Set `log_dir` explicitly to enable a plaintext TUI log for a run:
-
-```bash
-codex -c log_dir=./.codex-log
-tail -F ./.codex-log/codex-tui.log
-```
-
-The non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
-
-See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
+Codex honors the `RUST_LOG` environment variable. The TUI writes logs under the
+Codex log directory by default, and `codex exec` prints error-level messages
+inline for non-interactive runs.

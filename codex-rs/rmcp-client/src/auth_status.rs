@@ -16,6 +16,7 @@ use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::oauth::StoredOAuthTokenStatus;
 use crate::oauth::oauth_token_status;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
+use crate::utils::apply_termux_tls;
 use crate::utils::build_default_headers;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;

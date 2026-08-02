@@ -1435,6 +1435,20 @@ mod tests {
     }
 
     #[test]
+    fn model_info_defaults_base_instructions_to_empty_when_omitted() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        value
+            .as_object_mut()
+            .expect("model info should be an object")
+            .remove("base_instructions");
+
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert!(model.base_instructions.is_empty());
+    }
+
+    #[test]
     fn model_info_deserializes_known_tool_mode() {
         let mut value =
             serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");

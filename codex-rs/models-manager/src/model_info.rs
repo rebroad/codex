@@ -93,9 +93,25 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
             }
             model_messages.instructions_variables = None;
         }
+        ensure_catalog_instructions(&mut model);
     }
 
     model
+}
+
+fn ensure_catalog_instructions(model: &mut ModelInfo) {
+    let has_instruction_template = model
+        .model_messages
+        .as_ref()
+        .and_then(|messages| messages.instructions_template.as_deref())
+        .is_some_and(|template| !template.trim().is_empty());
+    if model.base_instructions.trim().is_empty() && !has_instruction_template {
+        warn!(
+            model = %model.slug,
+            "model catalog omitted usable instructions; using built-in fallback"
+        );
+        model.base_instructions = BASE_INSTRUCTIONS.to_string();
+    }
 }
 
 fn strip_personality_section(mut instructions: String) -> String {
