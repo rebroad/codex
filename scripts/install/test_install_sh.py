@@ -13,6 +13,7 @@ import unittest
 
 INSTALL_SCRIPT = Path(__file__).with_name("install.sh")
 VERSION = "0.142.5"
+MISMATCH_VERSION = "0.145.0"
 
 
 class InstallShTest(unittest.TestCase):
@@ -23,8 +24,8 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/DioNanos/codex-termux/releases/tags/"
-                f"v{VERSION}"
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
+                f"rust-v{VERSION}"
             ],
         )
         self.assertIn(
@@ -33,20 +34,36 @@ class InstallShTest(unittest.TestCase):
         )
         self.assertNotIn("Could not find Codex package", result.stderr)
 
-    def test_exact_release_fetches_metadata_once(self) -> None:
-        result, requests = run_installer(VERSION)
+    def test_exact_release_opt_out_uses_github_metadata_once(self) -> None:
+        result, requests = run_installer(VERSION, use_mirror=False)
 
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/DioNanos/codex-termux/releases/tags/"
-                f"v{VERSION}",
-                "https://github.com/DioNanos/codex-termux/releases/download/"
-                f"v{VERSION}/codex-package_SHA256SUMS",
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
+                f"rust-v{VERSION}",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
         self.assertIn(f"Resolved version: {VERSION}", result.stdout)
+
+    def test_alpha_hotfix_release_is_valid(self) -> None:
+        version = "0.145.0-alpha.23.1"
+        result, requests = run_installer(version)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
+                f"rust-v{version}",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{version}/codex-package_SHA256SUMS",
+            ],
+        )
+        self.assertIn(f"Resolved version: {version}", result.stdout)
 
     def test_latest_release_reuses_version_metadata(self) -> None:
         result, requests = run_installer("latest")
@@ -55,9 +72,9 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/DioNanos/codex-termux/releases/latest",
-                "https://github.com/DioNanos/codex-termux/releases/download/"
-                f"v{VERSION}/codex-package_SHA256SUMS",
+                "https://api.github.com/repos/rebroad/codex/releases/latest",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
         self.assertIn(f"Resolved version: {VERSION}", result.stdout)
@@ -71,9 +88,9 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/DioNanos/codex-termux/releases/latest",
-                "https://github.com/DioNanos/codex-termux/releases/download/"
-                f"v{VERSION}/codex-package_SHA256SUMS",
+                "https://api.github.com/repos/rebroad/codex/releases/latest",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
         self.assertIn(f"Resolved version: {VERSION}", result.stdout)
@@ -120,6 +137,7 @@ def run_installer(
     *,
     metadata_failure: bool = False,
     metadata_json: str | None = None,
+    use_mirror: bool | None = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     with tempfile.TemporaryDirectory() as temp_dir:
         return run_installer_in(
@@ -127,6 +145,7 @@ def run_installer(
             release,
             metadata_failure=metadata_failure,
             metadata_json=metadata_json,
+            use_mirror=use_mirror,
         )
 
 
@@ -136,12 +155,17 @@ def run_installer_in(
     *,
     metadata_failure: bool = False,
     metadata_json: str | None = None,
+    releases_metadata_json: str | None = None,
     archive_path: Path | None = None,
     checksum_path: Path | None = None,
+    releases_checksum_path: Path | None = None,
+    legacy_archive_path: Path | None = None,
     force_macos: bool = False,
+    use_mirror: bool | None = False,
+    releases_mode: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     bin_dir = root / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     request_log = root / "requests.log"
     fake_curl = bin_dir / "curl"
     fake_curl.write_text(
@@ -177,9 +201,16 @@ def run_installer_in(
                   exit 22
                 fi
                 ;;
-              */codex-package-*.tar.gz)
+              https://github.com/rebroad/codex/releases/download/*/codex-package-*.tar.gz)
                 if [ -n "$CODEX_TEST_ARCHIVE_PATH" ]; then
                   cp "$CODEX_TEST_ARCHIVE_PATH" "$output"
+                else
+                  exit 22
+                fi
+                ;;
+              https://github.com/rebroad/codex/releases/download/*/codex-npm-*.tgz)
+                if [ -n "$CODEX_TEST_LEGACY_ARCHIVE_PATH" ]; then
+                  cp "$CODEX_TEST_LEGACY_ARCHIVE_PATH" "$output"
                 else
                   exit 22
                 fi
@@ -206,7 +237,7 @@ def run_installer_in(
         fake_uname.chmod(0o755)
 
     home = root / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     env = os.environ.copy()
     env.update(
         {
@@ -216,16 +247,34 @@ def run_installer_in(
             "CODEX_RELEASE": release,
             "CODEX_TEST_ARCHIVE_PATH": str(archive_path or ""),
             "CODEX_TEST_CHECKSUM_PATH": str(checksum_path or ""),
+            "CODEX_TEST_RELEASES_CHECKSUM_PATH": str(
+                releases_checksum_path or checksum_path or ""
+            ),
+            "CODEX_TEST_LEGACY_ARCHIVE_PATH": str(legacy_archive_path or ""),
             "CODEX_TEST_METADATA_FAILURE": "1" if metadata_failure else "0",
             "CODEX_TEST_METADATA_JSON": (
                 metadata_json if metadata_json is not None else release_metadata()
             ),
+            "CODEX_TEST_RELEASES_METADATA_JSON": (
+                releases_metadata_json
+                if releases_metadata_json is not None
+                else metadata_json
+                if metadata_json is not None
+                else release_metadata()
+            ),
+            "CODEX_TEST_RELEASES_MODE": releases_mode,
             "CODEX_TEST_REQUEST_LOG": str(request_log),
             "HOME": str(home),
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "SHELL": "/bin/sh",
         }
     )
+    if use_mirror is None:
+        env.pop("CODEX_INSTALLER_USE_RELEASES_OPENAI_COM", None)
+    else:
+        env["CODEX_INSTALLER_USE_RELEASES_OPENAI_COM"] = (
+            "TRUE" if use_mirror else "false"
+        )
     result = subprocess.run(
         ["/bin/sh", str(INSTALL_SCRIPT)],
         capture_output=True,
@@ -241,7 +290,11 @@ def run_installer_in(
     return result, requests
 
 
-def create_package_release(root: Path) -> tuple[Path, Path, str]:
+def create_package_release(
+    root: Path,
+    *,
+    metadata_version: str = VERSION,
+) -> tuple[Path, Path, str]:
     package_dir = root / "package"
     (package_dir / "bin").mkdir(parents=True)
     (package_dir / "codex-path").mkdir()
@@ -275,11 +328,38 @@ def create_package_release(root: Path) -> tuple[Path, Path, str]:
                     "digest": f"sha256:{checksum_digest}",
                 },
             ],
-            "tag_name": f"v{VERSION}",
+            "tag_name": f"rust-v{metadata_version}",
         },
         indent=2,
     )
     return archive_path, checksum_path, metadata_json
+
+
+def create_legacy_release(root: Path) -> tuple[Path, str]:
+    package_dir = root / "legacy-package"
+    vendor_dir = package_dir / "package" / "vendor" / "aarch64-apple-darwin"
+    (vendor_dir / "codex").mkdir(parents=True)
+    (vendor_dir / "path").mkdir()
+    write_executable(
+        vendor_dir / "codex" / "codex",
+        f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
+    )
+    write_executable(vendor_dir / "path" / "rg", "#!/bin/sh\nexit 0\n")
+
+    asset = f"codex-npm-darwin-arm64-{VERSION}.tgz"
+    archive_path = root / asset
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(package_dir / "package", arcname="package")
+
+    archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    metadata_json = json.dumps(
+        {
+            "assets": [{"name": asset, "digest": f"sha256:{archive_digest}"}],
+            "tag_name": f"rust-v{VERSION}",
+        },
+        indent=2,
+    )
+    return archive_path, metadata_json
 
 
 def write_executable(path: Path, contents: str) -> None:
@@ -310,7 +390,7 @@ def release_metadata(*, compact: bool = False, reorder: bool = False) -> str:
     )
     separators = (",", ":") if compact else None
     return json.dumps(
-        {"assets": assets, "body": "braces: { } [ ]", "tag_name": f"v{VERSION}"},
+        {"assets": assets, "body": "braces: { } [ ]", "tag_name": f"rust-v{VERSION}"},
         indent=None if compact else 2,
         separators=separators,
     )
@@ -341,7 +421,7 @@ def legacy_release_metadata_with_decoys() -> str:
                 f'fake: {{"name":"codex-package_SHA256SUMS","digest":"{fake_digest}"}}'
             ),
             "assets": assets,
-            "tag_name": f"v{VERSION}",
+            "tag_name": f"rust-v{VERSION}",
         },
         separators=(",", ":"),
     )

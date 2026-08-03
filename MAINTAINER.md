@@ -1,7 +1,6 @@
 # Maintainer
 
-Codex Termux is maintained by **Davide A. Guglielmi** (GitHub:
-[DioNanos](https://github.com/DioNanos)) as the porting / distribution
+Codex Termux is maintained by (GitHub: [rebroad](https://github.com/rebroad)) as the porting / distribution
 maintainer for Android ARM64 (Termux).
 
 This is **not** an independent fork — Codex Termux tracks
@@ -34,7 +33,7 @@ If a feature is generic and not Termux-specific, the right place is upstream.
 
 | Channel | Where |
 |---|---|
-| Termux/Android bug reports, PRs | [DioNanos/codex-termux](https://github.com/DioNanos/codex-termux) |
+| Termux/Android bug reports, PRs | [DioNanos/codex-termux](https://github.com/rebroad/codex-termux) |
 | Generic Codex bugs (not Termux-specific) | [openai/codex](https://github.com/openai/codex) |
 | Security disclosures (Termux fork) | [`SECURITY.md`](./SECURITY.md) — `security@mmmbuto.com` |
 | General contact | `dev@mmmbuto.com` |

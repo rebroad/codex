@@ -54,9 +54,8 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
-const LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/DioNanos/codex-termux/releases/latest";
-const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@mmmbuto%2fcodex-cli-termux/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/rebroad/codex/releases/latest";
+const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@rebroad%2fcodex/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {

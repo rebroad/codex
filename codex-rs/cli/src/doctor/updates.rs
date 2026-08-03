@@ -23,8 +23,8 @@ use super::run_command;
 
 const VERSION_FILE_NAME: &str = "version.json";
 const GITHUB_LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/DioNanos/codex-termux/releases/latest";
-const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@mmmbuto%2fcodex-cli-termux/latest";
+    "https://api.github.com/repos/rebroad/codex/releases/latest";
+const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@rebroad%2fcodex/latest";
 
 /// Builds the update-health row for the current installation.
 ///
@@ -132,10 +132,10 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 
 fn update_action_label(context: &InstallContext) -> &'static str {
     match &context.method {
-        InstallMethod::Npm => "npm install -g @mmmbuto/codex-cli-termux",
-        InstallMethod::Bun => "bun install -g @mmmbuto/codex-cli-termux",
-        InstallMethod::Pnpm => "pnpm add -g @mmmbuto/codex-cli-termux",
-        InstallMethod::Brew => "npm install -g @mmmbuto/codex-cli-termux",
+        InstallMethod::Npm => "npm install -g @rebroad/codex",
+        InstallMethod::Bun => "bun install -g @rebroad/codex",
+        InstallMethod::Pnpm => "pnpm add -g @rebroad/codex",
+        InstallMethod::Brew => "npm install -g @rebroad/codex",
         InstallMethod::Standalone { .. } => "standalone installer",
         InstallMethod::Other => "manual or unknown",
     }
@@ -226,21 +226,21 @@ mod tests {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            concat!("npm install -g @mmmbuto/", "codex-cli-termux")
+            "npm install -g @rebroad/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Pnpm,
                 package_layout: None,
             }),
-            concat!("pnpm add -g @mmmbuto/", "codex-cli-termux")
+            "pnpm add -g @rebroad/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Brew,
                 package_layout: None,
             }),
-            concat!("npm install -g @mmmbuto/", "codex-cli-termux")
+            "pnpm add -g @rebroad/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {

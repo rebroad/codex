@@ -673,10 +673,10 @@ impl Daemon {
 
         let managed_codex_path = self.managed_codex_bin.display();
         Err(anyhow!(
-            "managed Codex Termux install not found at {managed_codex_path}\n\n\
-             This command requires the managed install path used by the Termux package, because \
-             the daemon starts app-server from that fixed path.\n\n\
-             Install or update it with:\n  npm install -g @mmmbuto/codex-cli-termux@latest\n\n\
+            "managed standalone Codex install not found at {managed_codex_path}\n\n\
+             This command requires the standalone install managed by the Codex installer, because \
+             the daemon starts and updates app-server from that fixed path.\n\n\
+             Install or update it with:\n  npm install -g @rebroad/codex@latest\n\n\
              Then rerun the command you just tried."
         ))
     }

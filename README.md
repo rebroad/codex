@@ -1,13 +1,6 @@
-# Codex Termux
-
-> Native Codex CLI for **Termux / Android ARM64**.
-> This fork tracks upstream OpenAI Codex main and carries only the Android/Termux compatibility delta needed to package and run it.
-
-[![npm termux](https://img.shields.io/npm/v/@mmmbuto/codex-cli-termux?style=flat-square&logo=npm)](https://www.npmjs.com/package/@mmmbuto/codex-cli-termux)
-[![latest release](https://img.shields.io/github/v/release/DioNanos/codex-termux?style=flat-square)](https://github.com/DioNanos/codex-termux/releases/latest)
-
+<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
-  <img src="./.github/termux-robot.png" alt="Termux robot" width="80%" />
+  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
 </p>
 
 ## Install
@@ -17,7 +10,7 @@
 ```bash
 pkg update && pkg upgrade -y
 pkg install nodejs-lts -y
-npm install -g @mmmbuto/codex-cli-termux@latest
+npm install -g @rebroad/codex
 codex --version
 codex login
 ```
@@ -55,7 +48,7 @@ What this fork does not do:
 ## Current Termux Delta
 
 - browser login uses `termux-open-url`
-- self-update points to `DioNanos/codex-termux` and `@mmmbuto/codex-cli-termux`
+- self-update points to `rebroad/codex` and `@rebroad/codex`
 - packaged wrappers set `CODEX_SELF_EXE` to the native ELF, sanitize `LD_LIBRARY_PATH`, and bundle `libc++_shared.so`
 - Android binaries are linked with `RUNPATH=$ORIGIN`
 - `exec`/code-mode now runs for real on Android via the in-process V8 runtime (no longer a stub) — the meaningful capability gain on Termux
@@ -64,12 +57,11 @@ What this fork does not do:
 
 ## Releases and Updates
 
-- Latest GitHub release: [releases/latest](https://github.com/DioNanos/codex-termux/releases/latest)
+- Latest GitHub release: [releases/latest](https://github.com/rebroad/codex/releases/latest)
 - Upstream base: OpenAI Codex `rust-v0.146.0`. The `0.146.0` Android package
   follows the exact-artifact release flow; npm dist-tags and GitHub Releases
   are authoritative for current publication status.
-- npm package: [`@mmmbuto/codex-cli-termux`](https://www.npmjs.com/package/@mmmbuto/codex-cli-termux)
-- Legacy `@mmmbuto/codex-cli-lts` (OpenAI Codex 0.80.x) is archived; current builds live in this package or in [`@mmmbuto/codex-vl`](https://www.npmjs.com/package/@mmmbuto/codex-vl) (multi-platform).
+- npm package: [`@rebroad/codex`](https://www.npmjs.com/package/@rebroad/codex)
 
 Maintainer publish flow:
 
@@ -99,7 +91,7 @@ Maintainer publish flow:
 This is a community fork of OpenAI Codex. Security-relevant properties of this build:
 
 - **Network**: agents bind to loopback by default; nothing is exposed externally unless you opt in.
-- **Supply chain**: builds and releases come only from fork-owned CI and the `@mmmbuto/...` npm
+- **Supply chain**: builds and releases come only from fork-owned CI and the `@rebroad/...` npm
   scope. This package does not silently fetch or run the upstream installer; updates flow through
   the fork's own channel.
 - **Termux**: TLS trust uses bundled webpki roots (no Android platform-verifier dependency).

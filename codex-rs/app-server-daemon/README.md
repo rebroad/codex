@@ -36,7 +36,7 @@ running app-server version when applicable.
 For a new remote machine:
 
 ```sh
-npm install -g @mmmbuto/codex-cli-termux@latest
+npm install -g @rebroad/codex@latest
 codex app-server daemon bootstrap --remote-control
 ```
 
@@ -54,7 +54,7 @@ targets retain the upstream standalone path under `CODEX_HOME`.
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
 | The fork npm package has run, but only `start` is used | On Android, `start` uses the native `codex.bin` path from `CODEX_SELF_EXE` | No | No. The managed path is used when starting or restarting, but no updater is installed. |
-| The fork npm package has run, then `bootstrap` is used | The pidfile backend uses the native managed path supplied by the launcher | No. Bootstrap stops any stale updater loop and leaves `autoUpdateEnabled` false. | No. Update with `npm install -g @mmmbuto/codex-cli-termux@latest`, then restart the daemon. |
+| The fork npm package has run, then `bootstrap` is used | The pidfile backend uses the native managed path supplied by the launcher | No. Bootstrap stops any stale updater loop and leaves `autoUpdateEnabled` false. | No. Update with `npm install -g @rebroad/codex@latest`, then restart the daemon. |
 | Some other tool updates the managed binary path | The next fresh start or restart uses the updated file at that path | No | No. Restart app-server after updating the managed path. |
 
 ### Termux npm installs
@@ -65,7 +65,7 @@ For installs created by the fork npm package:
   `CODEX_SELF_EXE`
 - `bootstrap` is supported
 - `bootstrap` does not fetch installers or spawn an updater loop
-- updates are explicit through `@mmmbuto/codex-cli-termux@latest`
+- updates are explicit through `@rebroad/codex@latest`
 
 ### Out-of-band updates
 

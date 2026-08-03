@@ -1,6 +1,6 @@
-# Installing Codex CLI for Termux
+## Installing & building
 
-This package is for Android Termux on ARM64 devices.
+### System requirements
 
 ### Requirements
 

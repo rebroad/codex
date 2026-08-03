@@ -9,7 +9,7 @@ body:
         Before submitting a new issue, please search for existing issues to see if your issue has already been reported.
         If it has, please add a 👍 reaction (no need to leave a comment) to the existing issue instead of creating a new one.
 
-        Make sure you are running the [latest](https://npmjs.com/package/@mmmbuto/codex-cli-termux) version of Codex CLI for Termux. The bug you are experiencing may already have been fixed.
+        Make sure you are running the [latest](https://npmjs.com/package/@rebroad/codex) version of Codex CLI. The bug you are experiencing may already have been fixed.
 
         If your version supports it, please run `codex doctor --json` and paste the output in the "Codex doctor report" field below. This helps us diagnose install, config, auth, terminal, MCP, network, and local state issues.
 
@@ -30,13 +30,15 @@ body:
     id: model
     attributes:
       label: Which model were you using?
-      description: Copy the model name shown by Codex.
+      description: Like `gpt-5.2`, `gpt-5.2-codex`, etc.
   - type: input
     id: platform
     attributes:
-      label: What Android device and Termux build are you using?
+      label: What platform is your computer?
       description: |
-        Include the device model, Android version/API level, Termux source and version (F-Droid or GitHub), Node.js version, and the output of `uname -mprs`.
+        For macOS and Linux: copy the output of `uname -mprs`
+        For Windows: copy the output of `"$([Environment]::OSVersion | ForEach-Object VersionString) $(if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" })"` in the PowerShell console
+        For Android: Include the device model, Android version/API level, Termux source and version (F-Droid or GitHub), Node.js version, and the output of `uname -mprs`.
   - type: input
     id: terminal
     attributes:

@@ -5,8 +5,8 @@ expression: rendered
 ---
 ╭────────────────────────────────────────────────────────────────╮
 │ ✨ Update available! 0.0.0 -> 9.9.9                            │
-│ Run npm install -g @mmmbuto/codex-cli-termux@latest to update. │
+│ Run npm install -g @rebroad/codex@latest to update.            │
 │                                                                │
 │ See full release notes:                                        │
-│ https://github.com/DioNanos/codex-termux/releases/latest       │
+│ https://github.com/rebroad/codex/releases/latest               │
 ╰────────────────────────────────────────────────────────────────╯
