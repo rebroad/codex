@@ -1,0 +1,140 @@
+#!/usr/bin/env sh
+set -eu
+
+# The app-server daemon owns the single-instance lock. This wrapper recovers an
+# errored daemon and can replace it when explicitly asked to enable logging.
+home_dir="${HOME:?HOME must be set}"
+codex_home="${CODEX_HOME:-$home_dir/.codex}"
+codex_bin="${CODEX_BIN:-}"
+timeout_seconds="${CODEX_REMOTE_START_TIMEOUT:-20}"
+pid_file="$codex_home/app-server-daemon/app-server.pid"
+debug_log=0
+
+usage() {
+    printf '%s\n' 'Usage: codex-remote-start [--debug-log]'
+}
+
+if [ -z "$codex_bin" ]; then
+    codex_bin=$(command -v codex) || {
+        printf '%s\n' 'Codex Remote: codex was not found; set CODEX_BIN to its path.' >&2
+        exit 1
+    }
+fi
+
+case "${1-}" in
+    "")
+        ;;
+    --debug-log)
+        debug_log=1
+        export RUST_LOG="${CODEX_REMOTE_RUST_LOG:-codex_app_server_transport::transport::remote_control=info}"
+        export LOG_FORMAT="${CODEX_REMOTE_LOG_FORMAT:-json}"
+        ;;
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
+
+managed_daemon_pid() {
+    pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$pid_file" 2>/dev/null)"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    case "$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)" in
+        *app-server*) printf '%s\n' "$pid" ;;
+        *) return 1 ;;
+    esac
+}
+
+daemon_has_debug_log() {
+    pid="$1"
+    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null |
+        grep -Fqx "RUST_LOG=$RUST_LOG" &&
+        tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null |
+        grep -Fqx "LOG_FORMAT=$LOG_FORMAT"
+}
+
+stop_managed_daemon() {
+    pid="$1"
+    kill "$pid" 2>/dev/null || return 1
+
+    elapsed=0
+    max_ticks=$((timeout_seconds * 10))
+    while kill -0 "$pid" 2>/dev/null; do
+        [ "$elapsed" -lt "$max_ticks" ] || return 1
+        sleep 0.1
+        elapsed=$((elapsed + 1))
+    done
+}
+
+ensure_managed_codex_install() {
+    # Stock Codex expects the daemon executable at this path. Reuse an
+    # existing install, otherwise point the daemon at the Codex on PATH.
+    [ -n "${CODEX_SELF_EXE:-}" ] && return 0
+
+    managed_codex_bin="$codex_home/packages/standalone/current/codex"
+    [ -f "$managed_codex_bin" ] && return 0
+    if [ -e "$managed_codex_bin" ] || [ -L "$managed_codex_bin" ]; then
+        printf 'Codex Remote: managed Codex path exists but is not usable: %s\n' \
+            "$managed_codex_bin" >&2
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$managed_codex_bin")"
+    ln -s "$codex_bin" "$managed_codex_bin" || {
+        printf 'Codex Remote: could not link %s to %s\n' \
+            "$codex_bin" "$managed_codex_bin" >&2
+        return 1
+    }
+}
+
+if [ "$debug_log" -eq 1 ]; then
+    existing_pid="$(managed_daemon_pid || true)"
+    if [ -n "$existing_pid" ] && ! daemon_has_debug_log "$existing_pid"; then
+        printf '%s\n' 'Codex Remote: replacing backend to enable debug logging.' >&2
+        if ! stop_managed_daemon "$existing_pid"; then
+            printf '%s\n' 'Codex Remote: could not stop the existing backend.' >&2
+            exit 1
+        fi
+    fi
+fi
+
+ensure_managed_codex_install || exit 1
+
+start_output=""
+start_status=0
+start_output="$(timeout "$timeout_seconds" "$codex_bin" remote-control start --json 2>&1)" || start_status=$?
+
+if [ "$start_status" -eq 0 ]; then
+    exit 0
+fi
+
+case "$start_output" in
+    *"connection is errored"*)
+        # Stop through Codex so it removes the managed PID/socket state, then
+        # let the daemon manager recreate exactly one app-server.
+        timeout "$timeout_seconds" "$codex_bin" remote-control stop --json >/dev/null 2>&1 || true
+        restart_output=""
+        restart_status=0
+        restart_output="$(timeout "$timeout_seconds" "$codex_bin" remote-control start --json 2>&1)" || restart_status=$?
+        if [ "$restart_status" -eq 0 ]; then
+            exit 0
+        fi
+        case "$restart_output" in
+            *"connection is errored"*)
+                # The local daemon is usable for pairing even when its
+                # upstream enrollment status is currently errored. Let the
+                # pairing request report the actual upstream cause.
+                exit 0
+                ;;
+        esac
+        printf '%s\n' "$restart_output" >&2
+        exit "$restart_status"
+        ;;
+esac
+
+printf '%s\n' "$start_output" >&2
+exit "$start_status"
