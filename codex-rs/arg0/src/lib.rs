@@ -19,10 +19,38 @@ use tempfile::TempDir;
 
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+const CODEX_SELF_EXE_ENV: &str = "CODEX_SELF_EXE";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Filesystems that do not support advisory file locking (observed on
+/// Termux storage backends under `/data/data/com.termux/files`) surface
+/// `ErrorKind::Unsupported` from `File::try_lock`. Detect this on every
+/// target instead of gating on `cfg!(target_os = "android")`: support for
+/// the affected filesystem behavior is a runtime property, and keeping the
+/// helper target-independent also covers older Termux package lines.
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
+fn resolve_codex_self_exe_with(
+    override_path: Option<std::ffi::OsString>,
+    current_exe: Option<PathBuf>,
+) -> Option<PathBuf> {
+    override_path
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or(current_exe)
+}
+
+fn resolve_codex_self_exe() -> Option<PathBuf> {
+    resolve_codex_self_exe_with(
+        std::env::var_os(CODEX_SELF_EXE_ENV),
+        std::env::current_exe().ok(),
+    )
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
@@ -382,7 +410,12 @@ fn prepare_path_entry_for_codex_aliases(
         .create(true)
         .truncate(false)
         .open(&lock_path)?;
-    lock_file.try_lock()?;
+    if let Err(err) = lock_file.try_lock() {
+        let io_err: std::io::Error = err.into();
+        if !is_unsupported_file_lock_error(&io_err) {
+            return Err(io_err);
+        }
+    }
 
     for filename in &[
         APPLY_PATCH_ARG0,
@@ -392,7 +425,12 @@ fn prepare_path_entry_for_codex_aliases(
         #[cfg(unix)]
         EXECVE_WRAPPER_ARG0,
     ] {
-        let exe = std::env::current_exe()?;
+        let exe = resolve_codex_self_exe().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "failed to determine codex self executable",
+            )
+        })?;
 
         #[cfg(unix)]
         {
@@ -418,7 +456,7 @@ fn prepare_path_entry_for_codex_aliases(
     let updated_path_env_var = path_env_with_entry(path, existing_path);
 
     let paths = Arg0DispatchPaths {
-        codex_self_exe: std::env::current_exe().ok(),
+        codex_self_exe: resolve_codex_self_exe(),
         codex_linux_sandbox_exe: {
             #[cfg(target_os = "linux")]
             {
@@ -526,7 +564,14 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
     match lock_file.try_lock() {
         Ok(()) => Ok(Some(lock_file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(err) => Err(err.into()),
+        Err(err) => {
+            let io_err: std::io::Error = err.into();
+            if is_unsupported_file_lock_error(&io_err) {
+                Ok(None)
+            } else {
+                Err(io_err)
+            }
+        }
     }
 }
 
@@ -535,8 +580,10 @@ mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::is_unsupported_file_lock_error;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
+    use super::resolve_codex_self_exe_with;
     #[cfg(unix)]
     use super::run_main_with_arg0_guard;
     #[cfg(unix)]
@@ -806,5 +853,51 @@ mod tests {
 
         assert!(!dir.exists());
         Ok(())
+    }
+
+    #[test]
+    fn resolve_codex_self_exe_prefers_override() {
+        assert_eq!(
+            resolve_codex_self_exe_with(
+                Some(std::ffi::OsString::from("/override/codex")),
+                Some(PathBuf::from("/current/codex")),
+            ),
+            Some(PathBuf::from("/override/codex")),
+        );
+    }
+
+    #[test]
+    fn unsupported_file_lock_errors_are_detected() {
+        assert!(is_unsupported_file_lock_error(&std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "unsupported",
+        )));
+    }
+
+    #[test]
+    fn other_file_lock_errors_are_not_treated_as_unsupported() {
+        assert!(!is_unsupported_file_lock_error(&std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )));
+    }
+
+    #[test]
+    fn resolve_codex_self_exe_falls_back_to_current_exe() {
+        assert_eq!(
+            resolve_codex_self_exe_with(None, Some(PathBuf::from("/current/codex"))),
+            Some(PathBuf::from("/current/codex")),
+        );
+    }
+
+    #[test]
+    fn resolve_codex_self_exe_ignores_empty_override() {
+        assert_eq!(
+            resolve_codex_self_exe_with(
+                Some(std::ffi::OsString::new()),
+                Some(PathBuf::from("/current/codex")),
+            ),
+            Some(PathBuf::from("/current/codex")),
+        );
     }
 }
