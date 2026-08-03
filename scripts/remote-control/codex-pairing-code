@@ -1,0 +1,103 @@
+#!/usr/bin/env sh
+set -eu
+
+home_dir="${HOME:?HOME must be set}"
+codex_home="${CODEX_HOME:-$home_dir/.codex}"
+codex_bin="${CODEX_BIN:-}"
+timeout_seconds="${CODEX_REMOTE_PAIR_TIMEOUT:-20}"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+control_socket="$codex_home/app-server-control/app-server-control.sock"
+pid_file="$codex_home/app-server-daemon/app-server.pid"
+lock_dir="$codex_home/app-server-control/pairing-code.lock"
+start_option=""
+
+usage() {
+    printf '%s\n' 'Usage: codex-pairing-code [--debug-log]'
+}
+
+if [ -z "$codex_bin" ]; then
+    codex_bin=$(command -v codex) || {
+        printf '%s\n' 'Codex Remote: codex was not found; set CODEX_BIN to its path.' >&2
+        exit 1
+    }
+fi
+
+case "${1-}" in
+    "")
+        ;;
+    --debug-log)
+        start_option="--debug-log"
+        ;;
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
+
+mkdir -p "$(dirname "$lock_dir")"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+    printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
+    exit 1
+fi
+trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT HUP INT TERM
+
+daemon_is_running() {
+    pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$pid_file" 2>/dev/null)"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    case "$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)" in
+        *app-server*) return 0 ;;
+    esac
+    return 1
+}
+
+if [ ! -S "$control_socket" ] || ! daemon_is_running || [ -n "$start_option" ]; then
+    remote_start="$script_dir/codex-remote-start"
+    if [ ! -x "$remote_start" ]; then
+        printf 'Codex Remote: companion script is not executable: %s\n' "$remote_start" >&2
+        exit 1
+    fi
+    if [ -n "$start_option" ]; then
+        "$remote_start" "$start_option"
+    else
+        "$remote_start"
+    fi
+fi
+
+pairing_json=""
+pairing_status=1
+attempt=1
+while [ "$attempt" -le 4 ]; do
+    pairing_status=0
+    pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
+    [ "$pairing_status" -eq 0 ] && break
+
+    case "$pairing_json" in
+        *"timed out waiting for remoteControl/pairing/start response"*|*"deadline has elapsed"*)
+            sleep 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+    attempt=$((attempt + 1))
+done
+
+if [ "$pairing_status" -ne 0 ]; then
+    printf 'Codex Remote: could not create a pairing code (%s).\n' "$pairing_json" >&2
+    exit "$pairing_status"
+fi
+
+manual_code="$(printf '%s' "$pairing_json" | sed -n \
+    's/.*"manualPairingCode"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')"
+if [ -z "$manual_code" ]; then
+    printf '%s\n' 'Codex Remote: pairing response did not contain a manual code.' >&2
+    exit 1
+fi
+
+printf '\nCodex Remote pairing code: %s\n' "$manual_code"
+printf '%s\n\n' 'ChatGPT/Codex app → Remote → Add or pair device'
