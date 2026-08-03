@@ -243,7 +243,7 @@ impl Renderable for StatusIndicatorWidget {
         if self.animations_enabled {
             // Schedule next animation frame.
             self.frame_requester
-                .schedule_frame_in(Duration::from_millis(32));
+                .schedule_frame_in(Duration::from_millis(200));
         }
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
