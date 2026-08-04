@@ -11,7 +11,7 @@
       "path": "codex-zsh/bin/zsh",
       "providers": [
         {
-          "url": "https://github.com/openai/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-aarch64-apple-darwin.tar.gz"
+          "url": "https://github.com/rebroad/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-aarch64-apple-darwin.tar.gz"
         }
       ]
     },
@@ -23,7 +23,7 @@
       "path": "codex-zsh/bin/zsh",
       "providers": [
         {
-          "url": "https://github.com/openai/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-x86_64-apple-darwin.tar.gz"
+          "url": "https://github.com/rebroad/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-x86_64-apple-darwin.tar.gz"
         }
       ]
     },
@@ -35,7 +35,7 @@
       "path": "codex-zsh/bin/zsh",
       "providers": [
         {
-          "url": "https://github.com/openai/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-x86_64-unknown-linux-musl.tar.gz"
+          "url": "https://github.com/rebroad/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-x86_64-unknown-linux-musl.tar.gz"
         }
       ]
     },
@@ -47,7 +47,7 @@
       "path": "codex-zsh/bin/zsh",
       "providers": [
         {
-          "url": "https://github.com/openai/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-aarch64-unknown-linux-musl.tar.gz"
+          "url": "https://github.com/rebroad/codex/releases/download/rust-v0.134.0-alpha.3/codex-zsh-aarch64-unknown-linux-musl.tar.gz"
         }
       ]
     }

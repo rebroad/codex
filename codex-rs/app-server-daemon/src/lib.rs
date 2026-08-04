@@ -232,10 +232,13 @@ pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControl
 }
 
 pub async fn run_pid_update_loop(
-    http_client_factory: codex_http_client::HttpClientFactory,
+    _http_client_factory: codex_http_client::HttpClientFactory,
 ) -> Result<()> {
     ensure_supported_platform()?;
-    update_loop::run(http_client_factory).await
+    // Packages update through the reb.ai release channel. Its standalone updater is
+    // intentionally isolated from upstream HTTP install machinery, so retain the
+    // public caller contract whle invoking the fail-closed no-argument loop.
+    update_loop::run().await
 }
 
 #[cfg(unix)]
@@ -609,14 +612,13 @@ impl Daemon {
         if updater.is_starting_or_running().await? {
             updater.stop().await?;
         }
-        updater.start().await?;
 
         let info = self.wait_until_ready().await?;
         let managed_codex_version = self.managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
-            auto_update_enabled: true,
+            auto_update_enabled: false,
             remote_control_enabled: settings.remote_control_enabled,
             managed_codex_path: self.managed_codex_bin.clone(),
             managed_codex_version,
@@ -976,7 +978,7 @@ mod tests {
         let bootstrap_output = BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
-            auto_update_enabled: true,
+            auto_update_enabled: false,
             remote_control_enabled: true,
             managed_codex_path: "codex".into(),
             managed_codex_version: Some("1.2.3".to_string()),
