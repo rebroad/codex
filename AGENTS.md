@@ -1,7 +1,8 @@
-# Rust/codex-rs
+In the `codex-rs` folder where the Rust code lives:
 
-In the codex-rs folder where the rust code lives:
-
+- Escalated shell access may be needed for cargo (due to sccache)
+- Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness.
+- When making any changes, always try to keep as closely aligned to `upstream/latest-alpha-cli` as possible.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
@@ -61,7 +62,7 @@ In the codex-rs folder where the rust code lives:
     trivial; prefer new modules/files and keep `chatwidget.rs` focused on orchestration.
 - When running Rust commands (e.g. `just fix` or `just test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
 
-Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making code changes anywhere in this repository; do not ask for approval to run it. Additionally, run the tests:
+Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
 1. Do not run `cargo test` directly. Use `just test` so test execution follows the repo defaults.
 2. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `just test -p codex-tui`.
