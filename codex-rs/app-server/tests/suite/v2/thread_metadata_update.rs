@@ -1091,7 +1091,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
             commit_hash: Some(GitSha::new("abc123")),
             branch: Some("feature/sidebar-pr".to_string()),
             repository_url: Some(
-                SanitizedGitUrl::try_from("git@example.com:openai/codex.git")
+                SanitizedGitUrl::try_from("git@example.com:rebroad/codex.git")
                     .expect("repository URL should be valid"),
             ),
         }),

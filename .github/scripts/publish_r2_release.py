@@ -28,7 +28,7 @@ from urllib.parse import quote
 
 BUCKET = "releases"
 PREFIX = "codex"
-REPOSITORY = "openai/codex"
+REPOSITORY = "rebroad/codex"
 RELEASE_METADATA_NAME = "release.json"
 INSTALLER_NAMES = ("install.sh", "install.ps1")
 MAX_UPLOAD_WORKERS = 8

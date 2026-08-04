@@ -19,7 +19,7 @@ use super::*;
 
 const BASE_URL: &str = "https://chatgpt.com/backend-api";
 const BY_REPO_URL: &str =
-    "https://chatgpt.com/backend-api/wham/environments/by-repo/github/openai/codex";
+    "https://chatgpt.com/backend-api/wham/environments/by-repo/github/rebroad/codex";
 const GLOBAL_URL: &str = "https://chatgpt.com/backend-api/wham/environments";
 
 #[tokio::test]
@@ -133,7 +133,7 @@ async fn autodetect_requests_exact_repository_endpoint_and_decodes_selection() {
         BASE_URL,
         &headers,
         Some("Repository".to_string()),
-        &[SanitizedGitUrl::try_from("git@github.com:openai/codex.git").expect("valid Git remote")],
+        &[SanitizedGitUrl::try_from("git@github.com:rebroad/codex.git").expect("valid Git remote")],
     )
     .await
     .expect("repository environment should be selected");
@@ -231,7 +231,7 @@ async fn autodetect_falls_back_to_exact_global_endpoint_and_decodes_selection() 
         BASE_URL,
         &HeaderMap::new(),
         /*desired_label*/ None,
-        &[SanitizedGitUrl::try_from("git@github.com:openai/codex.git").expect("valid Git remote")],
+        &[SanitizedGitUrl::try_from("git@github.com:rebroad/codex.git").expect("valid Git remote")],
     )
     .await
     .expect("global environment should be selected");
@@ -269,7 +269,7 @@ async fn list_requests_exact_repository_and_global_endpoints_and_merges_results(
         BASE_URL,
         &HeaderMap::new(),
         &[
-            SanitizedGitUrl::try_from("https://github.com/openai/codex.git")
+            SanitizedGitUrl::try_from("https://github.com/rebroad/codex.git")
                 .expect("valid Git remote"),
         ],
     )
@@ -285,7 +285,7 @@ async fn list_requests_exact_repository_and_global_endpoints_and_merges_results(
                 "env-repo".to_string(),
                 Some("Repository".to_string()),
                 true,
-                Some("openai/codex".to_string()),
+                Some("rebroad/codex".to_string()),
             ),
             (
                 "env-global".to_string(),
