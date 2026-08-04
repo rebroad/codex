@@ -30,6 +30,7 @@ pub(crate) struct SessionState {
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) effective_model: Option<String>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
     pub(crate) additional_context: AdditionalContextStore,
@@ -68,6 +69,7 @@ impl SessionState {
             base_instructions_provenance: None,
             history,
             latest_rate_limits: None,
+            effective_model: None,
             server_reasoning_included: false,
             mcp_dependency_prompted: HashSet::new(),
             additional_context: AdditionalContextStore::default(),
@@ -218,8 +220,20 @@ impl SessionState {
 
     pub(crate) fn token_info_and_rate_limits(
         &self,
-    ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
-        (self.token_info(), self.latest_rate_limits.clone())
+    ) -> (
+        Option<TokenUsageInfo>,
+        Option<RateLimitSnapshot>,
+        Option<String>,
+    ) {
+        (
+            self.token_info(),
+            self.latest_rate_limits.clone(),
+            self.effective_model.clone(),
+        )
+    }
+
+    pub(crate) fn set_effective_model(&mut self, model: String) {
+        self.effective_model = Some(model);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
