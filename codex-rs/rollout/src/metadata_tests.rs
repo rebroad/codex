@@ -315,7 +315,7 @@ async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_f
         Some(GitInfo {
             commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),
             branch: Some("rollout-branch".to_string()),
-            repository_url: Some("git@example.com:openai/codex.git".to_string()),
+            repository_url: Some("git@example.com:rebroad/codex.git".to_string()),
         }),
     );
 
@@ -349,7 +349,7 @@ async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_f
     assert_eq!(persisted.git_branch.as_deref(), Some("sqlite-branch"));
     assert_eq!(
         persisted.git_origin_url.as_deref(),
-        Some("git@example.com:openai/codex.git")
+        Some("git@example.com:rebroad/codex.git")
     );
 }
 

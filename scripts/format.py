@@ -6,12 +6,41 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def configure_uv_cache() -> None:
+    """Choose a writable uv cache when the default home cache is unavailable."""
+    if os.environ.get("UV_CACHE_DIR"):
+        return
+
+    candidates = []
+    if xdg_cache_home := os.environ.get("XDG_CACHE_HOME"):
+        candidates.append(Path(xdg_cache_home) / "codex" / "uv")
+    candidates.extend(
+        [
+            Path.home() / ".cache" / "codex" / "uv",
+            REPO_ROOT.parent / f"{REPO_ROOT.name}.build" / ".uv-cache",
+            Path(tempfile.gettempdir()) / "codex-uv-cache",
+        ]
+    )
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write-test"
+            probe.touch()
+            probe.unlink()
+        except OSError:
+            continue
+        os.environ["UV_CACHE_DIR"] = str(candidate)
+        return
 
 
 @dataclass(frozen=True)
@@ -176,6 +205,7 @@ def main() -> int:
         help="check formatting without modifying files",
     )
     args = parser.parse_args()
+    configure_uv_cache()
     groups = formatter_groups(check=args.check)
 
     failures: list[str] = []
