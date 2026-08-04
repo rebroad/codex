@@ -1665,7 +1665,7 @@ mod tests {
         let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig::default()));
         let mut req = Request::builder()
             .method(Method::GET)
-            .uri("http://raw.githubusercontent.com/openai/codex/main/README.md")
+            .uri("http://raw.githubusercontent.com/rebroad/codex/main/README.md")
             .header(header::HOST, "api.github.com")
             .body(Body::empty())
             .unwrap();
