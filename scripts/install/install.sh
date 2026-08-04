@@ -24,7 +24,6 @@ LOCK_DIR="$STANDALONE_ROOT/install.lock.d"
 LOCK_STALE_AFTER_SECS=600
 
 path_action="already"
-path_profile=""
 conflict_manager=""
 conflict_path=""
 lock_kind=""
@@ -307,7 +306,7 @@ release_url_for_asset() {
   asset="$1"
   resolved_version="$2"
 
-  printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
+  printf 'https://github.com/rebroad/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
 }
 
 releases_url_for_asset() {
@@ -320,7 +319,7 @@ releases_url_for_asset() {
 release_metadata_url() {
   resolved_version="$1"
 
-  printf 'https://api.github.com/repos/openai/codex/releases/tags/rust-v%s\n' "$resolved_version"
+  printf 'https://api.github.com/repos/rebroad/codex/releases/tags/rust-v%s\n' "$resolved_version"
 }
 
 parse_downloaded_release_metadata() {
@@ -349,7 +348,7 @@ resolve_release_from_github() {
   normalized_version="$1"
   if [ "$normalized_version" = "latest" ]; then
     requested_release="latest"
-    metadata_url="https://api.github.com/repos/openai/codex/releases/latest"
+    metadata_url="https://api.github.com/repos/rebroad/codex/releases/latest"
   else
     resolved_version="$normalized_version"
     requested_release="$resolved_version"
@@ -560,31 +559,8 @@ require_command() {
   fi
 }
 
-pick_profile() {
-  # Use the same shell-specific split Homebrew documents because there is no
-  # universal startup file across macOS/Linux login and interactive shells.
-  case "$os:${SHELL:-}" in
-    darwin:*/zsh)
-      printf '%s\n' "$HOME/.zprofile"
-      ;;
-    darwin:*/bash)
-      printf '%s\n' "$HOME/.bash_profile"
-      ;;
-    linux:*/zsh)
-      printf '%s\n' "$HOME/.zshrc"
-      ;;
-    linux:*/bash)
-      printf '%s\n' "$HOME/.bashrc"
-      ;;
-    *)
-      printf '%s\n' "$HOME/.profile"
-      ;;
-  esac
-}
-
 add_to_path() {
   path_action="already"
-  path_profile=""
 
   case ":$PATH:" in
     *":$BIN_DIR:"*)
@@ -594,80 +570,7 @@ add_to_path() {
       ;;
   esac
 
-  profile="$(pick_profile)"
-  path_profile="$profile"
-  begin_marker="# >>> Codex installer >>>"
-  end_marker="# <<< Codex installer <<<"
-  path_line="export PATH=\"$BIN_DIR:\$PATH\""
-
-  if [ -f "$profile" ] && grep -F "$begin_marker" "$profile" >/dev/null 2>&1; then
-    if grep -F "$path_line" "$profile" >/dev/null 2>&1; then
-      path_action="configured"
-      return
-    fi
-
-    if grep -F "$end_marker" "$profile" >/dev/null 2>&1; then
-      rewrite_path_block "$profile" "$begin_marker" "$end_marker" "$path_line"
-      path_action="updated"
-      return
-    fi
-  fi
-
-  append_path_block "$profile" "$begin_marker" "$end_marker" "$path_line"
-  path_action="added"
-}
-
-append_path_block() {
-  profile="$1"
-  begin_marker="$2"
-  end_marker="$3"
-  path_line="$4"
-
-  {
-    printf '\n%s\n' "$begin_marker"
-    printf '%s\n' "$path_line"
-    printf '%s\n' "$end_marker"
-  } >>"$profile"
-}
-
-rewrite_path_block() {
-  profile="$1"
-  begin_marker="$2"
-  end_marker="$3"
-  path_line="$4"
-  tmp_profile="$tmp_dir/profile.$$.tmp"
-
-  awk -v begin="$begin_marker" -v end="$end_marker" -v line="$path_line" '
-    BEGIN {
-      in_block = 0
-      replaced = 0
-    }
-    $0 == begin {
-      if (!replaced) {
-        print begin
-        print line
-        print end
-        replaced = 1
-      }
-      in_block = 1
-      next
-    }
-    in_block {
-      if ($0 == end) {
-        in_block = 0
-      }
-      next
-    }
-    {
-      print
-    }
-    END {
-      if (in_block != 0) {
-        exit 1
-      }
-    }
-  ' "$profile" >"$tmp_profile"
-  mv "$tmp_profile" "$profile"
+  path_action="manual"
 }
 
 mkdir_lock_is_stale() {
@@ -862,20 +765,9 @@ prompt_yes_no() {
 
 print_launch_instructions() {
   case "$path_action" in
-    added)
+    manual)
       step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
-      step "PATH was added to $path_profile"
-      ;;
-    updated)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
-      step "PATH was updated in $path_profile"
-      ;;
-    configured)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
-      step "PATH is already configured in $path_profile"
+      step "PATH was not modified automatically; add $BIN_DIR to PATH manually if desired"
       ;;
     *)
       step "Current terminal: codex"
@@ -915,10 +807,10 @@ handle_conflicting_install() {
       uninstall_cmd="brew uninstall --cask codex"
       ;;
     bun)
-      uninstall_cmd="bun remove -g @openai/codex"
+      uninstall_cmd="bun remove -g @reb.ai/codex"
       ;;
     *)
-      uninstall_cmd="npm uninstall -g @openai/codex"
+      uninstall_cmd="npm uninstall -g @reb.ai/codex"
       ;;
   esac
 
@@ -1189,21 +1081,7 @@ verify_visible_command
 release_install_lock
 handle_conflicting_install
 
-case "$path_action" in
-  added)
-    print_launch_instructions
-    ;;
-  updated)
-    print_launch_instructions
-    ;;
-  configured)
-    print_launch_instructions
-    ;;
-  *)
-    step "$BIN_DIR is already on PATH"
-    print_launch_instructions
-    ;;
-esac
+print_launch_instructions
 
 printf 'Codex CLI %s installed successfully.\n' "$resolved_version"
 maybe_launch_codex_now

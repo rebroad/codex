@@ -46,9 +46,9 @@ for release in "${releases[@]}"; do
   fi
 
   if [[ "${release}" == "latest" ]]; then
-    release_url="https://github.com/openai/codex/releases/latest/download/${asset}"
+    release_url="https://github.com/rebroad/codex/releases/latest/download/${asset}"
   else
-    release_url="https://github.com/openai/codex/releases/download/rust-v${release}/${asset}"
+    release_url="https://github.com/rebroad/codex/releases/download/rust-v${release}/${asset}"
   fi
 
   binary_directory="${release_directory}/${release}"
