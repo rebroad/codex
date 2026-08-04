@@ -79,6 +79,7 @@ write_native_package "${STAGE_ROOT}/linux-x64" "@reb.ai/codex-linux-x64" linux x
 write_native_package "${STAGE_ROOT}/linux-armv7" "@reb.ai/codex-linux-armv7" linux arm "${ARMV7_BIN}" "${ARMV7_STRIP}"
 
 if [[ -x "${ANDROID_STAGE}/codex.bin" && -f "${ANDROID_STAGE}/libc++_shared.so" ]]; then
+  ANDROID_OPTIONAL_DEPENDENCY=$',\n    "@reb.ai/codex-android-arm64": "'"${VERSION}"'"'
   mkdir -p "${STAGE_ROOT}/android-arm64/bin"
   cat >"${STAGE_ROOT}/android-arm64/package.json" <<EOF
 {
@@ -96,6 +97,7 @@ EOF
   install -m 0644 "${ANDROID_STAGE}/libc++_shared.so" "${STAGE_ROOT}/android-arm64/bin/libc++_shared.so"
   npm pack --ignore-scripts --pack-destination "${OUTPUT_DIR}" "${STAGE_ROOT}/android-arm64" >/dev/null
 fi
+ANDROID_OPTIONAL_DEPENDENCY="${ANDROID_OPTIONAL_DEPENDENCY:-}"
 
 mkdir -p "${STAGE_ROOT}/root/bin"
 cat >"${STAGE_ROOT}/root/package.json" <<EOF
@@ -110,8 +112,7 @@ cat >"${STAGE_ROOT}/root/package.json" <<EOF
   "engines": {"node": ">=16"},
   "optionalDependencies": {
     "@reb.ai/codex-linux-x64": "${VERSION}",
-    "@reb.ai/codex-linux-armv7": "${VERSION}",
-    "@reb.ai/codex-android-arm64": "${VERSION}"
+    "@reb.ai/codex-linux-armv7": "${VERSION}"${ANDROID_OPTIONAL_DEPENDENCY}
   }
 }
 EOF
