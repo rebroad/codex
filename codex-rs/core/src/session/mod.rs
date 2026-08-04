@@ -3875,12 +3875,21 @@ impl Session {
     }
 
     pub(crate) async fn send_token_count_event(&self, turn_context: &TurnContext) {
-        let (info, rate_limits) = {
+        let (info, rate_limits, effective_model) = {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let event = EventMsg::TokenCount(TokenCountEvent {
+            info,
+            rate_limits,
+            effective_model,
+        });
         self.send_event(turn_context, event).await;
+    }
+
+    pub(crate) async fn set_effective_model(&self, model: String) {
+        let mut state = self.state.lock().await;
+        state.set_effective_model(model);
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
