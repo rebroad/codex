@@ -24,6 +24,8 @@ fi
 OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_TREE}/build/npm-artifact}"
 STAGE_ROOT="$(mktemp -d "${BUILD_TREE}/npm-stage.XXXXXX")"
 trap 'rm -rf "${STAGE_ROOT}"' EXIT
+COMMIT_SHORT="$(git -C "${ROOT}" rev-parse --short=12 HEAD)"
+BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
 STRIP_TOOL="${STRIP:-}"
 if [[ -z "${STRIP_TOOL}" ]]; then
   for candidate in llvm-strip strip; do
@@ -40,6 +42,33 @@ require_binary() {
     echo "Build it with scripts/rebuild_codex.sh --release --build-npm-vendor" >&2
     exit 1
   }
+}
+patch_timestamp() {
+  local binary="${1}"
+  python3 - "${binary}" "${VERSION}" "${COMMIT_SHORT}-${BUILD_TIMESTAMP}" <<'PY'
+import mmap, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+needle = (sys.argv[2] + "-000000000000-000000000000").encode()
+replacement = (sys.argv[2] + "-" + sys.argv[3]).encode()
+if len(needle) != len(replacement):
+    raise SystemExit("timestamp placeholder width mismatch")
+with path.open("r+b") as handle:
+    with mmap.mmap(handle.fileno(), 0) as mapped:
+        count = 0
+        start = 0
+        while True:
+            index = mapped.find(needle, start)
+            if index < 0:
+                break
+            mapped[index:index + len(needle)] = replacement
+            count += 1
+            start = index + len(needle)
+        mapped.flush()
+if count == 0:
+    raise SystemExit(f"no timestamp placeholder found in {path}")
+PY
 }
 write_native_package() {
   local dir="${1}" name="${2}" os="${3}" cpu="${4}" binary="${5}" strip_tool="${6}"
@@ -58,6 +87,7 @@ write_native_package() {
 }
 EOF
   install -m 0755 "${binary}" "${dir}/bin/codex"
+  patch_timestamp "${dir}/bin/codex"
   "${strip_tool}" --strip-all "${dir}/bin/codex"
   npm pack --ignore-scripts --pack-destination "${OUTPUT_DIR}" "${dir}" >/dev/null
 }
