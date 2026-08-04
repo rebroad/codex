@@ -1399,6 +1399,7 @@ async fn paginated_projection_accepts_float_rate_limits_and_later_final_answers(
     let token_count = |primary: Option<f64>, secondary: Option<f64>| {
         RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
             info: None,
+            effective_model: None,
             rate_limits: Some(RateLimitSnapshot {
                 limit_id: None,
                 limit_name: None,
