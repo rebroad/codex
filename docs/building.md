@@ -91,8 +91,11 @@ The selector is only needed for one cross-platform package name; each native
 package still exposes its ELF directly.
 
 ```bash
-scripts/package-npm.sh 0.147.0-alpha.4
+scripts/package-npm.sh
 ```
+
+The script derives the version from the workspace `codex-rs/Cargo.toml`. Pass a
+version explicitly only when packaging a deliberate override.
 
 This writes the packages to:
 
