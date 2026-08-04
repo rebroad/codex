@@ -783,6 +783,7 @@ async fn drain_to_completed(
                         response_id,
                         token_usage: token_usage.clone(),
                         usage_metadata,
+                        effective_model: None,
                     }),
                 )
                 .await;

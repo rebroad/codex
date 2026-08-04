@@ -363,6 +363,7 @@ struct RemoteCompactionV2Output {
     response_id: String,
     token_usage: Option<TokenUsage>,
     usage_metadata: Option<ResponseUsageMetadata>,
+    effective_model: Option<String>,
 }
 
 async fn run_remote_compaction_request_v2(
@@ -425,8 +426,12 @@ async fn collect_compaction_output(
     let mut completed_response_id = None;
     let mut completed_token_usage = None;
     let mut completed_usage_metadata = None;
+    let mut effective_model = None;
     while let Some(event) = stream.next().await {
         match event? {
+            ResponseEvent::EffectiveModel(model) => {
+                effective_model = Some(model);
+            }
             ResponseEvent::OutputItemDone(item) => {
                 output_item_count += 1;
                 if let ResponseItem::Compaction { .. } = item {
@@ -475,6 +480,7 @@ async fn collect_compaction_output(
         response_id,
         token_usage: completed_token_usage,
         usage_metadata: completed_usage_metadata,
+        effective_model,
     })
 }
 
