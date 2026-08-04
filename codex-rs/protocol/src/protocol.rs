@@ -1836,6 +1836,11 @@ pub struct RawResponseItemEvent {
 pub struct RawResponseCompletedEvent {
     pub response_id: String,
     pub token_usage: Option<TokenUsage>,
+    /// Model identifier reported by the backend response, if present. This
+    /// may differ from the requested/catalog model after server-side routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effective_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
