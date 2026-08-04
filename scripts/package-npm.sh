@@ -42,7 +42,7 @@ require_binary() {
   }
 }
 write_native_package() {
-  local dir="${1}" name="${2}" os="${3}" cpu="${4}" binary="${5}"
+  local dir="${1}" name="${2}" os="${3}" cpu="${4}" binary="${5}" strip_tool="${6}"
   require_binary "${binary}"
   mkdir -p "${dir}/bin"
   cat >"${dir}/package.json" <<EOF
@@ -58,7 +58,7 @@ write_native_package() {
 }
 EOF
   install -m 0755 "${binary}" "${dir}/bin/codex"
-  "${STRIP_TOOL}" --strip-all "${dir}/bin/codex"
+  "${strip_tool}" --strip-all "${dir}/bin/codex"
   npm pack --ignore-scripts --pack-destination "${OUTPUT_DIR}" "${dir}" >/dev/null
 }
 mkdir -p "${OUTPUT_DIR}"
@@ -66,9 +66,17 @@ mkdir -p "${OUTPUT_DIR}"
 MUSL_BIN="${BUILD_TREE}/build/musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex"
 ARMV7_BIN="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex"
 ANDROID_STAGE="${BUILD_TREE}/build/android-artifact"
+ARMV7_STRIP="${ARMV7_STRIP:-}"
+if [[ -z "${ARMV7_STRIP}" ]]; then
+  ARMV7_STRIP="$(command -v arm-linux-gnueabihf-strip || true)"
+fi
+[[ -n "${ARMV7_STRIP}" ]] || {
+  echo "arm-linux-gnueabihf-strip is required for the ARMv7 npm package" >&2
+  exit 1
+}
 
-write_native_package "${STAGE_ROOT}/linux-x64" "@reb.ai/codex-linux-x64" linux x64 "${MUSL_BIN}"
-write_native_package "${STAGE_ROOT}/linux-armv7" "@reb.ai/codex-linux-armv7" linux arm "${ARMV7_BIN}"
+write_native_package "${STAGE_ROOT}/linux-x64" "@reb.ai/codex-linux-x64" linux x64 "${MUSL_BIN}" "${STRIP_TOOL}"
+write_native_package "${STAGE_ROOT}/linux-armv7" "@reb.ai/codex-linux-armv7" linux arm "${ARMV7_BIN}" "${ARMV7_STRIP}"
 
 if [[ -x "${ANDROID_STAGE}/codex.bin" && -f "${ANDROID_STAGE}/libc++_shared.so" ]]; then
   mkdir -p "${STAGE_ROOT}/android-arm64/bin"
