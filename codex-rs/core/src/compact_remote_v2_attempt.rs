@@ -112,6 +112,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         compaction_output,
         response_id,
         token_usage,
+        effective_model,
     } = compaction_output_result?;
     // TODO: Emit this before compaction output validation so malformed completed
     // responses still surface their raw upstream usage.
@@ -120,6 +121,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
             response_id,
             token_usage: token_usage.clone(),
+            effective_model,
         }),
     )
     .await;
