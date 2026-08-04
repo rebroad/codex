@@ -2989,7 +2989,8 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     let cwd = temp_dir.path().join("frontend");
     let runtime_root = temp_dir.path().join("backend");
     let profile_root = temp_dir.path().join("shared");
-    for root in [&cwd, &runtime_root, &profile_root] {
+    let global_root = temp_dir.path().join("global");
+    for root in [&cwd, &runtime_root, &profile_root, &global_root] {
         std::fs::create_dir_all(root.join(".git"))?;
         std::fs::create_dir_all(root.join(".codex"))?;
     }
@@ -2997,6 +2998,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             default_permissions: Some("dev".to_string()),
+            additional_writable_roots: vec![global_root.abs()],
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
                     "dev".to_string(),
@@ -3038,25 +3040,40 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     let cwd_abs = cwd.abs();
     let runtime_root_abs = runtime_root.abs();
     let profile_root_abs = profile_root.abs();
+    let global_root_abs = global_root.abs();
     assert_eq!(
         config.workspace_roots,
-        vec![cwd_abs.clone(), runtime_root_abs.clone()]
+        vec![
+            cwd_abs.clone(),
+            runtime_root_abs.clone(),
+            global_root_abs.clone()
+        ]
     );
     assert_eq!(
         config.permissions.workspace_roots(),
-        &[cwd_abs.clone(), runtime_root_abs.clone()]
+        &[
+            cwd_abs.clone(),
+            runtime_root_abs.clone(),
+            global_root_abs.clone()
+        ]
     );
     assert_eq!(
         config.effective_workspace_roots(),
         vec![
             cwd_abs.clone(),
             runtime_root_abs.clone(),
-            profile_root_abs.clone()
+            global_root_abs.clone(),
+            profile_root_abs.clone(),
         ]
     );
 
     let policy = config.permissions.file_system_sandbox_policy();
-    for root in [cwd_abs, runtime_root_abs, profile_root_abs.clone()] {
+    for root in [
+        cwd_abs,
+        runtime_root_abs,
+        global_root_abs.clone(),
+        profile_root_abs.clone(),
+    ] {
         assert!(
             policy.can_write_path_with_cwd(root.as_path(), cwd.as_path()),
             "expected workspace root to be writable, policy: {policy:?}"
@@ -3072,7 +3089,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     }
     assert_eq!(
         config.permissions.profile_workspace_roots(),
-        std::slice::from_ref(&profile_root_abs)
+        &[profile_root_abs, global_root_abs]
     );
     assert_eq!(
         config.permissions.active_permission_profile(),
@@ -5689,6 +5706,41 @@ enabled = true
             })
         ))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_additional_writable_roots_extend_workspace_writable_roots() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let cwd = temp_dir.path().join("project");
+    let additional_root = temp_dir.path().join("shared");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&additional_root)?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            additional_writable_roots: vec![additional_root.abs()],
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        temp_dir.path().abs(),
+    )
+    .await?;
+
+    let additional_root = additional_root.abs();
+    assert!(config.workspace_roots.contains(&additional_root));
+    if !cfg!(target_os = "windows") {
+        assert!(
+            config
+                .permissions
+                .file_system_sandbox_policy()
+                .can_write_path_with_cwd(&additional_root, cwd.as_path())
+        );
+    }
     Ok(())
 }
 
