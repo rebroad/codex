@@ -632,6 +632,8 @@ inherits = "test"
 opt-level = 0
 
 [patch.crates-io]
+# ARMv7 support is not in the crates.io release yet.
+pagable = { git = "https://github.com/facebook/starlark-rust", rev = "4190cefd570e05858cbb51815a4de11a7b49f951" }
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "efa177859fd9623d57b9fe7ae9bf491ae1ac6ec4" }
