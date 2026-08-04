@@ -81,6 +81,10 @@ pub enum ResponseEvent {
     /// Emitted when the server includes `OpenAI-Model` on the stream response.
     /// This can differ from the requested model when backend safety routing applies.
     ServerModel(String),
+    /// Emitted when the response payload identifies the model used for the
+    /// request. Kept separate from `ServerModel` so it cannot drive downgrade
+    /// warning logic.
+    EffectiveModel(String),
     /// Emitted when the server recommends additional account verification.
     ModelVerifications(Vec<ModelVerification>),
     /// Emitted when the server includes moderation metadata for first-party turn presentation.
