@@ -3433,6 +3433,7 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
+        let configured_additional_writable_roots = cfg.additional_writable_roots.clone();
         let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
         let active_project = cfg
             .get_active_project(
@@ -3509,6 +3510,7 @@ impl Config {
                 });
         let workspace_roots_explicit = workspace_roots_override.is_some()
             || !requested_additional_writable_roots.is_empty()
+            || !configured_additional_writable_roots.is_empty()
             || legacy_workspace_roots_explicit;
         let mut workspace_roots = match workspace_roots_override {
             Some(workspace_roots) => workspace_roots,
@@ -3523,6 +3525,7 @@ impl Config {
                 workspace_roots
             }
         };
+        workspace_roots.extend(configured_additional_writable_roots.clone());
         dedupe_absolute_paths(&mut workspace_roots);
         let (
             mut configured_network_proxy_config,
@@ -3595,6 +3598,7 @@ impl Config {
             {
                 configured_workspace_roots.extend(sandbox_workspace_write.writable_roots.clone());
             }
+            configured_workspace_roots.extend(configured_additional_writable_roots.clone());
             dedupe_absolute_paths(&mut configured_workspace_roots);
             file_system_sandbox_policy = file_system_sandbox_policy
                 .with_materialized_project_roots_for_workspace_roots(&configured_workspace_roots);

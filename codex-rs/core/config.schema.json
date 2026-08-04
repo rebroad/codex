@@ -4931,6 +4931,14 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "additional_writable_roots": {
+      "default": [],
+      "description": "Additional writable roots applied across all projects.",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": "array"
+    },
     "agents": {
       "allOf": [
         {
