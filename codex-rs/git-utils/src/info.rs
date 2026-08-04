@@ -893,16 +893,16 @@ mod tests {
     fn canonicalize_git_remote_url_normalizes_github_variants() {
         for remote in [
             "git@github.com:OpenAI/Codex.git",
-            "ssh://git@github.com/openai/codex.git",
+            "ssh://git@github.com/rebroad/codex.git",
             "ssh://git@github.com:22/OpenAI/Codex.git",
-            "https://github.com/openai/codex.git",
-            "https://github.com:443/openai/codex.git",
-            "https://token@github.com/openai/codex/",
+            "https://github.com/rebroad/codex.git",
+            "https://github.com:443/rebroad/codex.git",
+            "https://token@github.com/rebroad/codex/",
             "github.com/OpenAI/Codex.git",
         ] {
             assert_eq!(
                 canonicalize_git_remote_url(remote),
-                Some("github.com/openai/codex".to_string())
+                Some("github.com/rebroad/codex".to_string())
             );
         }
     }

@@ -33,7 +33,8 @@ use super::network;
 const MAX_VERSION_RESPONSE_BYTES: usize = 1024 * 1024;
 
 const VERSION_FILE_NAME: &str = "version.json";
-const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const GITHUB_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/rebroad/codex/releases/latest";
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const DESKTOP_UPDATE_URL: &str = "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml";
@@ -389,10 +390,10 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 
 fn update_action_label(context: &InstallContext) -> &'static str {
     match &context.method {
-        InstallMethod::Npm => "npm install -g @openai/codex",
-        InstallMethod::Bun => "bun install -g @openai/codex",
-        InstallMethod::VitePlus => "vp install -g @openai/codex",
-        InstallMethod::Pnpm => "pnpm add -g @openai/codex",
+        InstallMethod::Npm => "npm install -g @reb.ai/codex",
+        InstallMethod::Bun => "bun install -g @reb.ai/codex",
+        InstallMethod::VitePlus => "vp install -g @reb.ai/codex",
+        InstallMethod::Pnpm => "pnpm add -g @reb.ai/codex",
         InstallMethod::Brew => "brew upgrade --cask codex",
         InstallMethod::Standalone { .. } => "standalone installer",
         InstallMethod::Other => "manual or unknown",
@@ -691,14 +692,14 @@ mod tests {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            "npm install -g @openai/codex"
+            "npm install -g @reb.ai/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Pnpm,
                 package_layout: None,
             }),
-            "pnpm add -g @openai/codex"
+            "pnpm add -g @reb.ai/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {

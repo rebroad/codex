@@ -24,7 +24,7 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/tags/"
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
                 f"rust-v{VERSION}"
             ],
         )
@@ -41,9 +41,9 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/tags/"
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
                 f"rust-v{VERSION}",
-                "https://github.com/openai/codex/releases/download/"
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
@@ -57,9 +57,9 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/tags/"
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
                 f"rust-v{version}",
-                "https://github.com/openai/codex/releases/download/"
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{version}/codex-package_SHA256SUMS",
             ],
         )
@@ -72,8 +72,8 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/latest",
-                "https://github.com/openai/codex/releases/download/"
+                "https://api.github.com/repos/rebroad/codex/releases/latest",
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
@@ -88,8 +88,8 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/latest",
-                "https://github.com/openai/codex/releases/download/"
+                "https://api.github.com/repos/rebroad/codex/releases/latest",
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
@@ -130,6 +130,24 @@ class InstallShTest(unittest.TestCase):
                 str(current / "bin" / "codex-code-mode-host"),
             )
             self.assertTrue(os.access(host_path, os.X_OK))
+
+    def test_install_does_not_modify_shell_startup_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(root)
+
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_macos=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / "home" / ".bashrc").exists())
+            self.assertFalse((root / "home" / ".profile").exists())
 
     def test_releases_latest_installs_verified_package_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -396,10 +414,10 @@ class InstallShTest(unittest.TestCase):
                         requests,
                         [
                             "https://releases.openai.com/codex/channels/latest",
-                            "https://api.github.com/repos/openai/codex/releases/latest",
-                            "https://github.com/openai/codex/releases/download/"
+                            "https://api.github.com/repos/rebroad/codex/releases/latest",
+                            "https://github.com/rebroad/codex/releases/download/"
                             f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                            "https://github.com/openai/codex/releases/download/"
+                            "https://github.com/rebroad/codex/releases/download/"
                             f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                         ],
                     )
@@ -430,11 +448,11 @@ class InstallShTest(unittest.TestCase):
                 requests,
                 [
                     f"https://releases.openai.com/codex/releases/{VERSION}/release.json",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
             )
@@ -462,10 +480,10 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
             )
@@ -493,10 +511,10 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
             )
@@ -529,9 +547,9 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
@@ -573,9 +591,9 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
@@ -604,9 +622,9 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                 ],
             )
@@ -665,9 +683,9 @@ class InstallShTest(unittest.TestCase):
                 first_requests,
                 [
                     f"https://releases.openai.com/codex/releases/{VERSION}/release.json",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-npm-darwin-arm64-{VERSION}.tgz",
                 ],
             )
@@ -687,7 +705,7 @@ class InstallShTest(unittest.TestCase):
                 second_requests,
                 [
                     f"https://releases.openai.com/codex/releases/{VERSION}/release.json",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                 ],
             )
@@ -796,7 +814,7 @@ def run_installer_in(
                   exit 22
                 fi
                 ;;
-              https://github.com/openai/codex/releases/download/*/codex-package_SHA256SUMS)
+              https://github.com/rebroad/codex/releases/download/*/codex-package_SHA256SUMS)
                 if [ "$CODEX_TEST_RELEASES_MODE" = "corrupt_checksum_and_github" ]; then
                   printf '<html>proxy error</html>\n' >"$output"
                   exit 0
@@ -807,14 +825,14 @@ def run_installer_in(
                   exit 22
                 fi
                 ;;
-              https://github.com/openai/codex/releases/download/*/codex-package-*.tar.gz)
+              https://github.com/rebroad/codex/releases/download/*/codex-package-*.tar.gz)
                 if [ -n "$CODEX_TEST_ARCHIVE_PATH" ]; then
                   cp "$CODEX_TEST_ARCHIVE_PATH" "$output"
                 else
                   exit 22
                 fi
                 ;;
-              https://github.com/openai/codex/releases/download/*/codex-npm-*.tgz)
+              https://github.com/rebroad/codex/releases/download/*/codex-npm-*.tgz)
                 if [ -n "$CODEX_TEST_LEGACY_ARCHIVE_PATH" ]; then
                   cp "$CODEX_TEST_LEGACY_ARCHIVE_PATH" "$output"
                 else
