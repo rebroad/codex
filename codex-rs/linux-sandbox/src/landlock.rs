@@ -169,8 +169,8 @@ fn install_filesystem_landlock_rules_on_current_thread(
 fn install_network_seccomp_filter_on_current_thread(
     mode: NetworkSeccompMode,
 ) -> std::result::Result<(), SandboxErr> {
-    fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, nr: i64) {
-        rules.insert(nr, vec![]); // empty rule vec = unconditional match
+    fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, nr: impl Into<i64>) {
+        rules.insert(nr.into(), vec![]); // empty rule vec = unconditional match
     }
 
     // Build rule map.
@@ -212,8 +212,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 libc::AF_UNIX as u64,
             )?])?;
 
-            rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
-            rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
+            rules.insert(libc::SYS_socket.into(), vec![unix_only_rule.clone()]);
+            rules.insert(libc::SYS_socketpair.into(), vec![unix_only_rule]);
         }
         NetworkSeccompMode::ProxyRouted => {
             // In proxy-routed mode we allow IP sockets in the isolated
@@ -242,8 +242,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 SeccompCmpOp::Ne,
                 libc::AF_UNIX as u64,
             )?])?;
-            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
-            rules.insert(libc::SYS_socketpair, vec![deny_non_unix_socketpair]);
+            rules.insert(libc::SYS_socket.into(), vec![deny_non_ip_socket]);
+            rules.insert(libc::SYS_socketpair.into(), vec![deny_non_unix_socketpair]);
         }
     }
 
