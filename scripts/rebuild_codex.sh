@@ -77,11 +77,6 @@ sync_sources() {
     echo "cpto not found; syncing source without deleting build artifacts" >&2
     tar --exclude='./.git' -cf - -C "${SOURCE_REPO}" . | tar -xf - -C "${BUILD_REPO}"
   fi
-  # Cargo.lock is intentionally source-controlled with workspace package
-  # versions omitted. Keep the generated, build-tree lockfile independent so
-  # --locked builds can resolve the versioned package manifests.
-  echo "Refreshing generated build-tree Cargo.lock..." >&2
-  (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" generate-lockfile)
   SYNCED=true
 }
 
@@ -185,7 +180,9 @@ cargo_build() {
 
   local -a env_args=(CARGO_TARGET_DIR="${target_dir}" RUSTUP_DISABLE_SELF_UPDATE=1)
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
-  if [[ "${target_mode}" != native ]]; then
+  if [[ "${target_mode}" == native ]]; then
+    env_args+=(V8_FROM_SOURCE="${V8_FROM_SOURCE:-1}")
+  elif [[ "${target_mode}" != android ]]; then
     configure_rusty_v8_artifacts "${target_mode}"
     env_args+=(
       RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
