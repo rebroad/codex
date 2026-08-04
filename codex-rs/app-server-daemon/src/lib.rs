@@ -282,7 +282,9 @@ pub async fn update() -> Result<UpdateOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    anyhow::bail!("daemon-managed updates are disabled; update the @reb.ai/codex package explicitly")
+    anyhow::bail!(
+        "daemon-managed updates are disabled; update the @reb.ai/codex package explicitly"
+    )
 }
 
 #[cfg(any(unix, windows))]
@@ -871,17 +873,6 @@ impl Daemon {
         Ok(managed_install::managed_codex_bin(home))
     }
 
-    fn has_latest_selection_marker(&self) -> bool {
-        self.settings_file
-            .parent()
-            .and_then(Path::parent)
-            .is_some_and(|home| {
-                managed_install::package_root(home)
-                    .join("auto-update-version")
-                    .is_file()
-            })
-    }
-
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
         Ok(self.running_backend_instance(settings).await?.is_some())
     }
@@ -895,7 +886,11 @@ impl Daemon {
 
         let managed_codex_path = self.managed_codex_bin.display();
         Err(anyhow!(
-            "daemon executable not found at {managed_codex_path}; repair the existing installation, or run `codex app-server daemon start` to install a missing daemon"
+            "managed Codex install not found at {managed_codex_path}\n\n\
+             This command requires the install managed by the package manager, because \
+             the daemon starts app-server from that fixed path.\n\n\
+             Install it with:\n  npm install -g @reb.ai/codex\n\n\
+             Then rerun the command you just tried."
         ))
     }
 
@@ -925,10 +920,6 @@ impl Daemon {
             remote_control_enabled: settings.remote_control_enabled,
             feature_overrides: settings.feature_overrides.clone(),
         }
-    }
-
-    fn manual_update_socket_path(&self) -> PathBuf {
-        self.update_pid_file.with_extension("sock")
     }
 
     async fn load_settings(&self) -> Result<DaemonSettings> {
@@ -1183,7 +1174,7 @@ mod tests {
             serde_json::json!({
                 "status": "bootstrapped",
                 "backend": "pid",
-                "autoUpdateEnabled": true,
+                "autoUpdateEnabled": false,
                 "remoteControlEnabled": true,
                 "managedCodexPath": "codex",
                 "managedCodexVersion": "1.2.3",
