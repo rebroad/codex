@@ -29,6 +29,22 @@ export ANDROID_NDK_HOME="$HOME/Android/Sdk/ndk/28.2.13676358"
 scripts/build.sh android
 ```
 
+For the complete repeatable workflow, use `scripts/rebuild_codex.sh`. It
+supports debug/release builds, the sibling-tree cache, Linux musl x64,
+Linux ARMv7, Android ARM64, timestamped installs in `~/.cargo/bin`, npm
+packaging, and opt-in npm/GitHub publishing:
+
+```bash
+scripts/rebuild_codex.sh --release
+scripts/rebuild_codex.sh --release --package-npm
+scripts/rebuild_codex.sh --release --publish-npm --dry-run
+scripts/rebuild_codex.sh --release --target armv7
+```
+
+ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
+`ARMV7_LINKER`). The musl and ARMv7 binaries are staged by the npm package
+workflow as `@reb.ai/codex-linux-x64` and `@reb.ai/codex-linux-armv7`.
+
 Outputs are:
 
 ```text
@@ -85,7 +101,7 @@ llvm-strip --strip-all $CARGO_TARGET_DIR/../android-artifact/codex.bin
 
 ## Direct-binary npm packages
 
-The build mirrors OpenAI's npm layout: `@rebroad/codex` is a small
+The build mirrors OpenAI's npm layout: `@reb.ai/codex` is a small
 platform selector, while the native payloads are separate optional packages.
 The selector is only needed for one cross-platform package name; each native
 package still exposes its ELF directly.
@@ -106,10 +122,10 @@ This writes the packages to:
 Publish or install the three archives together when using the unified package:
 
 ```bash
-npm install --global @rebroad/codex
+npm install --global @reb.ai/codex
 ```
 
-The generated archives are named `rebroad-codex-*.tgz`. For local testing,
+The generated archives are named `reb.ai-codex-*.tgz`. For local testing,
 install the platform archive directly; it creates npm's normal global `codex`
 link and points it directly at the native ELF. The unified package's selector
 adds only platform detection and signal forwarding.
