@@ -77,16 +77,60 @@ sync_sources() {
     echo "cpto not found; syncing source without deleting build artifacts" >&2
     tar --exclude='./.git' -cf - -C "${SOURCE_REPO}" . | tar -xf - -C "${BUILD_REPO}"
   fi
-  # Cargo.lock is source-controlled and must match Cargo.toml. Keep generated
-  # build-tree changes from making the next --locked build fail.
-  if ! cmp -s "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"; then
-    cp -p "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"
-  fi
+  # Cargo.lock is intentionally source-controlled with workspace package
+  # versions omitted. Keep the generated, build-tree lockfile independent so
+  # --locked builds can resolve the versioned package manifests.
+  echo "Refreshing generated build-tree Cargo.lock..." >&2
+  (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" generate-lockfile)
   SYNCED=true
 }
 
 workspace_version() {
   sed -n 's/^version = "\([^"]*\)"/\1/p' "${SOURCE_REPO}/codex-rs/Cargo.toml" | head -n 1
+}
+
+configure_rusty_v8_artifacts() {
+  local target_mode="${1}" target archive binding local_repo cache_dir release_tag base_url
+  case "${target_mode}" in
+    musl)
+      target="x86_64-unknown-linux-musl"
+      ;;
+    armv7)
+      target="${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}"
+      ;;
+    *)
+      return
+      ;;
+  esac
+
+  local crate_version="${V8_CRATE_VERSION:-$(sed -n '/^name = "v8"$/,/^version = /s/^version = "\([^"]*\)"/\1/p' "${SOURCE_REPO}/codex-rs/Cargo.lock" | head -n 1)}"
+  [[ -n "${crate_version}" ]] || die "could not determine the pinned v8 crate version"
+  local profile="${RUSTY_V8_PROFILE:-ptrcomp_sandbox_release}"
+  archive="librusty_v8_${profile}_${target}.a.gz"
+  binding="src_binding_${profile}_${target}.rs"
+  local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
+  cache_dir="${BUILD_REPO}/rusty-v8-artifacts/${VERSION}/${target}"
+  mkdir -p "${cache_dir}"
+
+  if [[ -f "${local_repo}/${archive}" && -f "${local_repo}/${binding}" ]]; then
+    RUSTY_V8_ARCHIVE_PATH="${local_repo}/${archive}"
+    RUSTY_V8_BINDING_PATH="${local_repo}/${binding}"
+    echo "Using local Rusty V8 artifacts from ${local_repo} for ${target}." >&2
+  else
+    require_cmd curl
+    release_tag="${RUSTY_V8_RELEASE_TAG:-rusty-v8-v${crate_version}}"
+    base_url="https://github.com/${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}/releases/download/${release_tag}"
+    RUSTY_V8_ARCHIVE_PATH="${cache_dir}/${archive}"
+    RUSTY_V8_BINDING_PATH="${cache_dir}/${binding}"
+    echo "Downloading Rusty V8 ${release_tag} artifacts for ${target}." >&2
+    curl --fail --location --retry 3 --silent --show-error \
+      "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}"
+    curl --fail --location --retry 3 --silent --show-error \
+      "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"
+  fi
+
+  [[ -s "${RUSTY_V8_ARCHIVE_PATH}" ]] || die "Rusty V8 archive is empty: ${RUSTY_V8_ARCHIVE_PATH}"
+  [[ -s "${RUSTY_V8_BINDING_PATH}" ]] || die "Rusty V8 binding is empty: ${RUSTY_V8_BINDING_PATH}"
 }
 
 read_toolchain() {
@@ -139,6 +183,13 @@ cargo_build() {
 
   local -a env_args=(CARGO_TARGET_DIR="${target_dir}" RUSTUP_DISABLE_SELF_UPDATE=1)
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
+  if [[ "${target_mode}" != native ]]; then
+    configure_rusty_v8_artifacts "${target_mode}"
+    env_args+=(
+      RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
+      RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
+    )
+  fi
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_cc="${ARMV7_LINKER:-arm-linux-gnueabihf-gcc}"
     require_cmd "${armv7_cc}"
@@ -306,6 +357,10 @@ COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=12 HEAD)"
 
 if [[ "${TARGET_MODE}" == android ]]; then
   build_android
+elif [[ "${PACKAGE_NPM}" == true && "${TARGET_MODE}" == native ]]; then
+  # npm packages use the portable musl and ARMv7 builds below. The native
+  # build is not part of the package and needlessly builds the V8 runtime.
+  echo "Skipping native build; npm packaging will build its target binaries."
 else
   binary="$(cargo_build "${MODE}" "${TARGET_MODE}")"
   if [[ "${TARGET_MODE}" == native ]]; then
