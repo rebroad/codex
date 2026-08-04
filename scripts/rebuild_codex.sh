@@ -2,13 +2,26 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 BUILD_TREE=""
-for candidate in "${SOURCE_REPO}.build" "${SOURCE_REPO}.make"; do
-  if [[ -d "${candidate}" ]]; then BUILD_TREE="${candidate}"; break; fi
-done
+SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+case "${SCRIPT_REPO##*/}" in
+  *.build|*.make)
+    BUILD_TREE="${SCRIPT_REPO}"
+    SOURCE_REPO="${SCRIPT_REPO%.*}"
+    ;;
+  *)
+    SOURCE_REPO="${SCRIPT_REPO}"
+    for candidate in "${SOURCE_REPO}.build" "${SOURCE_REPO}.make"; do
+      if [[ -d "${candidate}" ]]; then BUILD_TREE="${candidate}"; break; fi
+    done
+    ;;
+esac
 if [[ -z "${BUILD_TREE}" ]]; then
   echo "No sibling build tree found; expected ${SOURCE_REPO}.build or ${SOURCE_REPO}.make" >&2
+  exit 1
+fi
+if [[ ! -d "${SOURCE_REPO}/codex-rs" ]]; then
+  echo "Source checkout not found at ${SOURCE_REPO}" >&2
   exit 1
 fi
 BUILD_REPO="${BUILD_TREE}"
@@ -63,6 +76,11 @@ sync_sources() {
   else
     echo "cpto not found; syncing source without deleting build artifacts" >&2
     tar --exclude='./.git' -cf - -C "${SOURCE_REPO}" . | tar -xf - -C "${BUILD_REPO}"
+  fi
+  # Cargo.lock is source-controlled and must match Cargo.toml. Keep generated
+  # build-tree changes from making the next --locked build fail.
+  if ! cmp -s "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"; then
+    cp -p "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"
   fi
   SYNCED=true
 }
@@ -146,8 +164,9 @@ cargo_build() {
   cmd+=( "${profile_args[@]}" --locked )
   echo "Building ${mode} ${target_mode} in ${target_dir} (incremental cache retained)..." >&2
   if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
-    echo "Locked Cargo build failed; retrying in the build tree without --locked." >&2
+    echo "Locked Cargo build failed; retrying offline in the build tree without --locked." >&2
     unset 'cmd[-1]'
+    cmd+=(--offline)
     if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
       return 1
     fi
