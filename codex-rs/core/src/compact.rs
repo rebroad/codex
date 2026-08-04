@@ -793,6 +793,7 @@ async fn drain_to_completed(
         )
         .await?;
     let mut output = Vec::new();
+    let mut response_effective_model = None;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {
@@ -801,6 +802,10 @@ async fn drain_to_completed(
             ));
         };
         match event {
+            Ok(ResponseEvent::ServerModel(model)) | Ok(ResponseEvent::EffectiveModel(model)) => {
+                response_effective_model = Some(model.clone());
+                sess.set_effective_model(model).await;
+            }
             Ok(ResponseEvent::OutputItemDone(item)) => {
                 if matches!(phase, CompactionPhase::PostTurn) {
                     // Commit post-turn summaries only after success; failures must leave both
@@ -833,12 +838,18 @@ async fn drain_to_completed(
                 usage_metadata,
                 ..
             }) => {
+                let account_id = turn_context
+                    .auth_manager
+                    .as_ref()
+                    .and_then(|auth_manager| auth_manager.auth_cached())
+                    .and_then(|auth| auth.get_account_id());
                 sess.record_observed_response_completed(
                     turn_context,
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
-                    None,
+                    response_effective_model.take(),
+                    account_id,
                 )
                 .await;
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())

@@ -77,6 +77,7 @@ pub(crate) struct SessionState {
     pub(crate) history_reset: CancellationToken,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
+    pub(crate) effective_model: Option<String>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
     pub(crate) additional_context: AdditionalContextStore,
@@ -126,6 +127,7 @@ impl SessionState {
             history_reset: CancellationToken::new(),
             latest_rate_limits: None,
             latest_token_usage_record: None,
+            effective_model: None,
             server_reasoning_included: false,
             mcp_dependency_prompted: HashSet::new(),
             additional_context: AdditionalContextStore::default(),
@@ -225,7 +227,10 @@ impl SessionState {
         session_id: SessionId,
         root_turn_id: String,
         response_id: String,
-        usage: &TokenUsage,
+        usage: Option<&TokenUsage>,
+        effective_model: Option<String>,
+        usage_metadata: Option<codex_protocol::ResponseUsageMetadata>,
+        account_id: Option<String>,
     ) -> TokenUsageRecord {
         let mut turn_token_usage = self
             .latest_token_usage_record
@@ -234,21 +239,28 @@ impl SessionState {
             .map_or_else(TokenUsage::default, |record| {
                 record.turn_token_usage.clone()
             });
-        turn_token_usage.add_assign(usage);
+        if let Some(usage) = usage {
+            turn_token_usage.add_assign(usage);
+        }
         let mut thread_token_usage = self
             .latest_token_usage_record
             .as_ref()
             .map_or_else(TokenUsage::default, |record| {
                 record.thread_token_usage.clone()
             });
-        thread_token_usage.add_assign(usage);
+        if let Some(usage) = usage {
+            thread_token_usage.add_assign(usage);
+        }
         let record = TokenUsageRecord {
             thread_id,
             turn_id: turn_id.to_string(),
             session_id,
             root_turn_id,
             response_id,
-            usage: usage.clone(),
+            effective_model,
+            usage_metadata,
+            account_id,
+            usage: usage.cloned().unwrap_or_default(),
             turn_token_usage,
             thread_token_usage,
         };
@@ -344,8 +356,20 @@ impl SessionState {
 
     pub(crate) fn token_info_and_rate_limits(
         &self,
-    ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
-        (self.token_info(), self.latest_rate_limits.clone())
+    ) -> (
+        Option<TokenUsageInfo>,
+        Option<RateLimitSnapshot>,
+        Option<String>,
+    ) {
+        (
+            self.token_info(),
+            self.latest_rate_limits.clone(),
+            self.effective_model.clone(),
+        )
+    }
+
+    pub(crate) fn set_effective_model(&mut self, model: String) {
+        self.effective_model = Some(model);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {

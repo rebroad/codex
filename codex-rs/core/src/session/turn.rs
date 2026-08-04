@@ -2523,7 +2523,6 @@ async fn try_run_sampling_request(
         .await??;
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
     let mut needs_follow_up = false;
-    let mut effective_model: Option<String> = None;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
@@ -2532,6 +2531,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
+    let mut response_effective_model = None;
     const MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE: usize = 256;
     let mut analytics_tool_call_ids = Vec::new();
     let reasoning_effort = step_context
@@ -2797,7 +2797,8 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
-                effective_model = Some(server_model.clone());
+                response_effective_model = Some(server_model.clone());
+                sess.set_effective_model(server_model.clone()).await;
                 if !turn_context
                     .server_model_warning_emitted
                     .load(Ordering::Relaxed)
@@ -2811,7 +2812,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::EffectiveModel(model) => {
-                effective_model = Some(model.clone());
+                response_effective_model = Some(model.clone());
                 sess.set_effective_model(model).await;
             }
             ResponseEvent::ModelVerifications(verifications) => {
@@ -2862,6 +2863,11 @@ async fn try_run_sampling_request(
                 usage_metadata,
                 end_turn,
             } => {
+                let account_id = turn_context
+                    .auth_manager
+                    .as_ref()
+                    .and_then(|auth_manager| auth_manager.auth_cached())
+                    .and_then(|auth| auth.get_account_id());
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -2884,7 +2890,8 @@ async fn try_run_sampling_request(
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
-                    effective_model.as_deref(),
+                    response_effective_model.take(),
+                    account_id,
                 )
                 .await;
                 let budget_result = sess
