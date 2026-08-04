@@ -65,10 +65,10 @@ Use Python's standard `help(openai_codex)`, `help(Codex)`, or
 
 ## Documentation
 
-- [Getting started](https://github.com/openai/codex/blob/main/sdk/python/docs/getting-started.md)
-- [API reference](https://github.com/openai/codex/blob/main/sdk/python/docs/api-reference.md)
-- [FAQ](https://github.com/openai/codex/blob/main/sdk/python/docs/faq.md)
-- [Examples](https://github.com/openai/codex/blob/main/sdk/python/examples/README.md)
+- [Getting started](https://github.com/rebroad/codex/blob/main/sdk/python/docs/getting-started.md)
+- [API reference](https://github.com/rebroad/codex/blob/main/sdk/python/docs/api-reference.md)
+- [FAQ](https://github.com/rebroad/codex/blob/main/sdk/python/docs/faq.md)
+- [Examples](https://github.com/rebroad/codex/blob/main/sdk/python/examples/README.md)
 
 The package is licensed under the
-[repository Apache License 2.0](https://github.com/openai/codex/blob/main/LICENSE).
+[repository Apache License 2.0](https://github.com/rebroad/codex/blob/main/LICENSE).

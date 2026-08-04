@@ -19,10 +19,10 @@ classifiers = [
 dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.144.4"]
 
 [project.urls]
-Homepage = "https://github.com/openai/codex"
-Repository = "https://github.com/openai/codex"
-Issues = "https://github.com/openai/codex/issues"
-Documentation = "https://github.com/openai/codex/tree/main/sdk/python/docs"
+Homepage = "https://github.com/rebroad/codex"
+Repository = "https://github.com/rebroad/codex"
+Issues = "https://github.com/rebroad/codex/issues"
+Documentation = "https://github.com/rebroad/codex/tree/main/sdk/python/docs"
 
 [dependency-groups]
 format = ["ruff>=0.15.8"]
