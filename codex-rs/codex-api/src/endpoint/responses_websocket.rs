@@ -675,6 +675,7 @@ async fn run_websocket_response_stream(
     timing_log_context: &ResponsesWebsocketTimingLogContext,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut last_effective_model: Option<String> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
     send_websocket_request(
         ws_stream,
@@ -758,6 +759,20 @@ async fn run_websocket_response_stream(
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
                     }
                     continue;
+                }
+                if let Some(model) = event.response_effective_model()
+                    && last_effective_model.as_deref() != Some(model.as_str())
+                {
+                    if tx_event
+                        .send(Ok(ResponseEvent::EffectiveModel(model.clone())))
+                        .await
+                        .is_err()
+                    {
+                        return Err(ApiError::Stream(
+                            "response event consumer dropped".to_string(),
+                        ));
+                    }
+                    last_effective_model = Some(model);
                 }
                 if let Some(model) = event.response_model()
                     && last_server_model.as_deref() != Some(model.as_str())

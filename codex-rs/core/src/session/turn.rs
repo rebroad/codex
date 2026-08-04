@@ -2205,6 +2205,7 @@ async fn try_run_sampling_request(
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
+    let mut effective_model: Option<String> = None;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
@@ -2463,6 +2464,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
+                effective_model = Some(server_model.clone());
                 if !turn_context
                     .server_model_warning_emitted
                     .load(Ordering::Relaxed)
@@ -2474,6 +2476,10 @@ async fn try_run_sampling_request(
                         .server_model_warning_emitted
                         .store(true, Ordering::Relaxed);
                 }
+            }
+            ResponseEvent::EffectiveModel(model) => {
+                effective_model = Some(model.clone());
+                sess.set_effective_model(model).await;
             }
             ResponseEvent::ModelVerifications(verifications) => {
                 if !turn_context
@@ -2544,6 +2550,7 @@ async fn try_run_sampling_request(
                     EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
                         response_id,
                         token_usage: token_usage.clone(),
+                        effective_model: effective_model.clone(),
                     }),
                 )
                 .await;
