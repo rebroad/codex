@@ -211,6 +211,15 @@ impl ResponsesStreamEvent {
         }
     }
 
+    /// Returns the model identifier in the response payload, if present.
+    /// This is used for accounting, not downgrade-warning decisions.
+    pub fn response_effective_model(&self) -> Option<String> {
+        self.response
+            .as_ref()
+            .and_then(|response| response.get("model"))
+            .and_then(json_value_as_string)
+    }
+
     pub(crate) fn turn_state(&self) -> Option<String> {
         if self.kind() != "response.metadata" {
             return None;
@@ -548,6 +557,7 @@ async fn process_sse_with_treatment(
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut last_effective_model: Option<String> = None;
 
     loop {
         let start = Instant::now();
@@ -595,6 +605,19 @@ async fn process_sse_with_treatment(
         let model_verifications = event.model_verifications();
         let turn_moderation_metadata = event.turn_moderation_metadata();
         let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
+
+        if let Some(model) = event.response_effective_model()
+            && last_effective_model.as_deref() != Some(model.as_str())
+        {
+            if tx_event
+                .send(Ok(ResponseEvent::EffectiveModel(model.clone())))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            last_effective_model = Some(model);
+        }
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -1414,7 +1437,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_sse_ignores_response_model_field_in_payload() {
+    async fn process_sse_emits_effective_model_from_response_payload() {
         let events = run_sse(vec![
             json!({
                 "type": "response.created",
@@ -1433,10 +1456,14 @@ mod tests {
         ])
         .await;
 
-        assert_eq!(events.len(), 2);
-        assert_matches!(&events[0], ResponseEvent::Created);
+        assert_eq!(events.len(), 3);
         assert_matches!(
-            &events[1],
+            &events[0],
+            ResponseEvent::EffectiveModel(model) if model == CYBER_RESTRICTED_MODEL_FOR_TESTS
+        );
+        assert_matches!(&events[1], ResponseEvent::Created);
+        assert_matches!(
+            &events[2],
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
