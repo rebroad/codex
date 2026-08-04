@@ -159,7 +159,7 @@ cargo_build() {
     )
   fi
 
-  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli)
+  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
   cmd+=( "${profile_args[@]}" --locked )
   echo "Building ${mode} ${target_mode} in ${target_dir} (incremental cache retained)..." >&2
@@ -217,6 +217,13 @@ install_binary() {
   ln -sfn "${name}" "${INSTALL_BIN_DIR}/codex"
   echo "Installed ${INSTALL_BIN_DIR}/${name}"
   echo "Linked ${INSTALL_BIN_DIR}/codex"
+}
+
+install_code_mode_host() {
+  local binary="${1}"
+  [[ -x "${binary}" ]] || die "built code-mode host not found: ${binary}"
+  install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/codex-code-mode-host"
+  echo "Installed ${INSTALL_BIN_DIR}/codex-code-mode-host"
 }
 
 build_android() {
@@ -303,6 +310,7 @@ else
   binary="$(cargo_build "${MODE}" "${TARGET_MODE}")"
   if [[ "${TARGET_MODE}" == native ]]; then
     install_binary "${binary}" "${VERSION}"
+    install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
   else
     echo "Built target binary: ${binary}"
   fi
