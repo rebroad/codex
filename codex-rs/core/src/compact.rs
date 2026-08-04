@@ -738,6 +738,7 @@ async fn drain_to_completed(
                     EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
                         response_id,
                         token_usage: token_usage.clone(),
+                        effective_model: None,
                     }),
                 )
                 .await;
