@@ -3291,6 +3291,7 @@ mod tests {
                     last_token_usage: codex_protocol::protocol::TokenUsage::default(),
                     model_context_window: None,
                 }),
+                effective_model: None,
                 rate_limits: None,
             },
         ))];
