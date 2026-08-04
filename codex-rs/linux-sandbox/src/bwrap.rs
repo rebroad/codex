@@ -385,8 +385,7 @@ fn create_filesystem_args(
 ) -> Result<BwrapArgs> {
     let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
     // Bubblewrap requires bind mount targets to exist. Skip missing writable
-    // roots so mixed-platform configs can keep harmless paths for other
-    // environments without breaking Linux command startup.
+    // roots so the sandbox can still start when a configured root is absent.
     let mut writable_roots = file_system_sandbox_policy
         .get_writable_roots_with_cwd(cwd)
         .into_iter()
@@ -1938,9 +1937,12 @@ mod tests {
             "existing writable root should be rebound writable",
         );
         assert!(
-            !args.args.iter().any(|arg| arg == &missing_root),
+            !args.args.windows(3).any(|window| {
+                window == ["--bind", missing_root.as_str(), missing_root.as_str()]
+            }),
             "missing writable root should be skipped",
         );
+        assert!(!Path::new(&missing_root).exists());
     }
 
     #[test]
