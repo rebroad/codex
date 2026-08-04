@@ -377,13 +377,33 @@ fn create_filesystem_args(
     glob_scan_max_depth: Option<usize>,
 ) -> Result<BwrapArgs> {
     let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
-    // Bubblewrap requires bind mount targets to exist. Skip missing writable
-    // roots so mixed-platform configs can keep harmless paths for other
-    // environments without breaking Linux command startup.
+    // Bubblewrap requires bind mount targets to exist. If a writable root was
+    // explicitly approved but is missing, create it so commands can start and
+    // write beneath newly approved directories. If creation fails (for
+    // example, for a mixed-platform placeholder path), preserve the previous
+    // behavior by skipping that root.
     let mut writable_roots = file_system_sandbox_policy
         .get_writable_roots_with_cwd(cwd)
         .into_iter()
-        .filter(|writable_root| writable_root.root.as_path().exists())
+        .filter_map(|writable_root| {
+            let root = writable_root.root.as_path();
+            let explicitly_approved = file_system_sandbox_policy.entries.iter().any(|entry| {
+                entry.access.can_write()
+                    && matches!(&entry.path, FileSystemPath::Path { path } if path == &writable_root.root)
+            });
+            let is_protected_metadata_root = root
+                .file_name()
+                .is_some_and(is_protected_metadata_name);
+            if root.exists()
+                || (explicitly_approved
+                    && !is_protected_metadata_root
+                    && std::fs::create_dir_all(root).is_ok())
+            {
+                Some(writable_root)
+            } else {
+                None
+            }
+        })
         .collect::<Vec<_>>();
     if writable_roots.is_empty()
         && file_system_sandbox_policy.has_full_disk_write_access()
@@ -686,6 +706,7 @@ fn should_leave_missing_git_for_parent_repo_discovery(mount_root: &Path, name: &
         && mount_root
             .ancestors()
             .skip(1)
+            .filter(|ancestor| *ancestor != Path::new("/"))
             .any(ancestor_has_git_metadata)
 }
 
@@ -1899,7 +1920,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_missing_writable_roots() {
+    fn creates_missing_writable_roots() {
         let temp_dir = TempDir::new().expect("temp dir");
         let existing_root = temp_dir.path().join("existing");
         let missing_root = temp_dir.path().join("missing");
@@ -1927,9 +1948,12 @@ mod tests {
             "existing writable root should be rebound writable",
         );
         assert!(
-            !args.args.iter().any(|arg| arg == &missing_root),
-            "missing writable root should be skipped",
+            args.args.windows(3).any(|window| {
+                window == ["--bind", missing_root.as_str(), missing_root.as_str()]
+            }),
+            "missing writable root should be created and rebound writable",
         );
+        assert!(Path::new(&missing_root).exists());
     }
 
     #[test]
@@ -2054,79 +2078,83 @@ mod tests {
         )
         .expect("bwrap fs args");
         assert!(args.preserved_files.is_empty());
+        let mut expected_synthetic_mount_targets = vec![
+            PathBuf::from("/.agents"),
+            PathBuf::from("/.codex"),
+            PathBuf::from("/dev/.git"),
+            PathBuf::from("/dev/.agents"),
+            PathBuf::from("/dev/.codex"),
+        ];
+        if !Path::new("/.git").exists() {
+            expected_synthetic_mount_targets.insert(0, PathBuf::from("/.git"));
+        }
         assert_eq!(
             synthetic_mount_target_paths(&args),
-            vec![
-                PathBuf::from("/.git"),
-                PathBuf::from("/.agents"),
-                PathBuf::from("/.codex"),
-                PathBuf::from("/dev/.git"),
-                PathBuf::from("/dev/.agents"),
-                PathBuf::from("/dev/.codex"),
-            ]
+            expected_synthetic_mount_targets
         );
-        assert_eq!(
-            args.args,
-            vec![
-                // Start from a read-only view of the full filesystem.
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Recreate a writable /dev inside the sandbox.
-                "--dev".to_string(),
-                "/dev".to_string(),
-                // Make the writable root itself writable again.
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Mask the default metadata path names under the writable root.
-                // Because the root is `/` in this test, these carveout paths
-                // appear directly below `/`.
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/.git".to_string(),
-                "--remount-ro".to_string(),
-                "/.git".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/.agents".to_string(),
-                "--remount-ro".to_string(),
-                "/.agents".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/.codex".to_string(),
-                "--remount-ro".to_string(),
-                "/.codex".to_string(),
-                // Rebind /dev after the root bind so device nodes remain
-                // writable/usable inside the writable root.
-                "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
-                // Then mask the metadata names that would otherwise be
-                // creatable below the writable /dev bind.
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/dev/.git".to_string(),
-                "--remount-ro".to_string(),
-                "/dev/.git".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/dev/.agents".to_string(),
-                "--remount-ro".to_string(),
-                "/dev/.agents".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/dev/.codex".to_string(),
-                "--remount-ro".to_string(),
-                "/dev/.codex".to_string(),
-            ]
-        );
+        let mut expected_args = vec![
+            // Start from a read-only view of the full filesystem.
+            "--ro-bind".to_string(),
+            "/".to_string(),
+            "/".to_string(),
+            // Recreate a writable /dev inside the sandbox.
+            "--dev".to_string(),
+            "/dev".to_string(),
+            // Make the writable root itself writable again.
+            "--bind".to_string(),
+            "/".to_string(),
+            "/".to_string(),
+            // Mask the default metadata path names under the writable root.
+            // Because the root is `/` in this test, these carveout paths
+            // appear directly below `/`.
+            "--perms".to_string(),
+            "555".to_string(),
+            "--tmpfs".to_string(),
+            "/.git".to_string(),
+            "--remount-ro".to_string(),
+            "/.git".to_string(),
+            "--perms".to_string(),
+            "555".to_string(),
+            "--tmpfs".to_string(),
+            "/.agents".to_string(),
+            "--remount-ro".to_string(),
+            "/.agents".to_string(),
+            "--perms".to_string(),
+            "555".to_string(),
+            "--tmpfs".to_string(),
+            "/.codex".to_string(),
+            "--remount-ro".to_string(),
+            "/.codex".to_string(),
+            // Rebind /dev after the root bind so device nodes remain
+            // writable/usable inside the writable root.
+            "--bind".to_string(),
+            "/dev".to_string(),
+            "/dev".to_string(),
+            // Then mask the metadata names that would otherwise be
+            // creatable below the writable /dev bind.
+            "--perms".to_string(),
+            "555".to_string(),
+            "--tmpfs".to_string(),
+            "/dev/.git".to_string(),
+            "--remount-ro".to_string(),
+            "/dev/.git".to_string(),
+            "--perms".to_string(),
+            "555".to_string(),
+            "--tmpfs".to_string(),
+            "/dev/.agents".to_string(),
+            "--remount-ro".to_string(),
+            "/dev/.agents".to_string(),
+            "--perms".to_string(),
+            "555".to_string(),
+            "--tmpfs".to_string(),
+            "/dev/.codex".to_string(),
+            "--remount-ro".to_string(),
+            "/dev/.codex".to_string(),
+        ];
+        if Path::new("/.git").exists() {
+            expected_args.splice(8..14, ["--ro-bind", "/.git", "/.git"].map(String::from));
+        }
+        assert_eq!(args.args, expected_args);
     }
 
     #[test]
