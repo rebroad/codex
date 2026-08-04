@@ -105,7 +105,9 @@ configure_rusty_v8_artifacts() {
 
   local crate_version="${V8_CRATE_VERSION:-$(sed -n '/^name = "v8"$/,/^version = /s/^version = "\([^"]*\)"/\1/p' "${SOURCE_REPO}/codex-rs/Cargo.lock" | head -n 1)}"
   [[ -n "${crate_version}" ]] || die "could not determine the pinned v8 crate version"
-  local profile="${RUSTY_V8_PROFILE:-ptrcomp_sandbox_release}"
+  local default_profile="ptrcomp_sandbox_release"
+  [[ "${target_mode}" == armv7 ]] && default_profile="release"
+  local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
   archive="librusty_v8_${profile}_${target}.a.gz"
   binding="src_binding_${profile}_${target}.rs"
   local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
