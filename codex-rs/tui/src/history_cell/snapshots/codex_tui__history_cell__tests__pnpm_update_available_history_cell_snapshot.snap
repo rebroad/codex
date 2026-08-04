@@ -4,8 +4,8 @@ expression: rendered
 ---
 ╭─────────────────────────────────────────────────╮
 │ ✨ Update available! 0.0.0 -> 9.9.9             │
-│ Run pnpm add -g @openai/codex to update.        │
+│ Run pnpm add -g @reb.ai/codex to update.        │
 │                                                 │
 │ See full release notes:                         │
-│ https://github.com/openai/codex/releases/latest │
+│ https://github.com/rebroad/codex/releases/latest │
 ╰─────────────────────────────────────────────────╯
