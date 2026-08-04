@@ -1367,7 +1367,7 @@ mod tests {
                     git_info: Some(GitInfoPatch {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
-                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        origin_url: Some(Some("https://github.com/rebroad/codex".to_string())),
                     }),
                     ..Default::default()
                 },
@@ -1384,7 +1384,7 @@ mod tests {
         assert_eq!(git_info.branch.as_deref(), Some("main"));
         assert_eq!(
             git_info.repository_url.as_deref(),
-            Some("https://github.com/openai/codex")
+            Some("https://github.com/rebroad/codex")
         );
     }
 
@@ -1465,7 +1465,7 @@ mod tests {
                     git_info: Some(GitInfoPatch {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
-                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        origin_url: Some(Some("https://github.com/rebroad/codex".to_string())),
                     }),
                     ..Default::default()
                 },
@@ -1497,7 +1497,7 @@ mod tests {
         assert_eq!(git_info.branch.as_deref(), Some("feature"));
         assert_eq!(
             git_info.repository_url.as_deref(),
-            Some("https://github.com/openai/codex")
+            Some("https://github.com/rebroad/codex")
         );
     }
 
@@ -1524,7 +1524,7 @@ mod tests {
                     git_info: Some(GitInfoPatch {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
-                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        origin_url: Some(Some("https://github.com/rebroad/codex".to_string())),
                     }),
                     ..Default::default()
                 },

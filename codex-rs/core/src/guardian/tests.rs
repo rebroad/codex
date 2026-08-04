@@ -328,7 +328,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     id: None,
                     name: "gh_repo_view".to_string(),
                     namespace: None,
-                    arguments: "{\"repo\":\"openai/codex\"}".to_string(),
+                    arguments: "{\"repo\":\"rebroad/codex\"}".to_string(),
                     call_id: "call-1".to_string(),
                     encrypted_function_args: None,
                     internal_chat_message_metadata_passthrough: None,

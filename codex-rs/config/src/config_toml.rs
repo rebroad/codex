@@ -262,7 +262,7 @@ pub struct ConfigToml {
 
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
-    ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
+    ///          https://github.com/rebroad/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
     /// file: Use a file in the Codex home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
