@@ -2465,6 +2465,7 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::ServerModel(server_model) => {
                 effective_model = Some(server_model.clone());
+                sess.set_effective_model(server_model.clone()).await;
                 if !turn_context
                     .server_model_warning_emitted
                     .load(Ordering::Relaxed)
