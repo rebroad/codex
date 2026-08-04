@@ -3430,6 +3430,7 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
+        let configured_additional_writable_roots = cfg.additional_writable_roots.clone();
         let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
         let active_project = cfg
             .get_active_project(
@@ -3537,6 +3538,7 @@ impl Config {
                 });
         let workspace_roots_explicit = workspace_roots_override.is_some()
             || !requested_additional_writable_roots.is_empty()
+            || !configured_additional_writable_roots.is_empty()
             || legacy_workspace_roots_explicit;
         let mut workspace_roots = match workspace_roots_override {
             Some(workspace_roots) => workspace_roots,
@@ -3551,6 +3553,7 @@ impl Config {
                 workspace_roots
             }
         };
+        workspace_roots.extend(configured_additional_writable_roots.clone());
         dedupe_absolute_paths(&mut workspace_roots);
         let (
             configured_network_proxy_config,
@@ -3615,7 +3618,7 @@ impl Config {
             )?;
             let CompiledPermissionProfile {
                 permission_profile,
-                workspace_roots: configured_workspace_roots,
+                workspace_roots: mut configured_workspace_roots,
             } = compile_permission_profile(
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
@@ -3623,6 +3626,23 @@ impl Config {
                 builtin_workspace_write_settings.as_ref(),
                 &mut startup_warnings,
             )?;
+            configured_workspace_roots.extend(
+                configured_additional_writable_roots
+                    .iter()
+                    .map(PathUri::from_abs_path),
+            );
+            let mut seen = HashSet::new();
+            configured_workspace_roots.retain(|root| seen.insert(root.to_string()));
+            let mut materialized_workspace_roots = configured_workspace_roots.clone();
+            materialized_workspace_roots.extend(
+                workspace_roots
+                    .iter()
+                    .map(PathUri::from_abs_path),
+            );
+            let mut seen = HashSet::new();
+            materialized_workspace_roots.retain(|root| seen.insert(root.to_string()));
+            let permission_profile = permission_profile
+                .materialize_project_roots_with_path_uris(&materialized_workspace_roots);
             let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
             let active_permission_profile = if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
