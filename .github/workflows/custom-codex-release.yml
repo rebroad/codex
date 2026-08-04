@@ -1,0 +1,77 @@
+name: custom-codex-release
+
+on:
+  push:
+    tags:
+      - "codex-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "codex-v* tag to build"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: custom-codex-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_NET_OFFLINE: "false"
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Resolve release tag
+        id: release
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          [[ "${tag}" == codex-v* ]] || { echo "Invalid release tag: ${tag}" >&2; exit 1; }
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${tag#codex-v}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-arm-linux-gnueabihf
+          rustup target add x86_64-unknown-linux-musl armv7-unknown-linux-gnueabihf
+
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          ./scripts/rebuild_codex.sh --release --target musl --package-npm
+
+      - name: Verify package names
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=( "${GITHUB_WORKSPACE}.build/npm-artifact/"*.tgz )
+          ((${#archives[@]} >= 3)) || { echo "Expected npm archives were not created" >&2; exit 1; }
+          for archive in "${archives[@]}"; do
+            tar -xOf "${archive}" package/package.json | jq -e '
+              .name | startswith("@reb.ai/codex")
+            ' >/dev/null
+          done
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.release.outputs.tag }}" \
+            --title "Codex ${{ steps.release.outputs.version }}" \
+            --generate-notes \
+            "${GITHUB_WORKSPACE}.build/npm-artifact/"*.tgz
