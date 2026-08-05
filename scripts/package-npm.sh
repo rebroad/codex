@@ -93,8 +93,8 @@ EOF
 }
 mkdir -p "${OUTPUT_DIR}"
 
-MUSL_BIN="${BUILD_TREE}/cargo-target-musl/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex"
-ARMV7_BIN="${BUILD_TREE}/cargo-target-armv7/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex"
+MUSL_BIN="${BUILD_TREE}/cargo-target-musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex"
+ARMV7_BIN="${BUILD_TREE}/cargo-target-armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex"
 ANDROID_STAGE="${BUILD_TREE}/android-artifact"
 ARMV7_STRIP="${ARMV7_STRIP:-}"
 if [[ -z "${ARMV7_STRIP}" ]]; then

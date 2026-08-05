@@ -184,13 +184,30 @@ read_toolchain() {
 }
 
 cargo_target_dir() {
-  case "${1}" in
-    native) echo "${BUILD_REPO}/cargo-target-linux" ;;
-    musl) echo "${BUILD_REPO}/cargo-target-musl" ;;
-    armv7) echo "${BUILD_REPO}/cargo-target-armv7" ;;
-    android) echo "${BUILD_REPO}/cargo-target-android" ;;
-    *) die "unknown target mode: ${1}" ;;
+  local mode="${1}" target_mode="${2}"
+  case "${target_mode}" in
+    native) echo "${BUILD_REPO}/cargo-target-linux-${mode}" ;;
+    musl) echo "${BUILD_REPO}/cargo-target-musl-${mode}" ;;
+    armv7) echo "${BUILD_REPO}/cargo-target-armv7-${mode}" ;;
+    android) echo "${BUILD_REPO}/cargo-target-android-${mode}" ;;
+    *) die "unknown target mode: ${target_mode}" ;;
   esac
+}
+
+migrate_legacy_target_dir() {
+  local mode="${1}" target_mode="${2}" target_dir legacy_dir
+  target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
+  legacy_dir="${BUILD_REPO}/cargo-target-${target_mode}"
+  if [[ ! -e "${target_dir}" && -d "${legacy_dir}" && ! -L "${legacy_dir}" ]]; then
+    echo "Moving legacy ${target_mode} target cache to ${target_dir}." >&2
+    mv "${legacy_dir}" "${target_dir}"
+  fi
+  # Rusty V8's cached build-script output contains an absolute link-search
+  # path into CARGO_TARGET_DIR. Keep the old path as an alias after migration
+  # so those cached instructions continue to resolve to the moved cache.
+  if [[ -d "${target_dir}" && ! -e "${legacy_dir}" ]]; then
+    ln -s "${target_dir}" "${legacy_dir}"
+  fi
 }
 
 target_triple() {
@@ -214,7 +231,8 @@ cargo_build() {
   local mode="${1}" target_mode="${2}" profile_args=() target triple target_dir
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
-  target_dir="$(cargo_target_dir "${target_mode}")"
+  migrate_legacy_target_dir "${mode}" "${target_mode}"
+  target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
   mkdir -p "${target_dir}"
   if [[ -n "${triple}" ]]; then
     target="${triple}"
