@@ -87,6 +87,9 @@ workspace_version() {
 configure_rusty_v8_artifacts() {
   local target_mode="${1}" target archive binding local_repo cache_dir release_tag base_url
   case "${target_mode}" in
+    native)
+      target="x86_64-unknown-linux-gnu"
+      ;;
     musl)
       target="x86_64-unknown-linux-musl"
       ;;
@@ -106,6 +109,9 @@ configure_rusty_v8_artifacts() {
   archive="librusty_v8_${profile}_${target}.a.gz"
   binding="src_binding_${profile}_${target}.rs"
   local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
+  if [[ "${target_mode}" == native && -d "${BUILD_REPO}/rusty-v8-artifacts/native" && -z "${RUSTY_V8_REPO_DIR:-}" ]]; then
+    local_repo="${BUILD_REPO}/rusty-v8-artifacts/native"
+  fi
   cache_dir="${BUILD_REPO}/rusty-v8-artifacts/${VERSION}/${target}"
   mkdir -p "${cache_dir}"
 
@@ -181,7 +187,15 @@ cargo_build() {
   local -a env_args=(CARGO_TARGET_DIR="${target_dir}" RUSTUP_DISABLE_SELF_UPDATE=1)
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
   if [[ "${target_mode}" == native ]]; then
-    env_args+=(V8_FROM_SOURCE="${V8_FROM_SOURCE:-1}")
+    if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]]; then
+      env_args+=(V8_FROM_SOURCE="${V8_FROM_SOURCE}")
+    else
+      configure_rusty_v8_artifacts "${target_mode}"
+      env_args+=(
+        RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
+        RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
+      )
+    fi
   elif [[ "${target_mode}" != android ]]; then
     configure_rusty_v8_artifacts "${target_mode}"
     env_args+=(
