@@ -109,7 +109,10 @@ prepare_armv7_rusty_v8_source() {
 
 refresh_build_lockfile() {
   echo "Refreshing generated build-tree Cargo.lock..." >&2
-  (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" generate-lockfile)
+  cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"
+  if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
+    (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
+  fi
 }
 
 workspace_version() {
