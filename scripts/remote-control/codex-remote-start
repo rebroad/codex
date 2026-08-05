@@ -58,16 +58,13 @@ daemon_has_debug_log() {
 }
 
 stop_managed_daemon() {
-    pid="$1"
-    kill "$pid" 2>/dev/null || return 1
-
-    elapsed=0
-    max_ticks=$((timeout_seconds * 10))
-    while kill -0 "$pid" 2>/dev/null; do
-        [ "$elapsed" -lt "$max_ticks" ] || return 1
-        sleep 0.1
-        elapsed=$((elapsed + 1))
-    done
+    stop_output=""
+    stop_status=0
+    stop_output="$(timeout "$timeout_seconds" "$codex_bin" app-server daemon stop --json 2>&1)" || stop_status=$?
+    if [ "$stop_status" -ne 0 ]; then
+        [ -z "$stop_output" ] || printf '%s\n' "$stop_output" >&2
+        return "$stop_status"
+    fi
 }
 
 ensure_managed_codex_install() {
@@ -95,7 +92,7 @@ if [ "$debug_log" -eq 1 ]; then
     existing_pid="$(managed_daemon_pid || true)"
     if [ -n "$existing_pid" ] && ! daemon_has_debug_log "$existing_pid"; then
         printf '%s\n' 'Codex Remote: replacing backend to enable debug logging.' >&2
-        if ! stop_managed_daemon "$existing_pid"; then
+        if ! stop_managed_daemon; then
             printf '%s\n' 'Codex Remote: could not stop the existing backend.' >&2
             exit 1
         fi
