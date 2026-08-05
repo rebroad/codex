@@ -36,6 +36,7 @@ PACKAGE_NPM="false"
 PREFLIGHT_ONLY="false"
 DRY_RUN="false"
 SYNCED="false"
+RUSTY_V8_ARMV7_PREPARED="false"
 TIMESTAMP="$(date +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
@@ -78,6 +79,37 @@ sync_sources() {
     tar --exclude='./.git' -cf - -C "${SOURCE_REPO}" . | tar -xf - -C "${BUILD_REPO}"
   fi
   SYNCED=true
+}
+
+prepare_armv7_rusty_v8_source() {
+  [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]] && return
+  local source_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
+  local build_repo=""
+  for candidate in "${source_repo}.build" "${source_repo}.make"; do
+    if [[ -d "${candidate}" ]]; then
+      build_repo="${candidate}"
+      break
+    fi
+  done
+  [[ -n "${build_repo}" ]] || die "Rusty V8 build tree not found beside ${source_repo}"
+  if [[ "${NO_SYNC:-0}" != 1 ]]; then
+    if command -v cpto >/dev/null 2>&1; then
+      cpto --no-lngit --nogit "${source_repo}" "${build_repo}"
+    else
+      echo "cpto not found; Rusty V8 source sync requires cpto" >&2
+      die "missing required command: cpto"
+    fi
+  fi
+  local manifest="${BUILD_WORKSPACE}/Cargo.toml"
+  if ! grep -Fq "path = \"${build_repo}\"" "${manifest}"; then
+    sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${build_repo}\" }" "${manifest}"
+  fi
+  RUSTY_V8_ARMV7_PREPARED="true"
+}
+
+refresh_build_lockfile() {
+  echo "Refreshing generated build-tree Cargo.lock..." >&2
+  (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" generate-lockfile)
 }
 
 workspace_version() {
@@ -359,6 +391,10 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
+if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 ]]; then
+  prepare_armv7_rusty_v8_source
+fi
+refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
   exit 0
