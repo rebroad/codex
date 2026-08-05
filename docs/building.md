@@ -48,8 +48,8 @@ workflow as `@reb.ai/codex-linux-x64` and `@reb.ai/codex-linux-armv7`.
 Outputs are:
 
 ```text
-../codex.build/build/linux/release/codex
-../codex.build/build/android/aarch64-linux-android/release/codex
+../codex.build/build/linux-release/release/codex
+../codex.build/build/android-release/aarch64-linux-android/release/codex
 ../codex.build/build/android-artifact/codex.bin
 ../codex.build/build/android-artifact/libc++_shared.so
 ```
@@ -80,7 +80,7 @@ export CXX_aarch64_linux_android="$LLVM/bin/aarch64-linux-android29-clang++"
 export AR_aarch64_linux_android="$LLVM/bin/llvm-ar"
 export RANLIB_aarch64_linux_android="$LLVM/bin/llvm-ranlib"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LLVM/bin/aarch64-linux-android29-clang"
-export CARGO_TARGET_DIR="$PWD/../codex.build/build/android"
+export CARGO_TARGET_DIR="$PWD/../codex.build/build/android-release"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=$builtins"
 
 cd "$CARGO_TARGET_DIR/../codex-rs"
