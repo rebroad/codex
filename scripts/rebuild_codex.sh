@@ -227,6 +227,25 @@ ensure_target() {
   fi
 }
 
+configure_musl_build_tools() {
+  local target="${1}" env_file="${MUSL_TOOL_ENV_FILE:-${RUNNER_TEMP:-/var/tmp}/codex-musl-env-${1}}"
+  local tool_root="${RUNNER_TEMP:-/var/tmp}/codex-musl-tools-${target}"
+  local libcap_archive="${tool_root}/libcap-2.75/prefix/lib/libcap.a"
+  local setup_script="${SOURCE_REPO}/.github/scripts/install-musl-build-tools.sh"
+
+  if [[ ! -f "${libcap_archive}" || ! -f "${env_file}" ]]; then
+    require_cmd sudo
+    [[ -f "${setup_script}" ]] || die "musl build-tool setup script not found: ${setup_script}"
+    echo "Preparing musl build tools and target-built libcap..." >&2
+    TARGET="${target}" GITHUB_ENV="${env_file}" RUNNER_TEMP="${RUNNER_TEMP:-/var/tmp}" \
+      bash "${setup_script}"
+  fi
+
+  while IFS= read -r assignment; do
+    [[ -n "${assignment}" ]] && export "${assignment}"
+  done <"${env_file}"
+}
+
 cargo_build() {
   local mode="${1}" target_mode="${2}" profile_args=() target triple target_dir
   [[ "${mode}" == release ]] && profile_args+=(--release)
@@ -269,6 +288,7 @@ cargo_build() {
     )
   fi
   if [[ "${target_mode}" == musl ]]; then
+    configure_musl_build_tools "${triple}"
     local musl_cc="${MUSL_CC:-}"
     if [[ -z "${musl_cc}" ]]; then
       musl_cc="$(command -v musl-gcc || true)"
@@ -277,10 +297,16 @@ cargo_build() {
     env_args+=(
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${MUSL_LINKER:-${musl_cc}}"
       CC_x86_64_unknown_linux_musl="${musl_cc}"
+      PKG_CONFIG_ALLOW_CROSS=1
+      PKG_CONFIG_ALL_STATIC=1
     )
+    if [[ -d /usr/include/x86_64-linux-gnu ]]; then
+      env_args+=(CFLAGS_x86_64_unknown_linux_musl="-idirafter/usr/include -idirafter/usr/include/x86_64-linux-gnu")
+    fi
   fi
 
   local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host)
+  [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
   cmd+=( "${profile_args[@]}" --locked )
   echo "Building ${mode} ${target_mode} in ${target_dir} (incremental cache retained)..." >&2
