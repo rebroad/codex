@@ -26,6 +26,7 @@ STAGE_ROOT="$(mktemp -d "${BUILD_TREE}/npm-stage.XXXXXX")"
 trap 'rm -rf "${STAGE_ROOT}"' EXIT
 COMMIT_SHORT="$(git -C "${ROOT}" rev-parse --short=12 HEAD)"
 BUILD_TIMESTAMP="$(date +%Y%m%d%H%M)"
+BINARY_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${ROOT}/codex-rs/Cargo.toml" | head -n 1)"
 STRIP_TOOL="${STRIP:-}"
 if [[ -z "${STRIP_TOOL}" ]]; then
   for candidate in llvm-strip strip; do
@@ -34,6 +35,8 @@ if [[ -z "${STRIP_TOOL}" ]]; then
 fi
 [[ -n "${STRIP_TOOL}" ]] || { echo "llvm-strip or strip is required" >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "npm is required" >&2; exit 1; }
+export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-${BUILD_TREE}/npm-cache}"
+mkdir -p "${NPM_CONFIG_CACHE}"
 
 profile_path() { [[ "${1}" == release ]] && echo release || echo debug; }
 require_binary() {
@@ -45,13 +48,13 @@ require_binary() {
 }
 patch_timestamp() {
   local binary="${1}"
-  python3 - "${binary}" "${VERSION}" "${COMMIT_SHORT}-${BUILD_TIMESTAMP}" <<'PY'
+  python3 - "${binary}" "${VERSION}" "${BINARY_VERSION}" "${COMMIT_SHORT}-${BUILD_TIMESTAMP}" <<'PY'
 import mmap, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-needle = (sys.argv[2] + "-000000000000-000000000000").encode()
-replacement = (sys.argv[2] + "-" + sys.argv[3]).encode()
+needle = (sys.argv[3] + "-000000000000-000000000000").encode()
+replacement = (sys.argv[2] + "-" + sys.argv[4]).encode()
 if len(needle) != len(replacement):
     raise SystemExit("timestamp placeholder width mismatch")
 with path.open("r+b") as handle:
@@ -71,9 +74,15 @@ if count == 0:
 PY
 }
 write_native_package() {
-  local dir="${1}" name="${2}" os="${3}" cpu="${4}" binary="${5}" strip_tool="${6}"
+  local dir="${1}" name="${2}" os="${3}" cpu="${4}" binary="${5}" host="${6}" bwrap="${7}" strip_tool="${8}"
   require_binary "${binary}"
+  require_binary "${host}"
   mkdir -p "${dir}/bin"
+  mkdir -p "${dir}/codex-resources"
+  local files='["bin", "codex-resources"]'
+  if [[ -n "${bwrap}" ]]; then
+    require_binary "${bwrap}"
+  fi
   cat >"${dir}/package.json" <<EOF
 {
   "name": "${name}",
@@ -83,10 +92,16 @@ write_native_package() {
   "os": ["${os}"],
   "cpu": ["${cpu}"],
   "bin": {"codex": "bin/codex"},
-  "files": ["bin"]
+  "files": ${files}
 }
 EOF
   install -m 0755 "${binary}" "${dir}/bin/codex"
+  # The npm launcher resolves the code-mode host beside codex. Keep this
+  # location in sync with the upstream native package layout.
+  install -m 0755 "${host}" "${dir}/bin/codex-code-mode-host"
+  if [[ -n "${bwrap}" ]]; then
+    install -m 0755 "${bwrap}" "${dir}/codex-resources/bwrap"
+  fi
   patch_timestamp "${dir}/bin/codex"
   "${strip_tool}" --strip-all "${dir}/bin/codex"
   npm pack --ignore-scripts --pack-destination "${OUTPUT_DIR}" "${dir}" >/dev/null
@@ -94,7 +109,10 @@ EOF
 mkdir -p "${OUTPUT_DIR}"
 
 MUSL_BIN="${BUILD_TREE}/cargo-target-musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex"
+MUSL_HOST="${BUILD_TREE}/cargo-target-musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex-code-mode-host"
 ARMV7_BIN="${BUILD_TREE}/cargo-target-armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex"
+ARMV7_HOST="${BUILD_TREE}/cargo-target-armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex-code-mode-host"
+MUSL_BWRAP="${BUILD_TREE}/cargo-target-musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/bwrap"
 ANDROID_STAGE="${BUILD_TREE}/android-artifact"
 ARMV7_STRIP="${ARMV7_STRIP:-}"
 if [[ -z "${ARMV7_STRIP}" ]]; then
@@ -105,10 +123,11 @@ fi
   exit 1
 }
 
-write_native_package "${STAGE_ROOT}/linux-x64" "@reb.ai/codex-linux-x64" linux x64 "${MUSL_BIN}" "${STRIP_TOOL}"
-write_native_package "${STAGE_ROOT}/linux-armv7" "@reb.ai/codex-linux-armv7" linux arm "${ARMV7_BIN}" "${ARMV7_STRIP}"
+write_native_package "${STAGE_ROOT}/linux-x64" "@reb.ai/codex-linux-x64" linux x64 "${MUSL_BIN}" "${MUSL_HOST}" "${MUSL_BWRAP}" "${STRIP_TOOL}"
+write_native_package "${STAGE_ROOT}/linux-armv7" "@reb.ai/codex-linux-armv7" linux arm "${ARMV7_BIN}" "${ARMV7_HOST}" "" "${ARMV7_STRIP}"
 
-if [[ -x "${ANDROID_STAGE}/codex.bin" && -f "${ANDROID_STAGE}/libc++_shared.so" ]]; then
+if [[ -x "${ANDROID_STAGE}/codex.bin" && -f "${ANDROID_STAGE}/libc++_shared.so" \
+  && "$(grep -a -F -c "${BINARY_VERSION}-000000000000-000000000000" "${ANDROID_STAGE}/codex.bin" || true)" -gt 0 ]]; then
   ANDROID_OPTIONAL_DEPENDENCY=$',\n    "@reb.ai/codex-android-arm64": "'"${VERSION}"'"'
   mkdir -p "${STAGE_ROOT}/android-arm64/bin"
   cat >"${STAGE_ROOT}/android-arm64/package.json" <<EOF
@@ -125,6 +144,7 @@ if [[ -x "${ANDROID_STAGE}/codex.bin" && -f "${ANDROID_STAGE}/libc++_shared.so" 
 EOF
   install -m 0755 "${ANDROID_STAGE}/codex.bin" "${STAGE_ROOT}/android-arm64/bin/codex"
   install -m 0644 "${ANDROID_STAGE}/libc++_shared.so" "${STAGE_ROOT}/android-arm64/bin/libc++_shared.so"
+  patch_timestamp "${STAGE_ROOT}/android-arm64/bin/codex"
   npm pack --ignore-scripts --pack-destination "${OUTPUT_DIR}" "${STAGE_ROOT}/android-arm64" >/dev/null
 fi
 ANDROID_OPTIONAL_DEPENDENCY="${ANDROID_OPTIONAL_DEPENDENCY:-}"
