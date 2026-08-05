@@ -35,7 +35,7 @@ export RUSTC_WRAPPER=
 export CARGO_NET_OFFLINE=true
 
 if [[ "$MODE" == linux ]]; then
-  export CARGO_TARGET_DIR="$BUILD_TREE/build/linux"
+  export CARGO_TARGET_DIR="$BUILD_TREE/build/linux-release"
   (cd "$BUILD_TREE/codex-rs" && \
     rustup run "$RUST_TOOLCHAIN" cargo build --offline --release -p codex-cli)
   file "$CARGO_TARGET_DIR/release/codex"
@@ -71,7 +71,7 @@ export CXX_aarch64_linux_android="$LLVM/bin/aarch64-linux-android29-clang++"
 export AR_aarch64_linux_android="$LLVM/bin/llvm-ar"
 export RANLIB_aarch64_linux_android="$LLVM/bin/llvm-ranlib"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LLVM/bin/aarch64-linux-android29-clang"
-  export CARGO_TARGET_DIR="$BUILD_TREE/build/android"
+export CARGO_TARGET_DIR="$BUILD_TREE/build/android-release"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=$builtins"
 
 (cd "$BUILD_TREE/codex-rs" && \
