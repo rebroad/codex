@@ -1,0 +1,9 @@
+Restore sandbox/bwrap debugging from `main-119-history`
+
+Review deviations from `rust-v0.147.0-alpha.10`:-
+ - Do we need .github/workflows/custom-codex-release.yml? What's it used by? (Deviation from upstream)
+ - Do we need rebuild_codex.sh --publish-npm? (Deviation from upstream) - Should be using (and extending) build_npm_package.py instead!
+ - commit `fix: support ARMv7 release builds` - pageable removal from Cargo.lock (and addition to the repo) for Android seems like the wrong method - find a way to avoid adding pageable from the repo (and ideally allowing it to stay in Cargo.lock if possible)
+
+ Review code in `termux` branch:-
+  - Do we need the checks after `flock()` which might not be supported on Android/Termux?
