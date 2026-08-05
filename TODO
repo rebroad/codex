@@ -1,0 +1,7 @@
+Show new memories (Optional. When memory files are updated, show this to the user)
+Fix ~/.codex/memories read-only issue when the project is $HOME !
+A prompt of "." can be ignored but can unpause a session.
+Find the difference in "executed commands", see https://github.com/openai/codex/issues/37815
+Extend `/ps` - and never send / commands to the model!
+poll counting does not include every backend request - fix
+codeburn watch reports the wrong model (when a model is changed mid-session)
