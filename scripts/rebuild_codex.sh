@@ -160,11 +160,15 @@ configure_rusty_v8_artifacts() {
     base_url="https://github.com/${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}/releases/download/${release_tag}"
     RUSTY_V8_ARCHIVE_PATH="${cache_dir}/${archive}"
     RUSTY_V8_BINDING_PATH="${cache_dir}/${binding}"
-    echo "Downloading Rusty V8 ${release_tag} artifacts for ${target}." >&2
-    curl --fail --location --retry 3 --silent --show-error \
-      "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}"
-    curl --fail --location --retry 3 --silent --show-error \
-      "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"
+    if [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]]; then
+      echo "Using cached Rusty V8 ${release_tag} artifacts for ${target}." >&2
+    else
+      echo "Downloading Rusty V8 ${release_tag} artifacts for ${target}." >&2
+      curl --fail --location --retry 3 --silent --show-error \
+        "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}"
+      curl --fail --location --retry 3 --silent --show-error \
+        "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"
+    fi
   fi
 
   [[ -s "${RUSTY_V8_ARCHIVE_PATH}" ]] || die "Rusty V8 archive is empty: ${RUSTY_V8_ARCHIVE_PATH}"
