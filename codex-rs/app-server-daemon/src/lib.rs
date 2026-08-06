@@ -213,6 +213,13 @@ pub(crate) enum RestartMode {
 
 #[cfg(any(unix, windows))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdaterRefreshMode {
+    None,
+    ReexecIfManagedBinaryChanged,
+}
+
+#[cfg(any(unix, windows))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestartDecision {
     NotReady,
     AlreadyCurrent,
@@ -488,6 +495,7 @@ impl Daemon {
     pub(crate) async fn try_restart_if_running(
         &self,
         mode: RestartMode,
+        _updater_refresh_mode: UpdaterRefreshMode,
         managed_codex_bin: &Path,
     ) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
@@ -555,15 +563,6 @@ impl Daemon {
             RestartIfRunningOutcome::NotRunning
         };
 
-        if !self.is_stable_standalone_release()?
-            || managed_install::resolved_managed_codex_bin(&self.current_managed_codex_bin()?)
-                .await
-                .ok()
-                .as_deref()
-                != Some(managed_codex_bin)
-        {
-            return Ok(RestartIfRunningOutcome::AlreadyCurrent);
-        }
         Ok(outcome)
     }
 
