@@ -1,10 +1,12 @@
 use clap::Parser;
+use std::env;
 use std::ffi::CString;
 use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
+use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
@@ -34,6 +36,7 @@ use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use serde::Deserialize;
 
 static BWRAP_CHILD_PID: AtomicI32 = AtomicI32::new(0);
 static PENDING_FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
@@ -43,6 +46,13 @@ const FORWARDED_SIGNALS: &[libc::c_int] =
 const SYNTHETIC_MOUNT_MARKER_SYNTHETIC: &[u8] = b"synthetic\n";
 const SYNTHETIC_MOUNT_MARKER_EXISTING: &[u8] = b"existing\n";
 const PROTECTED_CREATE_MARKER: &[u8] = b"protected-create\n";
+
+const DEFAULT_SANDBOX_DEBUG_LOG_PATH: &str = "/tmp/codex-sandbox-debug.log";
+
+#[derive(Debug, Deserialize)]
+struct SandboxDebugConfigFile {
+    sandbox_log_path: Option<PathBuf>,
+}
 
 #[derive(Debug)]
 struct SyntheticMountTargetRegistration {
@@ -321,6 +331,85 @@ fn ensure_legacy_landlock_mode_supports_policy(
     }
 }
 
+fn sandbox_debug_enabled() -> bool {
+    match env::var("CODEX_SANDBOX_DEBUG") {
+        Ok(value) => !matches!(value.as_str(), "0" | "false" | "no" | "off"),
+        Err(_) => true,
+    }
+}
+
+fn write_sandbox_debug(
+    label: &str,
+    bwrap_args: &crate::bwrap::BwrapArgs,
+    sandbox_policy_cwd: &Path,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_mode: BwrapNetworkMode,
+    mount_proc: bool,
+) {
+    if !sandbox_debug_enabled() {
+        return;
+    }
+
+    let log_path = sandbox_debug_log_path();
+    let mut file = match OpenOptions::new().create(true).append(true).open(log_path) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+
+    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let unreadable_roots =
+        file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
+
+    let _ = writeln!(file, "=== {label} ===");
+    let _ = writeln!(file, "cwd={}", sandbox_policy_cwd.display());
+    let _ = writeln!(
+        file,
+        "mount_proc={mount_proc} network_mode={network_mode:?}"
+    );
+    let _ = writeln!(file, "argv={:?}", bwrap_args.args);
+    let _ = writeln!(file, "writable_roots={writable_roots:?}");
+    for root in &writable_roots {
+        let root_path = root.root.as_path();
+        let canonical = std::fs::canonicalize(root_path).ok();
+        let _ = writeln!(
+            file,
+            "writable_root_check path={} exists={} canonical={canonical:?}",
+            root_path.display(),
+            root_path.exists(),
+        );
+    }
+    let _ = writeln!(file, "unreadable_roots={unreadable_roots:?}");
+}
+
+fn sandbox_debug_log_path() -> PathBuf {
+    let Some(codex_home) = env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+    else {
+        return PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH);
+    };
+    let config_path = codex_home.join("config.toml");
+    let Ok(contents) = fs::read_to_string(&config_path) else {
+        return PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH);
+    };
+    let Ok(config) = toml::from_str::<SandboxDebugConfigFile>(&contents) else {
+        return PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH);
+    };
+    config
+        .sandbox_log_path
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                config_path
+                    .parent()
+                    .expect("config path has a parent")
+                    .join(path)
+            }
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH))
+}
+
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
@@ -357,6 +446,14 @@ fn run_bwrap_with_proc_fallback(
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
     apply_inner_command_argv0(&mut bwrap_args.args);
+    write_sandbox_debug(
+        "bwrap-run",
+        &bwrap_args,
+        sandbox_policy_cwd,
+        file_system_sandbox_policy,
+        network_mode,
+        mount_proc,
+    );
     run_or_exec_bwrap(bwrap_args);
 }
 
@@ -445,6 +542,20 @@ fn current_process_argv0() -> String {
 
 fn preflight_proc_mount_support(network_mode: BwrapNetworkMode) -> CodexResult<bool> {
     let preflight_argv = build_preflight_bwrap_argv(network_mode)?;
+    write_sandbox_debug(
+        "bwrap-preflight",
+        &preflight_argv,
+        Path::new("/"),
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        }]),
+        network_mode,
+        true,
+    );
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     Ok(!is_proc_mount_failure(stderr.as_str()))
 }
