@@ -610,9 +610,11 @@ acquire_install_lock() {
 
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCK_FILE"
-    flock 9
-    lock_kind="flock"
-    return
+    if flock 9; then
+      lock_kind="flock"
+      return
+    fi
+    exec 9>&- 2>/dev/null || true
   fi
 
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do

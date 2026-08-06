@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -130,11 +131,35 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Directory containing pre-installed native binaries to bundle (vendor root).",
     )
+    parser.add_argument(
+        "--publish-dir",
+        type=Path,
+        help="Directory containing npm archives to publish.",
+    )
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="Publish archives from --publish-dir to npm.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Use npm's dry-run mode when publishing archives.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    if args.publish_dir is not None:
+        if not args.publish:
+            raise RuntimeError("--publish-dir requires --publish")
+        publish_npm_archives(args.publish_dir, dry_run=args.dry_run)
+        return 0
+
+    if args.publish:
+        raise RuntimeError("--publish requires --publish-dir")
 
     package = args.package
     version = args.version
@@ -206,6 +231,7 @@ def main() -> int:
         if args.pack_output is not None:
             output_path = run_npm_pack(staging_dir, args.pack_output)
             print(f"npm pack output written to {output_path}")
+
     finally:
         if created_temp:
             # Preserve the staging directory for further inspection.
@@ -445,6 +471,32 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
         shutil.move(str(tarball_path), output_path)
 
     return output_path
+
+
+def publish_npm_archives(archive_dir: Path, *, dry_run: bool) -> None:
+    archive_dir = archive_dir.resolve()
+    archives = sorted(archive_dir.glob("*.tgz"))
+    if not archives:
+        raise RuntimeError(f"No npm archives found in {archive_dir}")
+
+    subprocess.run(["npm", "whoami"], check=True)
+    for archive in archives:
+        with tarfile.open(archive, "r:gz") as tar:
+            package_json = json.loads(tar.extractfile("package/package.json").read())
+        package_name = package_json["name"]
+        if package_name == CODEX_NPM_NAME:
+            tag = "alpha" if "-" in package_json["version"] else "latest"
+        elif package_name.startswith(f"{CODEX_NPM_NAME}-"):
+            platform_name = package_name.removeprefix(f"{CODEX_NPM_NAME}-")
+            tag = f"alpha-{platform_name}" if "-" in package_json["version"] else platform_name
+        else:
+            raise RuntimeError(f"Unexpected npm package in {archive}: {package_name}")
+
+        command = ["npm", "publish", str(archive), "--access", "public", "--tag", tag]
+        if dry_run:
+            command.append("--dry-run")
+        print("+", " ".join(command), flush=True)
+        subprocess.run(command, check=True)
 
 
 if __name__ == "__main__":
