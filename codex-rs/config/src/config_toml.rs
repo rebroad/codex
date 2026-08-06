@@ -528,6 +528,9 @@ pub struct ConfigLockfileToml {
 #[schemars(deny_unknown_fields)]
 pub struct DebugToml {
     pub config_lockfile: Option<DebugConfigLockToml>,
+
+    /// Path where Linux bubblewrap sandbox diagnostics are appended.
+    pub sandbox_log_path: Option<AbsolutePathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
