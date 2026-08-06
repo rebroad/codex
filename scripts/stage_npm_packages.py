@@ -27,6 +27,8 @@ BINARY_TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
+    "armv7-unknown-linux-gnueabihf",
+    "aarch64-linux-android",
 )
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
@@ -107,6 +109,11 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing previously downloaded workflow artifacts.",
     )
     parser.add_argument(
+        "--vendor-src",
+        type=Path,
+        help="Use an already prepared vendor root instead of downloading workflow artifacts.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -136,10 +143,23 @@ def collect_native_component_sets(packages: list[str]) -> list[tuple[str, ...]]:
     return component_sets
 
 
-def expand_packages(packages: list[str]) -> list[str]:
+def expand_packages(packages: list[str], vendor_src: Path | None = None) -> list[str]:
     expanded: list[str] = []
     for package in packages:
-        for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
+        package_expansion = PACKAGE_EXPANSIONS.get(package, [package])
+        if package == "codex" and vendor_src is not None:
+            package_expansion = [
+                "codex",
+                *(
+                    platform_package
+                    for platform_package in CODEX_PLATFORM_PACKAGES
+                    if (
+                        vendor_src
+                        / CODEX_PLATFORM_PACKAGES[platform_package]["target_triple"]
+                    ).is_dir()
+                ),
+            ]
+        for expanded_package in package_expansion:
             if expanded_package in expanded:
                 continue
             expanded.append(expanded_package)
@@ -486,7 +506,8 @@ def main() -> int:
 
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
-    packages = expand_packages(list(args.packages))
+    vendor_src_override = args.vendor_src.resolve() if args.vendor_src else None
+    packages = expand_packages(list(args.packages), vendor_src_override)
     native_component_sets = collect_native_component_sets(packages)
     print("Expanded packages: " + ", ".join(packages), flush=True)
     if native_component_sets:
@@ -506,7 +527,15 @@ def main() -> int:
     staging_jobs: list[tuple[Path, list[str], str]] = []
 
     try:
-        if native_component_sets:
+        if native_component_sets and vendor_src_override is not None:
+            vendor_src = vendor_src_override
+            if not vendor_src.is_dir():
+                raise FileNotFoundError(
+                    f"Vendor source directory not found: {vendor_src}"
+                )
+            for components in native_component_sets:
+                vendor_src_by_components[components] = vendor_src
+        elif native_component_sets:
             workflow_url, resolved_head_sha = resolve_workflow_url(
                 args.release_version, args.workflow_url
             )

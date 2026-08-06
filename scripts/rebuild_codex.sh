@@ -36,6 +36,7 @@ PREFLIGHT_ONLY="false"
 DRY_RUN="false"
 SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
+RUSTY_V8_SOURCE_PREPARED="false"
 TIMESTAMP="$(date +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
@@ -105,13 +106,29 @@ prepare_armv7_rusty_v8_source() {
   RUSTY_V8_ARMV7_PREPARED="true"
 }
 
+prepare_native_rusty_v8_source() {
+  [[ "${RUSTY_V8_SOURCE_PREPARED}" == true ]] && return
+  local source_repo="${RUSTY_V8_SOURCE_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
+  [[ -f "${source_repo}/Cargo.toml" ]] || return
+  local manifest="${BUILD_WORKSPACE}/Cargo.toml"
+  if ! grep -Fq "path = \"${source_repo}\"" "${manifest}"; then
+    sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${source_repo}\" }" "${manifest}"
+  fi
+  RUSTY_V8_SOURCE_PREPARED="true"
+}
+
 refresh_build_lockfile() {
   echo "Refreshing generated build-tree Cargo.lock..." >&2
   cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"
-  if grep -Fq 'pagable = { git =' "${BUILD_WORKSPACE}/Cargo.toml"; then
+  if [[ "${RUSTY_V8_ARMV7_PREPARED}" != true ]]; then
+    sed -i '/^pagable = { git =/d' "${BUILD_WORKSPACE}/Cargo.toml"
+  elif grep -Fq 'pagable = { git =' "${BUILD_WORKSPACE}/Cargo.toml"; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p pagable)
   fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
+    (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
+  fi
+  if [[ "${RUSTY_V8_SOURCE_PREPARED}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
   fi
 }
@@ -165,10 +182,14 @@ configure_rusty_v8_artifacts() {
       echo "Using cached Rusty V8 ${release_tag} artifacts for ${target}." >&2
     else
       echo "Downloading Rusty V8 ${release_tag} artifacts for ${target}." >&2
-      curl --fail --location --retry 3 --silent --show-error \
-        "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}"
-      curl --fail --location --retry 3 --silent --show-error \
-        "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"
+      if ! curl --fail --location --retry 3 --silent --show-error \
+        "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}"; then
+        return 1
+      fi
+      if ! curl --fail --location --retry 3 --silent --show-error \
+        "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"; then
+        return 1
+      fi
     fi
   fi
 
@@ -264,14 +285,18 @@ cargo_build() {
   local -a env_args=(CARGO_TARGET_DIR="${target_dir}" RUSTUP_DISABLE_SELF_UPDATE=1)
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
   if [[ "${target_mode}" == native ]]; then
-    if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]]; then
-      env_args+=(V8_FROM_SOURCE="${V8_FROM_SOURCE}")
+    if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ || "${RUSTY_V8_SOURCE_PREPARED}" == true ]]; then
+      env_args+=(V8_FROM_SOURCE=1)
     else
-      configure_rusty_v8_artifacts "${target_mode}"
-      env_args+=(
-        RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
-        RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
-      )
+      if configure_rusty_v8_artifacts "${target_mode}"; then
+        env_args+=(
+          RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
+          RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
+        )
+      else
+        echo "Native Rusty V8 artifacts are unavailable; building V8 from source." >&2
+        env_args+=(V8_FROM_SOURCE=1)
+      fi
     fi
   elif [[ "${target_mode}" != android ]]; then
     configure_rusty_v8_artifacts "${target_mode}"
@@ -438,12 +463,16 @@ done
 require_cmd git
 require_cmd python3
 read_toolchain
+VERSION="$(workspace_version)"
+[[ -n "${VERSION}" ]] || die "could not determine workspace version"
 if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
 if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 ]]; then
   prepare_armv7_rusty_v8_source
+elif [[ "${TARGET_MODE}" == native ]]; then
+  prepare_native_rusty_v8_source
 fi
 refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
@@ -451,8 +480,6 @@ if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   exit 0
 fi
 
-VERSION="$(workspace_version)"
-[[ -n "${VERSION}" ]] || die "could not determine workspace version"
 COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=12 HEAD)"
 
 if [[ "${TARGET_MODE}" == android ]]; then

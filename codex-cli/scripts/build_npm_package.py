@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -64,6 +63,20 @@ CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
         "os": "win32",
         "cpu": "arm64",
     },
+    "codex-linux-armv7": {
+        "npm_name": "@reb.ai/codex-linux-armv7",
+        "npm_tag": "linux-armv7",
+        "target_triple": "armv7-unknown-linux-gnueabihf",
+        "os": "linux",
+        "cpu": "arm",
+    },
+    "codex-android-arm64": {
+        "npm_name": "@reb.ai/codex-android-arm64",
+        "npm_tag": "android-arm64",
+        "target_triple": "aarch64-linux-android",
+        "os": "linux",
+        "cpu": "arm64",
+    },
 }
 
 PACKAGE_EXPANSIONS: dict[str, list[str]] = {
@@ -78,6 +91,8 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex-darwin-arm64": [CODEX_PACKAGE_COMPONENT],
     "codex-win32-x64": [CODEX_PACKAGE_COMPONENT],
     "codex-win32-arm64": [CODEX_PACKAGE_COMPONENT],
+    "codex-linux-armv7": [CODEX_PACKAGE_COMPONENT],
+    "codex-android-arm64": [CODEX_PACKAGE_COMPONENT],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": [],
 }
@@ -131,35 +146,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Directory containing pre-installed native binaries to bundle (vendor root).",
     )
-    parser.add_argument(
-        "--publish-dir",
-        type=Path,
-        help="Directory containing npm archives to publish.",
-    )
-    parser.add_argument(
-        "--publish",
-        action="store_true",
-        help="Publish archives from --publish-dir to npm.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Use npm's dry-run mode when publishing archives.",
-    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-
-    if args.publish_dir is not None:
-        if not args.publish:
-            raise RuntimeError("--publish-dir requires --publish")
-        publish_npm_archives(args.publish_dir, dry_run=args.dry_run)
-        return 0
-
-    if args.publish:
-        raise RuntimeError("--publish requires --publish-dir")
 
     package = args.package
     version = args.version
@@ -175,11 +166,19 @@ def main() -> int:
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
-        stage_sources(staging_dir, version, package)
-
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
         target_filter = PACKAGE_TARGET_FILTERS.get(package)
+
+        available_platform_packages = None
+        if package == "codex" and vendor_src is not None:
+            available_platform_packages = [
+                package_name
+                for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
+                if (vendor_src / package_config["target_triple"]).is_dir()
+            ]
+
+        stage_sources(staging_dir, version, package, available_platform_packages)
 
         if native_components:
             if vendor_src is None:
@@ -252,7 +251,12 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
-def stage_sources(staging_dir: Path, version: str, package: str) -> None:
+def stage_sources(
+    staging_dir: Path,
+    version: str,
+    package: str,
+    available_platform_packages: list[str] | None = None,
+) -> None:
     package_json: dict
     package_json_path: Path | None = None
 
@@ -319,13 +323,13 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
 
     if package == "codex":
         package_json["files"] = ["bin/codex.js"]
+        platform_packages = available_platform_packages or list(CODEX_PLATFORM_PACKAGES)
         package_json["optionalDependencies"] = {
             CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
                 f"npm:{CODEX_NPM_NAME}@"
                 f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
             )
-            for platform_package in PACKAGE_EXPANSIONS["codex"]
-            if platform_package != "codex"
+            for platform_package in platform_packages
         }
 
     elif package == "codex-sdk":
@@ -471,32 +475,6 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
         shutil.move(str(tarball_path), output_path)
 
     return output_path
-
-
-def publish_npm_archives(archive_dir: Path, *, dry_run: bool) -> None:
-    archive_dir = archive_dir.resolve()
-    archives = sorted(archive_dir.glob("*.tgz"))
-    if not archives:
-        raise RuntimeError(f"No npm archives found in {archive_dir}")
-
-    subprocess.run(["npm", "whoami"], check=True)
-    for archive in archives:
-        with tarfile.open(archive, "r:gz") as tar:
-            package_json = json.loads(tar.extractfile("package/package.json").read())
-        package_name = package_json["name"]
-        if package_name == CODEX_NPM_NAME:
-            tag = "alpha" if "-" in package_json["version"] else "latest"
-        elif package_name.startswith(f"{CODEX_NPM_NAME}-"):
-            platform_name = package_name.removeprefix(f"{CODEX_NPM_NAME}-")
-            tag = f"alpha-{platform_name}" if "-" in package_json["version"] else platform_name
-        else:
-            raise RuntimeError(f"Unexpected npm package in {archive}: {package_name}")
-
-        command = ["npm", "publish", str(archive), "--access", "public", "--tag", tag]
-        if dry_run:
-            command.append("--dry-run")
-        print("+", " ".join(command), flush=True)
-        subprocess.run(command, check=True)
 
 
 if __name__ == "__main__":

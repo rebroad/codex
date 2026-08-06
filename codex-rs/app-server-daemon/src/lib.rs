@@ -231,13 +231,8 @@ pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControl
     Daemon::from_environment()?.set_remote_control(mode).await
 }
 
-pub async fn run_pid_update_loop(
-    _http_client_factory: codex_http_client::HttpClientFactory,
-) -> Result<()> {
+pub async fn run_pid_update_loop() -> Result<()> {
     ensure_supported_platform()?;
-    // Packages update through the reb.ai release channel. Its standalone updater is
-    // intentionally isolated from upstream HTTP install machinery, so retain the
-    // public caller contract whle invoking the fail-closed no-argument loop.
     update_loop::run().await
 }
 
@@ -366,7 +361,7 @@ impl Daemon {
     pub(crate) async fn try_restart_if_running(
         &self,
         mode: RestartMode,
-        updater_refresh_mode: UpdaterRefreshMode,
+        _updater_refresh_mode: UpdaterRefreshMode,
         managed_codex_bin: &Path,
     ) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
@@ -400,10 +395,6 @@ impl Daemon {
         } else {
             RestartIfRunningOutcome::NotRunning
         };
-
-        if should_reexec_updater(updater_refresh_mode, outcome) {
-            crate::update_loop::reexec_managed_updater(managed_codex_bin)?;
-        }
 
         Ok(outcome)
     }
