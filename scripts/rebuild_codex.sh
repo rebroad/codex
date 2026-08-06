@@ -31,7 +31,6 @@ VERSION=""
 MODE="debug"
 TARGET_MODE="native"
 PUBLISH="false"
-PUBLISH_NPM="false"
 PACKAGE_NPM="false"
 PREFLIGHT_ONLY="false"
 DRY_RUN="false"
@@ -55,8 +54,7 @@ Options:
   --armv7                  Alias for --target armv7
   --build-npm-vendor       Build Linux musl/ARMv7 payloads for npm packaging
   --package-npm            Build local @reb.ai/codex npm archives
-  --publish-npm            Publish npm archives (implies --package-npm)
-  --dry-run                Use npm/GitHub dry-run checks where supported
+  --dry-run                Use supported dry-run checks
   --publish                Create/push codex-v<version> and wait for GitHub release
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced sibling source tree
@@ -110,6 +108,9 @@ prepare_armv7_rusty_v8_source() {
 refresh_build_lockfile() {
   echo "Refreshing generated build-tree Cargo.lock..." >&2
   cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"
+  if grep -Fq 'pagable = { git =' "${BUILD_WORKSPACE}/Cargo.toml"; then
+    (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p pagable)
+  fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
   fi
@@ -421,7 +422,6 @@ while (($#)); do
     --armv7) TARGET_MODE=armv7; shift ;;
     --build-npm-vendor) TARGET_MODE=musl; PACKAGE_NPM=true; shift ;;
     --package-npm) PACKAGE_NPM=true; shift ;;
-    --publish-npm) PUBLISH_NPM=true; PACKAGE_NPM=true; MODE=release; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --publish) PUBLISH=true; MODE=release; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
@@ -477,12 +477,6 @@ if [[ "${PACKAGE_NPM:-false}" == true ]]; then
   fi
   cargo_build "${MODE}" armv7 >/dev/null
   "${SOURCE_REPO}/scripts/package-npm.sh" "${VERSION}" "${MODE}"
-fi
-
-if [[ "${PUBLISH_NPM}" == true ]]; then
-  publish_args=(--version "${VERSION}" --publish)
-  [[ "${DRY_RUN}" == true ]] && publish_args+=(--dry-run)
-  "${SOURCE_REPO}/scripts/publish_npm_local.sh" "${publish_args[@]}"
 fi
 
 if [[ "${PUBLISH}" == true ]]; then
