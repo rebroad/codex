@@ -20,9 +20,14 @@ const PLATFORM_PACKAGE_BY_TARGET = {
   "aarch64-apple-darwin": "@reb.ai/codex-darwin-arm64",
   "x86_64-pc-windows-msvc": "@reb.ai/codex-win32-x64",
   "aarch64-pc-windows-msvc": "@reb.ai/codex-win32-arm64",
+  "armv7-unknown-linux-gnueabihf": "@reb.ai/codex-linux-armv7",
+  "aarch64-linux-android": "@reb.ai/codex-android-arm64",
 };
 
 const { platform, arch } = process;
+const isTermux =
+  platform === "android" ||
+  (platform === "linux" && process.env.PREFIX?.includes("/com.termux/"));
 
 let targetTriple = null;
 switch (platform) {
@@ -33,7 +38,10 @@ switch (platform) {
         targetTriple = "x86_64-unknown-linux-musl";
         break;
       case "arm64":
-        targetTriple = "aarch64-unknown-linux-musl";
+        targetTriple = isTermux ? "aarch64-linux-android" : "aarch64-unknown-linux-musl";
+        break;
+      case "arm":
+        targetTriple = "armv7-unknown-linux-gnueabihf";
         break;
       default:
         break;
@@ -122,7 +130,7 @@ function isPnpmOwnedCodexInstall(nodeModulesDir) {
 
   try {
     return (
-      realpathSync(path.join(nodeModulesDir, "@openai", "codex")) ===
+      realpathSync(path.join(nodeModulesDir, "@reb.ai", "codex")) ===
       codexPackageRoot
     );
   } catch {
@@ -187,6 +195,16 @@ const env = {
   ...process.env,
   CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,
 };
+if (isTermux) {
+  const prefix = process.env.PREFIX || "/data/data/com.termux/files/usr";
+  const blocked = new Set([`${prefix}/lib`, `${prefix}/libexec`]);
+  env.LD_LIBRARY_PATH = [
+    path.dirname(binaryPath),
+    ...(process.env.LD_LIBRARY_PATH || "")
+      .split(":")
+      .filter((entry) => entry && !blocked.has(entry)),
+  ].join(":");
+}
 delete env.CODEX_MANAGED_BY_NPM;
 delete env.CODEX_MANAGED_BY_BUN;
 delete env.CODEX_MANAGED_BY_PNPM;
