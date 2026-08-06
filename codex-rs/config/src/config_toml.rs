@@ -197,6 +197,9 @@ pub struct ConfigToml {
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
+    /// Path where Linux bubblewrap sandbox diagnostics are appended.
+    pub sandbox_log_path: Option<AbsolutePathBuf>,
+
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
