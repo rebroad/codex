@@ -32,22 +32,9 @@ if [[ "${DO_PUBLISH}" != true ]]; then
   echo "Skipping npm publish (use --publish)."
   exit 0
 fi
-npm whoami >/dev/null
-for archive in "${DIST_DIR}"/*.tgz; do
-  [[ -f "${archive}" ]] || continue
-  package_name="$(tar -xOf "${archive}" package/package.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
-  case "${package_name}" in
-    @reb.ai/codex)
-      if [[ "${VERSION}" == *-* ]]; then tag=alpha; else tag=latest; fi
-      ;;
-    @reb.ai/codex-linux-x64) tag="linux-x64" ;;
-    @reb.ai/codex-linux-armv7) tag="linux-armv7" ;;
-    @reb.ai/codex-android-arm64) tag="android-arm64" ;;
-    *) echo "Unexpected package ${package_name}" >&2; exit 1 ;;
-  esac
-  [[ "${VERSION}" == *-* ]] && [[ "${package_name}" != @reb.ai/codex ]] && tag="alpha-${tag}"
-  cmd=(npm publish "${archive}" --access public --tag "${tag}")
-  [[ "${DRY_RUN}" == true ]] && cmd+=(--dry-run)
-  echo "+ ${cmd[*]}"
-  "${cmd[@]}"
-done
+publish_args=(
+  --publish
+  --publish-dir "${DIST_DIR}"
+)
+[[ "${DRY_RUN}" == true ]] && publish_args+=(--dry-run)
+python3 "${ROOT}/codex-cli/scripts/build_npm_package.py" "${publish_args[@]}"

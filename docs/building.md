@@ -37,7 +37,8 @@ packaging, and opt-in npm/GitHub publishing:
 ```bash
 scripts/rebuild_codex.sh --release
 scripts/rebuild_codex.sh --release --package-npm
-scripts/rebuild_codex.sh --release --publish-npm --dry-run
+python3 codex-cli/scripts/build_npm_package.py \
+  --publish --publish-dir ../codex.build/build/npm-artifact --dry-run
 scripts/rebuild_codex.sh --release --target armv7
 ```
 
@@ -116,7 +117,7 @@ version explicitly only when packaging a deliberate override.
 This writes the packages to:
 
 ```text
-../codex.build/npm-artifact/
+../codex.build/build/npm-artifact/
 ```
 
 Publish or install the three archives together when using the unified package:
