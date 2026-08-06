@@ -975,6 +975,14 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
+        },
+        "sandbox_log_path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Path where Linux bubblewrap sandbox diagnostics are appended."
         }
       },
       "type": "object"
