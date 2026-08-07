@@ -412,7 +412,7 @@ async fn run_resume_picker_with_launch_context(
     let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
-        /*show_all*/ false,
+        show_all,
         uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
@@ -466,7 +466,7 @@ pub async fn run_fork_picker_with_app_server(
     let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
-        /*show_all*/ false,
+        show_all,
         uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
@@ -1982,15 +1982,21 @@ fn thread_list_params(
     include_non_interactive: bool,
     use_state_db_only: bool,
 ) -> ThreadListParams {
+    // Provider filtering was intentionally removed so the picker can resume sessions from any
+    // provider. Consume the legacy filter here while callers are migrated away from it.
+    let _provider_filter = match provider_filter {
+        ProviderFilter::Any => None,
+        ProviderFilter::MatchDefault(default_provider) => Some(default_provider),
+    };
+
     ThreadListParams {
         cursor,
         limit: Some(PAGE_SIZE as u32),
         sort_key: Some(sort_key),
         sort_direction: None,
-        model_providers: match provider_filter {
-            ProviderFilter::Any => None,
-            ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
-        },
+        // The picker should show resumable sessions regardless of the currently configured
+        // provider. The selected session's provider is restored when it is resumed.
+        model_providers: None,
         source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
         archived: Some(status == SessionStatus::Archived),
         section_id: None,
