@@ -77,7 +77,7 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Cl
 (cd "$BUILD_TREE/codex-rs" && \
   rustup run "$RUST_TOOLCHAIN" cargo build --offline --target aarch64-linux-android --release -p codex-cli)
 
-STAGE="$BUILD_TREE/android-artifact"
+STAGE="$BUILD_TREE/build/android-artifact"
 mkdir -p "$STAGE"
 cp "$CARGO_TARGET_DIR/aarch64-linux-android/release/codex" "$STAGE/codex.bin"
 cp "$LLVM/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$STAGE/libc++_shared.so"
