@@ -57,7 +57,7 @@ def fetch_codex_v8_artifacts(
 ) -> RustyV8ArtifactPair:
     version = version or resolved_v8_crate_version()
     release_url = (
-        f"https://github.com/rebroad/codex/releases/download/rusty-v8-v{version}"
+        f"https://github.com/openai/codex/releases/download/rusty-v8-v{version}"
     )
     target = spec.target
     cache_dir = (cache_root or default_cache_root()) / f"rusty-v8-{version}-{target}"
