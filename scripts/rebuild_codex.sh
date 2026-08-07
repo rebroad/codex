@@ -110,6 +110,15 @@ prepare_native_rusty_v8_source() {
   [[ "${RUSTY_V8_SOURCE_PREPARED}" == true ]] && return
   local source_repo="${RUSTY_V8_SOURCE_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
   [[ -f "${source_repo}/Cargo.toml" ]] || return
+  local build_repo="${BUILD_REPO}/rusty-v8-native"
+  if command -v cpto >/dev/null 2>&1; then
+    mkdir -p "${build_repo}"
+    cpto --no-lngit --nogit "${source_repo}" "${build_repo}"
+  else
+    die "cpto is required to prepare the native Rusty V8 source"
+  fi
+  rm -rf "${build_repo}/third_party/rust-toolchain"
+  source_repo="${build_repo}"
   local manifest="${BUILD_WORKSPACE}/Cargo.toml"
   if ! grep -Fq "path = \"${source_repo}\"" "${manifest}"; then
     sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${source_repo}\" }" "${manifest}"
@@ -130,6 +139,8 @@ refresh_build_lockfile() {
   fi
   if [[ "${RUSTY_V8_SOURCE_PREPARED}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
+  else
+    sed -i "\|v8 = { path = \"${BUILD_REPO}/rusty-v8-native\" }|d" "${BUILD_WORKSPACE}/Cargo.toml"
   fi
 }
 
@@ -138,7 +149,7 @@ workspace_version() {
 }
 
 configure_rusty_v8_artifacts() {
-  local target_mode="${1}" target archive binding local_repo cache_dir release_tag base_url
+  local target_mode="${1}" target archive binding local_repo cache_dir release_tag base_url release_repo
   case "${target_mode}" in
     native)
       target="x86_64-unknown-linux-gnu"
@@ -175,26 +186,28 @@ configure_rusty_v8_artifacts() {
   else
     require_cmd curl
     release_tag="${RUSTY_V8_RELEASE_TAG:-rusty-v8-v${crate_version}}"
-    base_url="https://github.com/${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}/releases/download/${release_tag}"
     RUSTY_V8_ARCHIVE_PATH="${cache_dir}/${archive}"
     RUSTY_V8_BINDING_PATH="${cache_dir}/${binding}"
     if [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]]; then
       echo "Using cached Rusty V8 ${release_tag} artifacts for ${target}." >&2
     else
-      echo "Downloading Rusty V8 ${release_tag} artifacts for ${target}." >&2
-      if ! curl --fail --location --retry 3 --silent --show-error \
-        "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}"; then
-        return 1
-      fi
-      if ! curl --fail --location --retry 3 --silent --show-error \
-        "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"; then
-        return 1
-      fi
+      local release_repos=("${RUSTY_V8_RELEASE_REPO:-rebroad/codex}")
+      [[ -n "${RUSTY_V8_RELEASE_REPO:-}" ]] || release_repos+=("openai/codex")
+      for release_repo in "${release_repos[@]}"; do
+        base_url="https://github.com/${release_repo}/releases/download/${release_tag}"
+        echo "Downloading Rusty V8 ${release_tag} artifacts for ${target} from ${release_repo}." >&2
+        if curl --fail --location --retry 3 --silent --show-error \
+          "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}" \
+          && curl --fail --location --retry 3 --silent --show-error \
+            "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"; then
+          break
+        fi
+        rm -f "${RUSTY_V8_ARCHIVE_PATH}" "${RUSTY_V8_BINDING_PATH}"
+      done
     fi
   fi
 
-  [[ -s "${RUSTY_V8_ARCHIVE_PATH}" ]] || die "Rusty V8 archive is empty: ${RUSTY_V8_ARCHIVE_PATH}"
-  [[ -s "${RUSTY_V8_BINDING_PATH}" ]] || die "Rusty V8 binding is empty: ${RUSTY_V8_BINDING_PATH}"
+  [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]]
 }
 
 read_toolchain() {
@@ -472,7 +485,9 @@ sync_sources
 if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 ]]; then
   prepare_armv7_rusty_v8_source
 elif [[ "${TARGET_MODE}" == native ]]; then
-  prepare_native_rusty_v8_source
+  if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] || ! configure_rusty_v8_artifacts native; then
+    prepare_native_rusty_v8_source || true
+  fi
 fi
 refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
