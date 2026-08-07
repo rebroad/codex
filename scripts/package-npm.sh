@@ -14,14 +14,14 @@ if [[ "${VERSION}" == --help || "${VERSION}" == -h ]]; then
   cat <<'EOF'
 Usage: scripts/package-npm.sh [VERSION] [debug|release]
 Packages Linux musl x64/ARMv7 and, when staged, Android ARM64 binaries.
-Output defaults to the sibling build tree's npm-artifact directory.
+Output defaults to the sibling build tree's build/npm-artifact directory.
 EOF
   exit 0
 fi
 [[ -n "${VERSION}" ]] || VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${ROOT}/codex-rs/Cargo.toml" | head -n 1)"
 [[ "${PROFILE}" == debug || "${PROFILE}" == release ]] || { echo "profile must be debug or release" >&2; exit 2; }
 
-OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_TREE}/npm-artifact}"
+OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_TREE}/build/npm-artifact}"
 STAGE_ROOT="$(mktemp -d "${BUILD_TREE}/npm-stage.XXXXXX")"
 trap 'rm -rf "${STAGE_ROOT}"' EXIT
 COMMIT_SHORT="$(git -C "${ROOT}" rev-parse --short=12 HEAD)"
@@ -108,12 +108,12 @@ EOF
 }
 mkdir -p "${OUTPUT_DIR}"
 
-MUSL_BIN="${BUILD_TREE}/cargo-target-musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex"
-MUSL_HOST="${BUILD_TREE}/cargo-target-musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex-code-mode-host"
-ARMV7_BIN="${BUILD_TREE}/cargo-target-armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex"
-ARMV7_HOST="${BUILD_TREE}/cargo-target-armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex-code-mode-host"
-MUSL_BWRAP="${BUILD_TREE}/cargo-target-musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/bwrap"
-ANDROID_STAGE="${BUILD_TREE}/android-artifact"
+MUSL_BIN="${BUILD_TREE}/build/musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex"
+MUSL_HOST="${BUILD_TREE}/build/musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/codex-code-mode-host"
+ARMV7_BIN="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex"
+ARMV7_HOST="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")/codex-code-mode-host"
+MUSL_BWRAP="${BUILD_TREE}/build/musl-${PROFILE}/x86_64-unknown-linux-musl/$(profile_path "${PROFILE}")/bwrap"
+ANDROID_STAGE="${BUILD_TREE}/build/android-artifact"
 ARMV7_STRIP="${ARMV7_STRIP:-}"
 if [[ -z "${ARMV7_STRIP}" ]]; then
   ARMV7_STRIP="$(command -v arm-linux-gnueabihf-strip || true)"
