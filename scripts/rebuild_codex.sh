@@ -37,6 +37,7 @@ DRY_RUN="false"
 SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_SOURCE_PREPARED="false"
+RUSTY_V8_BUILD_REPO=""
 TIMESTAMP="$(date +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
@@ -91,6 +92,7 @@ prepare_armv7_rusty_v8_source() {
     fi
   done
   [[ -n "${build_repo}" ]] || die "Rusty V8 build tree not found beside ${source_repo}"
+  RUSTY_V8_BUILD_REPO="${build_repo}"
   if [[ "${NO_SYNC:-0}" != 1 ]]; then
     if command -v cpto >/dev/null 2>&1; then
       cpto --no-lngit --nogit "${source_repo}" "${build_repo}"
@@ -129,9 +131,10 @@ prepare_native_rusty_v8_source() {
 refresh_build_lockfile() {
   echo "Refreshing generated build-tree Cargo.lock..." >&2
   cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"
-  if [[ "${RUSTY_V8_ARMV7_PREPARED}" != true ]]; then
-    sed -i '/^pagable = { git =/d' "${BUILD_WORKSPACE}/Cargo.toml"
-  elif grep -Fq 'pagable = { git =' "${BUILD_WORKSPACE}/Cargo.toml"; then
+  # Keep the Starlark pagable override in every build profile. Removing it for
+  # native builds leaves the generated tree on crates.io pagable, while the
+  # ARMv7/npm path needs the patched Git revision and its unified Dupe graph.
+  if grep -Fq 'pagable = { git =' "${BUILD_WORKSPACE}/Cargo.toml"; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p pagable)
   fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
@@ -317,6 +320,11 @@ cargo_build() {
       RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
       RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
     )
+  else
+    # Upstream does not publish the sandboxed Android archive for every V8
+    # release. Android must therefore use the patched Rusty V8 checkout that
+    # was prepared above instead of falling back to the upstream downloader.
+    env_args+=(V8_FROM_SOURCE=1)
   fi
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_cc="${ARMV7_LINKER:-arm-linux-gnueabihf-gcc}"
@@ -414,7 +422,24 @@ install_code_mode_host() {
 
 build_android() {
   local ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
-  [[ -d "${ndk}" ]] || die "set ANDROID_NDK_HOME to the Android NDK directory"
+  local user_home="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}"
+  if [[ ! -d "${ndk}" ]]; then
+    ndk=""
+    local sdk_root
+    for sdk_root in \
+      "${ANDROID_HOME:-}" \
+      "${ANDROID_SDK_ROOT:-}" \
+      "${user_home}/Android/sdk" \
+      "${user_home}/Android/Sdk"
+    do
+      if [[ -d "${sdk_root}/ndk" ]]; then
+        ndk="$(find "${sdk_root}/ndk" -mindepth 1 -maxdepth 1 -type d -print | sort -V | tail -n 1)"
+        [[ -n "${ndk}" ]] && break
+      fi
+    done
+  fi
+  [[ -d "${ndk}" ]] || die "Android NDK not found; set ANDROID_NDK_HOME or ANDROID_NDK_ROOT"
+  export ANDROID_NDK_HOME="${ndk}" ANDROID_NDK_ROOT="${ndk}"
   local llvm="${ndk}/toolchains/llvm/prebuilt/linux-x86_64"
   [[ -x "${llvm}/bin/aarch64-linux-android29-clang" ]] || die "Android NDK Clang not found under ${llvm}"
   local builtins
@@ -429,6 +454,15 @@ build_android() {
   export RANLIB_aarch64_linux_android="${llvm}/bin/llvm-ranlib"
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${llvm}/bin/aarch64-linux-android29-clang"
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}"
+  local ndk_properties="${RUSTY_V8_BUILD_REPO}/third_party/android_ndk/source.properties"
+  local rusty_v8_ndk_version
+  rusty_v8_ndk_version="$(sed -n 's/^Pkg.Revision = //p' "${ndk_properties}" | head -n 1)"
+  [[ -n "${rusty_v8_ndk_version}" ]] || die "Rusty V8 bundled Android NDK version not found in ${ndk_properties}"
+  local gclient_args="${RUSTY_V8_BUILD_REPO}/build/config/gclient_args.gni"
+  if ! grep -Fq 'android_ndk_version' "${gclient_args}"; then
+    printf 'declare_args() {\n  android_ndk_version = "%s"\n}\n' \
+      "${rusty_v8_ndk_version}" >"${gclient_args}"
+  fi
   local binary
   binary="$(cargo_build "${MODE}" android)"
   local stage="${BUILD_REPO}/build/android-artifact"
@@ -479,7 +513,7 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
-if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 ]]; then
+if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
   prepare_armv7_rusty_v8_source
 elif [[ "${TARGET_MODE}" == native ]]; then
   if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] || ! configure_rusty_v8_artifacts native; then
