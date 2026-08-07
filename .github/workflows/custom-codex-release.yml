@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          archives=( "${GITHUB_WORKSPACE}.build/npm-artifact/"*.tgz )
+          archives=( "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz )
           ((${#archives[@]} >= 3)) || { echo "Expected npm archives were not created" >&2; exit 1; }
           for archive in "${archives[@]}"; do
             tar -xOf "${archive}" package/package.json | jq -e '
@@ -74,4 +74,76 @@ jobs:
           gh release create "${{ steps.release.outputs.tag }}" \
             --title "Codex ${{ steps.release.outputs.version }}" \
             --generate-notes \
-            "${GITHUB_WORKSPACE}.build/npm-artifact/"*.tgz
+            "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz
+
+  publish-npm:
+    needs: build-and-release
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Resolve release values
+        id: release
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${tag#codex-v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Node.js for npm trusted publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          scope: "@reb.ai"
+
+      - name: Download npm tarballs from GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'codex-npm-*.tgz' \
+            --dir dist/npm
+
+      - name: Publish npm tarballs serially
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          root="dist/npm/codex-npm-${VERSION}.tgz"
+          platform_tarballs=(dist/npm/codex-npm-*-${VERSION}.tgz)
+          [[ -f "${root}" ]] || { echo "Missing root npm tarball" >&2; exit 1; }
+          ((${#platform_tarballs[@]} > 0)) || { echo "Missing platform npm tarballs" >&2; exit 1; }
+          tarballs=("${platform_tarballs[@]}" "${root}")
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "${tarball}")"
+            tag=""
+            if [[ "${filename}" != "codex-npm-${VERSION}.tgz" ]]; then
+              platform="${filename#codex-npm-}"
+              platform="${platform%-${VERSION}.tgz}"
+              tag="${platform}"
+              [[ "${VERSION}" == *-* ]] && tag="alpha-${tag}"
+            elif [[ "${VERSION}" == *-* ]]; then
+              tag=alpha
+            fi
+            command=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            [[ -n "${tag}" ]] && command+=(--tag "${tag}")
+            echo "+ ${command[*]}"
+            set +e
+            output="$("${command[@]}" 2>&1)"
+            status=$?
+            set -e
+            echo "${output}"
+            if [[ ${status} -ne 0 ]] && ! grep -qiE 'previously published|cannot publish over|version already exists' <<<"${output}"; then
+              exit "${status}"
+            fi
+          done

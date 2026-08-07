@@ -442,9 +442,6 @@ build_android() {
 
 run_preflight() {
   (cd "${SOURCE_REPO}" && bash -n scripts/rebuild_codex.sh scripts/build.sh scripts/package-npm.sh)
-  if [[ -f "${SOURCE_REPO}/scripts/publish_npm_local.sh" ]]; then
-    bash -n "${SOURCE_REPO}/scripts/publish_npm_local.sh"
-  fi
   require_cmd rustup
   require_cmd cargo
   require_cmd npm
