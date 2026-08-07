@@ -431,7 +431,7 @@ build_android() {
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}"
   local binary
   binary="$(cargo_build "${MODE}" android)"
-  local stage="${BUILD_REPO}/android-artifact"
+  local stage="${BUILD_REPO}/build/android-artifact"
   mkdir -p "${stage}"
   install -m 0755 "${binary}" "${stage}/codex.bin"
   install -m 0644 "${llvm}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "${stage}/libc++_shared.so"
