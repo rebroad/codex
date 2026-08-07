@@ -37,14 +37,12 @@ packaging, and opt-in npm/GitHub publishing:
 ```bash
 scripts/rebuild_codex.sh --release
 scripts/rebuild_codex.sh --release --package-npm
-python3 codex-cli/scripts/build_npm_package.py \
-  --publish --publish-dir ../codex.build/build/npm-artifact --dry-run
 scripts/rebuild_codex.sh --release --target armv7
 ```
 
 ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
-`ARMV7_LINKER`). The musl and ARMv7 binaries are staged by the npm package
-workflow as `@reb.ai/codex-linux-x64` and `@reb.ai/codex-linux-armv7`.
+`ARMV7_LINKER`). The musl and ARMv7 binaries are staged as platform variants
+of `@reb.ai/codex`.
 
 Outputs are:
 
