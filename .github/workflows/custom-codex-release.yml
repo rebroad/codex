@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          archives=( "${GITHUB_WORKSPACE}.build/npm-artifact/"*.tgz )
+          archives=( "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz )
           ((${#archives[@]} >= 3)) || { echo "Expected npm archives were not created" >&2; exit 1; }
           for archive in "${archives[@]}"; do
             tar -xOf "${archive}" package/package.json | jq -e '
@@ -74,7 +74,7 @@ jobs:
           gh release create "${{ steps.release.outputs.tag }}" \
             --title "Codex ${{ steps.release.outputs.version }}" \
             --generate-notes \
-            "${GITHUB_WORKSPACE}.build/npm-artifact/"*.tgz
+            "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz
 
   publish-npm:
     needs: build-and-release
