@@ -1,7 +1,7 @@
 In the `codex-rs` folder where the Rust code lives:
 
 - Escalated shell access may be needed for cargo (due to sccache)
-- Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness.
+- Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness. Ideally run it sending stdout and stderr to a file.
 - When making any changes, always try to keep as closely aligned to `upstream/latest-alpha-cli` as possible.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
