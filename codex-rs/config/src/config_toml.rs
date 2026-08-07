@@ -565,10 +565,13 @@ pub struct AutoReviewToml {
     pub policy: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    /// Additional writable roots applied when this project is active.
+    #[serde(default)]
+    pub additional_writable_roots: Vec<AbsolutePathBuf>,
 }
 
 impl ProjectConfig {
@@ -808,6 +811,9 @@ impl ConfigToml {
                     .map(|settings| settings.writable_roots.clone())
                     .unwrap_or_default();
                 writable_roots.extend(self.additional_writable_roots.clone());
+                if let Some(active_project) = active_project {
+                    writable_roots.extend(active_project.additional_writable_roots.clone());
+                }
                 PermissionProfile::workspace_write_with(
                     &writable_roots,
                     network_policy,
