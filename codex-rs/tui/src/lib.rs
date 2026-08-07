@@ -3672,7 +3672,7 @@ requires_openai_auth = {requires_openai_auth}
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig::default();
         config.set_windows_sandbox_enabled(/*value*/ false);
 
         let should_show = should_show_trust_screen(&config);
@@ -3923,7 +3923,7 @@ requires_openai_auth = {requires_openai_auth}
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig::default();
         config.set_windows_sandbox_enabled(/*value*/ true);
 
         let should_show = should_show_trust_screen(&config);
@@ -3947,6 +3947,7 @@ requires_openai_auth = {requires_openai_auth}
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
+            ..Default::default()
         };
 
         let should_show = should_show_trust_screen(&config);

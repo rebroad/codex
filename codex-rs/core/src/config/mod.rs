@@ -3437,7 +3437,8 @@ impl Config {
                 resolved_cwd.as_path(),
                 repo_root.as_ref().map(AbsolutePathBuf::as_path),
             )
-            .unwrap_or(ProjectConfig { trust_level: None });
+            .unwrap_or_default();
+        let project_additional_writable_roots = active_project.additional_writable_roots.clone();
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
             &cfg,
@@ -3539,12 +3540,14 @@ impl Config {
         let workspace_roots_explicit = workspace_roots_override.is_some()
             || !requested_additional_writable_roots.is_empty()
             || !configured_additional_writable_roots.is_empty()
+            || !project_additional_writable_roots.is_empty()
             || legacy_workspace_roots_explicit;
         let mut workspace_roots = match workspace_roots_override {
             Some(workspace_roots) => workspace_roots,
             None => {
                 let mut workspace_roots = vec![resolved_cwd.clone()];
                 workspace_roots.extend(requested_additional_writable_roots.clone());
+                workspace_roots.extend(project_additional_writable_roots.clone());
                 if should_seed_legacy_workspace_roots
                     && let Some(sandbox_workspace_write) = cfg.sandbox_workspace_write.as_ref()
                 {
@@ -3628,6 +3631,11 @@ impl Config {
             )?;
             configured_workspace_roots.extend(
                 configured_additional_writable_roots
+                    .iter()
+                    .map(PathUri::from_abs_path),
+            );
+            configured_workspace_roots.extend(
+                project_additional_writable_roots
                     .iter()
                     .map(PathUri::from_abs_path),
             );

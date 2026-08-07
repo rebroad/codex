@@ -2665,6 +2665,7 @@ async fn missing_persisted_permission_profile_id_uses_configured_default() -> st
                     project_key.clone(),
                     ProjectConfig {
                         trust_level: Some(TrustLevel::Trusted),
+                        ..Default::default()
                     },
                 )])),
                 ..Default::default()
@@ -3562,6 +3563,7 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project(
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Trusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
@@ -3618,6 +3620,7 @@ async fn empty_config_defaults_to_builtin_profile_for_untrusted_project() -> std
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
@@ -3680,6 +3683,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Trusted),
+                    ..Default::default()
                 },
             )])),
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
@@ -3750,6 +3754,7 @@ async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Trusted),
+                    ..Default::default()
                 },
             )])),
             windows: Some(WindowsToml {
@@ -6047,7 +6052,49 @@ async fn config_additional_writable_roots_extend_workspace_writable_roots() -> s
             config
                 .permissions
                 .file_system_sandbox_policy()
-                .can_write_path_with_cwd(&additional_root, cwd.as_path())
+                .can_write_local_path_with_cwd(&additional_root, cwd.as_path())
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_additional_writable_roots_extend_workspace_writable_roots() -> std::io::Result<()>
+{
+    let temp_dir = TempDir::new()?;
+    let cwd = temp_dir.path().join("project");
+    let additional_root = temp_dir.path().join("shared");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&additional_root)?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                cwd.to_string_lossy().into_owned(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                    additional_writable_roots: vec![additional_root.abs()],
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        temp_dir.path().abs(),
+    )
+    .await?;
+
+    let additional_root = additional_root.abs();
+    assert!(config.workspace_roots.contains(&additional_root));
+    if !cfg!(target_os = "windows") {
+        assert!(
+            config
+                .permissions
+                .file_system_sandbox_policy()
+                .can_write_local_path_with_cwd(&additional_root, cwd.as_path())
         );
     }
     Ok(())
@@ -10482,6 +10529,7 @@ async fn active_project_does_not_match_configured_alias_for_canonical_cwd() -> a
             alias_root.to_string_lossy().to_string(),
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
@@ -10586,6 +10634,7 @@ trust_level = "untrusted"
         .expect("TOML deserialization should succeed");
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Untrusted),
+        ..Default::default()
     };
 
     let resolution = derive_legacy_sandbox_policy_for_test(
@@ -10624,12 +10673,14 @@ async fn derive_sandbox_policy_falls_back_to_read_only_for_implicit_defaults() -
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
     };
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
+        ..Default::default()
     };
     let constrained = Constrained::new(PermissionProfile::read_only(), |candidate| {
         if candidate == &PermissionProfile::read_only() {
@@ -10668,12 +10719,14 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
     };
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
+        ..Default::default()
     };
     let constrained = Constrained::new(PermissionProfile::workspace_write(), |candidate| {
         if matches!(
@@ -10945,6 +10998,7 @@ async fn untrusted_parent_repo_with_incomplete_child_git_keeps_unless_trusted_ap
                 repo.path().to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
@@ -10976,6 +11030,7 @@ async fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow:
                 test_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
