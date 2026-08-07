@@ -583,11 +583,19 @@ opt-level = 0
 [patch.crates-io]
 # ARMv7 support is not in the crates.io release yet.
 pagable = { git = "https://github.com/facebook/starlark-rust", rev = "4190cefd570e05858cbb51815a4de11a7b49f951" }
+
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "45fecb9508105988f42fe6ff0441783ed3717f92" }
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
+
+# Keep pagable's shared workspace dependencies on crates.io so they use the
+# same Dupe/Allocative traits as the released Starlark crates.
+[patch."https://github.com/facebook/starlark-rust"]
+allocative = { version = "0.3.6" }
+dupe = { version = "0.9.1" }
+strong_hash = { version = "0.1.0" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
