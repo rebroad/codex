@@ -20,7 +20,7 @@ fi
 [[ -n "${VERSION}" ]] || VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${ROOT}/codex-rs/Cargo.toml" | head -n 1)"
 [[ "${PROFILE}" == debug || "${PROFILE}" == release ]] || { echo "profile must be debug or release" >&2; exit 2; }
 
-OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_TREE}/npm-artifact}"
+OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_TREE}/build/npm-artifact}"
 VENDOR_ROOT="$(mktemp -d "${BUILD_TREE}/npm-vendor.XXXXXX")"
 trap 'rm -rf "${VENDOR_ROOT}"' EXIT
 mkdir -p "${OUTPUT_DIR}"
