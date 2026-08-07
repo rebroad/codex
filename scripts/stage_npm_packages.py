@@ -595,6 +595,8 @@ def main() -> int:
             vendor_src = vendor_src_by_components.get(
                 native_components_for_package(package)
             )
+            if vendor_src is None and vendor_src_override is not None:
+                vendor_src = vendor_src_override
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
 
