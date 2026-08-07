@@ -744,6 +744,7 @@ async fn write_project_trust_config(
                             project_trust_key(project),
                             ProjectConfig {
                                 trust_level: Some(*trust_level),
+                                ..Default::default()
                             },
                         )
                     })
