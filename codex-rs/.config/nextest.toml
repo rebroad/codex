@@ -25,6 +25,12 @@ max-threads = 4
 [test-groups.core_apply_patch_cli_integration]
 max-threads = 1
 
+# These MCP/code-mode matrices each start many stdio servers. Running both at
+# once makes their startup work contend with one another and can exceed the
+# normal nextest timeout on developer machines.
+[test-groups.core_code_mode_mcp_matrix]
+max-threads = 1
+
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
@@ -61,6 +67,13 @@ test-group = 'app_server_integration_local'
 # sensitive to Windows runner process-startup stalls when many cases launch at once.
 filter = 'package(codex-core) & kind(test) & test(apply_patch_cli)'
 test-group = 'core_apply_patch_cli_integration'
+
+[[profile.default.overrides]]
+# These matrices launch many MCP stdio servers and need a larger timeout when
+# the complete core suite is running.
+filter = 'package(codex-core) & (test(code_mode_excludes_mcp_servers_using_their_configured_identity) | test(mcp_code_mode_exclusion_does_not_change_direct_mode_tool_exposure))'
+test-group = 'core_code_mode_mcp_matrix'
+slow-timeout = { period = "1m", terminate-after = 4 }
 
 [[profile.default.overrides]]
 # These tests create restricted-token Windows child processes and private desktops.
