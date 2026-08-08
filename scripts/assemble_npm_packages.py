@@ -10,6 +10,7 @@ the same immutable release candidate.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import re
@@ -115,6 +116,25 @@ def copy_vendor_tree(source: Path, destination: Path) -> None:
         shutil.copytree(target_dir, target_destination)
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha256_tree(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(path for path in root.rglob("*") if path.is_file()):
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(b"\0")
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def archive_sort_key(package_version: str, archive: Path) -> tuple[str, int, str]:
     timestamp = TIMESTAMP_RE.search(package_version)
     return (
@@ -156,7 +176,11 @@ def extract_fork_payloads(artifact_dir: Path, vendor_root: Path) -> dict[str, di
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
-        manifest[target] = {"archive": archive.name, "version": package_version}
+        manifest[target] = {
+            "archive": archive.name,
+            "version": package_version,
+            "sha256": sha256_file(archive),
+        }
     return manifest
 
 
@@ -174,7 +198,11 @@ def main() -> int:
             copy_vendor_tree(args.upstream_vendor_src, vendor_root)
             for platform, target in PLATFORM_TARGETS.items():
                 if (vendor_root / target).is_dir():
-                    source_manifest[target] = {"source": "upstream-vendor-src", "platform": platform}
+                    source_manifest[target] = {
+                        "source": "upstream-vendor-src",
+                        "platform": platform,
+                        "payload_sha256": sha256_tree(vendor_root / target),
+                    }
         else:
             workflow = (
                 {"url": args.upstream_workflow_url}
@@ -191,11 +219,17 @@ def main() -> int:
             )
             for platform, target in PLATFORM_TARGETS.items():
                 if (vendor_root / target).is_dir():
+                    artifact_dir = stage_module.artifact_dir_for_target(upstream_cache, target)
+                    artifact = next(artifact_dir.glob("codex-package-*.tar.gz"), None)
                     source_manifest[target] = {
                         "source": args.upstream_repo,
                         "workflow": workflow["url"],
                         "platform": platform,
                     }
+                    if artifact is not None:
+                        source_manifest[target].update(
+                            {"artifact": artifact.name, "sha256": sha256_file(artifact)}
+                        )
 
         source_manifest.update(extract_fork_payloads(args.fork_artifact_dir, vendor_root))
         missing = [
