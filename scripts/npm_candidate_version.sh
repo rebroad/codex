@@ -10,4 +10,4 @@ timestamp="${CODEX_PACKAGE_TIMESTAMP:-$(date -u +%Y%m%d%H%M)}"
 [[ "${commit}" =~ ^[0-9a-fA-F]{12}$ ]] || { echo "invalid commit hash: ${commit}" >&2; exit 1; }
 [[ "${timestamp}" =~ ^[0-9]{12}$ ]] || { echo "invalid UTC timestamp: ${timestamp}" >&2; exit 1; }
 
-printf '%s.g%s.t%s\n' "${base_version}" "${commit}" "${timestamp}"
+printf '%s.%s.%s\n' "${base_version}" "${commit}" "${timestamp}"
