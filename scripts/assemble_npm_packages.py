@@ -58,8 +58,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--upstream-version",
-        required=True,
         help="Upstream Cargo version whose successful rust-release run supplies desktop targets.",
+    )
+    parser.add_argument(
+        "--no-upstream",
+        action="store_true",
+        help="Assemble solely from fork archives already in --fork-artifact-dir.",
     )
     parser.add_argument("--upstream-repo", default="openai/codex")
     parser.add_argument("--upstream-workflow-url")
@@ -147,8 +151,12 @@ def archive_sort_key(package_version: str, archive: Path) -> tuple[str, int, str
 def select_fork_archives(artifact_dir: Path) -> dict[str, tuple[Path, str]]:
     selected: dict[str, tuple[Path, str]] = {}
     for archive in sorted(artifact_dir.glob("codex-npm-*.tgz")):
-        with tarfile.open(archive, "r:gz") as package_archive:
-            metadata = json.loads(package_archive.extractfile("package/package.json").read())
+        try:
+            with tarfile.open(archive, "r:gz") as package_archive:
+                metadata = json.loads(package_archive.extractfile("package/package.json").read())
+        except (OSError, tarfile.TarError, KeyError, json.JSONDecodeError) as error:
+            print(f"Ignoring unusable fork npm archive {archive}: {error}", file=sys.stderr)
+            continue
         package_version = metadata.get("version", "")
         for platform, target in PLATFORM_TARGETS.items():
             if package_version.endswith(f"-{platform}"):
@@ -203,7 +211,9 @@ def main() -> int:
                         "platform": platform,
                         "payload_sha256": sha256_tree(vendor_root / target),
                     }
-        else:
+        elif not args.no_upstream:
+            if not args.upstream_version:
+                raise RuntimeError("--upstream-version is required unless --no-upstream is used")
             workflow = (
                 {"url": args.upstream_workflow_url}
                 if args.upstream_workflow_url
