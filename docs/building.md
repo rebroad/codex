@@ -152,8 +152,10 @@ packages, checks npm authentication and immutable-version collisions, then
 publishes the eight platform packages before the root alias package. It fails
 before publishing if any platform package is missing or invalid.
 
-The GitHub workflow builds, audits, publishes the GitHub release, and publishes
-the npm packages through npm Trusted Publishing. Local npm publication remains
+The GitHub workflow builds every supported npm architecture from this fork's
+source, audits the combined package, publishes the GitHub release, and then
+publishes npm packages through npm Trusted Publishing. It does not download
+native Codex artifacts from `openai/codex`. Local npm publication remains
 available when the workflow is not being used:
 
 Release tags and binary/npm candidate versions use the workspace version
