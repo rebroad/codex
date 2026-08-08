@@ -106,7 +106,7 @@ The selector is only needed for one cross-platform package name; each native
 package still exposes its ELF directly.
 
 ```bash
-scripts/package-npm.sh
+scripts/package_npm.sh
 ```
 
 The script derives the version from the workspace `codex-rs/Cargo.toml`. Pass a

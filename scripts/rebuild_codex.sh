@@ -583,7 +583,7 @@ build_android() {
 }
 
 run_preflight() {
-  (cd "${SOURCE_REPO}" && bash -n scripts/rebuild_codex.sh scripts/build.sh scripts/package-npm.sh)
+  (cd "${SOURCE_REPO}" && bash -n scripts/rebuild_codex.sh scripts/build.sh scripts/package_npm.sh)
   require_cmd rustup
   require_cmd cargo
   require_cmd npm
@@ -713,7 +713,7 @@ fi
 
 if [[ "${PACKAGE_NPM:-false}" == true ]]; then
   package_target_csv="$(IFS=,; echo "${PACKAGE_TARGETS[*]}")"
-  "${SOURCE_REPO}/scripts/package-npm.sh" "${PACKAGE_VERSION}" "${MODE}" "${package_target_csv}"
+  "${SOURCE_REPO}/scripts/package_npm.sh" "${PACKAGE_VERSION}" "${MODE}" "${package_target_csv}"
 fi
 
 if [[ "${PUBLISH}" == true ]]; then
