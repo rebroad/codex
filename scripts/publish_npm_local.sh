@@ -24,6 +24,7 @@ ARTIFACT_DIR="$(cd -- "${ARTIFACT_DIR}" && pwd)"
 require_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "missing required command: $1" >&2; exit 1; }; }
 require_cmd jq
 require_cmd npm
+require_cmd python3
 require_cmd sha256sum
 require_cmd tar
 
@@ -85,6 +86,10 @@ for platform in "${platforms[@]}"; do
     exit 1
   }
 done
+
+python3 "${ROOT}/scripts/audit_npm_packages.py" \
+  --artifact-dir "${ARTIFACT_DIR}" \
+  --expected-version "${version}"
 
 root_metadata="$(tar -xOf "${root_archive}" package/package.json)"
 for platform in "${platforms[@]}"; do
