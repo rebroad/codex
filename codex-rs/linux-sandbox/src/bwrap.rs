@@ -749,16 +749,18 @@ fn expand_unreadable_globs_with_ripgrep(
         }
     }
 
-    // Record both the logical match and any canonical symlink target. The bwrap
+    // Record the canonical target when a match crosses a symlink. The bwrap
     // overlay needs the resolved target to prevent a readable symlink path from
-    // bypassing an unreadable glob match.
+    // bypassing an unreadable glob match, and emitting the lexical path as a
+    // second mount can fail when its parent is itself an overlaid symlink.
     let mut expanded_paths = BTreeSet::new();
     for (search_root, globs) in patterns_by_search_root {
         for path in ripgrep_files(search_root.as_path(), &globs, max_depth)? {
             if let Some(target) = canonical_target_if_symlinked_path(path.as_path()) {
                 expanded_paths.insert(AbsolutePathBuf::from_absolute_path_checked(target)?);
+            } else {
+                expanded_paths.insert(path);
             }
-            expanded_paths.insert(path);
             if expanded_paths.len() > MAX_UNREADABLE_GLOB_MATCHES {
                 return Err(CodexErr::Fatal(format!(
                     "unreadable glob expansion for {} matched more than {MAX_UNREADABLE_GLOB_MATCHES} paths",

@@ -9,19 +9,19 @@ use image::DynamicImage;
 use image::GenericImageView;
 use image::ImageBuffer;
 use image::ImageFormat;
-use image::Rgba;
+use image::Rgb;
 use pretty_assertions::assert_eq;
 
 use super::*;
 
-fn png_data_url(width: u32, height: u32) -> (String, Vec<u8>) {
-    let image = ImageBuffer::from_pixel(width, height, Rgba([10u8, 20, 30, 255]));
+fn test_image_data_url(width: u32, height: u32) -> (String, Vec<u8>) {
+    let image = ImageBuffer::from_pixel(width, height, Rgb([10u8, 20, 30]));
     let mut encoded = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(image)
-        .write_to(&mut encoded, ImageFormat::Png)
+    DynamicImage::ImageRgb8(image)
+        .write_to(&mut encoded, ImageFormat::Jpeg)
         .expect("encode PNG");
     let bytes = encoded.into_inner();
-    (data_url_from_bytes("image/png", &bytes), bytes)
+    (data_url_from_bytes("image/jpeg", &bytes), bytes)
 }
 
 fn decoded_image(image_url: &str) -> (Vec<u8>, DynamicImage) {
@@ -33,7 +33,7 @@ fn decoded_image(image_url: &str) -> (Vec<u8>, DynamicImage) {
 
 #[test]
 fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
-    let (data_url, original_bytes) = png_data_url(/*width*/ 64, /*height*/ 32);
+    let (data_url, original_bytes) = test_image_data_url(/*width*/ 64, /*height*/ 32);
     let mut items = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -100,7 +100,7 @@ fn detail_policies_apply_the_expected_budgets() {
         ),
         (None, ImageDetailSetting::High, (2048, 2048), (1600, 1600)),
     ] {
-        let (image_url, _) = png_data_url(input_dimensions.0, input_dimensions.1);
+        let (image_url, _) = test_image_data_url(input_dimensions.0, input_dimensions.1);
         let mut items = vec![ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -140,7 +140,7 @@ fn detail_policies_apply_the_expected_budgets() {
 #[test]
 fn preparation_reports_tool_output_item_id() {
     let call_id = "call-image";
-    let (image_url, _) = png_data_url(/*width*/ 64, /*height*/ 32);
+    let (image_url, _) = test_image_data_url(/*width*/ 64, /*height*/ 32);
     let mut items = vec![ResponseItem::FunctionCallOutput {
         id: None,
         call_id: call_id.to_string(),
@@ -308,7 +308,7 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
 
 #[test]
 fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
-    let (valid_image_url, _) = png_data_url(/*width*/ 64, /*height*/ 32);
+    let (valid_image_url, _) = test_image_data_url(/*width*/ 64, /*height*/ 32);
     let expected_valid_image_url = valid_image_url.clone();
     let mut items = vec![ResponseItem::CustomToolCallOutput {
         id: None,
