@@ -359,10 +359,23 @@ cargo_build() {
   fi
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_cc="${ARMV7_LINKER:-arm-linux-gnueabihf-gcc}"
+    local armv7_cxx="${ARMV7_CXX:-arm-linux-gnueabihf-g++}"
+    local armv7_ar="${ARMV7_AR:-arm-linux-gnueabihf-ar}"
+    local armv7_ranlib="${ARMV7_RANLIB:-arm-linux-gnueabihf-ranlib}"
     require_cmd "${armv7_cc}"
+    require_cmd "${armv7_cxx}"
+    require_cmd "${armv7_ar}"
+    require_cmd "${armv7_ranlib}"
+    # The musl tool setup exports TARGET_* for x86_64-musl. Those variables
+    # take precedence over the target-specific CC_* values in some build
+    # scripts, causing an x86 compiler to receive ARM flags.
+    unset TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB 2>/dev/null || true
     env_args+=(
       CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="${armv7_cc}"
       CC_armv7_unknown_linux_gnueabihf="${armv7_cc}"
+      CXX_armv7_unknown_linux_gnueabihf="${armv7_cxx}"
+      AR_armv7_unknown_linux_gnueabihf="${armv7_ar}"
+      RANLIB_armv7_unknown_linux_gnueabihf="${armv7_ranlib}"
     )
   fi
   if [[ "${target_mode}" == musl ]]; then
@@ -542,6 +555,12 @@ while (($#)); do
     *) die "unknown option ${1} (use --help)" ;;
   esac
 done
+
+if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == musl ]]; then
+  require_cmd sudo
+  echo "Authenticating sudo before starting the build..." >&2
+  sudo -v
+fi
 
 require_cmd git
 require_cmd python3
