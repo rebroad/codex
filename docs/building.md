@@ -39,6 +39,9 @@ scripts/rebuild_codex.sh --release
 scripts/rebuild_codex.sh --release --package-npm
 scripts/rebuild_codex.sh --release --target armv7
 scripts/rebuild_codex.sh --release --target android --package-npm
+scripts/rebuild_codex.sh --release --target all --package-npm
+# Add --publish-npm only after the complete set has been audited.
+scripts/rebuild_codex.sh --release --target all --publish-npm
 ```
 
 ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
@@ -121,18 +124,15 @@ This writes the packages to:
 ../codex.build/build/npm-artifact/
 ```
 
-For a complete nine-package candidate, provide the upstream vendor tree and
-the locally staged fork archives. The assembler selects the newest fork
-archive per target, creates the root aliases, writes the source/checksum
-manifest, and runs the full audit:
+For a complete nine-package candidate, use `rebuild_codex.sh` with
+`--target all`. It downloads the latest completed fork npm release when one
+is available, reuses valid local platform archives, and builds only requested
+local targets that are still missing. It then selects one payload per
+architecture, normalizes package versions, creates the root aliases, writes
+the source/checksum manifest, and runs the full audit:
 
 ```bash
-VERSION="$(scripts/npm_candidate_version.sh)"
-scripts/package_npm.sh \
-  "$VERSION" release musl,armv7,android \
-  --vendor-root ../codex.build/build/upstream-vendor \
-  --fork-artifact-dir ../codex.build/build/npm-artifact \
-  --output-dir ../codex.build/build/npm-artifact-complete
+scripts/rebuild_codex.sh --release --target all --package-npm
 ```
 
 The complete output contains one root archive and eight platform archives.

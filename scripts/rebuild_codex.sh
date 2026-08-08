@@ -33,6 +33,7 @@ MODE="debug"
 TARGET_MODE="native"
 PUBLISH="false"
 PACKAGE_NPM="false"
+PUBLISH_NPM="false"
 PREFLIGHT_ONLY="false"
 DRY_RUN="false"
 SYNCED="false"
@@ -42,6 +43,7 @@ RUSTY_V8_BUILD_REPO=""
 TIMESTAMP="$(date +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
+FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 
 usage() {
   cat <<'EOF'
@@ -57,6 +59,7 @@ Options:
   --armv7                  Alias for --target armv7
   --build-npm-vendor       Build the Linux musl payload for npm packaging
   --package-npm            Build local @reb.ai/codex npm archives
+  --publish-npm            Publish the complete locally assembled npm set
   --package-version V      Override only the npm package release version
   --dry-run                Use supported dry-run checks
   --publish                Create/push codex-v<version> and wait for GitHub release
@@ -70,6 +73,55 @@ EOF
 
 die() { echo "rebuild_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
+
+set_v8_path_patch() {
+  local manifest="${1}" build_repo="${2}"
+  sed -i '/^v8 = { path = /d' "${manifest}"
+  sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${build_repo}\" }" "${manifest}"
+}
+
+download_latest_fork_npm_release() {
+  local output_dir="${BUILD_REPO}/build/npm-artifact"
+  local tag
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "gh is unavailable; using local npm artifacts." >&2
+    return 0
+  fi
+  mkdir -p "${output_dir}"
+  tag="$(gh release list --repo "${FORK_RELEASE_REPO}" --limit 50 \
+    --json tagName,publishedAt \
+    --jq '[.[] | select(.tagName | startswith("codex-npm-v"))] | sort_by(.publishedAt) | last.tagName' \
+    2>/dev/null || true)"
+  if [[ -z "${tag}" ]]; then
+    echo "No completed fork npm release is available from ${FORK_RELEASE_REPO}; using local artifacts." >&2
+    return 0
+  fi
+  echo "Downloading latest fork npm release ${FORK_RELEASE_REPO}:${tag}..." >&2
+  if ! gh release download "${tag}" --repo "${FORK_RELEASE_REPO}" \
+    --pattern 'codex-npm-*.tgz' --dir "${output_dir}" --clobber; then
+    echo "Fork npm release download failed; using local artifacts." >&2
+  fi
+}
+
+platform_for_package_target() {
+  case "${1}" in
+    musl) echo linux-x64 ;;
+    armv7) echo linux-armv7 ;;
+    android) echo android-arm64 ;;
+  esac
+}
+
+has_local_npm_platform_archive() {
+  local target="${1}" platform archive
+  platform="$(platform_for_package_target "${target}")"
+  shopt -s nullglob
+  for archive in "${BUILD_REPO}/build/npm-artifact/codex-npm-${platform}-"*.tgz; do
+    if tar -tzf "${archive}" package/package.json >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 sync_sources() {
   [[ "${SYNCED}" == true ]] && return
@@ -140,9 +192,7 @@ prepare_armv7_rusty_v8_source() {
     rm -rf "${rust_toolchain}"
   fi
   local manifest="${BUILD_WORKSPACE}/Cargo.toml"
-  if ! grep -Fq "path = \"${build_repo}\"" "${manifest}"; then
-    sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${build_repo}\" }" "${manifest}"
-  fi
+  set_v8_path_patch "${manifest}" "${build_repo}"
   RUSTY_V8_ARMV7_PREPARED="true"
 }
 
@@ -161,9 +211,7 @@ prepare_native_rusty_v8_source() {
   rm -rf "${build_repo}/third_party/rust-toolchain"
   source_repo="${build_repo}"
   local manifest="${BUILD_WORKSPACE}/Cargo.toml"
-  if ! grep -Fq "path = \"${source_repo}\"" "${manifest}"; then
-    sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${source_repo}\" }" "${manifest}"
-  fi
+  set_v8_path_patch "${manifest}" "${source_repo}"
   RUSTY_V8_SOURCE_PREPARED="true"
 }
 
@@ -640,6 +688,7 @@ while (($#)); do
     --armv7) TARGET_MODE=armv7; shift ;;
     --build-npm-vendor) TARGET_MODE=musl; PACKAGE_NPM=true; shift ;;
     --package-npm) PACKAGE_NPM=true; shift ;;
+    --publish-npm) PACKAGE_NPM=true; PUBLISH_NPM=true; shift ;;
     --package-version) PACKAGE_VERSION="${2:-}"; shift 2 ;;
     --package-version=*) PACKAGE_VERSION="${1#*=}"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
@@ -715,6 +764,19 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
+if [[ "${PACKAGE_NPM}" == true ]]; then
+  download_latest_fork_npm_release
+  BUILD_PACKAGE_TARGETS=()
+  for package_target in "${PACKAGE_TARGETS[@]}"; do
+    if has_local_npm_platform_archive "${package_target}"; then
+      echo "Reusing existing npm payload for ${package_target}." >&2
+    else
+      BUILD_PACKAGE_TARGETS+=("${package_target}")
+    fi
+  done
+else
+  BUILD_PACKAGE_TARGETS=()
+fi
 if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
   prepare_armv7_rusty_v8_source
 elif [[ "${TARGET_MODE}" == native ]]; then
@@ -731,8 +793,10 @@ fi
 COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=12 HEAD)"
 
 if [[ "${PACKAGE_NPM}" == true ]]; then
-  echo "Building npm target(s): $(IFS=,; echo "${PACKAGE_TARGETS[*]}")" >&2
-  for package_target in "${PACKAGE_TARGETS[@]}"; do
+  if [[ "${#BUILD_PACKAGE_TARGETS[@]}" -gt 0 ]]; then
+    echo "Building npm target(s): $(IFS=,; echo "${BUILD_PACKAGE_TARGETS[*]}")" >&2
+  fi
+  for package_target in "${BUILD_PACKAGE_TARGETS[@]}"; do
     if [[ "${package_target}" == android ]]; then
       build_android
     else
@@ -753,8 +817,30 @@ else
 fi
 
 if [[ "${PACKAGE_NPM:-false}" == true ]]; then
-  package_target_csv="$(IFS=,; echo "${PACKAGE_TARGETS[*]}")"
-  "${SOURCE_REPO}/scripts/package_npm.sh" "${PACKAGE_VERSION}" "${MODE}" "${package_target_csv}"
+  if [[ "${#BUILD_PACKAGE_TARGETS[@]}" -gt 0 ]]; then
+    package_target_csv="$(IFS=,; echo "${BUILD_PACKAGE_TARGETS[*]}")"
+    "${SOURCE_REPO}/scripts/package_npm.sh" "${PACKAGE_VERSION}" "${MODE}" "${package_target_csv}"
+  fi
+  if [[ "${TARGET_MODE}" == all || "${PUBLISH_NPM}" == true ]]; then
+    complete_output="${BUILD_REPO}/build/npm-artifact-complete"
+    rm -rf "${complete_output}"
+    mkdir -p "${complete_output}"
+    python3 "${SOURCE_REPO}/scripts/assemble_npm_packages.py" \
+      --release-version "${PACKAGE_VERSION}" \
+      --fork-artifact-dir "${BUILD_REPO}/build/npm-artifact" \
+      --no-upstream \
+      --output-dir "${complete_output}"
+    for archive in "${complete_output}"/codex-npm-*.tgz; do
+      sha256sum "${archive}" >"${archive}.sha256"
+    done
+    python3 "${SOURCE_REPO}/scripts/audit_npm_packages.py" \
+      --artifact-dir "${complete_output}" \
+      --expected-version "${PACKAGE_VERSION}"
+    echo "Complete npm artifact set: ${complete_output}" >&2
+    if [[ "${PUBLISH_NPM}" == true ]]; then
+      "${SOURCE_REPO}/scripts/publish_npm_local.sh" "${complete_output}"
+    fi
+  fi
 fi
 
 if [[ "${PUBLISH}" == true ]]; then
