@@ -418,7 +418,6 @@ configure_rusty_v8_artifacts() {
         preferred_release_repo="${RUSTY_V8_ANDROID_RELEASE_REPO}"
       fi
       local release_repos=("${preferred_release_repo:-rebroad/codex}")
-      [[ -n "${preferred_release_repo}" ]] || release_repos+=("openai/codex")
       for release_repo in "${release_repos[@]}"; do
         base_url="https://github.com/${release_repo}/releases/download/${release_tag}"
         echo "Downloading Rusty V8 ${release_tag} artifacts for ${target} from ${release_repo}." >&2
@@ -779,7 +778,7 @@ for requested_target in "${REQUESTED_TARGETS[@]}"; do
   case "${requested_target}" in
     native)
       if [[ "${PACKAGE_NPM}" == true ]]; then
-        # The upstream Linux npm payload is the portable musl build. Keep
+        # The Linux npm payload is the portable musl build. Keep
         # native as the default host-build mode while making its npm meaning
         # explicit and target-scoped.
         PACKAGE_TARGETS+=(musl)
@@ -831,15 +830,21 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
 fi
 sync_sources
 if [[ "${PACKAGE_NPM}" == true ]]; then
-  download_latest_fork_npm_release
+  if [[ "${CODEX_BUILD_FROM_SOURCE:-false}" != true ]]; then
+    download_latest_fork_npm_release
+  fi
   BUILD_PACKAGE_TARGETS=()
-  for package_target in "${PACKAGE_TARGETS[@]}"; do
-    if has_local_npm_platform_archive "${package_target}"; then
-      echo "Reusing existing npm payload for ${package_target}." >&2
-    else
-      BUILD_PACKAGE_TARGETS+=("${package_target}")
-    fi
-  done
+  if [[ "${CODEX_BUILD_FROM_SOURCE:-false}" == true ]]; then
+    BUILD_PACKAGE_TARGETS=("${PACKAGE_TARGETS[@]}")
+  else
+    for package_target in "${PACKAGE_TARGETS[@]}"; do
+      if has_local_npm_platform_archive "${package_target}"; then
+        echo "Reusing existing npm payload for ${package_target}." >&2
+      else
+        BUILD_PACKAGE_TARGETS+=("${package_target}")
+      fi
+    done
+  fi
 else
   BUILD_PACKAGE_TARGETS=()
 fi
