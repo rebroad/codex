@@ -30,6 +30,7 @@ jobs:
       RUST_TOOLCHAIN: "1.95.0"
       ANDROID_NDK_VERSION: "28.2.13676358"
       RUSTY_V8_COMMIT: "58fb8ceb62e9231002719ee2a4f227d17c938a90"
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Resolve release tag
         id: release
@@ -55,9 +56,30 @@ jobs:
           base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
           commit="$(git rev-parse --short=12 HEAD)"
           timestamp="$(date -u +%Y%m%d%H%M)"
-          package_version="${base_version}.g${commit}.t${timestamp}"
+          package_version="${base_version}.${commit}.${timestamp}"
+          echo "base_version=${base_version}" >> "${GITHUB_OUTPUT}"
           echo "version=${package_version}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=codex-npm-v${package_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve latest upstream native artifacts
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          workflow="$(gh run list \
+            --repo openai/codex \
+            --workflow rust-release.yml \
+            --branch "rust-v${{ steps.candidate.outputs.base_version }}" \
+            --limit 20 \
+            --json url,status,conclusion,createdAt \
+            --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | first')"
+          [[ "${workflow}" != null && -n "${workflow}" ]] || {
+            echo "No successful upstream rust-release workflow found" >&2
+            exit 1
+          }
+          echo "url=$(jq -r .url <<<"${workflow}")" >> "${GITHUB_OUTPUT}"
+          echo "Using upstream workflow $(jq -r .url <<<"${workflow}")"
 
       - name: Install cross-compilation tools
         run: |
@@ -93,26 +115,29 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}.build"
           ./scripts/rebuild_codex.sh --release --target all --package-npm \
             --package-version "${{ steps.candidate.outputs.version }}"
+          python3 scripts/assemble_npm_packages.py \
+            --release-version "${{ steps.candidate.outputs.version }}" \
+            --upstream-version "${{ steps.candidate.outputs.base_version }}" \
+            --upstream-repo openai/codex \
+            --upstream-workflow-url "${{ steps.upstream.outputs.url }}" \
+            --upstream-artifacts-dir "${GITHUB_WORKSPACE}.build/build/upstream-artifacts" \
+            --fork-artifact-dir "${GITHUB_WORKSPACE}.build/build/npm-artifact" \
+            --output-dir "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete"
 
-      - name: Verify package names
+      - name: Verify complete package set
         run: |
           set -euo pipefail
           shopt -s nullglob
-          archives=( "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz )
-          ((${#archives[@]} == 4)) || { echo "Expected four fork-owned npm archives; found ${#archives[@]}" >&2; exit 1; }
-          for archive in "${archives[@]}"; do
-            tar -xOf "${archive}" package/package.json | jq -e '
-              (.name | startswith("@reb.ai/codex")) and
-              (.name == "@reb.ai/codex") and
-              ((.version == "${{ steps.candidate.outputs.version }}") or
-               (.version | startswith("${{ steps.candidate.outputs.version }}-")))
-            ' >/dev/null
-          done
+          archives=( "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/"*.tgz )
+          ((${#archives[@]} == 9)) || { echo "Expected nine complete npm archives; found ${#archives[@]}" >&2; exit 1; }
+          scripts/audit_npm_packages.py \
+            --artifact-dir "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete" \
+            --expected-version "${{ steps.candidate.outputs.version }}"
 
       - name: Create package checksums
         run: |
           set -euo pipefail
-          for archive in "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz; do
+          for archive in "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/"*.tgz; do
             sha256sum "${archive}" >"${archive}.sha256"
           done
 
@@ -124,5 +149,6 @@ jobs:
           gh release create "${{ steps.candidate.outputs.release_tag }}" \
             --title "Codex ${{ steps.candidate.outputs.version }}" \
             --generate-notes \
-            "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz \
-            "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz.sha256
+            "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/"*.tgz \
+            "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/"*.tgz.sha256 \
+            "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/npm-artifact-sources.json"
