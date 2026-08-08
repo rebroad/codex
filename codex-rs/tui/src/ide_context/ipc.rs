@@ -1034,8 +1034,10 @@ mod tests {
             .into_iter()
             .next()
             .expect("UID-0 legacy socket path");
-        std::fs::create_dir(legacy_socket_path.parent().expect("legacy parent"))
-            .expect("create legacy parent");
+        let legacy_parent = legacy_socket_path.parent().expect("legacy parent");
+        std::fs::create_dir(legacy_parent).expect("create legacy parent");
+        std::fs::set_permissions(legacy_parent, std::fs::Permissions::from_mode(0o750))
+            .expect("set private legacy parent permissions");
         let legacy_listener = UnixListener::bind(&legacy_socket_path).expect("bind legacy");
         let server = spawn_ide_context_server(legacy_listener, "legacy-root");
 
@@ -1062,8 +1064,10 @@ mod tests {
         let pre_migration_socket_path = legacy_socket_paths
             .last()
             .expect("pre-migration UID-0 legacy socket path");
-        std::fs::create_dir(pre_migration_socket_path.parent().expect("legacy parent"))
-            .expect("create legacy parent");
+        let legacy_parent = pre_migration_socket_path.parent().expect("legacy parent");
+        std::fs::create_dir(legacy_parent).expect("create legacy parent");
+        std::fs::set_permissions(legacy_parent, std::fs::Permissions::from_mode(0o750))
+            .expect("set private legacy parent permissions");
         let legacy_listener =
             UnixListener::bind(pre_migration_socket_path).expect("bind pre-migration legacy");
         let server = spawn_ide_context_server(legacy_listener, "legacy-root-pre-migration");
