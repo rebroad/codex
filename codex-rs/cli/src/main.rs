@@ -2320,20 +2320,6 @@ async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> a
     Ok(())
 }
 
-fn updater_http_client_factory(
-    config: anyhow::Result<codex_core::config::Config>,
-) -> codex_http_client::HttpClientFactory {
-    match config {
-        Ok(config) => config.http_client_factory(),
-        Err(error) => {
-            eprintln!("warning: failed to load updater network configuration: {error}");
-            codex_http_client::HttpClientFactory::new(
-                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-            )
-        }
-    }
-}
-
 async fn print_app_server_remote_control_output(
     mode: AppServerRemoteControlMode,
 ) -> anyhow::Result<()> {
@@ -2635,34 +2621,6 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
-
-    #[tokio::test]
-    async fn updater_http_client_factory_honors_respect_system_proxy() {
-        let codex_home = tempfile::tempdir().expect("temporary Codex home");
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .cli_overrides(vec![(
-                "features.respect_system_proxy".to_string(),
-                toml::Value::Boolean(true),
-            )])
-            .build()
-            .await
-            .expect("config should load");
-
-        assert_eq!(
-            updater_http_client_factory(Ok(config)).outbound_proxy_policy(),
-            codex_http_client::OutboundProxyPolicy::RespectSystemProxy
-        );
-    }
-
-    #[test]
-    fn updater_http_client_factory_falls_back_when_config_load_fails() {
-        assert_eq!(
-            updater_http_client_factory(Err(anyhow::anyhow!("invalid config")))
-                .outbound_proxy_policy(),
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault
-        );
-    }
 
     #[test]
     fn exec_server_remote_auth_accepts_api_key_auth() {
