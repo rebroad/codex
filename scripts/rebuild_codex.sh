@@ -53,9 +53,9 @@ Builds from the source checkout into the first existing sibling build tree
 Options:
   --debug                  Build debug (default)
   --release                Build optimized release
-  --target <name>          native, musl, armv7, or android
+  --target <names>         native, musl, armv7, android, all, or comma-separated targets
   --armv7                  Alias for --target armv7
-  --build-npm-vendor       Build Linux musl/ARMv7 payloads for npm packaging
+  --build-npm-vendor       Build the Linux musl payload for npm packaging
   --package-npm            Build local @reb.ai/codex npm archives
   --package-version V      Override only the npm package release version
   --dry-run                Use supported dry-run checks
@@ -613,6 +613,44 @@ while (($#)); do
   esac
 done
 
+IFS=',' read -r -a REQUESTED_TARGETS <<<"${TARGET_MODE}"
+[[ "${#REQUESTED_TARGETS[@]}" -gt 0 ]] || die "target must not be empty"
+PACKAGE_TARGETS=()
+for requested_target in "${REQUESTED_TARGETS[@]}"; do
+  case "${requested_target}" in
+    native)
+      if [[ "${PACKAGE_NPM}" == true ]]; then
+        # The upstream Linux npm payload is the portable musl build. Keep
+        # native as the default host-build mode while making its npm meaning
+        # explicit and target-scoped.
+        PACKAGE_TARGETS+=(musl)
+      else
+        [[ "${#REQUESTED_TARGETS[@]}" -eq 1 ]] || die "multiple targets require --package-npm"
+      fi
+      ;;
+    musl|armv7|android) PACKAGE_TARGETS+=("${requested_target}") ;;
+    all)
+      [[ "${PACKAGE_NPM}" == true ]] || die "target all requires --package-npm"
+      PACKAGE_TARGETS+=(musl armv7 android)
+      ;;
+    *) die "unknown target: ${requested_target} (use native, musl, armv7, android, or all)" ;;
+  esac
+done
+
+# Preserve order while removing duplicates from comma-separated selections.
+UNIQUE_PACKAGE_TARGETS=()
+for package_target in "${PACKAGE_TARGETS[@]}"; do
+  already_selected=false
+  for selected_target in "${UNIQUE_PACKAGE_TARGETS[@]}"; do
+    [[ "${selected_target}" == "${package_target}" ]] && already_selected=true && break
+  done
+  [[ "${already_selected}" == true ]] || UNIQUE_PACKAGE_TARGETS+=("${package_target}")
+done
+PACKAGE_TARGETS=("${UNIQUE_PACKAGE_TARGETS[@]}")
+if [[ "${PACKAGE_NPM}" == true && "${#PACKAGE_TARGETS[@]}" -eq 0 ]]; then
+  die "npm packaging requires at least one target"
+fi
+
 if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == musl ]]; then
   require_cmd sudo
   echo "Authenticating sudo before starting the build..." >&2
@@ -650,12 +688,17 @@ fi
 
 COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=12 HEAD)"
 
-if [[ "${TARGET_MODE}" == android ]]; then
+if [[ "${PACKAGE_NPM}" == true ]]; then
+  echo "Building npm target(s): $(IFS=,; echo "${PACKAGE_TARGETS[*]}")" >&2
+  for package_target in "${PACKAGE_TARGETS[@]}"; do
+    if [[ "${package_target}" == android ]]; then
+      build_android
+    else
+      cargo_build "${MODE}" "${package_target}" >/dev/null
+    fi
+  done
+elif [[ "${TARGET_MODE}" == android ]]; then
   build_android
-elif [[ "${PACKAGE_NPM}" == true && "${TARGET_MODE}" == native ]]; then
-  # npm packages use the portable musl and ARMv7 builds below. The native
-  # build is not part of the package and needlessly builds the V8 runtime.
-  echo "Skipping native build; npm packaging will build its target binaries."
 else
   binary="$(cargo_build "${MODE}" "${TARGET_MODE}")"
   if [[ "${TARGET_MODE}" == native ]]; then
@@ -668,11 +711,8 @@ else
 fi
 
 if [[ "${PACKAGE_NPM:-false}" == true ]]; then
-  if [[ "${TARGET_MODE}" != musl ]]; then
-    cargo_build "${MODE}" musl >/dev/null
-  fi
-  cargo_build "${MODE}" armv7 >/dev/null
-  "${SOURCE_REPO}/scripts/package-npm.sh" "${PACKAGE_VERSION}" "${MODE}"
+  package_target_csv="$(IFS=,; echo "${PACKAGE_TARGETS[*]}")"
+  "${SOURCE_REPO}/scripts/package-npm.sh" "${PACKAGE_VERSION}" "${MODE}" "${package_target_csv}"
 fi
 
 if [[ "${PUBLISH}" == true ]]; then
