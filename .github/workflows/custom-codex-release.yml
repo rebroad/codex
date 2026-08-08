@@ -196,6 +196,8 @@ jobs:
         with:
           target: ${{ matrix.target }}
           release-repo: rebroad/rusty_v8
+          archive-sha256: ${{ env.RUSTY_V8_MUSL_ARCHIVE_SHA256 }}
+          binding-sha256: ${{ env.RUSTY_V8_MUSL_BINDING_SHA256 }}
 
       - name: Build fork target from source
         if: matrix.build_mode == 'rebuild'
