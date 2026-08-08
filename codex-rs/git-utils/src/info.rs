@@ -33,7 +33,22 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     } else {
         base_dir.parent()?
     };
-    find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
+    find_ancestor_git_entry(base).and_then(|(repo_root, dot_git)| {
+        // Treating the filesystem root as a repository would make every
+        // temporary directory appear to belong to one and can trigger
+        // unbounded metadata scans.
+        if repo_root.parent().is_none() {
+            return None;
+        }
+        // A directory named `.git` is only a repository marker when it has
+        // the repository's HEAD file. This avoids accepting placeholder
+        // directories and then allowing Git to discover an unrelated parent
+        // repository.
+        if dot_git.is_dir() && !dot_git.join("HEAD").is_file() {
+            return None;
+        }
+        Some(repo_root)
+    })
 }
 
 /// Timeout for git commands to prevent freezing on large repositories
@@ -71,6 +86,9 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
         .success();
 
     if !is_git_repo {
+        return None;
+    }
+    if git_repo_is_filesystem_root(cwd).await {
         return None;
     }
 
@@ -311,6 +329,9 @@ pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
     if !out.status.success() {
         return Vec::new();
     }
+    if git_repo_is_filesystem_root(cwd).await {
+        return Vec::new();
+    }
 
     let fmt = "%H%x1f%ct%x1f%s"; // <sha> <US> <commit_time> <US> <subject>
     let limit_arg = (limit > 0).then(|| limit.to_string());
@@ -404,6 +425,40 @@ pub(crate) async fn detect_local_fsmonitor_override(
 ) -> crate::FsmonitorOverride {
     let mut runner = LocalFsmonitorProbeRunner { git, cwd };
     crate::detect_fsmonitor_override(&mut runner).await
+}
+
+pub(crate) async fn git_repo_is_filesystem_root(cwd: &Path) -> bool {
+    let Some(output) = run_git_command_with_timeout(&["rev-parse", "--show-toplevel"], cwd).await
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let Some(root) = String::from_utf8(output.stdout)
+        .ok()
+        .map(|root| PathBuf::from(root.trim()))
+    else {
+        return false;
+    };
+    root.parent().is_none()
+        || is_synthetic_temp_repo_root(&root)
+        || is_temp_path(cwd) && !root.starts_with(std::env::temp_dir())
+}
+
+fn is_temp_path(path: &Path) -> bool {
+    path.starts_with(std::env::temp_dir())
+}
+
+fn is_synthetic_temp_repo_root(repo_root: &Path) -> bool {
+    let temp_dir = std::env::temp_dir();
+    let is_temp_root = repo_root == temp_dir
+        || temp_dir
+            .parent()
+            .is_some_and(|temp_parent| repo_root == temp_parent);
+    is_temp_root
+        && repo_root.join(".git").is_dir()
+        && !repo_root.join(".git").join("HEAD").is_file()
 }
 
 pub(crate) async fn run_git_command_with_timeout_from(
@@ -892,13 +947,13 @@ mod tests {
     #[test]
     fn canonicalize_git_remote_url_normalizes_github_variants() {
         for remote in [
-            "git@github.com:OpenAI/Codex.git",
+            "git@github.com:rebroad/codex.git",
             "ssh://git@github.com/rebroad/codex.git",
-            "ssh://git@github.com:22/OpenAI/Codex.git",
+            "ssh://git@github.com:22/rebroad/codex.git",
             "https://github.com/rebroad/codex.git",
             "https://github.com:443/rebroad/codex.git",
             "https://token@github.com/rebroad/codex/",
-            "github.com/OpenAI/Codex.git",
+            "github.com/rebroad/codex.git",
         ] {
             assert_eq!(
                 canonicalize_git_remote_url(remote),
