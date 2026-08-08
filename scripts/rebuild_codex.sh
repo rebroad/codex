@@ -28,6 +28,7 @@ BUILD_REPO="${BUILD_TREE}"
 BUILD_WORKSPACE="${BUILD_REPO}/codex-rs"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
 VERSION=""
+PACKAGE_VERSION=""
 MODE="debug"
 TARGET_MODE="native"
 PUBLISH="false"
@@ -56,6 +57,7 @@ Options:
   --armv7                  Alias for --target armv7
   --build-npm-vendor       Build Linux musl/ARMv7 payloads for npm packaging
   --package-npm            Build local @reb.ai/codex npm archives
+  --package-version V      Override only the npm package release version
   --dry-run                Use supported dry-run checks
   --publish                Create/push codex-v<version> and wait for GitHub release
   --preflight-only         Run syntax/tooling checks without compiling
@@ -596,6 +598,8 @@ while (($#)); do
     --armv7) TARGET_MODE=armv7; shift ;;
     --build-npm-vendor) TARGET_MODE=musl; PACKAGE_NPM=true; shift ;;
     --package-npm) PACKAGE_NPM=true; shift ;;
+    --package-version) PACKAGE_VERSION="${2:-}"; shift 2 ;;
+    --package-version=*) PACKAGE_VERSION="${1#*=}"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --publish) PUBLISH=true; MODE=release; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
@@ -620,6 +624,13 @@ require_cmd python3
 read_toolchain
 VERSION="$(workspace_version)"
 [[ -n "${VERSION}" ]] || die "could not determine workspace version"
+if [[ -z "${PACKAGE_VERSION}" && "${PACKAGE_NPM}" == true ]]; then
+  PACKAGE_VERSION="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
+else
+  PACKAGE_VERSION="${PACKAGE_VERSION:-${VERSION}}"
+fi
+[[ "${PACKAGE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-+.0-9A-Za-z-]+$ ]] \
+  || die "invalid npm package version: ${PACKAGE_VERSION}"
 if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
@@ -661,7 +672,7 @@ if [[ "${PACKAGE_NPM:-false}" == true ]]; then
     cargo_build "${MODE}" musl >/dev/null
   fi
   cargo_build "${MODE}" armv7 >/dev/null
-  "${SOURCE_REPO}/scripts/package-npm.sh" "${VERSION}" "${MODE}"
+  "${SOURCE_REPO}/scripts/package-npm.sh" "${PACKAGE_VERSION}" "${MODE}"
 fi
 
 if [[ "${PUBLISH}" == true ]]; then
