@@ -58,7 +58,26 @@ done
 
 OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-${BUILD_TREE}/build/npm-artifact}}"
 mkdir -p "${OUTPUT_DIR}"
-rm -f "${OUTPUT_DIR}"/*.tgz "${OUTPUT_DIR}"/*.tgz.sha256
+# Target-scoped invocations must preserve previously staged architectures so
+# local builds can be accumulated before the complete assembly/audit step.
+shopt -s nullglob
+for archive in "${OUTPUT_DIR}"/codex-npm-*.tgz; do
+  case "$(basename "${archive}")" in
+    codex-npm-linux-x64-*|codex-npm-linux-arm64-*|codex-npm-darwin-x64-*|\
+    codex-npm-darwin-arm64-*|codex-npm-win32-x64-*|codex-npm-win32-arm64-*|\
+    codex-npm-linux-armv7-*|codex-npm-android-arm64-*) ;;
+    *) rm -f "${archive}" "${archive}.sha256" ;;
+  esac
+done
+for target in "${SELECTED_TARGETS[@]}"; do
+  case "${target}" in
+    musl) platform="linux-x64" ;;
+    armv7) platform="linux-armv7" ;;
+    android) platform="android-arm64" ;;
+  esac
+  rm -f "${OUTPUT_DIR}/codex-npm-${platform}-"*.tgz \
+    "${OUTPUT_DIR}/codex-npm-${platform}-"*.tgz.sha256
+done
 VENDOR_ROOT="$(mktemp -d "${BUILD_TREE}/npm-vendor.XXXXXX")"
 FORK_ARTIFACT_DIR=""
 if [[ -n "${UPSTREAM_VENDOR_ROOT}" ]]; then
