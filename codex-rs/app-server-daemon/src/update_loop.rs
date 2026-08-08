@@ -1,6 +1,4 @@
 #[cfg(unix)]
-use std::process::Command as StdCommand;
-#[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -10,8 +8,6 @@ use anyhow::Result;
 use anyhow::bail;
 #[cfg(unix)]
 use futures::FutureExt;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use tokio::signal::unix::Signal;
 #[cfg(unix)]
@@ -132,19 +128,6 @@ fn update_modes_for_identities(
             UpdaterRefreshMode::ReexecIfManagedBinaryChanged,
         )
     }
-}
-
-#[cfg(unix)]
-pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Result<()> {
-    let err = StdCommand::new(managed_codex_bin)
-        .args(["app-server", "daemon", "pid-update-loop"])
-        .exec();
-    Err(err).with_context(|| {
-        format!(
-            "failed to replace updater with managed Codex binary {}",
-            managed_codex_bin.display()
-        )
-    })
 }
 
 #[cfg(unix)]
