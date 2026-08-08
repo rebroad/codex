@@ -22,11 +22,13 @@ Complete local mode:
                       vendor tree, then assemble and audit all nine packages.
   --fork-artifact-dir PATH
                       reuse existing local fork archives instead of staging
+  --output-dir PATH   write package archives to PATH
 EOF
   exit 0
 fi
 UPSTREAM_VENDOR_ROOT=""
 REUSE_FORK_ARTIFACT_DIR=""
+OUTPUT_DIR_OVERRIDE=""
 shift $(( $# >= 3 ? 3 : $# ))
 while (($#)); do
   case "$1" in
@@ -34,6 +36,8 @@ while (($#)); do
     --vendor-root=*) UPSTREAM_VENDOR_ROOT="${1#*=}"; shift ;;
     --fork-artifact-dir) REUSE_FORK_ARTIFACT_DIR="${2:-}"; shift 2 ;;
     --fork-artifact-dir=*) REUSE_FORK_ARTIFACT_DIR="${1#*=}"; shift ;;
+    --output-dir) OUTPUT_DIR_OVERRIDE="${2:-}"; shift 2 ;;
+    --output-dir=*) OUTPUT_DIR_OVERRIDE="${1#*=}"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -52,7 +56,7 @@ for target in "${SELECTED_TARGETS[@]}"; do
   esac
 done
 
-OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_TREE}/build/npm-artifact}"
+OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-${BUILD_TREE}/build/npm-artifact}}"
 mkdir -p "${OUTPUT_DIR}"
 rm -f "${OUTPUT_DIR}"/*.tgz "${OUTPUT_DIR}"/*.tgz.sha256
 VENDOR_ROOT="$(mktemp -d "${BUILD_TREE}/npm-vendor.XXXXXX")"
