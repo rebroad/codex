@@ -221,6 +221,7 @@ jobs:
           VERSION: ${{ needs.prepare-release.outputs.package_version }}
           OUTPUT_DIR: ${{ github.workspace }}.build/npm-source-artifact
           CARGO_TARGET_DIR: ${{ github.workspace }}.build/cargo-target
+        shell: bash
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}/codex-rs"
