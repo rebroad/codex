@@ -30,6 +30,7 @@ BINARY_TARGETS = (
     "armv7-unknown-linux-gnueabihf",
     "aarch64-linux-android",
 )
+UPSTREAM_WORKFLOW_TARGETS = BINARY_TARGETS[:6]
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -159,6 +160,16 @@ def expand_packages(packages: list[str], vendor_src: Path | None = None) -> list
                     ).is_dir()
                 ),
             ]
+        elif package == "codex":
+            package_expansion = [
+                "codex",
+                *(
+                    platform_package
+                    for platform_package in CODEX_PLATFORM_PACKAGES
+                    if CODEX_PLATFORM_PACKAGES[platform_package]["target_triple"]
+                    in UPSTREAM_WORKFLOW_TARGETS
+                ),
+            ]
         for expanded_package in package_expansion:
             if expanded_package in expanded:
                 continue
@@ -231,10 +242,10 @@ def install_from_workflow_artifacts(
     components: Sequence[str],
     vendor_dir: Path,
 ) -> None:
-    artifacts = select_target_artifacts(workflow_id, components)
+    artifacts, available_targets = select_target_artifacts(workflow_id, components)
     download_artifacts(workflow_id, artifacts_dir, artifacts)
     if CODEX_PACKAGE_COMPONENT in components:
-        install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
+        install_codex_package_archives(artifacts_dir, vendor_dir, available_targets)
     install_binary_components(
         artifacts_dir,
         vendor_dir,
@@ -245,29 +256,40 @@ def install_from_workflow_artifacts(
 def select_target_artifacts(
     workflow_id: str,
     components: Sequence[str],
-) -> list[WorkflowArtifact]:
+) -> tuple[list[WorkflowArtifact], list[str]]:
     needs_target_artifacts = CODEX_PACKAGE_COMPONENT in components or any(
         component in BINARY_COMPONENTS for component in components
     )
     if not needs_target_artifacts:
-        return []
+        return [], []
 
     artifacts_by_name = {
         artifact.name: artifact for artifact in list_workflow_artifacts(workflow_id)
     }
     selected_artifacts: list[WorkflowArtifact] = []
+    available_targets: list[str] = []
     for target in BINARY_TARGETS:
         for artifact_name in [target, f"{target}-unsigned"]:
             artifact = artifacts_by_name.get(artifact_name)
             if artifact is not None:
                 selected_artifacts.append(artifact)
+                available_targets.append(target)
                 break
-        else:
-            raise FileNotFoundError(
-                f"Expected workflow artifact not found for target {target}"
-            )
 
-    return selected_artifacts
+    if not selected_artifacts:
+        raise FileNotFoundError(
+            "No Codex package target artifacts found in the selected workflow"
+        )
+
+    missing_targets = sorted(set(BINARY_TARGETS) - set(available_targets))
+    if missing_targets:
+        print(
+            "Workflow does not provide optional target artifacts: "
+            + ", ".join(missing_targets),
+            flush=True,
+        )
+
+    return selected_artifacts, available_targets
 
 
 def list_workflow_artifacts(workflow_id: str) -> list[WorkflowArtifact]:
