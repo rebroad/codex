@@ -57,10 +57,15 @@ Options:
   --debug                  Build debug (default)
   --release                Build optimized release
   --target <names>         native, musl, armv7, android, all, or comma-separated targets
+                           (all means the complete eight-architecture npm candidate)
   --armv7                  Alias for --target armv7
   --build-npm-vendor       Build the Linux musl payload for npm packaging
-  --package-npm            Build local @reb.ai/codex npm archives
-  --publish-npm            Publish the complete locally assembled npm set
+  --package-local-npm      Build/reuse local @reb.ai/codex npm archives
+  --publish-local-npm      Assemble, audit, and publish npm locally
+  --start-github-release   Push a release tag and start/watch GitHub CI
+  --package-npm            Alias for --package-local-npm
+  --publish-npm            Alias for --publish-local-npm
+  --publish                Alias for --start-github-release
   --package-version V      Override only the npm package release version
   --dry-run                Use supported dry-run checks
   --publish                Create/push codex-v<version> and wait for GitHub release
@@ -132,6 +137,30 @@ has_local_npm_platform_archive() {
     fi
   done
   return 1
+}
+
+start_github_release() {
+  require_cmd gh
+  require_cmd jq
+  local tag="codex-v${VERSION}" run_info run_id run_url
+  echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/custom-codex-release.yml" >&2
+  if [[ "${DRY_RUN}" == true ]]; then
+    echo "Would create and push GitHub tag ${tag}" >&2
+    return 0
+  fi
+  git -C "${SOURCE_REPO}" tag -a "${tag}" -m "Release ${VERSION}"
+  git -C "${SOURCE_REPO}" push origin "${tag}"
+  run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
+    --workflow custom-codex-release.yml --limit 20 --json databaseId,headBranch,url \
+    | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag)] | .[0] | [.databaseId, .url] | @tsv')"
+  read -r run_id run_url <<<"${run_info}"
+  if [[ -n "${run_id}" ]]; then
+    echo "GitHub CI run: ${run_url}" >&2
+    gh run watch "${run_id}" --repo "${FORK_RELEASE_REPO}" --exit-status
+    gh release view "${tag}" --repo "${FORK_RELEASE_REPO}" >/dev/null
+  else
+    echo "Tag pushed; the workflow has not appeared yet. Open the workflow URL above." >&2
+  fi
 }
 
 sync_sources() {
@@ -698,12 +727,12 @@ while (($#)); do
     --target=*) TARGET_MODE="${1#*=}"; shift ;;
     --armv7) TARGET_MODE=armv7; shift ;;
     --build-npm-vendor) TARGET_MODE=musl; PACKAGE_NPM=true; shift ;;
-    --package-npm) PACKAGE_NPM=true; shift ;;
-    --publish-npm) PACKAGE_NPM=true; PUBLISH_NPM=true; shift ;;
+    --package-local-npm|--package-npm) PACKAGE_NPM=true; shift ;;
+    --publish-local-npm|--publish-npm) PACKAGE_NPM=true; PUBLISH_NPM=true; shift ;;
     --package-version) PACKAGE_VERSION="${2:-}"; shift 2 ;;
     --package-version=*) PACKAGE_VERSION="${1#*=}"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
-    --publish) PUBLISH=true; MODE=release; shift ;;
+    --start-github-release|--publish) PUBLISH=true; MODE=release; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
@@ -714,6 +743,10 @@ while (($#)); do
     *) die "unknown option ${1} (use --help)" ;;
   esac
 done
+
+if [[ "${PUBLISH}" == true && ( "${PACKAGE_NPM}" == true || "${PUBLISH_NPM}" == true ) ]]; then
+  die "GitHub release startup and local npm publication are separate operations"
+fi
 
 if [[ "${PUBLISH_NPM}" == true ]]; then
   case "${TARGET_MODE}" in
@@ -763,9 +796,13 @@ fi
 
 require_cmd git
 require_cmd python3
-read_toolchain
 VERSION="$(workspace_version)"
 [[ -n "${VERSION}" ]] || die "could not determine workspace version"
+if [[ "${PUBLISH}" == true ]]; then
+  start_github_release
+  exit 0
+fi
+read_toolchain
 if [[ -z "${PACKAGE_VERSION}" && "${PACKAGE_NPM}" == true ]]; then
   PACKAGE_VERSION="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
 else
@@ -852,29 +889,6 @@ if [[ "${PACKAGE_NPM:-false}" == true ]]; then
     echo "Complete npm artifact set: ${complete_output}" >&2
     if [[ "${PUBLISH_NPM}" == true ]]; then
       "${SOURCE_REPO}/scripts/publish_npm_local.sh" "${complete_output}"
-    fi
-  fi
-fi
-
-if [[ "${PUBLISH}" == true ]]; then
-  require_cmd gh
-  require_cmd jq
-  tag="codex-v${VERSION}"
-  if [[ "${DRY_RUN}" == true ]]; then
-    echo "Would create and push GitHub tag ${tag}"
-  else
-    git -C "${SOURCE_REPO}" tag -a "${tag}" -m "Release ${VERSION}"
-    git -C "${SOURCE_REPO}" push origin "${tag}"
-    run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
-      --workflow custom-codex-release.yml --limit 20 --json databaseId,headBranch,url \
-      | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag)] | .[0] | [.databaseId, .url] | @tsv')"
-    read -r run_id run_url <<<"${run_info}"
-    if [[ -n "${run_id}" ]]; then
-      echo "GitHub CI run: ${run_url}" >&2
-      gh run watch "${run_id}" --exit-status
-      gh release view "${tag}" >/dev/null
-    else
-      echo "Tag pushed; custom-codex-release workflow has not appeared yet. Check GitHub Actions for ${tag}."
     fi
   fi
 fi
