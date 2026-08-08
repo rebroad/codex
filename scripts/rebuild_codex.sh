@@ -40,7 +40,7 @@ SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_SOURCE_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
-TIMESTAMP="$(date +%Y%m%d%H%M)"
+TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
@@ -68,7 +68,6 @@ Options:
   --publish                Alias for --start-github-release
   --package-version V      Override only the npm package release version
   --dry-run                Use supported dry-run checks
-  --publish                Create/push codex-v<version> and wait for GitHub release
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced sibling source tree
   --jobs N                 Set CARGO_BUILD_JOBS
@@ -142,7 +141,9 @@ has_local_npm_platform_archive() {
 start_github_release() {
   require_cmd gh
   require_cmd jq
-  local tag="codex-v${VERSION}" run_info run_id run_url
+  local release_version tag run_info run_id run_url
+  release_version="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
+  tag="codex-v${release_version}"
   echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/custom-codex-release.yml" >&2
   if [[ "${DRY_RUN}" == true ]]; then
     echo "Would create and push GitHub tag ${tag}" >&2
@@ -619,9 +620,9 @@ from pathlib import Path
 path = Path(sys.argv[1])
 version = sys.argv[2].encode()
 replacement = (sys.argv[2] + "-" + sys.argv[3]).encode()
-pattern = re.compile(re.escape(version) + rb"-[0-9a-f]{12}-[0-9]{12}")
-if len(replacement) != len(version) + 1 + 12 + 1 + 12:
-    raise SystemExit("timestamp placeholder width mismatch")
+pattern = re.compile(re.escape(version) + rb"-[0-9a-f]{10}-[0-9]{12}")
+if len(replacement) != len(version) + 1 + 10 + 1 + 12:
+    raise SystemExit("version placeholder width mismatch")
 with path.open("r+b") as handle:
     mm = mmap.mmap(handle.fileno(), 0)
     count = 0
@@ -640,7 +641,7 @@ install_binary() {
   local binary="${1}" version="${2}" short
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   mkdir -p "${INSTALL_BIN_DIR}"
-  short="$(git -C "${SOURCE_REPO}" rev-parse --short=12 HEAD)"
+  short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
   local name="codex-${version}-${short}-${TIMESTAMP}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
   if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
@@ -854,7 +855,7 @@ if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   exit 0
 fi
 
-COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=12 HEAD)"
+COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
 
 if [[ "${PACKAGE_NPM}" == true ]]; then
   if [[ "${#BUILD_PACKAGE_TARGETS[@]}" -gt 0 ]]; then
