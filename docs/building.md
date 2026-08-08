@@ -36,12 +36,14 @@ packaging, and opt-in npm/GitHub publishing:
 
 ```bash
 scripts/rebuild_codex.sh --release
-scripts/rebuild_codex.sh --release --package-npm
+scripts/rebuild_codex.sh --release --package-local-npm
 scripts/rebuild_codex.sh --release --target armv7
 scripts/rebuild_codex.sh --release --target android --package-npm
-scripts/rebuild_codex.sh --release --target all --package-npm
+scripts/rebuild_codex.sh --release --target all --package-local-npm
 # Full local assembly, audit, and npm publication.
-scripts/rebuild_codex.sh --release --publish-npm
+scripts/rebuild_codex.sh --release --publish-local-npm
+# Start the GitHub build/release workflow; this does not compile locally.
+scripts/rebuild_codex.sh --release --start-github-release
 ```
 
 ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
@@ -126,21 +128,26 @@ This writes the packages to:
 ../codex.build/build/npm-artifact/
 ```
 
-For a complete nine-package candidate, use `rebuild_codex.sh` with
-`--target all`. It downloads the latest completed fork npm release when one
-is available, reuses valid local platform archives, and builds only requested
-local targets that are still missing. It then selects one payload per
-architecture, normalizes package versions, creates the root aliases, writes
-the source/checksum manifest, and runs the full audit:
+Target selection is deliberately split from the host build matrix:
+
+- `native` is the default executable build. With npm packaging it means the
+  local Linux musl x64 package only.
+- `musl`, `armv7`, and `android` select the locally buildable fork targets.
+- `all` means the complete npm candidate: all eight supported architectures
+  (`linux-x64`, `linux-arm64`, both macOS targets, both Windows targets,
+  `linux-armv7`, and `android-arm64`). The local phase reuses/downloads the
+  desktop payloads and builds the locally supported fork targets as needed.
+
+For a complete nine-package candidate, use:
 
 ```bash
-scripts/rebuild_codex.sh --release --target all --package-npm
+scripts/rebuild_codex.sh --release --target all --package-local-npm
 ```
 
-`--publish-npm` implies `--package-npm` and selects `all` by default. If a
-target is explicitly supplied, it must be `all`. It downloads the newest
-completed fork release when one exists, reuses or builds missing local targets,
-assembles and audits all nine
+`--publish-local-npm` implies `--package-local-npm` and selects `all` by
+default. If a target is explicitly supplied, it must be `all`. It downloads
+the newest completed fork release when one exists, reuses or builds missing
+local targets, assembles and audits all nine
 packages, checks npm authentication and immutable-version collisions, then
 publishes the eight platform packages before the root alias package. It fails
 before publishing if any platform package is missing or invalid.
@@ -149,7 +156,8 @@ The GitHub workflow and local npm publication are separate operations:
 
 ```bash
 # Create/push the source release tag, start CI, print its run URL, and watch it.
-scripts/rebuild_codex.sh --release --publish
+# No local cargo compilation or npm packaging is performed by this command.
+scripts/rebuild_codex.sh --release --start-github-release
 
 # Publish the exact completed GitHub candidate locally.
 TAG="codex-npm-v<candidate-version>"
@@ -160,11 +168,12 @@ python3 scripts/audit_npm_packages.py \
 scripts/publish_npm_local.sh ../codex.build/build/npm-artifact-github
 ```
 
-`--publish` creates GitHub release artifacts and does not publish to npm.
-`--publish-npm` publishes locally and does not start a new GitHub run; when it
-reuses a completed fork release, it prints that release URL. `npm whoami` (or
-an equivalent authenticated npm session) must succeed before the final
-publication step.
+`--start-github-release` creates GitHub release artifacts and does not publish
+to npm. `--publish-local-npm` publishes locally and does not start a new GitHub
+run; when it reuses a completed fork release, it prints that release URL.
+`--publish` and `--publish-npm` remain compatibility aliases for the two
+descriptive options. `npm whoami` (or an equivalent authenticated npm session)
+must succeed before the final publication step.
 
 The complete output contains one root archive and eight platform archives.
 Publish or install them together when using the unified package:
