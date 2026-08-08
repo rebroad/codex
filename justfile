@@ -7,6 +7,7 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
+cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", "../build/cargo-target")
 
 # Display help
 help:
@@ -85,7 +86,7 @@ install:
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
-    RUST_MIN_STACK={{ rust_min_stack }} NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+    CARGO_TARGET_DIR={{ cargo_target_dir }} RUST_MIN_STACK={{ rust_min_stack }} NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
 
 [windows]
 test *args:
