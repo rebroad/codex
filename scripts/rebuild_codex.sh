@@ -223,6 +223,15 @@ read_toolchain() {
 
 cargo_target_dir() {
   local mode="${1}" target_mode="${2}"
+  if [[ "${mode}" == debug && "${target_mode}" == native ]]; then
+    if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+      echo "${CARGO_TARGET_DIR}"
+    else
+      (cd "${BUILD_WORKSPACE}" && cargo metadata --no-deps --format-version 1 \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+    fi
+    return
+  fi
   case "${target_mode}" in
     native) echo "${BUILD_REPO}/cargo-target-linux-${mode}" ;;
     musl) echo "${BUILD_REPO}/cargo-target-musl-${mode}" ;;
@@ -352,7 +361,7 @@ cargo_build() {
     fi
   fi
 
-  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host)
+  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host -p codex-rmcp-client --bin test_stdio_server)
   [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
   cmd+=( "${profile_args[@]}" --locked )
@@ -418,6 +427,13 @@ install_code_mode_host() {
   [[ -x "${binary}" ]] || die "built code-mode host not found: ${binary}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/codex-code-mode-host"
   echo "Installed ${INSTALL_BIN_DIR}/codex-code-mode-host"
+}
+
+install_test_stdio_server() {
+  local binary="${1}"
+  [[ -x "${binary}" ]] || die "built test stdio server not found: ${binary}"
+  install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/test_stdio_server"
+  echo "Installed ${INSTALL_BIN_DIR}/test_stdio_server"
 }
 
 build_android() {
@@ -539,6 +555,7 @@ else
   if [[ "${TARGET_MODE}" == native ]]; then
     install_binary "${binary}" "${VERSION}"
     install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
+    install_test_stdio_server "$(dirname "${binary}")/test_stdio_server"
   else
     echo "Built target binary: ${binary}"
   fi

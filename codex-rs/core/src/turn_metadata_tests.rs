@@ -1179,5 +1179,12 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
     )
     .await
     .expect("failed git enrichment should complete");
+    assert!(
+        invalid_state
+            .enrichment_task
+            .lock()
+            .expect("enrichment task lock")
+            .is_none()
+    );
     assert!(invalid_state.current_workspaces().is_empty());
 }
