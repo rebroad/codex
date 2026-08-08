@@ -38,6 +38,7 @@ packaging, and opt-in npm/GitHub publishing:
 scripts/rebuild_codex.sh --release
 scripts/rebuild_codex.sh --release --package-npm
 scripts/rebuild_codex.sh --release --target armv7
+scripts/rebuild_codex.sh --release --target android --package-npm
 ```
 
 ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
@@ -106,7 +107,9 @@ The selector is only needed for one cross-platform package name; each native
 package still exposes its ELF directly.
 
 ```bash
-scripts/package_npm.sh
+# Stage locally built fork targets selected by the target list.
+VERSION="$(scripts/npm_candidate_version.sh)"
+scripts/package_npm.sh "$VERSION" release musl,armv7,android
 ```
 
 The script derives the version from the workspace `codex-rs/Cargo.toml`. Pass a
@@ -118,13 +121,28 @@ This writes the packages to:
 ../codex.build/build/npm-artifact/
 ```
 
-Publish or install the three archives together when using the unified package:
+For a complete nine-package candidate, provide the upstream vendor tree and
+the locally staged fork archives. The assembler selects the newest fork
+archive per target, creates the root aliases, writes the source/checksum
+manifest, and runs the full audit:
+
+```bash
+VERSION="$(scripts/npm_candidate_version.sh)"
+scripts/package_npm.sh \
+  "$VERSION" release musl,armv7,android \
+  --vendor-root ../codex.build/build/upstream-vendor \
+  --fork-artifact-dir ../codex.build/build/npm-artifact \
+  --output-dir ../codex.build/build/npm-artifact-complete
+```
+
+The complete output contains one root archive and eight platform archives.
+Publish or install them together when using the unified package:
 
 ```bash
 npm install --global @reb.ai/codex
 ```
 
-The generated archives are named `reb.ai-codex-*.tgz`. For local testing,
+The generated archives are named `codex-npm-*.tgz`. For local testing,
 install the platform archive directly; it creates npm's normal global `codex`
 link and points it directly at the native ELF. The unified package's selector
 adds only platform detection and signal forwarding.
