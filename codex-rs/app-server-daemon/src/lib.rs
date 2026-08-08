@@ -810,15 +810,6 @@ fn restart_decision(
 }
 
 #[cfg(unix)]
-fn should_reexec_updater(
-    updater_refresh_mode: UpdaterRefreshMode,
-    outcome: RestartIfRunningOutcome,
-) -> bool {
-    updater_refresh_mode == UpdaterRefreshMode::ReexecIfManagedBinaryChanged
-        && outcome == RestartIfRunningOutcome::Restarted
-}
-
-#[cfg(unix)]
 fn try_lock_file(file: &tokio::fs::File) -> Result<bool> {
     use std::os::fd::AsRawFd;
 
@@ -853,11 +844,9 @@ mod tests {
     use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
     use super::RestartDecision;
-    use super::RestartIfRunningOutcome;
     use super::RestartMode;
     use super::UpdaterRefreshMode;
     use super::restart_decision;
-    use super::should_reexec_updater;
     use crate::client::ProbeInfo;
 
     #[test]
@@ -865,38 +854,6 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RemoteControlStatus::AlreadyEnabled).expect("serialize"),
             "\"alreadyEnabled\""
-        );
-    }
-
-    #[test]
-    fn updater_reexec_waits_for_validated_restart() {
-        assert_eq!(
-            [
-                RestartIfRunningOutcome::Busy,
-                RestartIfRunningOutcome::NotReady,
-                RestartIfRunningOutcome::AlreadyCurrent,
-                RestartIfRunningOutcome::NotRunning,
-                RestartIfRunningOutcome::Restarted,
-            ]
-            .map(|outcome| {
-                should_reexec_updater(UpdaterRefreshMode::ReexecIfManagedBinaryChanged, outcome)
-            }),
-            [false, false, false, false, true]
-        );
-    }
-
-    #[test]
-    fn unchanged_updater_never_reexecs() {
-        assert_eq!(
-            [
-                RestartIfRunningOutcome::Busy,
-                RestartIfRunningOutcome::NotReady,
-                RestartIfRunningOutcome::AlreadyCurrent,
-                RestartIfRunningOutcome::NotRunning,
-                RestartIfRunningOutcome::Restarted,
-            ]
-            .map(|outcome| should_reexec_updater(UpdaterRefreshMode::None, outcome)),
-            [false, false, false, false, false]
         );
     }
 
