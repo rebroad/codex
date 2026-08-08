@@ -129,8 +129,8 @@ prepare_armv7_rusty_v8_source() {
         mv "${preserved_rust_toolchain}" "${rust_toolchain}"
       fi
     else
-      echo "cpto not found; Rusty V8 source sync requires cpto" >&2
-      die "missing required command: cpto"
+      echo "cpto not found; syncing Rusty V8 source without deleting build artifacts" >&2
+      tar --exclude='./.git' -cf - -C "${source_repo}" . | tar -xf - -C "${build_repo}"
     fi
   fi
   local rust_toolchain="${build_repo}/third_party/rust-toolchain"
@@ -155,7 +155,8 @@ prepare_native_rusty_v8_source() {
     mkdir -p "${build_repo}"
     cpto --no-lngit --nogit "${source_repo}" "${build_repo}"
   else
-    die "cpto is required to prepare the native Rusty V8 source"
+    echo "cpto not found; syncing native Rusty V8 source without deleting build artifacts" >&2
+    tar --exclude='./.git' -cf - -C "${source_repo}" . | tar -xf - -C "${build_repo}"
   fi
   rm -rf "${build_repo}/third_party/rust-toolchain"
   source_repo="${build_repo}"
