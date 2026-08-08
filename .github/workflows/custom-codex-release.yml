@@ -191,10 +191,11 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Configure Rusty V8 artifacts
-        if: matrix.build_mode == 'direct'
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
+          release-repo: rebroad/rusty_v8
 
       - name: Build fork target from source
         if: matrix.build_mode == 'rebuild'
