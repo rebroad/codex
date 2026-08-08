@@ -1,6 +1,4 @@
-# Builds and uploads the fork-owned npm artifacts. Publishing is deliberately
-# performed locally after the complete artifact set has been downloaded and
-# audited with scripts/publish_npm_local.sh.
+# Builds, uploads, and publishes the fork-owned npm artifacts.
 name: custom-codex-release
 
 on:
@@ -23,6 +21,9 @@ concurrency:
 
 jobs:
   build-and-release:
+    outputs:
+      package_version: ${{ steps.candidate.outputs.version }}
+      release_tag: ${{ steps.candidate.outputs.release_tag }}
     runs-on: ubuntu-24.04
     env:
       CARGO_NET_OFFLINE: "false"
@@ -162,3 +163,97 @@ jobs:
             "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/"*.tgz \
             "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/"*.tgz.sha256 \
             "${GITHUB_WORKSPACE}.build/build/npm-artifact-complete/npm-artifact-sources.json"
+
+  publish-npm:
+    name: publish-npm
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        startsWith(github.ref, 'refs/tags/codex-v') &&
+        needs.build-and-release.result == 'success'
+      }}
+    needs: build-and-release
+    runs-on: ubuntu-24.04
+    environment: npm-production
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          # Node 24 bundles npm >= 11.5.1, required for trusted publishing.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          scope: '@reb.ai'
+          package-manager-cache: false
+
+      - name: Download npm tarballs from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build-and-release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'codex-npm-*.tgz' \
+            --dir dist/npm
+
+          shopt -s nullglob
+          archives=(dist/npm/codex-npm-*.tgz)
+          ((${#archives[@]} == 9)) || {
+            echo "Expected nine npm tarballs; found ${#archives[@]}" >&2
+            exit 1
+          }
+
+          for archive in "${archives[@]}"; do
+            gh release download "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "$(basename "${archive}").sha256" \
+              --dir dist/npm
+          done
+
+      - name: Audit npm packages
+        env:
+          RELEASE_VERSION: ${{ needs.build-and-release.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_npm_packages.py \
+            --artifact-dir dist/npm \
+            --expected-version "${RELEASE_VERSION}"
+
+      # No NODE_AUTH_TOKEN is needed: npm obtains a short-lived OIDC credential.
+      # Publish serially because all platform packages share the same npm name.
+      - name: Publish to npm
+        env:
+          RELEASE_VERSION: ${{ needs.build-and-release.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          platforms=(
+            linux-x64
+            linux-arm64
+            darwin-x64
+            darwin-arm64
+            win32-x64
+            win32-arm64
+            linux-armv7
+            android-arm64
+          )
+          root_tarball="dist/npm/codex-npm-${RELEASE_VERSION}.tgz"
+
+          for platform in "${platforms[@]}"; do
+            tarball="dist/npm/codex-npm-${platform}-${RELEASE_VERSION}.tgz"
+            [[ -f "${tarball}" ]] || { echo "Missing npm tarball: ${tarball}" >&2; exit 1; }
+            tag="${platform}"
+            [[ "${RELEASE_VERSION}" == *-* ]] && tag="alpha-${platform}"
+            echo "+ npm publish ${tarball} --access public --tag ${tag}"
+            npm publish "${tarball}" --access public --tag "${tag}"
+          done
+
+          [[ -f "${root_tarball}" ]] || { echo "Missing npm tarball: ${root_tarball}" >&2; exit 1; }
+          root_tag=latest
+          [[ "${RELEASE_VERSION}" == *-* ]] && root_tag=alpha
+          echo "+ npm publish ${root_tarball} --access public --tag ${root_tag}"
+          npm publish "${root_tarball}" --access public --tag "${root_tag}"
