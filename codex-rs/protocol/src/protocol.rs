@@ -2638,6 +2638,7 @@ impl InitialHistory {
                     .history
                     .iter()
                     .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(EventMsg::RawResponseCompleted(_)) => None,
                         RolloutItem::EventMsg(ev) => Some(ev.clone()),
                         _ => None,
                     })
@@ -2647,6 +2648,7 @@ impl InitialHistory {
                 items
                     .iter()
                     .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(EventMsg::RawResponseCompleted(_)) => None,
                         RolloutItem::EventMsg(ev) => Some(ev.clone()),
                         _ => None,
                     })
