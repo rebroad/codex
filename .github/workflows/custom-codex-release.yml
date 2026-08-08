@@ -62,9 +62,22 @@ jobs:
         run: |
           set -euo pipefail
           base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
-          commit="$(git rev-parse --short=12 HEAD)"
-          timestamp="$(date -u +%Y%m%d%H%M)"
-          package_version="${base_version}.${commit}.${timestamp}"
+          tag="${{ steps.release.outputs.tag }}"
+          package_version="${tag#codex-v}"
+          [[ "${package_version}" == "${base_version}."* ]] || {
+            echo "Release tag does not contain the workspace version: ${tag}" >&2
+            exit 1
+          }
+          candidate_suffix="${package_version#${base_version}.}"
+          [[ "${candidate_suffix}" =~ ^[0-9a-f]{10}\.[0-9]{12}$ ]] || {
+            echo "Release tag does not contain a valid candidate suffix: ${tag}" >&2
+            exit 1
+          }
+          commit="$(git rev-parse --short=10 HEAD)"
+          [[ "${candidate_suffix%%.*}" == "${commit}" ]] || {
+            echo "Release tag commit does not match checked-out commit: ${tag}" >&2
+            exit 1
+          }
           echo "base_version=${base_version}" >> "${GITHUB_OUTPUT}"
           echo "version=${package_version}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=codex-npm-v${package_version}" >> "${GITHUB_OUTPUT}"

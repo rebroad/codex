@@ -156,6 +156,14 @@ The GitHub workflow builds, audits, publishes the GitHub release, and publishes
 the npm packages through npm Trusted Publishing. Local npm publication remains
 available when the workflow is not being used:
 
+Release tags and binary/npm candidate versions use the workspace version
+followed by the first 10 hexadecimal commit characters and a UTC timestamp in
+`YYYYMMDDHHMM` form, for example:
+
+```text
+codex-v0.148.0-alpha.5.9084226b62.202608082151
+```
+
 ```bash
 # Create/push the source release tag, wait for CI to appear, print its run and
 # job URLs, and watch it.
