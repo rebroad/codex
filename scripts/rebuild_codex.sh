@@ -598,14 +598,19 @@ build_android() {
   export RANLIB_aarch64_linux_android="${llvm}/bin/llvm-ranlib"
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${llvm}/bin/aarch64-linux-android29-clang"
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}"
-  local ndk_properties="${RUSTY_V8_BUILD_REPO}/third_party/android_ndk/source.properties"
-  local rusty_v8_ndk_version
-  rusty_v8_ndk_version="$(sed -n 's/^Pkg.Revision = //p' "${ndk_properties}" | head -n 1)"
-  [[ -n "${rusty_v8_ndk_version}" ]] || die "Rusty V8 bundled Android NDK version not found in ${ndk_properties}"
-  local gclient_args="${RUSTY_V8_BUILD_REPO}/build/config/gclient_args.gni"
-  if ! grep -Fq 'android_ndk_version' "${gclient_args}"; then
-    printf 'declare_args() {\n  android_ndk_version = "%s"\n}\n' \
-      "${rusty_v8_ndk_version}" >"${gclient_args}"
+  # Source builds need Rusty V8's bundled NDK metadata; prebuilt artifact
+  # builds do not, and their checkout may intentionally omit this source-only
+  # directory.
+  if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] || ! configure_rusty_v8_artifacts android; then
+    local ndk_properties="${RUSTY_V8_BUILD_REPO}/third_party/android_ndk/source.properties"
+    local rusty_v8_ndk_version
+    rusty_v8_ndk_version="$(sed -n 's/^Pkg.Revision = //p' "${ndk_properties}" | head -n 1)"
+    [[ -n "${rusty_v8_ndk_version}" ]] || die "Rusty V8 bundled Android NDK version not found in ${ndk_properties}"
+    local gclient_args="${RUSTY_V8_BUILD_REPO}/build/config/gclient_args.gni"
+    if ! grep -Fq 'android_ndk_version' "${gclient_args}"; then
+      printf 'declare_args() {\n  android_ndk_version = "%s"\n}\n' \
+        "${rusty_v8_ndk_version}" >"${gclient_args}"
+    fi
   fi
   local binary
   binary="$(cargo_build "${MODE}" android)"
