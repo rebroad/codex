@@ -2,7 +2,9 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Stdio;
+#[cfg(test)]
 use std::time::Duration;
 
 use anyhow::Context;
@@ -12,6 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;
 use tokio::process::Command;
+#[cfg(test)]
 use tokio::time::timeout;
 
 /// New daemons own their packages, regardless of how the calling CLI was installed.
@@ -120,11 +123,13 @@ pub(crate) fn is_stable_standalone_release(codex_home: &Path, codex_bin: &Path) 
 }
 
 /// Older managed binaries can serve app-server requests without owning an updater.
+#[cfg(test)]
 pub(crate) async fn supports_daemon_update_loop(codex_bin: &Path) -> bool {
     supports_daemon_command(codex_bin, &["pid-update-loop", "--help"]).await
 }
 
 /// Probe an internal daemon command without running a long-lived process.
+#[cfg(test)]
 pub(crate) async fn supports_daemon_command(codex_bin: &Path, args: &[&str]) -> bool {
     let mut command = Command::new(codex_bin);
     #[cfg(windows)]
