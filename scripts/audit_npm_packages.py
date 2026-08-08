@@ -131,7 +131,9 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="codex-npm-audit-") as staging:
             metadata = read_package(archive, Path(staging))
         if metadata.get("name") != "@reb.ai/codex":
-            raise RuntimeError(f"Unexpected package name in {archive}: {metadata.get('name')}")
+            raise RuntimeError(
+                f"Unexpected package name in {archive}: {metadata.get('name')}"
+            )
         version = metadata.get("version")
         if not isinstance(version, str):
             raise RuntimeError(f"Missing package version in {archive}")
@@ -183,15 +185,25 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="codex-npm-audit-platform-") as staging:
             metadata = read_package(platform_archives[platform], Path(staging))
             package_root = Path(staging) / "package"
-            if metadata.get("os") != [config["os"]] or metadata.get("cpu") != [config["cpu"]]:
+            if metadata.get("os") != [config["os"]] or metadata.get("cpu") != [
+                config["cpu"]
+            ]:
                 raise RuntimeError(f"Incorrect os/cpu metadata for {platform}")
             vendor = package_root / "vendor" / config["target"]
-            binary = vendor / "bin" / ("codex.exe" if config["os"] == "win32" else "codex")
+            binary = (
+                vendor / "bin" / ("codex.exe" if config["os"] == "win32" else "codex")
+            )
             file_description = check_file(binary, config["file_tokens"])
             print(f"{platform}: {file_description}")
             if config["host"]:
-                host = vendor / "bin" / (
-                    "codex-code-mode-host.exe" if config["os"] == "win32" else "codex-code-mode-host"
+                host = (
+                    vendor
+                    / "bin"
+                    / (
+                        "codex-code-mode-host.exe"
+                        if config["os"] == "win32"
+                        else "codex-code-mode-host"
+                    )
                 )
                 check_file(host, config["file_tokens"])
             if platform == "android-arm64":
@@ -206,7 +218,9 @@ def main() -> int:
                 ["strings", str(binary)], capture_output=True, text=True, check=True
             ).stdout.lower()
             if "mcp" not in strings:
-                raise RuntimeError(f"{platform} binary does not contain MCP support markers")
+                raise RuntimeError(
+                    f"{platform} binary does not contain MCP support markers"
+                )
 
     print(f"Audited {len(archives)} Codex npm archives for {args.expected_version}")
     return 0
