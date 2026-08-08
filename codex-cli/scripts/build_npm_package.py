@@ -349,8 +349,8 @@ def stage_sources(
 
 
 def compute_platform_package_version(version: str, platform_tag: str) -> str:
-    # npm forbids republishing the same package name/version, so each
-    # platform-specific tarball needs a unique version string.
+    # Platform payloads use the same npm package name as the root package and
+    # are selected through npm aliases, so each target needs a unique version.
     return f"{version}-{platform_tag}"
 
 
