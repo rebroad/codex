@@ -1148,6 +1148,22 @@ fn project_ignored_config_keys_warning(
     )
 }
 
+fn is_synthetic_temp_marker_root(path: &Path) -> bool {
+    let Some(path) = std::fs::canonicalize(path).ok() else {
+        return false;
+    };
+    let temp_dir = std::env::temp_dir();
+    [
+        std::fs::canonicalize(&temp_dir).ok(),
+        temp_dir
+            .parent()
+            .and_then(|temp_parent| std::fs::canonicalize(temp_parent).ok()),
+    ]
+    .iter()
+    .flatten()
+    .any(|root| root == &path)
+}
+
 async fn project_trust_context(
     fs: &dyn ExecutorFileSystem,
     merged_config: &TomlValue,
@@ -1322,6 +1338,16 @@ async fn find_project_root(
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
             let marker_path_uri = PathUri::from_abs_path(&marker_path);
+            let is_temp_marker_root = is_synthetic_temp_marker_root(ancestor.as_path());
+            let is_synthetic_temp_codex_marker = marker == ".codex"
+                && is_temp_marker_root
+                && !marker_path.join(CONFIG_TOML_FILE).is_file()
+                && marker_path.is_dir();
+            if (marker == ".git" && is_temp_marker_root && !marker_path.join("HEAD").is_file())
+                || is_synthetic_temp_codex_marker
+            {
+                continue;
+            }
             let Ok(metadata) = fs
                 .get_metadata(&marker_path_uri, Default::default(), /*sandbox*/ None)
                 .await
@@ -1487,6 +1513,10 @@ async fn discover_project_layers(
     let mut startup_warnings = Vec::new();
     for dir in dirs {
         let dot_codex_abs = dir.join(".codex");
+        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
+        if is_synthetic_temp_marker_root(dir.as_path()) && !config_file.is_file() {
+            continue;
+        }
         let dot_codex_uri = PathUri::from_abs_path(&dot_codex_abs);
         if !fs
             .get_metadata(&dot_codex_uri, Default::default(), /*sandbox*/ None)
@@ -1505,7 +1535,6 @@ async fn discover_project_layers(
         if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
             continue;
         }
-        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
         let config_file_uri = PathUri::from_abs_path(&config_file);
         match fs
             .read_file_text(&config_file_uri, Default::default(), /*sandbox*/ None)

@@ -2812,6 +2812,14 @@
     "ProjectConfig": {
       "additionalProperties": false,
       "properties": {
+        "additional_writable_roots": {
+          "default": [],
+          "description": "Additional writable roots applied when this project is active.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
         }
