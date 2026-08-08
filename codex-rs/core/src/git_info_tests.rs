@@ -488,7 +488,8 @@ async fn test_get_has_changes_ignores_configured_hooks_path() {
         .await
         .expect("configure hooks path");
 
-    fs::write(repo_path.join("test.txt"), "test content").expect("refresh tracked file");
+    let tracked_contents = fs::read(repo_path.join("test.txt")).expect("read tracked file");
+    fs::write(repo_path.join("test.txt"), tracked_contents).expect("refresh tracked file");
 
     assert_eq!(get_has_changes(&repo_path).await, Some(false));
     assert!(
