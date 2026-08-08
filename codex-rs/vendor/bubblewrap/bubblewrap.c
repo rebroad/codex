@@ -1114,7 +1114,8 @@ privileged_op (int         privileged_op_socket,
 
       if (bind_result != BIND_MOUNT_SUCCESS)
         die_with_bind_result (bind_result, errno, failing_path,
-                              "Can't remount readonly on %s", arg2);
+                              "Can't remount readonly on %s",
+                              arg2 != NULL ? arg2 : "(null)");
 
       assert (failing_path == NULL);    /* otherwise we would have died */
       break;
@@ -1126,7 +1127,9 @@ privileged_op (int         privileged_op_socket,
 
       if (bind_result != BIND_MOUNT_SUCCESS)
         die_with_bind_result (bind_result, errno, failing_path,
-                              "Can't bind mount %s on %s", arg1, arg2);
+                              "Can't bind mount %s on %s",
+                              arg1 != NULL ? arg1 : "(null)",
+                              arg2 != NULL ? arg2 : "(null)");
 
       assert (failing_path == NULL);    /* otherwise we would have died */
       break;
@@ -1177,9 +1180,11 @@ privileged_op (int         privileged_op_socket,
           if (errno == ELOOP)
             die ("Can't make overlay mount on %s with options %s: "
                 "Overlay directories may not overlap",
-                arg2, arg1);
+                arg2 != NULL ? arg2 : "(null)",
+                arg1 != NULL ? arg1 : "(null)");
           die_with_mount_error ("Can't make overlay mount on %s with options %s",
-                                arg2, arg1);
+                                arg2 != NULL ? arg2 : "(null)",
+                                arg1 != NULL ? arg1 : "(null)");
         }
       break;
 
