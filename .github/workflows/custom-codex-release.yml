@@ -83,8 +83,7 @@ jobs:
           - platform: linux-x64
             target: x86_64-unknown-linux-musl
             runner: ubuntu-24.04
-            build_mode: rebuild
-            rebuild_target: musl
+            build_mode: direct
           - platform: linux-arm64
             target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
@@ -214,14 +213,48 @@ jobs:
           cp "${GITHUB_WORKSPACE}.build/build/npm-artifact/codex-npm-${{ matrix.platform }}-${VERSION}.tgz" \
             "${GITHUB_WORKSPACE}.build/npm-source-artifact/"
 
-      - name: Build desktop/Linux source target
+      - name: Build and package source target
         if: matrix.build_mode == 'direct'
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.prepare-release.outputs.package_version }}
           OUTPUT_DIR: ${{ github.workspace }}.build/npm-source-artifact
           CARGO_TARGET_DIR: ${{ github.workspace }}.build/cargo-target
-        run: bash .github/scripts/build_npm_source_target.sh
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}/codex-rs"
+          build_args=(
+            cargo build --target "${TARGET}" --release --timings
+            --bin codex
+            --bin codex-code-mode-host
+          )
+          case "${TARGET}" in
+            *-unknown-linux-musl) build_args+=(--bin bwrap) ;;
+            x86_64-pc-windows-msvc) export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC ;;
+          esac
+          "${build_args[@]}"
+
+          release_dir="${CARGO_TARGET_DIR}/${TARGET}/release"
+          vendor_dir="${RUNNER_TEMP}/codex-npm-vendor-${TARGET}"
+          rm -rf "${vendor_dir}"
+          mkdir -p "${vendor_dir}/${TARGET}/bin"
+          binary_suffix=""
+          [[ "${TARGET}" == *-pc-windows-msvc ]] && binary_suffix=.exe
+          cp "${release_dir}/codex${binary_suffix}" \
+            "${vendor_dir}/${TARGET}/bin/codex${binary_suffix}"
+          cp "${release_dir}/codex-code-mode-host${binary_suffix}" \
+            "${vendor_dir}/${TARGET}/bin/codex-code-mode-host${binary_suffix}"
+          if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
+            mkdir -p "${vendor_dir}/${TARGET}/codex-resources"
+            cp "${release_dir}/bwrap" "${vendor_dir}/${TARGET}/codex-resources/bwrap"
+          fi
+
+          mkdir -p "${OUTPUT_DIR}"
+          python3 "${GITHUB_WORKSPACE}/codex-cli/scripts/build_npm_package.py" \
+            --release-version "${VERSION}" \
+            --package "codex-${{ matrix.platform }}" \
+            --vendor-src "${vendor_dir}" \
+            --pack-output "${OUTPUT_DIR}/codex-npm-${{ matrix.platform }}-${VERSION}.tgz"
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
