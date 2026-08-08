@@ -201,8 +201,26 @@ workspace_version() {
   sed -n 's/^version = "\([^"]*\)"/\1/p' "${SOURCE_REPO}/codex-rs/Cargo.toml" | head -n 1
 }
 
+verify_rusty_v8_artifacts() {
+  local target_mode="${1}" expected_archive expected_binding actual
+  expected_archive="${RUSTY_V8_ARCHIVE_SHA256:-}"
+  expected_binding="${RUSTY_V8_BINDING_SHA256:-}"
+  if [[ "${target_mode}" == android ]]; then
+    expected_archive="${RUSTY_V8_ANDROID_ARCHIVE_SHA256:-${expected_archive}}"
+    expected_binding="${RUSTY_V8_ANDROID_BINDING_SHA256:-${expected_binding}}"
+  fi
+  if [[ -n "${expected_archive}" ]]; then
+    actual="$(sha256sum "${RUSTY_V8_ARCHIVE_PATH}" | awk '{print $1}')"
+    [[ "${actual}" == "${expected_archive}" ]] || die "Rusty V8 archive checksum mismatch for ${target_mode}: expected ${expected_archive}, got ${actual}"
+  fi
+  if [[ -n "${expected_binding}" ]]; then
+    actual="$(sha256sum "${RUSTY_V8_BINDING_PATH}" | awk '{print $1}')"
+    [[ "${actual}" == "${expected_binding}" ]] || die "Rusty V8 binding checksum mismatch for ${target_mode}: expected ${expected_binding}, got ${actual}"
+  fi
+}
+
 configure_rusty_v8_artifacts() {
-  local target_mode="${1}" target archive binding local_repo cache_dir release_tag base_url release_repo
+  local target_mode="${1}" target archive binding local_repo cache_dir release_tag base_url release_repo preferred_release_repo
   case "${target_mode}" in
     native)
       target="x86_64-unknown-linux-gnu"
@@ -213,6 +231,9 @@ configure_rusty_v8_artifacts() {
     armv7)
       target="${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}"
       ;;
+    android)
+      target="aarch64-linux-android"
+      ;;
     *)
       return
       ;;
@@ -221,7 +242,7 @@ configure_rusty_v8_artifacts() {
   local crate_version="${V8_CRATE_VERSION:-$(sed -n '/^name = "v8"$/,/^version = /s/^version = "\([^"]*\)"/\1/p' "${SOURCE_REPO}/codex-rs/Cargo.lock" | head -n 1)}"
   [[ -n "${crate_version}" ]] || die "could not determine the pinned v8 crate version"
   local default_profile="ptrcomp_sandbox_release"
-  [[ "${target_mode}" == armv7 ]] && default_profile="release"
+  [[ "${target_mode}" == armv7 || "${target_mode}" == android ]] && default_profile="release"
   local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
   archive="librusty_v8_${profile}_${target}.a.gz"
   binding="src_binding_${profile}_${target}.rs"
@@ -231,6 +252,7 @@ configure_rusty_v8_artifacts() {
       || die "RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH must point to existing files"
     RUSTY_V8_ARCHIVE_PATH="${RUSTY_V8_ARCHIVE}"
     RUSTY_V8_BINDING_PATH="${RUSTY_V8_SRC_BINDING_PATH}"
+    verify_rusty_v8_artifacts "${target_mode}"
     echo "Using Rusty V8 artifacts from the environment for ${target}." >&2
     return 0
   fi
@@ -277,8 +299,12 @@ configure_rusty_v8_artifacts() {
     if [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]]; then
       echo "Using cached Rusty V8 ${release_tag} artifacts for ${target}." >&2
     else
-      local release_repos=("${RUSTY_V8_RELEASE_REPO:-rebroad/codex}")
-      [[ -n "${RUSTY_V8_RELEASE_REPO:-}" ]] || release_repos+=("openai/codex")
+      preferred_release_repo="${RUSTY_V8_RELEASE_REPO:-}"
+      if [[ "${target_mode}" == android && -n "${RUSTY_V8_ANDROID_RELEASE_REPO:-}" ]]; then
+        preferred_release_repo="${RUSTY_V8_ANDROID_RELEASE_REPO}"
+      fi
+      local release_repos=("${preferred_release_repo:-rebroad/codex}")
+      [[ -n "${preferred_release_repo}" ]] || release_repos+=("openai/codex")
       for release_repo in "${release_repos[@]}"; do
         base_url="https://github.com/${release_repo}/releases/download/${release_tag}"
         echo "Downloading Rusty V8 ${release_tag} artifacts for ${target} from ${release_repo}." >&2
@@ -293,7 +319,8 @@ configure_rusty_v8_artifacts() {
     fi
   fi
 
-  [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]]
+  [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]] || return 1
+  verify_rusty_v8_artifacts "${target_mode}"
 }
 
 read_toolchain() {
@@ -389,17 +416,16 @@ cargo_build() {
         env_args+=(V8_FROM_SOURCE=1)
       fi
     fi
-  elif [[ "${target_mode}" != android ]]; then
-    configure_rusty_v8_artifacts "${target_mode}"
-    env_args+=(
-      RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
-      RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
-    )
   else
-    # Upstream does not publish the sandboxed Android archive for every V8
-    # release. Android must therefore use the patched Rusty V8 checkout that
-    # was prepared above instead of falling back to the upstream downloader.
-    env_args+=(V8_FROM_SOURCE=1)
+    if configure_rusty_v8_artifacts "${target_mode}"; then
+      env_args+=(
+        RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
+        RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
+      )
+    else
+      echo "Rusty V8 artifacts are unavailable for ${target_mode}; building V8 from the prepared source checkout." >&2
+      env_args+=(V8_FROM_SOURCE=1)
+    fi
   fi
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_cc="${ARMV7_LINKER:-arm-linux-gnueabihf-gcc}"
