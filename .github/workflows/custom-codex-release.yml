@@ -108,6 +108,7 @@ jobs:
           git -C "${rusty_v8}" fetch --depth 1 origin "${RUSTY_V8_COMMIT}"
           git -C "${rusty_v8}" checkout --detach "${RUSTY_V8_COMMIT}"
           git -C "${rusty_v8}" submodule update --init --depth 1 --recursive
+          mkdir -p "${rusty_v8}.build"
 
       - name: Build and package
         run: |
