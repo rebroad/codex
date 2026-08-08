@@ -155,7 +155,8 @@ before publishing if any platform package is missing or invalid.
 The GitHub workflow and local npm publication are separate operations:
 
 ```bash
-# Create/push the source release tag, start CI, print its run URL, and watch it.
+# Create/push the source release tag, wait for CI to appear, print its run and
+# job URLs, and watch it.
 # No local cargo compilation or npm packaging is performed by this command.
 scripts/rebuild_codex.sh --release --start-github-release
 
