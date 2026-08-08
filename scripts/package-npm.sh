@@ -67,3 +67,7 @@ python3 "${ROOT}/scripts/stage_npm_packages.py" \
   --package codex \
   --vendor-src "${VENDOR_ROOT}" \
   --output-dir "${OUTPUT_DIR}"
+
+for archive in "${OUTPUT_DIR}"/*.tgz; do
+  sha256sum "${archive}" >"${archive}.sha256"
+done

@@ -1,3 +1,6 @@
+# Builds and uploads the fork-owned npm artifacts. Publishing is deliberately
+# performed locally after the complete artifact set has been downloaded and
+# audited with scripts/publish_npm_local.sh.
 name: custom-codex-release
 
 on:
@@ -24,6 +27,9 @@ jobs:
     env:
       CARGO_NET_OFFLINE: "false"
       RUST_BACKTRACE: "1"
+      RUST_TOOLCHAIN: "1.95.0"
+      ANDROID_NDK_VERSION: "28.2.13676358"
+      RUSTY_V8_COMMIT: "58fb8ceb62e9231002719ee2a4f227d17c938a90"
     steps:
       - name: Resolve release tag
         id: release
@@ -36,34 +42,78 @@ jobs:
           fi
           [[ "${tag}" == codex-v* ]] || { echo "Invalid release tag: ${tag}" >&2; exit 1; }
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "version=${tag#codex-v}" >> "${GITHUB_OUTPUT}"
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.release.outputs.tag }}
           fetch-depth: 0
 
+      - name: Determine candidate package version
+        id: candidate
+        run: |
+          set -euo pipefail
+          base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
+          commit="$(git rev-parse --short=12 HEAD)"
+          timestamp="$(date -u +%Y%m%d%H%M)"
+          package_version="${base_version}.g${commit}.t${timestamp}"
+          echo "version=${package_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=codex-npm-v${package_version}" >> "${GITHUB_OUTPUT}"
+
       - name: Install cross-compilation tools
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-arm-linux-gnueabihf
-          rustup target add x86_64-unknown-linux-musl armv7-unknown-linux-gnueabihf
+          sudo apt-get install -y --no-install-recommends musl-tools gcc-arm-linux-gnueabihf jq
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+
+      - name: Install Android NDK
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:?ANDROID_HOME must be set on the GitHub runner}"
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/cmdline-tools/bin:${PATH}"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          ndk_home="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ndk_home}" >> "${GITHUB_ENV}"
+          echo "ANDROID_NDK_ROOT=${ndk_home}" >> "${GITHUB_ENV}"
+
+      - name: Checkout patched Rusty V8 source
+        run: |
+          set -euo pipefail
+          rusty_v8="${GITHUB_WORKSPACE%/codex}/rusty_v8"
+          git init "${rusty_v8}"
+          git -C "${rusty_v8}" remote add origin https://github.com/rebroad/rusty_v8.git
+          git -C "${rusty_v8}" fetch --depth 1 origin "${RUSTY_V8_COMMIT}"
+          git -C "${rusty_v8}" checkout --detach "${RUSTY_V8_COMMIT}"
+          git -C "${rusty_v8}" submodule update --init --depth 1 --recursive
 
       - name: Build and package
         run: |
           set -euo pipefail
-          ./scripts/rebuild_codex.sh --release --target musl --package-npm
+          mkdir -p "${GITHUB_WORKSPACE}.build"
+          ./scripts/rebuild_codex.sh --release --target android --package-npm \
+            --package-version "${{ steps.candidate.outputs.version }}"
 
       - name: Verify package names
         run: |
           set -euo pipefail
           shopt -s nullglob
           archives=( "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz )
-          ((${#archives[@]} >= 3)) || { echo "Expected npm archives were not created" >&2; exit 1; }
+          ((${#archives[@]} == 4)) || { echo "Expected four fork-owned npm archives; found ${#archives[@]}" >&2; exit 1; }
           for archive in "${archives[@]}"; do
             tar -xOf "${archive}" package/package.json | jq -e '
-              .name | startswith("@reb.ai/codex")
+              (.name | startswith("@reb.ai/codex")) and
+              (.name == "@reb.ai/codex") and
+              ((.version == "${{ steps.candidate.outputs.version }}") or
+               (.version | startswith("${{ steps.candidate.outputs.version }}-")))
             ' >/dev/null
+          done
+
+      - name: Create package checksums
+        run: |
+          set -euo pipefail
+          for archive in "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz; do
+            sha256sum "${archive}" >"${archive}.sha256"
           done
 
       - name: Create GitHub release
@@ -71,79 +121,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.release.outputs.tag }}" \
-            --title "Codex ${{ steps.release.outputs.version }}" \
+          gh release create "${{ steps.candidate.outputs.release_tag }}" \
+            --title "Codex ${{ steps.candidate.outputs.version }}" \
             --generate-notes \
-            "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz
-
-  publish-npm:
-    needs: build-and-release
-    runs-on: ubuntu-24.04
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Resolve release values
-        id: release
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-          fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "version=${tag#codex-v}" >> "${GITHUB_OUTPUT}"
-
-      - name: Setup Node.js for npm trusted publishing
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-          scope: "@reb.ai"
-
-      - name: Download npm tarballs from GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist/npm
-          gh release download "${RELEASE_TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'codex-npm-*.tgz' \
-            --dir dist/npm
-
-      - name: Publish npm tarballs serially
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          root="dist/npm/codex-npm-${VERSION}.tgz"
-          platform_tarballs=(dist/npm/codex-npm-*-${VERSION}.tgz)
-          [[ -f "${root}" ]] || { echo "Missing root npm tarball" >&2; exit 1; }
-          ((${#platform_tarballs[@]} > 0)) || { echo "Missing platform npm tarballs" >&2; exit 1; }
-          tarballs=("${platform_tarballs[@]}" "${root}")
-          for tarball in "${tarballs[@]}"; do
-            filename="$(basename "${tarball}")"
-            tag=""
-            if [[ "${filename}" != "codex-npm-${VERSION}.tgz" ]]; then
-              platform="${filename#codex-npm-}"
-              platform="${platform%-${VERSION}.tgz}"
-              tag="${platform}"
-              [[ "${VERSION}" == *-* ]] && tag="alpha-${tag}"
-            elif [[ "${VERSION}" == *-* ]]; then
-              tag=alpha
-            fi
-            command=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
-            [[ -n "${tag}" ]] && command+=(--tag "${tag}")
-            echo "+ ${command[*]}"
-            set +e
-            output="$("${command[@]}" 2>&1)"
-            status=$?
-            set -e
-            echo "${output}"
-            if [[ ${status} -ne 0 ]] && ! grep -qiE 'previously published|cannot publish over|version already exists' <<<"${output}"; then
-              exit "${status}"
-            fi
-          done
+            "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz \
+            "${GITHUB_WORKSPACE}.build/build/npm-artifact/"*.tgz.sha256
