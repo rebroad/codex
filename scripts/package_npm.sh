@@ -58,6 +58,7 @@ done
 
 OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-${BUILD_TREE}/build/npm-artifact}}"
 mkdir -p "${OUTPUT_DIR}"
+rm -f "${OUTPUT_DIR}/npm-artifact-sources.json"
 # Target-scoped invocations must preserve previously staged architectures so
 # local builds can be accumulated before the complete assembly/audit step.
 shopt -s nullglob
