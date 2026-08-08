@@ -205,10 +205,20 @@ verify_rusty_v8_artifacts() {
   local target_mode="${1}" expected_archive expected_binding actual
   expected_archive="${RUSTY_V8_ARCHIVE_SHA256:-}"
   expected_binding="${RUSTY_V8_BINDING_SHA256:-}"
-  if [[ "${target_mode}" == android ]]; then
-    expected_archive="${RUSTY_V8_ANDROID_ARCHIVE_SHA256:-${expected_archive}}"
-    expected_binding="${RUSTY_V8_ANDROID_BINDING_SHA256:-${expected_binding}}"
-  fi
+  case "${target_mode}" in
+    musl)
+      expected_archive="${RUSTY_V8_MUSL_ARCHIVE_SHA256:-${expected_archive}}"
+      expected_binding="${RUSTY_V8_MUSL_BINDING_SHA256:-${expected_binding}}"
+      ;;
+    armv7)
+      expected_archive="${RUSTY_V8_ARMV7_ARCHIVE_SHA256:-${expected_archive}}"
+      expected_binding="${RUSTY_V8_ARMV7_BINDING_SHA256:-${expected_binding}}"
+      ;;
+    android)
+      expected_archive="${RUSTY_V8_ANDROID_ARCHIVE_SHA256:-${expected_archive}}"
+      expected_binding="${RUSTY_V8_ANDROID_BINDING_SHA256:-${expected_binding}}"
+      ;;
+  esac
   if [[ -n "${expected_archive}" ]]; then
     actual="$(sha256sum "${RUSTY_V8_ARCHIVE_PATH}" | awk '{print $1}')"
     [[ "${actual}" == "${expected_archive}" ]] || die "Rusty V8 archive checksum mismatch for ${target_mode}: expected ${expected_archive}, got ${actual}"
