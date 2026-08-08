@@ -416,28 +416,26 @@ cargo_build() {
 
 patch_timestamp() {
   local binary="${1}" version="${2}" suffix="${3}-${TIMESTAMP}"
-  python3 - "${binary}" "${version}" "${suffix}" <<'PY'
+python3 - "${binary}" "${version}" "${suffix}" <<'PY'
 import mmap, sys
+import re
 from pathlib import Path
 path = Path(sys.argv[1])
-needle = (sys.argv[2] + "-000000000000-000000000000").encode()
+version = sys.argv[2].encode()
 replacement = (sys.argv[2] + "-" + sys.argv[3]).encode()
-if len(needle) != len(replacement):
+pattern = re.compile(re.escape(version) + rb"-[0-9a-f]{12}-[0-9]{12}")
+if len(replacement) != len(version) + 1 + 12 + 1 + 12:
     raise SystemExit("timestamp placeholder width mismatch")
 with path.open("r+b") as handle:
     mm = mmap.mmap(handle.fileno(), 0)
     count = 0
-    start = 0
-    while True:
-        index = mm.find(needle, start)
-        if index < 0: break
-        mm[index:index + len(needle)] = replacement
+    for match in list(pattern.finditer(mm)):
+        mm[match.start():match.end()] = replacement
         count += 1
-        start = index + len(needle)
     mm.flush()
     mm.close()
 if count == 0:
-    raise SystemExit(f"no timestamp placeholder found in {path}")
+    raise SystemExit(f"no version timestamp found in {path}")
 print(f"Patched {count} embedded version string(s) in {path}")
 PY
 }
@@ -447,9 +445,12 @@ install_binary() {
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   mkdir -p "${INSTALL_BIN_DIR}"
   short="$(git -C "${SOURCE_REPO}" rev-parse --short=12 HEAD)"
-  patch_timestamp "${binary}" "${version}" "${short}"
   local name="codex-${version}-${short}-${TIMESTAMP}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
+  if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
+    rm -f "${INSTALL_BIN_DIR}/${name}"
+    return 1
+  fi
   ln -sfn "${name}" "${INSTALL_BIN_DIR}/codex"
   echo "Installed ${INSTALL_BIN_DIR}/${name}"
   echo "Linked ${INSTALL_BIN_DIR}/codex"
