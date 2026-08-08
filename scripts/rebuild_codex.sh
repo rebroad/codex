@@ -150,12 +150,26 @@ start_github_release() {
   fi
   git -C "${SOURCE_REPO}" tag -a "${tag}" -m "Release ${VERSION}"
   git -C "${SOURCE_REPO}" push origin "${tag}"
-  run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
-    --workflow custom-codex-release.yml --limit 20 --json databaseId,headBranch,url \
-    | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag)] | .[0] | [.databaseId, .url] | @tsv')"
-  read -r run_id run_url <<<"${run_info}"
+  echo "Waiting for GitHub to create the workflow run..." >&2
+  run_info=""
+  for _ in {1..30}; do
+    run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
+      --workflow custom-codex-release.yml --limit 20 --json databaseId,headBranch,url \
+      | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag)] | .[0] | [.databaseId, .url] | @tsv')"
+    read -r run_id run_url <<<"${run_info}"
+    [[ -n "${run_id}" ]] && break
+    sleep 2
+  done
   if [[ -n "${run_id}" ]]; then
     echo "GitHub CI run: ${run_url}" >&2
+    job_info="$(gh run view "${run_id}" --repo "${FORK_RELEASE_REPO}" \
+      --json jobs --jq '.jobs[] | [.databaseId, .name, .url] | @tsv' 2>/dev/null || true)"
+    while IFS=$'\t' read -r job_id job_name job_url; do
+      [[ -n "${job_id}" ]] || continue
+      [[ -n "${job_url}" && "${job_url}" != null ]] \
+        || job_url="https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}/job/${job_id}"
+      echo "GitHub CI job (${job_name}): ${job_url}" >&2
+    done <<<"${job_info}"
     gh run watch "${run_id}" --repo "${FORK_RELEASE_REPO}" --exit-status
     gh release view "${tag}" --repo "${FORK_RELEASE_REPO}" >/dev/null
   else
