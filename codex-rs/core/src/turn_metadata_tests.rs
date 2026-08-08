@@ -1074,21 +1074,12 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
         /*auto_review_enabled*/ false,
     ));
     invalid_state.spawn_git_enrichment_task();
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if invalid_state
-                .enrichment_task
-                .lock()
-                .expect("enrichment task lock")
-                .as_ref()
-                .is_some_and(tokio::task::JoinHandle::is_finished)
-            {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("failed git enrichment should complete");
+    assert!(
+        invalid_state
+            .enrichment_task
+            .lock()
+            .expect("enrichment task lock")
+            .is_none()
+    );
     assert!(invalid_state.current_workspaces().is_empty());
 }
