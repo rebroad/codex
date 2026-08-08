@@ -95,7 +95,37 @@ prepare_armv7_rusty_v8_source() {
   RUSTY_V8_BUILD_REPO="${build_repo}"
   if [[ "${NO_SYNC:-0}" != 1 ]]; then
     if command -v cpto >/dev/null 2>&1; then
-      cpto --no-lngit --nogit "${source_repo}" "${build_repo}"
+      local rust_toolchain="${build_repo}/third_party/rust-toolchain"
+      local preserved_rust_toolchain=""
+      if [[ -d "${rust_toolchain}" ]] \
+        && ! [[ -f "${rust_toolchain}/lib/rustlib/src/rust/library/core/src/intrinsics/simd.rs" \
+          && -f "${rust_toolchain}/lib/rustlib/src/rust/library/core/src/intrinsics/simd/mod.rs" ]]; then
+        preserved_rust_toolchain="${build_repo}/.codex-preserved-rust-toolchain"
+        [[ ! -e "${preserved_rust_toolchain}" ]] \
+          || die "temporary Rusty V8 toolchain path already exists: ${preserved_rust_toolchain}"
+        mv "${rust_toolchain}" "${preserved_rust_toolchain}"
+      fi
+      local source_rust_toolchain="${source_repo}/third_party/rust-toolchain"
+      local staged_source_rust_toolchain="${source_repo}.cpto-rust-toolchain"
+      if [[ -d "${source_rust_toolchain}" ]]; then
+        [[ ! -e "${staged_source_rust_toolchain}" ]] \
+          || die "temporary Rusty V8 source path already exists: ${staged_source_rust_toolchain}"
+        mv "${source_rust_toolchain}" "${staged_source_rust_toolchain}"
+      fi
+      if ! cpto --no-lngit --nogit "${source_repo}" "${build_repo}"; then
+        [[ ! -e "${source_rust_toolchain}" && -e "${staged_source_rust_toolchain}" ]] \
+          && mv "${staged_source_rust_toolchain}" "${source_rust_toolchain}"
+        [[ ! -e "${rust_toolchain}" && -e "${preserved_rust_toolchain}" ]] \
+          && mv "${preserved_rust_toolchain}" "${rust_toolchain}"
+        die "Rusty V8 source sync failed"
+      fi
+      if [[ -n "${staged_source_rust_toolchain}" && -e "${staged_source_rust_toolchain}" ]]; then
+        mv "${staged_source_rust_toolchain}" "${source_rust_toolchain}"
+      fi
+      if [[ -n "${preserved_rust_toolchain}" ]]; then
+        rm -rf "${rust_toolchain}"
+        mv "${preserved_rust_toolchain}" "${rust_toolchain}"
+      fi
     else
       echo "cpto not found; Rusty V8 source sync requires cpto" >&2
       die "missing required command: cpto"
@@ -135,8 +165,19 @@ prepare_native_rusty_v8_source() {
 }
 
 refresh_build_lockfile() {
+  local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock"
+  local build_lock="${BUILD_WORKSPACE}/Cargo.lock"
+  local fingerprint_file="${BUILD_WORKSPACE}/.codex-source-lock-fingerprint"
+  local source_fingerprint stored_fingerprint=""
+  source_fingerprint="$(sed '/^version = /d' "${source_lock}" | sha256sum | awk '{print $1}')"
+  [[ -f "${fingerprint_file}" ]] && read -r stored_fingerprint <"${fingerprint_file}"
   echo "Refreshing generated build-tree Cargo.lock..." >&2
-  cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_WORKSPACE}/Cargo.lock"
+  if [[ ! -f "${build_lock}" || "${source_fingerprint}" != "${stored_fingerprint}" ]]; then
+    cp "${source_lock}" "${build_lock}"
+    printf '%s\n' "${source_fingerprint}" >"${fingerprint_file}"
+  else
+    echo "Keeping generated build-tree Cargo.lock." >&2
+  fi
   # Keep the Starlark pagable override in every build profile. Removing it for
   # native builds leaves the generated tree on crates.io pagable, while the
   # ARMv7/npm path needs the patched Git revision and its unified Dupe graph.
@@ -396,7 +437,7 @@ cargo_build() {
     fi
   fi
 
-  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host -p codex-rmcp-client --bin test_stdio_server)
+  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host -p codex-rmcp-client)
   [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
   cmd+=( "${profile_args[@]}" --locked )
@@ -407,6 +448,18 @@ cargo_build() {
     cmd+=(--offline)
     if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
       return 1
+    fi
+  fi
+  if [[ "${target_mode}" == native ]]; then
+    local -a test_cmd=(cargo +"${TOOLCHAIN}" build -p codex-rmcp-client --bin test_stdio_server)
+    test_cmd+=( "${profile_args[@]}" --locked )
+    if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
+      echo "Locked test_stdio_server build failed; retrying offline in the build tree without --locked." >&2
+      unset 'test_cmd[-1]'
+      test_cmd+=(--offline)
+      if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
+        return 1
+      fi
     fi
   fi
   if [[ -n "${target}" ]]; then
