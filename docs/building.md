@@ -152,7 +152,9 @@ packages, checks npm authentication and immutable-version collisions, then
 publishes the eight platform packages before the root alias package. It fails
 before publishing if any platform package is missing or invalid.
 
-The GitHub workflow and local npm publication are separate operations:
+The GitHub workflow builds, audits, publishes the GitHub release, and publishes
+the npm packages through npm Trusted Publishing. Local npm publication remains
+available when the workflow is not being used:
 
 ```bash
 # Create/push the source release tag, wait for CI to appear, print its run and
@@ -160,7 +162,8 @@ The GitHub workflow and local npm publication are separate operations:
 # No local cargo compilation or npm packaging is performed by this command.
 scripts/rebuild_codex.sh --release --start-github-release
 
-# Publish the exact completed GitHub candidate locally.
+# Download and audit the exact completed GitHub candidate locally instead of
+# using the workflow's npm publish job.
 TAG="codex-npm-v<candidate-version>"
 scripts/download_npm_release.sh "$TAG" ../codex.build/build/npm-artifact-github
 python3 scripts/audit_npm_packages.py \
@@ -169,9 +172,13 @@ python3 scripts/audit_npm_packages.py \
 scripts/publish_npm_local.sh ../codex.build/build/npm-artifact-github
 ```
 
-`--start-github-release` creates GitHub release artifacts and does not publish
-to npm. `--publish-local-npm` publishes locally and does not start a new GitHub
-run; when it reuses a completed fork release, it prints that release URL.
+`--start-github-release` starts the GitHub build/release workflow. On a
+successful tag-triggered run, its `publish-npm` job publishes through the
+configured npm Trusted Publisher after the `npm-production` environment gate.
+Manual workflow dispatches build and create the GitHub release but do not
+publish to npm. `--publish-local-npm` publishes locally and does not start a
+new GitHub run; when it reuses a completed fork release, it prints that release
+URL.
 `--publish` and `--publish-npm` remain compatibility aliases for the two
 descriptive options. `npm whoami` (or an equivalent authenticated npm session)
 must succeed before the final publication step.
