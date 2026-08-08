@@ -44,6 +44,7 @@ TIMESTAMP="$(date +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
+SUDO_AUTHENTICATED="false"
 
 usage() {
   cat <<'EOF'
@@ -74,6 +75,14 @@ EOF
 die() { echo "rebuild_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
 
+authenticate_sudo() {
+  [[ "${SUDO_AUTHENTICATED}" == true ]] && return
+  require_cmd sudo
+  echo "Authenticating sudo before installing required build tools..." >&2
+  sudo -v
+  SUDO_AUTHENTICATED="true"
+}
+
 set_v8_path_patch() {
   local manifest="${1}" build_repo="${2}"
   sed -i '/^v8 = { path = /d' "${manifest}"
@@ -100,6 +109,8 @@ download_latest_fork_npm_release() {
   if ! gh release download "${tag}" --repo "${FORK_RELEASE_REPO}" \
     --pattern 'codex-npm-*.tgz' --dir "${output_dir}" --clobber; then
     echo "Fork npm release download failed; using local artifacts." >&2
+  else
+    echo "Fork npm release: https://github.com/${FORK_RELEASE_REPO}/releases/tag/${tag}" >&2
   fi
 }
 
@@ -433,7 +444,7 @@ configure_musl_build_tools() {
   local setup_script="${SOURCE_REPO}/.github/scripts/install-musl-build-tools.sh"
 
   if [[ ! -f "${libcap_archive}" || ! -f "${env_file}" ]]; then
-    require_cmd sudo
+    authenticate_sudo
     [[ -f "${setup_script}" ]] || die "musl build-tool setup script not found: ${setup_script}"
     echo "Preparing musl build tools and target-built libcap..." >&2
     TARGET="${target}" GITHUB_ENV="${env_file}" RUNNER_TEMP="${RUNNER_TEMP:-/var/tmp}" \
@@ -704,6 +715,14 @@ while (($#)); do
   esac
 done
 
+if [[ "${PUBLISH_NPM}" == true ]]; then
+  case "${TARGET_MODE}" in
+    native) TARGET_MODE=all ;;
+    all) ;;
+    *) die "--publish-npm requires --target all when a target is specified" ;;
+  esac
+fi
+
 IFS=',' read -r -a REQUESTED_TARGETS <<<"${TARGET_MODE}"
 [[ "${#REQUESTED_TARGETS[@]}" -gt 0 ]] || die "target must not be empty"
 PACKAGE_TARGETS=()
@@ -740,12 +759,6 @@ done
 PACKAGE_TARGETS=("${UNIQUE_PACKAGE_TARGETS[@]}")
 if [[ "${PACKAGE_NPM}" == true && "${#PACKAGE_TARGETS[@]}" -eq 0 ]]; then
   die "npm packaging requires at least one target"
-fi
-
-if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == musl ]]; then
-  require_cmd sudo
-  echo "Authenticating sudo before starting the build..." >&2
-  sudo -v
 fi
 
 require_cmd git
@@ -852,9 +865,12 @@ if [[ "${PUBLISH}" == true ]]; then
   else
     git -C "${SOURCE_REPO}" tag -a "${tag}" -m "Release ${VERSION}"
     git -C "${SOURCE_REPO}" push origin "${tag}"
-    run_id="$(gh run list --workflow custom-codex-release.yml --limit 20 --json databaseId,headBranch \
-      | jq -r --arg tag "${tag}" '.[] | select(.headBranch == $tag) | .databaseId' | head -n 1)"
+    run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
+      --workflow custom-codex-release.yml --limit 20 --json databaseId,headBranch,url \
+      | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag)] | .[0] | [.databaseId, .url] | @tsv')"
+    read -r run_id run_url <<<"${run_info}"
     if [[ -n "${run_id}" ]]; then
+      echo "GitHub CI run: ${run_url}" >&2
       gh run watch "${run_id}" --exit-status
       gh release view "${tag}" >/dev/null
     else
