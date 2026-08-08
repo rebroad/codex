@@ -91,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${GITHUB_WORKSPACE}.build"
-          ./scripts/rebuild_codex.sh --release --target android --package-npm \
+          ./scripts/rebuild_codex.sh --release --target all --package-npm \
             --package-version "${{ steps.candidate.outputs.version }}"
 
       - name: Verify package names
