@@ -40,13 +40,15 @@ scripts/rebuild_codex.sh --release --package-npm
 scripts/rebuild_codex.sh --release --target armv7
 scripts/rebuild_codex.sh --release --target android --package-npm
 scripts/rebuild_codex.sh --release --target all --package-npm
-# Add --publish-npm only after the complete set has been audited.
-scripts/rebuild_codex.sh --release --target all --publish-npm
+# Full local assembly, audit, and npm publication.
+scripts/rebuild_codex.sh --release --publish-npm
 ```
 
 ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
 `ARMV7_LINKER`). The musl and ARMv7 binaries are staged as platform variants
-of `@reb.ai/codex`.
+of `@reb.ai/codex`. `rebuild_codex.sh` requests sudo only when it actually
+needs to install missing musl build tools; cached/reused artifact and Android
+runs do not prompt for sudo.
 
 Outputs are:
 
@@ -134,6 +136,35 @@ the source/checksum manifest, and runs the full audit:
 ```bash
 scripts/rebuild_codex.sh --release --target all --package-npm
 ```
+
+`--publish-npm` implies `--package-npm` and selects `all` by default. If a
+target is explicitly supplied, it must be `all`. It downloads the newest
+completed fork release when one exists, reuses or builds missing local targets,
+assembles and audits all nine
+packages, checks npm authentication and immutable-version collisions, then
+publishes the eight platform packages before the root alias package. It fails
+before publishing if any platform package is missing or invalid.
+
+The GitHub workflow and local npm publication are separate operations:
+
+```bash
+# Create/push the source release tag, start CI, print its run URL, and watch it.
+scripts/rebuild_codex.sh --release --publish
+
+# Publish the exact completed GitHub candidate locally.
+TAG="codex-npm-v<candidate-version>"
+scripts/download_npm_release.sh "$TAG" ../codex.build/build/npm-artifact-github
+python3 scripts/audit_npm_packages.py \
+  --artifact-dir ../codex.build/build/npm-artifact-github \
+  --expected-version "<candidate-version>"
+scripts/publish_npm_local.sh ../codex.build/build/npm-artifact-github
+```
+
+`--publish` creates GitHub release artifacts and does not publish to npm.
+`--publish-npm` publishes locally and does not start a new GitHub run; when it
+reuses a completed fork release, it prints that release URL. `npm whoami` (or
+an equivalent authenticated npm session) must succeed before the final
+publication step.
 
 The complete output contains one root archive and eight platform archives.
 Publish or install them together when using the unified package:
