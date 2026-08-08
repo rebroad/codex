@@ -97,13 +97,15 @@ def resolve_upstream_workflow(repo: str, version: str) -> dict[str, str]:
             "--json",
             "databaseId,headSha,status,conclusion,url,createdAt",
             "--jq",
-            "[.[] | select(.status == \"completed\" and .conclusion == \"success\")] | first",
+            '[.[] | select(.status == "completed" and .conclusion == "success")] | first',
         ],
         text=True,
     )
     workflow = json.loads(output or "null")
     if not workflow:
-        raise RuntimeError(f"No successful rust-release workflow found for {repo} {version}")
+        raise RuntimeError(
+            f"No successful rust-release workflow found for {repo} {version}"
+        )
     return workflow
 
 
@@ -153,23 +155,30 @@ def select_fork_archives(artifact_dir: Path) -> dict[str, tuple[Path, str]]:
     for archive in sorted(artifact_dir.glob("codex-npm-*.tgz")):
         try:
             with tarfile.open(archive, "r:gz") as package_archive:
-                metadata = json.loads(package_archive.extractfile("package/package.json").read())
+                metadata = json.loads(
+                    package_archive.extractfile("package/package.json").read()
+                )
         except (OSError, tarfile.TarError, KeyError, json.JSONDecodeError) as error:
-            print(f"Ignoring unusable fork npm archive {archive}: {error}", file=sys.stderr)
+            print(
+                f"Ignoring unusable fork npm archive {archive}: {error}",
+                file=sys.stderr,
+            )
             continue
         package_version = metadata.get("version", "")
         for platform, target in PLATFORM_TARGETS.items():
             if package_version.endswith(f"-{platform}"):
                 previous = selected.get(target)
-                if previous is None or archive_sort_key(package_version, archive) > archive_sort_key(
-                    previous[1], previous[0]
-                ):
+                if previous is None or archive_sort_key(
+                    package_version, archive
+                ) > archive_sort_key(previous[1], previous[0]):
                     selected[target] = (archive, package_version)
                 break
     return selected
 
 
-def extract_fork_payloads(artifact_dir: Path, vendor_root: Path) -> dict[str, dict[str, str]]:
+def extract_fork_payloads(
+    artifact_dir: Path, vendor_root: Path
+) -> dict[str, dict[str, str]]:
     selected = select_fork_archives(artifact_dir)
     manifest: dict[str, dict[str, str]] = {}
     for target, (archive, package_version) in selected.items():
@@ -196,7 +205,9 @@ def main() -> int:
     args = parse_args()
     stage_module = load_stage_module()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    upstream_cache = args.upstream_artifacts_dir or args.output_dir.parent / "upstream-artifacts"
+    upstream_cache = (
+        args.upstream_artifacts_dir or args.output_dir.parent / "upstream-artifacts"
+    )
 
     with tempfile.TemporaryDirectory(prefix="codex-npm-vendor-") as vendor_temp:
         vendor_root = Path(vendor_temp)
@@ -213,11 +224,15 @@ def main() -> int:
                     }
         elif not args.no_upstream:
             if not args.upstream_version:
-                raise RuntimeError("--upstream-version is required unless --no-upstream is used")
+                raise RuntimeError(
+                    "--upstream-version is required unless --no-upstream is used"
+                )
             workflow = (
                 {"url": args.upstream_workflow_url}
                 if args.upstream_workflow_url
-                else resolve_upstream_workflow(args.upstream_repo, args.upstream_version)
+                else resolve_upstream_workflow(
+                    args.upstream_repo, args.upstream_version
+                )
             )
             stage_module.GITHUB_REPO = args.upstream_repo
             workflow_id = workflow["url"].rstrip("/").split("/")[-1]
@@ -229,7 +244,9 @@ def main() -> int:
             )
             for platform, target in PLATFORM_TARGETS.items():
                 if (vendor_root / target).is_dir():
-                    artifact_dir = stage_module.artifact_dir_for_target(upstream_cache, target)
+                    artifact_dir = stage_module.artifact_dir_for_target(
+                        upstream_cache, target
+                    )
                     artifact = next(artifact_dir.glob("codex-package-*.tar.gz"), None)
                     source_manifest[target] = {
                         "source": args.upstream_repo,
@@ -241,7 +258,9 @@ def main() -> int:
                             {"artifact": artifact.name, "sha256": sha256_file(artifact)}
                         )
 
-        source_manifest.update(extract_fork_payloads(args.fork_artifact_dir, vendor_root))
+        source_manifest.update(
+            extract_fork_payloads(args.fork_artifact_dir, vendor_root)
+        )
         missing = [
             platform
             for platform, target in PLATFORM_TARGETS.items()
