@@ -273,13 +273,14 @@ prepare_native_rusty_v8_source() {
 refresh_build_lockfile() {
   local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock"
   local build_lock="${BUILD_WORKSPACE}/Cargo.lock"
-  local fingerprint_file="${BUILD_WORKSPACE}/.codex-source-lock-fingerprint"
+  local fingerprint_file="${BUILD_REPO}/build/.codex-source-lock-fingerprint"
   local source_fingerprint stored_fingerprint=""
   source_fingerprint="$(sed '/^version = /d' "${source_lock}" | sha256sum | awk '{print $1}')"
   [[ -f "${fingerprint_file}" ]] && read -r stored_fingerprint <"${fingerprint_file}"
   echo "Refreshing generated build-tree Cargo.lock..." >&2
   if [[ ! -f "${build_lock}" || "${source_fingerprint}" != "${stored_fingerprint}" ]]; then
     cp "${source_lock}" "${build_lock}"
+    mkdir -p "$(dirname "${fingerprint_file}")"
     printf '%s\n' "${source_fingerprint}" >"${fingerprint_file}"
   else
     echo "Keeping generated build-tree Cargo.lock." >&2
@@ -394,10 +395,10 @@ configure_rusty_v8_artifacts() {
   done
 
   local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
-  if [[ "${target_mode}" == native && -d "${BUILD_REPO}/rusty-v8-artifacts/native" && -z "${RUSTY_V8_REPO_DIR:-}" ]]; then
-    local_repo="${BUILD_REPO}/rusty-v8-artifacts/native"
+  if [[ "${target_mode}" == native && -d "${BUILD_REPO}/build/rusty-v8-artifacts/native" && -z "${RUSTY_V8_REPO_DIR:-}" ]]; then
+    local_repo="${BUILD_REPO}/build/rusty-v8-artifacts/native"
   fi
-  cache_dir="${BUILD_REPO}/rusty-v8-artifacts/${VERSION}/${target}"
+  cache_dir="${BUILD_REPO}/build/rusty-v8-artifacts/${VERSION}/${target}"
   mkdir -p "${cache_dir}"
 
   if [[ -f "${local_repo}/${archive}" && -f "${local_repo}/${binding}" ]]; then
