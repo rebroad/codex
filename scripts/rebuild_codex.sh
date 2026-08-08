@@ -175,6 +175,39 @@ configure_rusty_v8_artifacts() {
   local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
   archive="librusty_v8_${profile}_${target}.a.gz"
   binding="src_binding_${profile}_${target}.rs"
+
+  if [[ -n "${RUSTY_V8_ARCHIVE:-}" || -n "${RUSTY_V8_SRC_BINDING_PATH:-}" ]]; then
+    [[ -s "${RUSTY_V8_ARCHIVE:-}" && -s "${RUSTY_V8_SRC_BINDING_PATH:-}" ]] \
+      || die "RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH must point to existing files"
+    RUSTY_V8_ARCHIVE_PATH="${RUSTY_V8_ARCHIVE}"
+    RUSTY_V8_BINDING_PATH="${RUSTY_V8_SRC_BINDING_PATH}"
+    echo "Using Rusty V8 artifacts from the environment for ${target}." >&2
+    return 0
+  fi
+
+  local target_dir build_profile build_root
+  target_dir="$(cargo_target_dir "${MODE}" "${target_mode}")"
+  build_profile="${MODE}"
+  [[ "${build_profile}" == release ]] || build_profile="debug"
+  build_root="${target_dir}/${build_profile}"
+  if [[ "${target_mode}" != native ]]; then
+    build_root="${target_dir}/${target}/${build_profile}"
+  fi
+  for output in "${build_root}"/build/v8-*/output; do
+    [[ -f "${output}" ]] || continue
+    local cached_archive cached_binding
+    cached_archive="$(sed -n 's/^static lib URL: //p' "${output}" | tail -n 1)"
+    cached_binding="$(sed -n 's/^cargo:rustc-env=RUSTY_V8_SRC_BINDING_PATH=//p' "${output}" | tail -n 1)"
+    if [[ "$(basename "${cached_archive}")" == "${archive}" \
+      && "$(basename "${cached_binding}")" == "${binding}" \
+      && -s "${cached_archive}" && -s "${cached_binding}" ]]; then
+      RUSTY_V8_ARCHIVE_PATH="${cached_archive}"
+      RUSTY_V8_BINDING_PATH="${cached_binding}"
+      echo "Using Rusty V8 artifacts recorded by Cargo for ${target}." >&2
+      return 0
+    fi
+  done
+
   local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
   if [[ "${target_mode}" == native && -d "${BUILD_REPO}/rusty-v8-artifacts/native" && -z "${RUSTY_V8_REPO_DIR:-}" ]]; then
     local_repo="${BUILD_REPO}/rusty-v8-artifacts/native"
