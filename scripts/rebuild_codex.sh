@@ -157,8 +157,8 @@ find_reusable_github_run() {
   return 1
 }
 
-watch_github_run() {
-  local run_id="${1}" run_url="${2}" release_tag="${3}" job_info
+show_github_run() {
+  local run_id="${1}" run_url="${2}" job_info
   echo "GitHub CI run: ${run_url}" >&2
   job_info="$(gh run view "${run_id}" --repo "${FORK_RELEASE_REPO}" \
     --json jobs --jq '.jobs[] | [.databaseId, .name, .url] | @tsv' 2>/dev/null || true)"
@@ -168,17 +168,15 @@ watch_github_run() {
       || job_url="https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}/job/${job_id}"
     echo "GitHub CI job (${job_name}): ${job_url}" >&2
   done <<<"${job_info}"
-  gh run watch "${run_id}" --repo "${FORK_RELEASE_REPO}" --exit-status
-  gh release view "${release_tag}" --repo "${FORK_RELEASE_REPO}" >/dev/null
+  echo "Watch command: gh run watch ${run_id} --repo ${FORK_RELEASE_REPO} --exit-status" >&2
 }
 
 start_github_release() {
   require_cmd gh
   require_cmd jq
-  local release_version tag run_info run_id run_url workflow_ref dispatch_started release_tag
+  local release_version tag run_info run_id run_url workflow_ref dispatch_started
   release_version="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
   tag="codex-v${release_version}"
-  release_tag="codex-npm-v${release_version}"
   echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/custom-codex-release.yml" >&2
   if [[ "${SKIP_BUILD}" == true ]]; then
     workflow_ref="$(git -C "${SOURCE_REPO}" branch --show-current)"
@@ -207,7 +205,7 @@ start_github_release() {
       sleep 2
     done
     [[ -n "${run_id}" ]] || die "fast-path workflow was dispatched but did not appear"
-    watch_github_run "${run_id}" "${run_url}" "${release_tag}"
+    show_github_run "${run_id}" "${run_url}"
     return 0
   fi
   if [[ "${DRY_RUN}" == true ]]; then
@@ -227,8 +225,7 @@ start_github_release() {
     sleep 2
   done
   if [[ -n "${run_id}" ]]; then
-    echo "GitHub CI run: ${run_url}" >&2
-    watch_github_run "${run_id}" "${run_url}" "${release_tag}"
+    show_github_run "${run_id}" "${run_url}"
   else
     echo "Tag pushed; the workflow has not appeared yet. Open the workflow URL above." >&2
   fi
