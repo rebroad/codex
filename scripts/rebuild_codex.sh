@@ -34,6 +34,7 @@ TARGET_MODE="native"
 PUBLISH="false"
 PACKAGE_NPM="false"
 PUBLISH_NPM="false"
+PACKAGE_ONLY="false"
 PREFLIGHT_ONLY="false"
 DRY_RUN="false"
 SYNCED="false"
@@ -61,9 +62,11 @@ Options:
   --armv7                  Alias for --target armv7
   --build-npm-vendor       Build the Linux musl payload for npm packaging
   --package-local-npm      Build/reuse local @reb.ai/codex npm archives
+  --package-local-npm-only Package existing build outputs without compiling
   --publish-local-npm      Assemble, audit, and publish npm locally
   --start-github-release   Push a release tag and start/watch GitHub CI
   --package-npm            Alias for --package-local-npm
+  --package-npm-only       Alias for --package-local-npm-only
   --publish-npm            Alias for --publish-local-npm
   --publish                Alias for --start-github-release
   --package-version V      Override only the npm package release version
@@ -747,6 +750,7 @@ while (($#)); do
     --armv7) TARGET_MODE=armv7; shift ;;
     --build-npm-vendor) TARGET_MODE=musl; PACKAGE_NPM=true; shift ;;
     --package-local-npm|--package-npm) PACKAGE_NPM=true; shift ;;
+    --package-local-npm-only|--package-npm-only) PACKAGE_NPM=true; PACKAGE_ONLY=true; shift ;;
     --publish-local-npm|--publish-npm) PACKAGE_NPM=true; PUBLISH_NPM=true; shift ;;
     --package-version) PACKAGE_VERSION="${2:-}"; shift 2 ;;
     --package-version=*) PACKAGE_VERSION="${1#*=}"; shift ;;
@@ -766,6 +770,9 @@ done
 if [[ "${PUBLISH}" == true && ( "${PACKAGE_NPM}" == true || "${PUBLISH_NPM}" == true ) ]]; then
   die "GitHub release startup and local npm publication are separate operations"
 fi
+
+[[ "${PACKAGE_ONLY}" != true || "${PREFLIGHT_ONLY}" != true ]] \
+  || die "--package-npm-only cannot be combined with --preflight-only"
 
 if [[ "${PUBLISH_NPM}" == true ]]; then
   case "${TARGET_MODE}" in
@@ -834,7 +841,7 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
 fi
 sync_sources
 if [[ "${PACKAGE_NPM}" == true ]]; then
-  if [[ "${CODEX_BUILD_FROM_SOURCE:-false}" != true ]]; then
+  if [[ "${PACKAGE_ONLY}" != true && "${CODEX_BUILD_FROM_SOURCE:-false}" != true ]]; then
     download_latest_fork_npm_release
   fi
   BUILD_PACKAGE_TARGETS=()
@@ -852,14 +859,18 @@ if [[ "${PACKAGE_NPM}" == true ]]; then
 else
   BUILD_PACKAGE_TARGETS=()
 fi
-if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
+if [[ "${PACKAGE_ONLY}" == true ]]; then
+  echo "Packaging existing npm artifacts/build outputs; compilation is disabled." >&2
+elif [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
   prepare_armv7_rusty_v8_source
 elif [[ "${TARGET_MODE}" == native ]]; then
   if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] || ! configure_rusty_v8_artifacts native; then
     prepare_native_rusty_v8_source || true
   fi
 fi
-refresh_build_lockfile
+if [[ "${PACKAGE_ONLY}" != true ]]; then
+  refresh_build_lockfile
+fi
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
   exit 0
