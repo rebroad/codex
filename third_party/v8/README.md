@@ -6,11 +6,12 @@ Bazel consumer builds use:
 - upstream `denoland/rusty_v8` release archives on Windows MSVC
 - source-built V8 archives on Darwin, GNU Linux, musl Linux, and Windows GNU
 
-Local Cargo builds still use upstream prebuilt `rusty_v8` archives by default.
-Selected Cargo CI, release, and package builds override
-`RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` with Codex release assets. Bazel
-sets those variables independently in `MODULE.bazel` to select source-built
-local archives and bindings for its consumer builds.
+Cargo builds use the target-selected prebuilt `rusty_v8` archives by default:
+the fork supplies x64 musl, ARMv7, and Android arm64, while upstream supplies
+the remaining targets. Selected CI, release, and package builds override
+`RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` explicitly. Bazel sets those
+variables independently in `MODULE.bazel` to select source-built local
+archives and bindings for its consumer builds.
 
 The Bazel `v8` crate feature selection enables V8's in-process sandbox for
 Darwin, Linux, and Windows GNU. Windows MSVC remains on upstream non-sandboxed
@@ -106,11 +107,13 @@ hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
 it cannot truthfully reproduce upstream's `*-pc-windows-msvc` archives until we
 add a real MSVC-targeting C++ toolchain to the Bazel graph.
 
-Release and CI Cargo builds for Darwin and Linux use `RUSTY_V8_ARCHIVE` plus a
-downloaded `RUSTY_V8_SRC_BINDING_PATH` to point at those `rebroad/codex` release
-assets directly. We do not use `RUSTY_V8_MIRROR` because the upstream `v8` crate
-hardcodes a `v<crate_version>` tag layout, while our artifacts are published
-under `rusty-v8-v<crate_version>`.
+Release and CI Cargo builds use `RUSTY_V8_ARCHIVE` plus a downloaded
+`RUSTY_V8_SRC_BINDING_PATH`. The artifact repository is selected by target:
+`rebroad/rusty_v8` supplies x64 musl, ARMv7, and Android arm64; all other
+targets use the corresponding upstream `openai/codex` release asset. We do not
+use `RUSTY_V8_MIRROR` because the upstream `v8` crate hardcodes a
+`v<crate_version>` tag layout, while these artifacts are published under
+`rusty-v8-v<crate_version>`.
 
 Do not mix artifacts across crate versions. The archive and binding must match
 the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.
