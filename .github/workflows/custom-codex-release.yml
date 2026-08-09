@@ -132,14 +132,8 @@ jobs:
       RUST_BACKTRACE: "1"
       RUST_TOOLCHAIN: "1.95.0"
       ANDROID_NDK_VERSION: "28.2.13676358"
-      RUSTY_V8_COMMIT: "58fb8ceb62e9231002719ee2a4f227d17c938a90"
-      RUSTY_V8_RELEASE_REPO: "rebroad/rusty_v8"
       RUSTY_V8_MUSL_ARCHIVE_SHA256: "9d9d1c14aa14f64231b051679b3350038f608f06be1d07a4c2c812f601a78e65"
       RUSTY_V8_MUSL_BINDING_SHA256: "639421ae6a0d125dde076cdb4c5d5b3afc9e3ce764acad4a772b7182ea77da66"
-      RUSTY_V8_ARMV7_ARCHIVE_SHA256: "2a842cfcd792317a3e521f67f98167751b8f1043a01c59ec483e8c49d3d081ed"
-      RUSTY_V8_ARMV7_BINDING_SHA256: "600de6702ca024c670310f14464cc892b1a1b4ae596f9898127d9e98263185a3"
-      RUSTY_V8_ANDROID_ARCHIVE_SHA256: "58753130e13184681966ec64fdef84ee0fb85d51a6bde8e01d54700f97a353ec"
-      RUSTY_V8_ANDROID_BINDING_SHA256: "c87a57bbad22339684cda2759ccb1e0fe15d0edc9dc9d70a2e1d0a40f674dee7"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: inputs.reuse_artifacts_run_id == ''
@@ -162,35 +156,6 @@ jobs:
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
             binutils-arm-linux-gnueabihf jq
 
-      - name: Install Zig for musl source builds
-        if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          zig_version=0.14.0
-          case "$(uname -m)" in
-            x86_64) zig_arch=x86_64 ;;
-            aarch64|arm64) zig_arch=aarch64 ;;
-            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-          zig_root="${RUNNER_TEMP}/zig-${zig_version}-${zig_arch}"
-          if [[ ! -x "${zig_root}/zig" ]]; then
-            archive="${RUNNER_TEMP}/zig-${zig_version}-${zig_arch}.tar.xz"
-            curl --fail --location --retry 3 --silent --show-error \
-              "https://ziglang.org/download/${zig_version}/zig-linux-${zig_arch}-${zig_version}.tar.xz" \
-              --output "${archive}"
-            rm -rf "${zig_root}"
-            mkdir -p "${zig_root}"
-            tar -xJf "${archive}" --strip-components=1 -C "${zig_root}"
-          fi
-          echo "${zig_root}" >> "${GITHUB_PATH}"
-          "${zig_root}/zig" version
-
-      - name: Build unsupported Rusty V8 targets from source
-        if: matrix.build_mode == 'direct' && matrix.target != 'x86_64-unknown-linux-musl' && inputs.reuse_artifacts_run_id == ''
-        shell: bash
-        run: echo 'V8_FROM_SOURCE=1' >> "${GITHUB_ENV}"
-
       - name: Configure musl build tools
         if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
         env:
@@ -209,50 +174,6 @@ jobs:
           echo "ANDROID_NDK_HOME=${ndk_home}" >> "${GITHUB_ENV}"
           echo "ANDROID_NDK_ROOT=${ndk_home}" >> "${GITHUB_ENV}"
 
-      - name: Checkout patched Rusty V8 source
-        if: >-
-          (
-            matrix.build_mode == 'rebuild' ||
-            (matrix.build_mode == 'direct' && matrix.target != 'x86_64-unknown-linux-musl')
-          ) && inputs.reuse_artifacts_run_id == ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${RUNNER_OS}" == Windows_NT ]]; then
-            git config --global core.symlinks true
-          fi
-          rusty_v8="${GITHUB_WORKSPACE%/codex}/rusty_v8"
-          git init "${rusty_v8}"
-          git -C "${rusty_v8}" remote add origin https://github.com/rebroad/rusty_v8.git
-          git -C "${rusty_v8}" fetch --depth 1 origin "${RUSTY_V8_COMMIT}"
-          git -C "${rusty_v8}" checkout --detach "${RUSTY_V8_COMMIT}"
-          git -C "${rusty_v8}" submodule update --init --depth 1 --recursive
-          mkdir -p "${rusty_v8}.build"
-          rusty_v8_config_path="$(cd -- "${rusty_v8}" && pwd -P)"
-          if command -v cygpath >/dev/null 2>&1; then
-            rusty_v8_config_path="$(cygpath -m "${rusty_v8_config_path}")"
-          fi
-          cargo_config="${RUNNER_TEMP}/codex-v8-source-${{ matrix.target }}.toml"
-          {
-            echo '[patch.crates-io]'
-            printf 'v8 = { path = "%s" }\n' "${rusty_v8_config_path}"
-          } >"${cargo_config}"
-          echo "CODEX_V8_CARGO_CONFIG=${cargo_config}" >> "${GITHUB_ENV}"
-
-      - name: Use patched Rusty V8 source for direct source builds
-        if: >-
-          matrix.build_mode == 'direct' &&
-          matrix.target != 'x86_64-unknown-linux-musl' &&
-          inputs.reuse_artifacts_run_id == ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          rusty_v8="${GITHUB_WORKSPACE%/codex}/rusty_v8"
-          [[ -f "${rusty_v8}/Cargo.toml" ]] || {
-            echo "Patched Rusty V8 source is missing." >&2
-            exit 1
-          }
-
       - name: Configure Windows linker
         if: runner.os == 'Windows' && inputs.reuse_artifacts_run_id == ''
         uses: ./.github/actions/setup-msvc-env
@@ -260,13 +181,12 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Configure Rusty V8 artifacts
-        if: matrix.target == 'x86_64-unknown-linux-musl' && inputs.reuse_artifacts_run_id == ''
+        if: inputs.reuse_artifacts_run_id == ''
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
-          release-repo: rebroad/rusty_v8
-          archive-sha256: ${{ env.RUSTY_V8_MUSL_ARCHIVE_SHA256 }}
-          binding-sha256: ${{ env.RUSTY_V8_MUSL_BINDING_SHA256 }}
+          archive-sha256: ${{ matrix.target == 'x86_64-unknown-linux-musl' && env.RUSTY_V8_MUSL_ARCHIVE_SHA256 || '' }}
+          binding-sha256: ${{ matrix.target == 'x86_64-unknown-linux-musl' && env.RUSTY_V8_MUSL_BINDING_SHA256 || '' }}
 
       - name: Build fork target from source
         if: matrix.build_mode == 'rebuild' && inputs.reuse_artifacts_run_id == ''
