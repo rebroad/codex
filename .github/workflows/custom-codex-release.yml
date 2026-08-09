@@ -11,9 +11,15 @@ on:
         description: "codex-v* tag to build"
         required: true
         type: string
+      reuse_artifacts_run_id:
+        description: "Completed run ID whose npm-source artifacts should be reused"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: custom-codex-release-${{ github.ref }}
@@ -129,17 +135,19 @@ jobs:
       RUSTY_V8_ANDROID_BINDING_SHA256: "c87a57bbad22339684cda2759ccb1e0fe15d0edc9dc9d70a2e1d0a40f674dee7"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: inputs.reuse_artifacts_run_id == ''
         with:
           ref: ${{ needs.prepare-release.outputs.source_tag }}
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        if: inputs.reuse_artifacts_run_id == ''
         with:
           toolchain: "1.95.0"
           targets: ${{ matrix.target }}
 
       - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && inputs.reuse_artifacts_run_id == ''
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -148,7 +156,7 @@ jobs:
             binutils-arm-linux-gnueabihf jq
 
       - name: Install Zig for musl source builds
-        if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl')
+        if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -172,18 +180,18 @@ jobs:
           "${zig_root}/zig" version
 
       - name: Build unsupported Rusty V8 targets from source
-        if: matrix.build_mode == 'direct' && matrix.target != 'x86_64-unknown-linux-musl'
+        if: matrix.build_mode == 'direct' && matrix.target != 'x86_64-unknown-linux-musl' && inputs.reuse_artifacts_run_id == ''
         shell: bash
         run: echo 'V8_FROM_SOURCE=1' >> "${GITHUB_ENV}"
 
       - name: Configure musl build tools
-        if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl')
+        if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
         env:
           TARGET: ${{ matrix.target }}
         run: bash .github/scripts/install-musl-build-tools.sh
 
       - name: Install Android NDK
-        if: matrix.rebuild_target == 'android'
+        if: matrix.rebuild_target == 'android' && inputs.reuse_artifacts_run_id == ''
         run: |
           set -euo pipefail
           : "${ANDROID_HOME:?ANDROID_HOME must be set on the GitHub runner}"
@@ -195,7 +203,7 @@ jobs:
           echo "ANDROID_NDK_ROOT=${ndk_home}" >> "${GITHUB_ENV}"
 
       - name: Checkout patched Rusty V8 source
-        if: matrix.build_mode == 'rebuild'
+        if: matrix.build_mode == 'rebuild' && inputs.reuse_artifacts_run_id == ''
         run: |
           set -euo pipefail
           rusty_v8="${GITHUB_WORKSPACE%/codex}/rusty_v8"
@@ -207,13 +215,13 @@ jobs:
           mkdir -p "${rusty_v8}.build"
 
       - name: Configure Windows linker
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.reuse_artifacts_run_id == ''
         uses: ./.github/actions/setup-msvc-env
         with:
           target: ${{ matrix.target }}
 
       - name: Configure Rusty V8 artifacts
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: matrix.target == 'x86_64-unknown-linux-musl' && inputs.reuse_artifacts_run_id == ''
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
@@ -222,7 +230,7 @@ jobs:
           binding-sha256: ${{ env.RUSTY_V8_MUSL_BINDING_SHA256 }}
 
       - name: Build fork target from source
-        if: matrix.build_mode == 'rebuild'
+        if: matrix.build_mode == 'rebuild' && inputs.reuse_artifacts_run_id == ''
         env:
           CODEX_BUILD_FROM_SOURCE: "true"
           VERSION: ${{ needs.prepare-release.outputs.package_version }}
@@ -239,7 +247,7 @@ jobs:
             "${GITHUB_WORKSPACE}.build/npm-source-artifact/"
 
       - name: Build and package source target
-        if: matrix.build_mode == 'direct'
+        if: matrix.build_mode == 'direct' && inputs.reuse_artifacts_run_id == ''
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.prepare-release.outputs.package_version }}
@@ -281,6 +289,16 @@ jobs:
             --package "codex-${{ matrix.platform }}" \
             --vendor-src "${vendor_dir}" \
             --pack-output "${OUTPUT_DIR}/codex-npm-${{ matrix.platform }}-${VERSION}.tgz"
+
+      - name: Reuse npm source artifact from completed run
+        if: inputs.reuse_artifacts_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-source-${{ matrix.platform }}
+          run-id: ${{ inputs.reuse_artifacts_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ github.workspace }}.build/npm-source-artifact
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
