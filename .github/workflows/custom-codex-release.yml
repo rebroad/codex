@@ -228,6 +228,16 @@ jobs:
           git -C "${rusty_v8}" checkout --detach "${RUSTY_V8_COMMIT}"
           git -C "${rusty_v8}" submodule update --init --depth 1 --recursive
           mkdir -p "${rusty_v8}.build"
+          rusty_v8_config_path="$(cd -- "${rusty_v8}" && pwd -P)"
+          if command -v cygpath >/dev/null 2>&1; then
+            rusty_v8_config_path="$(cygpath -m "${rusty_v8_config_path}")"
+          fi
+          cargo_config="${RUNNER_TEMP}/codex-v8-source-${{ matrix.target }}.toml"
+          {
+            echo '[patch.crates-io]'
+            printf 'v8 = { path = "%s" }\n' "${rusty_v8_config_path}"
+          } >"${cargo_config}"
+          echo "CODEX_V8_CARGO_CONFIG=${cargo_config}" >> "${GITHUB_ENV}"
 
       - name: Use patched Rusty V8 source for direct source builds
         if: >-
@@ -238,13 +248,10 @@ jobs:
         run: |
           set -euo pipefail
           rusty_v8="${GITHUB_WORKSPACE%/codex}/rusty_v8"
-          manifest="${GITHUB_WORKSPACE}/codex-rs/Cargo.toml"
-          [[ -f "${rusty_v8}/Cargo.toml" && -f "${manifest}" ]] || {
-            echo "Patched Rusty V8 source or Cargo manifest is missing." >&2
+          [[ -f "${rusty_v8}/Cargo.toml" ]] || {
+            echo "Patched Rusty V8 source is missing." >&2
             exit 1
           }
-          sed -i '/^v8 = { path = /d' "${manifest}"
-          sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${rusty_v8}\" }" "${manifest}"
 
       - name: Configure Windows linker
         if: runner.os == 'Windows' && inputs.reuse_artifacts_run_id == ''
@@ -290,7 +297,11 @@ jobs:
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}/codex-rs"
           build_args=(
-            cargo build --target "${TARGET}" --release --timings
+            cargo
+          )
+          [[ -n "${CODEX_V8_CARGO_CONFIG:-}" ]] && build_args+=(--config "${CODEX_V8_CARGO_CONFIG}")
+          build_args+=(
+            build --target "${TARGET}" --release --timings
             --bin codex
             --bin codex-code-mode-host
           )
