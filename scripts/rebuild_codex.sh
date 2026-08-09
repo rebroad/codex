@@ -39,7 +39,6 @@ PREFLIGHT_ONLY="false"
 DRY_RUN="false"
 SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
-RUSTY_V8_SOURCE_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
@@ -304,25 +303,6 @@ prepare_armv7_rusty_v8_source() {
   RUSTY_V8_ARMV7_PREPARED="true"
 }
 
-prepare_native_rusty_v8_source() {
-  [[ "${RUSTY_V8_SOURCE_PREPARED}" == true ]] && return
-  local source_repo="${RUSTY_V8_SOURCE_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
-  [[ -f "${source_repo}/Cargo.toml" ]] || return
-  local build_repo="${BUILD_REPO}/rusty-v8-native"
-  if command -v cpto >/dev/null 2>&1; then
-    mkdir -p "${build_repo}"
-    cpto --no-lngit --nogit "${source_repo}" "${build_repo}"
-  else
-    echo "cpto not found; syncing native Rusty V8 source without deleting build artifacts" >&2
-    tar --exclude='./.git' -cf - -C "${source_repo}" . | tar -xf - -C "${build_repo}"
-  fi
-  rm -rf "${build_repo}/third_party/rust-toolchain"
-  source_repo="${build_repo}"
-  local manifest="${BUILD_WORKSPACE}/Cargo.toml"
-  set_v8_path_patch "${manifest}" "${source_repo}"
-  RUSTY_V8_SOURCE_PREPARED="true"
-}
-
 refresh_build_lockfile() {
   local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock"
   local build_lock="${BUILD_WORKSPACE}/Cargo.lock"
@@ -346,11 +326,6 @@ refresh_build_lockfile() {
   fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
-  fi
-  if [[ "${RUSTY_V8_SOURCE_PREPARED}" == true ]]; then
-    (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
-  else
-    sed -i "\|v8 = { path = \"${BUILD_REPO}/rusty-v8-native\" }|d" "${BUILD_WORKSPACE}/Cargo.toml"
   fi
 }
 
@@ -577,19 +552,11 @@ cargo_build() {
   )
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
   if [[ "${target_mode}" == native ]]; then
-    if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ || "${RUSTY_V8_SOURCE_PREPARED}" == true ]]; then
-      env_args+=(V8_FROM_SOURCE=1)
-    else
-      if configure_rusty_v8_artifacts "${target_mode}"; then
-        env_args+=(
-          RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
-          RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
-        )
-      else
-        echo "Native Rusty V8 artifacts are unavailable; building V8 from source." >&2
-        env_args+=(V8_FROM_SOURCE=1)
-      fi
-    fi
+    configure_rusty_v8_artifacts "${target_mode}" || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
+    env_args+=(
+      RUSTY_V8_ARCHIVE="${RUSTY_V8_ARCHIVE_PATH}"
+      RUSTY_V8_SRC_BINDING_PATH="${RUSTY_V8_BINDING_PATH}"
+    )
   else
     if configure_rusty_v8_artifacts "${target_mode}"; then
       env_args+=(
