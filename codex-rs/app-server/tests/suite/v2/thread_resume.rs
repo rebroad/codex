@@ -2605,6 +2605,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
                 model_context_window: Some(200_000),
             }),
             rate_limits: None,
+            effective_model: None,
         })),
     )
     .await?;
@@ -2682,6 +2683,7 @@ async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Resul
                 model_context_window: Some(200_000),
             }),
             rate_limits: None,
+            effective_model: None,
         })),
     )
     .await?;
