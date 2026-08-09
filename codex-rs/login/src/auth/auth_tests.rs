@@ -1208,6 +1208,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     let updated_auth = CodexAuth::from_auth_dot_json(
         codex_home.path(),
         updated_auth_dot_json,
+        None,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -1784,6 +1785,7 @@ async fn build_config(
 ) -> AuthConfig {
     AuthConfig {
         codex_home: codex_home.to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method,
@@ -1879,6 +1881,7 @@ impl AuthManagerConfig for TestAuthManagerConfig {
 fn test_auth_manager_config(codex_home: &Path) -> TestAuthManagerConfig {
     TestAuthManagerConfig(AuthConfig {
         codex_home: codex_home.to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method: Some(ForcedLoginMethod::Chatgpt),
@@ -2455,6 +2458,7 @@ async fn enforce_login_restrictions_logs_out_for_personal_access_token_workspace
 
     let config = AuthConfig {
         codex_home: codex_home.path().to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::default(),
         forced_login_method: None,
@@ -2580,6 +2584,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
 
     let config = AuthConfig {
         codex_home: codex_home.path().to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method: None,
