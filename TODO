@@ -1,3 +1,4 @@
 Title - Can the codex window title be customised? (Useful to show a unique win id)
 Split-auth (one for backend, one for remote control)
 Show new memories (Optional. When memory files are updated, show this to the user)
+Fix ~/.codex/memories read-only issue when the project is $HOME !
