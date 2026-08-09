@@ -48,6 +48,7 @@ const SYNTHETIC_MOUNT_MARKER_EXISTING: &[u8] = b"existing\n";
 const PROTECTED_CREATE_MARKER: &[u8] = b"protected-create\n";
 
 const DEFAULT_SANDBOX_DEBUG_LOG_PATH: &str = "/tmp/codex-sandbox-debug.log";
+const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
 #[derive(Debug, Deserialize)]
 struct SandboxDebugConfigFile {
@@ -415,32 +416,64 @@ fn write_sandbox_debug(
 }
 
 fn sandbox_debug_log_path() -> PathBuf {
-    let Some(codex_home) = env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
-    else {
-        return PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH);
+    let log_path = {
+        let Some(codex_home) = env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+        else {
+            return session_scoped_log_path(PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH));
+        };
+        let config_path = codex_home.join("config.toml");
+        let Ok(contents) = fs::read_to_string(&config_path) else {
+            return session_scoped_log_path(PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH));
+        };
+        let Ok(config) = toml::from_str::<SandboxDebugConfigFile>(&contents) else {
+            return session_scoped_log_path(PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH));
+        };
+        config
+            .sandbox_log_path
+            .map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    config_path
+                        .parent()
+                        .expect("config path has a parent")
+                        .join(path)
+                }
+            })
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH))
     };
-    let config_path = codex_home.join("config.toml");
-    let Ok(contents) = fs::read_to_string(&config_path) else {
-        return PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH);
+
+    session_scoped_log_path(log_path)
+}
+
+fn session_scoped_log_path(log_path: PathBuf) -> PathBuf {
+    let session_id = env::var_os(CODEX_THREAD_ID_ENV_VAR)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.into_string().ok())
+        .as_deref()
+        .map(str::to_owned);
+
+    session_scoped_log_path_for_session(log_path, session_id.as_deref())
+}
+
+fn session_scoped_log_path_for_session(log_path: PathBuf, session_id: Option<&str>) -> PathBuf {
+    let Some(session_id) = session_id.filter(|value| {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    }) else {
+        return log_path;
     };
-    let Ok(config) = toml::from_str::<SandboxDebugConfigFile>(&contents) else {
-        return PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH);
+
+    let Some(file_name) = log_path.file_name().and_then(|name| name.to_str()) else {
+        return log_path;
     };
-    config
-        .sandbox_log_path
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else {
-                config_path
-                    .parent()
-                    .expect("config path has a parent")
-                    .join(path)
-            }
-        })
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH))
+    let Some(parent) = log_path.parent() else {
+        return PathBuf::from(format!("{file_name}-{session_id}"));
+    };
+    parent.join(format!("{file_name}-{session_id}"))
 }
 
 fn run_bwrap_with_proc_fallback(
