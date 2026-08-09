@@ -753,12 +753,8 @@ pub async fn run_main_with_transport_options(
     let mut remote_control_auth_config = config.auth_config();
     remote_control_auth_config.auth_credentials_store_mode =
         codex_config::types::AuthCredentialsStoreMode::File;
-    remote_control_auth_config.auth_file = Some(
-        config
-            .codex_home
-            .join("remote-control-auth.json")
-            .to_path_buf(),
-    );
+    remote_control_auth_config.auth_file =
+        Some(config.codex_home.join("rc-auth.json").to_path_buf());
     let remote_control_auth_manager =
         AuthManager::shared_from_auth_config(remote_control_auth_config, false).await;
 
