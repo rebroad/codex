@@ -32,6 +32,7 @@ PACKAGE_VERSION=""
 MODE="debug"
 TARGET_MODE="native"
 PUBLISH="false"
+SKIP_BUILD="false"
 PACKAGE_NPM="false"
 PUBLISH_NPM="false"
 PREFLIGHT_ONLY="false"
@@ -63,6 +64,7 @@ Options:
   --package-local-npm      Build/reuse local @reb.ai/codex npm archives
   --publish-local-npm      Assemble, audit, and publish npm locally
   --start-github-release   Push a release tag and start/watch GitHub CI
+  --skip-build             With --start-github-release, reuse a completed CI build
   --package-npm            Alias for --package-local-npm
   --publish-npm            Alias for --publish-local-npm
   --publish                Alias for --start-github-release
@@ -138,13 +140,76 @@ has_local_npm_platform_archive() {
   return 1
 }
 
+find_reusable_github_run() {
+  local tag="${1}" run_id artifact_count
+  while read -r run_id; do
+    [[ -n "${run_id}" ]] || continue
+    artifact_count="$(gh api "repos/${FORK_RELEASE_REPO}/actions/runs/${run_id}/artifacts?per_page=100" \
+      --jq '[.artifacts[] | select(.expired == false and (.name | startswith("npm-source-"))) | .name] | unique | length')"
+    if [[ "${artifact_count}" == 8 ]]; then
+      echo "${run_id}"
+      return 0
+    fi
+  done < <(gh run list --repo "${FORK_RELEASE_REPO}" \
+    --workflow custom-codex-release.yml --status completed --limit 50 \
+    --json databaseId,headBranch,event \
+    | jq -r --arg tag "${tag}" '.[] | select(.event == "push" and .headBranch == $tag) | .databaseId')
+  return 1
+}
+
+watch_github_run() {
+  local run_id="${1}" run_url="${2}" release_tag="${3}" job_info
+  echo "GitHub CI run: ${run_url}" >&2
+  job_info="$(gh run view "${run_id}" --repo "${FORK_RELEASE_REPO}" \
+    --json jobs --jq '.jobs[] | [.databaseId, .name, .url] | @tsv' 2>/dev/null || true)"
+  while IFS=$'\t' read -r job_id job_name job_url; do
+    [[ -n "${job_id}" ]] || continue
+    [[ -n "${job_url}" && "${job_url}" != null ]] \
+      || job_url="https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}/job/${job_id}"
+    echo "GitHub CI job (${job_name}): ${job_url}" >&2
+  done <<<"${job_info}"
+  gh run watch "${run_id}" --repo "${FORK_RELEASE_REPO}" --exit-status
+  gh release view "${release_tag}" --repo "${FORK_RELEASE_REPO}" >/dev/null
+}
+
 start_github_release() {
   require_cmd gh
   require_cmd jq
-  local release_version tag run_info run_id run_url
+  local release_version tag run_info run_id run_url workflow_ref dispatch_started release_tag
   release_version="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
   tag="codex-v${release_version}"
+  release_tag="codex-npm-v${release_version}"
   echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/custom-codex-release.yml" >&2
+  if [[ "${SKIP_BUILD}" == true ]]; then
+    workflow_ref="$(git -C "${SOURCE_REPO}" branch --show-current)"
+    [[ -n "${workflow_ref}" ]] || die "--skip-build requires a checked-out branch"
+    if [[ "${DRY_RUN}" == true ]]; then
+      echo "Would dispatch GitHub CI for ${tag} using the latest completed artifact run." >&2
+      return 0
+    fi
+    git -C "${SOURCE_REPO}" ls-remote --exit-code origin "refs/tags/${tag}" >/dev/null \
+      || die "release tag ${tag} does not exist; --skip-build can only retry an existing tagged build"
+    run_id="$(find_reusable_github_run "${tag}")" \
+      || die "no completed ${tag} run has all eight reusable npm source artifacts"
+    echo "Reusing artifacts from GitHub CI run: https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}" >&2
+    dispatch_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    gh workflow run custom-codex-release.yml --repo "${FORK_RELEASE_REPO}" --ref "${workflow_ref}" \
+      -f "tag=${tag}" -f "reuse_artifacts_run_id=${run_id}" -f publish_npm=true
+    echo "Waiting for the fast-path GitHub workflow run..." >&2
+    run_info=""
+    for _ in {1..30}; do
+      run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
+        --workflow custom-codex-release.yml --event workflow_dispatch --limit 20 \
+        --json databaseId,url,createdAt \
+        | jq -r --arg started "${dispatch_started}" '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | .[0] | [.databaseId, .url] | @tsv')"
+      read -r run_id run_url <<<"${run_info}"
+      [[ -n "${run_id}" ]] && break
+      sleep 2
+    done
+    [[ -n "${run_id}" ]] || die "fast-path workflow was dispatched but did not appear"
+    watch_github_run "${run_id}" "${run_url}" "${release_tag}"
+    return 0
+  fi
   if [[ "${DRY_RUN}" == true ]]; then
     echo "Would create and push GitHub tag ${tag}" >&2
     return 0
@@ -163,16 +228,7 @@ start_github_release() {
   done
   if [[ -n "${run_id}" ]]; then
     echo "GitHub CI run: ${run_url}" >&2
-    job_info="$(gh run view "${run_id}" --repo "${FORK_RELEASE_REPO}" \
-      --json jobs --jq '.jobs[] | [.databaseId, .name, .url] | @tsv' 2>/dev/null || true)"
-    while IFS=$'\t' read -r job_id job_name job_url; do
-      [[ -n "${job_id}" ]] || continue
-      [[ -n "${job_url}" && "${job_url}" != null ]] \
-        || job_url="https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}/job/${job_id}"
-      echo "GitHub CI job (${job_name}): ${job_url}" >&2
-    done <<<"${job_info}"
-    gh run watch "${run_id}" --repo "${FORK_RELEASE_REPO}" --exit-status
-    gh release view "${tag}" --repo "${FORK_RELEASE_REPO}" >/dev/null
+    watch_github_run "${run_id}" "${run_url}" "${release_tag}"
   else
     echo "Tag pushed; the workflow has not appeared yet. Open the workflow URL above." >&2
   fi
@@ -752,6 +808,7 @@ while (($#)); do
     --package-version=*) PACKAGE_VERSION="${1#*=}"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --start-github-release|--publish) PUBLISH=true; MODE=release; shift ;;
+    --skip-build) SKIP_BUILD=true; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
@@ -766,6 +823,8 @@ done
 if [[ "${PUBLISH}" == true && ( "${PACKAGE_NPM}" == true || "${PUBLISH_NPM}" == true ) ]]; then
   die "GitHub release startup and local npm publication are separate operations"
 fi
+[[ "${SKIP_BUILD}" != true || "${PUBLISH}" == true ]] \
+  || die "--skip-build requires --start-github-release"
 
 if [[ "${PUBLISH_NPM}" == true ]]; then
   case "${TARGET_MODE}" in
