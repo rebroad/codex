@@ -1219,6 +1219,10 @@ async fn configured_remote_control_listener(codex_home: &std::path::Path) -> Res
             .chatgpt_account_id("account_id"),
         AuthCredentialsStoreMode::File,
     )?;
+    std::fs::copy(
+        codex_home.join("auth.json"),
+        codex_home.join("rc-auth.json"),
+    )?;
     Ok(listener)
 }
 
