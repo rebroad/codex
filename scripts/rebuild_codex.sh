@@ -409,7 +409,6 @@ configure_rusty_v8_artifacts() {
   local crate_version="${V8_CRATE_VERSION:-$(sed -n '/^name = "v8"$/,/^version = /s/^version = "\([^"]*\)"/\1/p' "${SOURCE_REPO}/codex-rs/Cargo.lock" | head -n 1)}"
   [[ -n "${crate_version}" ]] || die "could not determine the pinned v8 crate version"
   local default_profile="ptrcomp_sandbox_release"
-  [[ "${target_mode}" == armv7 || "${target_mode}" == android ]] && default_profile="release"
   local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
   archive="librusty_v8_${profile}_${target}.a.gz"
   binding="src_binding_${profile}_${target}.rs"
@@ -447,14 +446,16 @@ configure_rusty_v8_artifacts() {
     fi
   done
 
-  local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
-  if [[ "${target_mode}" == native && -d "${BUILD_REPO}/build/rusty-v8-artifacts/native" && -z "${RUSTY_V8_REPO_DIR:-}" ]]; then
+  local_repo=""
+  if [[ "${target_mode}" == armv7 || "${target_mode}" == android || "${target_mode}" == musl ]]; then
+    local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
+  elif [[ "${target_mode}" == native && -d "${BUILD_REPO}/build/rusty-v8-artifacts/native" && -z "${RUSTY_V8_REPO_DIR:-}" ]]; then
     local_repo="${BUILD_REPO}/build/rusty-v8-artifacts/native"
   fi
   cache_dir="${BUILD_REPO}/build/rusty-v8-artifacts/${VERSION}/${target}"
   mkdir -p "${cache_dir}"
 
-  if [[ -f "${local_repo}/${archive}" && -f "${local_repo}/${binding}" ]]; then
+  if [[ -n "${local_repo}" && -f "${local_repo}/${archive}" && -f "${local_repo}/${binding}" ]]; then
     RUSTY_V8_ARCHIVE_PATH="${local_repo}/${archive}"
     RUSTY_V8_BINDING_PATH="${local_repo}/${binding}"
     echo "Using local Rusty V8 artifacts from ${local_repo} for ${target}." >&2
@@ -467,10 +468,13 @@ configure_rusty_v8_artifacts() {
       echo "Using cached Rusty V8 ${release_tag} artifacts for ${target}." >&2
     else
       preferred_release_repo="${RUSTY_V8_RELEASE_REPO:-}"
-      if [[ "${target_mode}" == android && -n "${RUSTY_V8_ANDROID_RELEASE_REPO:-}" ]]; then
-        preferred_release_repo="${RUSTY_V8_ANDROID_RELEASE_REPO}"
+      if [[ -z "${preferred_release_repo}" ]]; then
+        case "${target_mode}" in
+          musl|armv7|android) preferred_release_repo="rebroad/rusty_v8" ;;
+          *) preferred_release_repo="openai/codex" ;;
+        esac
       fi
-      local release_repos=("${preferred_release_repo:-rebroad/codex}")
+      local release_repos=("${preferred_release_repo}")
       for release_repo in "${release_repos[@]}"; do
         base_url="https://github.com/${release_repo}/releases/download/${release_tag}"
         echo "Downloading Rusty V8 ${release_tag} artifacts for ${target} from ${release_repo}." >&2
@@ -908,12 +912,22 @@ if [[ "${PACKAGE_NPM}" == true ]]; then
 else
   BUILD_PACKAGE_TARGETS=()
 fi
-if [[ "${PACKAGE_NPM}" == true || "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
-  prepare_armv7_rusty_v8_source
+if [[ "${PACKAGE_NPM}" == true ]]; then
+  for package_target in "${PACKAGE_TARGETS[@]}"; do
+    case "${package_target}" in
+      linux-armv7)
+        configure_rusty_v8_artifacts armv7 || prepare_armv7_rusty_v8_source
+        ;;
+      android-arm64)
+        configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source
+        ;;
+    esac
+  done
+elif [[ "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
+  configure_rusty_v8_artifacts "${TARGET_MODE}" || prepare_armv7_rusty_v8_source
 elif [[ "${TARGET_MODE}" == native ]]; then
-  if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] || ! configure_rusty_v8_artifacts native; then
-    prepare_native_rusty_v8_source || true
-  fi
+  [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] && die "native V8 source builds are disabled; use the upstream Rusty V8 artifact"
+  configure_rusty_v8_artifacts native || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
 fi
 refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then

@@ -1,13 +1,13 @@
 name: setup-rusty-v8
-description: Download and verify Codex-built rusty_v8 artifacts for Cargo builds.
+description: Download and verify the target-selected Rusty V8 artifacts for Cargo builds.
 inputs:
   target:
     description: Rust target triple with Codex-built V8 release artifacts.
     required: true
   release-repo:
-    description: GitHub repository containing the Rusty V8 release artifacts.
+    description: GitHub repository containing the Rusty V8 release artifacts; auto selects the fork override targets.
     required: false
-    default: openai/codex
+    default: auto
   archive-sha256:
     description: Expected SHA-256 for the downloaded archive, if no manifest asset is published.
     required: false
@@ -30,11 +30,23 @@ runs:
 
         version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
         release_tag="rusty-v8-v${version}"
-        release_repo="${RELEASE_REPO}"
+        if [[ "${RELEASE_REPO}" == auto ]]; then
+          case "${TARGET}" in
+            x86_64-unknown-linux-musl|armv7-unknown-linux-gnueabihf|aarch64-linux-android)
+              release_repo="rebroad/rusty_v8"
+              ;;
+            *)
+              release_repo="openai/codex"
+              ;;
+          esac
+        else
+          release_repo="${RELEASE_REPO}"
+        fi
+        echo "Using Rusty V8 release repository ${release_repo} for ${TARGET}."
         base_url="https://github.com/${release_repo}/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
         
-        profile="ptrcomp_sandbox_release"
+        profile="${RUSTY_V8_PROFILE:-ptrcomp_sandbox_release}"
 
         if [[ "$TARGET" == *-pc-windows-msvc ]]; then
           archive_name="rusty_v8_${profile}_${TARGET}.lib.gz"
