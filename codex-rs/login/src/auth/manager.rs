@@ -50,6 +50,7 @@ pub use crate::auth::storage::AgentIdentityStorage;
 pub use crate::auth::storage::AuthDotJson;
 pub use crate::auth::storage::AuthKeyringBackendKind;
 use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::create_client;
@@ -292,9 +293,11 @@ impl From<RefreshTokenError> for std::io::Error {
 }
 
 impl CodexAuth {
+    #[allow(clippy::too_many_arguments)]
     async fn from_auth_dot_json(
         codex_home: &Path,
         auth_dot_json: AuthDotJson,
+        auth_file: Option<&Path>,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
         keyring_backend_kind: AuthKeyringBackendKind,
@@ -374,11 +377,20 @@ impl CodexAuth {
 
         match auth_mode {
             AuthMode::Chatgpt => {
-                let storage = create_auth_storage(
-                    codex_home.to_path_buf(),
-                    storage_mode,
-                    keyring_backend_kind,
-                );
+                let storage = auth_file
+                    .map(|auth_file| {
+                        Arc::new(FileAuthStorage::with_auth_file(
+                            codex_home.to_path_buf(),
+                            Some(auth_file.to_path_buf()),
+                        )) as Arc<dyn AuthStorageBackend>
+                    })
+                    .unwrap_or_else(|| {
+                        create_auth_storage(
+                            codex_home.to_path_buf(),
+                            storage_mode,
+                            keyring_backend_kind,
+                        )
+                    });
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
             AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state })),
@@ -1115,6 +1127,7 @@ pub fn load_auth_dot_json(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthConfig {
     pub codex_home: PathBuf,
+    pub auth_file: Option<PathBuf>,
     pub auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub keyring_backend_kind: AuthKeyringBackendKind,
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -1166,8 +1179,9 @@ impl AuthConfig {
         let workspaces = self.effective_chatgpt_workspaces();
         let agent_identity_authapi_base_url =
             agent_identity_authapi_base_url(self.chatgpt_base_url.as_deref()).ok();
-        let auth = load_auth(
+        let auth = load_auth_with_file(
             &self.codex_home,
+            self.auth_file.as_deref(),
             enable_codex_api_key_env,
             self.auth_credentials_store_mode,
             Some(&allowed_login_methods),
@@ -1426,6 +1440,34 @@ async fn load_auth(
     agent_identity_authapi_base_url: Option<&str>,
     auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<Option<CodexAuth>> {
+    load_auth_with_file(
+        codex_home,
+        None,
+        enable_codex_api_key_env,
+        auth_credentials_store_mode,
+        allowed_login_methods,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        keyring_backend_kind,
+        agent_identity_authapi_base_url,
+        auth_route_config,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_auth_with_file(
+    codex_home: &Path,
+    auth_file: Option<&Path>,
+    enable_codex_api_key_env: bool,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    allowed_login_methods: Option<&[ForcedLoginMethod]>,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    agent_identity_authapi_base_url: Option<&str>,
+    auth_route_config: &AuthRouteConfig,
+) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env
         && auth_mode_is_allowed(allowed_login_methods, AuthMode::ApiKey)
@@ -1450,6 +1492,7 @@ async fn load_auth(
         let auth = CodexAuth::from_auth_dot_json(
             codex_home,
             auth_dot_json,
+            None,
             AuthCredentialsStoreMode::Ephemeral,
             chatgpt_base_url,
             keyring_backend_kind,
@@ -1493,11 +1536,20 @@ async fn load_auth(
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.
-    let storage = create_auth_storage(
-        codex_home.to_path_buf(),
-        auth_credentials_store_mode,
-        keyring_backend_kind,
-    );
+    let storage = auth_file
+        .map(|auth_file| {
+            Arc::new(FileAuthStorage::with_auth_file(
+                codex_home.to_path_buf(),
+                Some(auth_file.to_path_buf()),
+            )) as Arc<dyn AuthStorageBackend>
+        })
+        .unwrap_or_else(|| {
+            create_auth_storage(
+                codex_home.to_path_buf(),
+                auth_credentials_store_mode,
+                keyring_backend_kind,
+            )
+        });
     let auth_dot_json = match storage.load()? {
         Some(auth) => auth,
         None => return Ok(None),
@@ -1512,6 +1564,7 @@ async fn load_auth(
     let auth = CodexAuth::from_auth_dot_json(
         codex_home,
         auth_dot_json,
+        auth_file,
         auth_credentials_store_mode,
         chatgpt_base_url,
         keyring_backend_kind,
@@ -1988,6 +2041,7 @@ impl UnauthorizedRecovery {
 /// different parts of the program seeing inconsistent auth data mid‑run.
 pub struct AuthManager {
     codex_home: PathBuf,
+    auth_file: Option<PathBuf>,
     inner: RwLock<CachedAuth>,
     auth_change_tx: watch::Sender<u64>,
     enable_codex_api_key_env: bool,
@@ -2087,6 +2141,7 @@ impl AuthManager {
         Self::new_from_auth_config(
             AuthConfig {
                 codex_home,
+                auth_file: None,
                 auth_credentials_store_mode,
                 keyring_backend_kind,
                 forced_login_method: None,
@@ -2108,6 +2163,7 @@ impl AuthManager {
             .flatten();
         let AuthConfig {
             codex_home,
+            auth_file,
             auth_credentials_store_mode,
             keyring_backend_kind,
             forced_login_method,
@@ -2121,6 +2177,7 @@ impl AuthManager {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Self {
             codex_home,
+            auth_file,
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 permanent_refresh_failure: None,
@@ -2153,6 +2210,7 @@ impl AuthManager {
 
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
+            auth_file: None,
             inner: RwLock::new(cached),
             auth_change_tx,
             enable_codex_api_key_env: false,
@@ -2181,6 +2239,7 @@ impl AuthManager {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home,
+            auth_file: None,
             inner: RwLock::new(cached),
             auth_change_tx,
             enable_codex_api_key_env: false,
@@ -2213,6 +2272,7 @@ impl AuthManager {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
+            auth_file: None,
             inner: RwLock::new(cached),
             auth_change_tx,
             enable_codex_api_key_env: false,
@@ -2240,6 +2300,7 @@ impl AuthManager {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
+            auth_file: None,
             inner: RwLock::new(CachedAuth {
                 auth: None,
                 permanent_refresh_failure: None,
@@ -2495,8 +2556,9 @@ impl AuthManager {
 
         let allowed_login_methods = self.allowed_login_methods();
         let effective_chatgpt_workspaces = self.effective_chatgpt_workspaces();
-        load_auth(
+        load_auth_with_file(
             &self.codex_home,
+            self.auth_file.as_deref(),
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
             Some(&allowed_login_methods),
@@ -2977,6 +3039,7 @@ impl AuthManager {
 fn auth_config_from(config: &impl AuthManagerConfig) -> AuthConfig {
     AuthConfig {
         codex_home: config.codex_home(),
+        auth_file: None,
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode(),
         keyring_backend_kind: config.auth_keyring_backend_kind(),
         forced_login_method: config.forced_login_method(),
