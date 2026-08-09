@@ -482,8 +482,7 @@ cargo_target_dir() {
     if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
       echo "${CARGO_TARGET_DIR}"
     else
-      (cd "${BUILD_WORKSPACE}" && cargo metadata --no-deps --format-version 1 \
-        | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+      echo "${BUILD_WORKSPACE}/target"
     fi
     return
   fi
