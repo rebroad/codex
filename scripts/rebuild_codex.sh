@@ -513,7 +513,11 @@ cargo_build() {
     target=""
   fi
 
-  local -a env_args=(CARGO_TARGET_DIR="${target_dir}" RUSTUP_DISABLE_SELF_UPDATE=1)
+  local -a env_args=(
+    CARGO_TARGET_DIR="${target_dir}"
+    RUSTUP_DISABLE_SELF_UPDATE=1
+    CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}-${TIMESTAMP}"
+  )
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
   if [[ "${target_mode}" == native ]]; then
     if [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ || "${RUSTY_V8_SOURCE_PREPARED}" == true ]]; then
