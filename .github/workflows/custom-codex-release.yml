@@ -16,6 +16,11 @@ on:
         required: false
         default: ""
         type: string
+      publish_npm:
+        description: "Publish the assembled packages to npm"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -361,8 +366,13 @@ jobs:
     name: publish-npm
     if: >-
       ${{
-        github.event_name == 'push' &&
-        startsWith(github.ref, 'refs/tags/codex-v') &&
+        ((
+          github.event_name == 'push' &&
+          startsWith(github.ref, 'refs/tags/codex-v')
+        ) || (
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish_npm == true
+        )) &&
         needs.assemble-and-release.result == 'success'
       }}
     needs: assemble-and-release
