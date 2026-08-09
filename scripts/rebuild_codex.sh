@@ -488,7 +488,7 @@ cargo_target_dir() {
     return
   fi
   case "${target_mode}" in
-    native) echo "${BUILD_REPO}/build/linux-${mode}" ;;
+    native) echo "${BUILD_WORKSPACE}/target" ;;
     musl) echo "${BUILD_REPO}/build/musl-${mode}" ;;
     armv7) echo "${BUILD_REPO}/build/armv7-${mode}" ;;
     android) echo "${BUILD_REPO}/build/android-${mode}" ;;

@@ -38,11 +38,10 @@ async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn file_storage_custom_file_migrates_from_legacy_and_saves_separately() -> anyhow::Result<()>
-{
+async fn file_storage_custom_file_stays_separate_from_legacy() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let legacy_storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-    let remote_auth_file = codex_home.path().join("remote-control-auth.json");
+    let remote_auth_file = codex_home.path().join("rc-auth.json");
     let remote_storage = FileAuthStorage::with_auth_file(
         codex_home.path().to_path_buf(),
         Some(remote_auth_file.clone()),
@@ -58,7 +57,7 @@ async fn file_storage_custom_file_migrates_from_legacy_and_saves_separately() ->
     };
 
     legacy_storage.save(&legacy_auth)?;
-    assert_eq!(Some(legacy_auth.clone()), remote_storage.load()?);
+    assert_eq!(None, remote_storage.load()?);
 
     let remote_auth = AuthDotJson {
         openai_api_key: Some("remote-key".to_string()),
@@ -67,8 +66,11 @@ async fn file_storage_custom_file_migrates_from_legacy_and_saves_separately() ->
     remote_storage.save(&remote_auth)?;
 
     assert_eq!(Some(remote_auth), remote_storage.load()?);
-    assert_eq!(Some(legacy_auth), legacy_storage.load()?);
+    assert_eq!(Some(legacy_auth.clone()), legacy_storage.load()?);
     assert!(remote_auth_file.exists());
+    assert!(remote_storage.delete()?);
+    assert_eq!(None, remote_storage.load()?);
+    assert_eq!(Some(legacy_auth), legacy_storage.load()?);
     Ok(())
 }
 
