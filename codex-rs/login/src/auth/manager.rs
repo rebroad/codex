@@ -52,6 +52,7 @@ pub use crate::auth::storage::AuthKeyringBackendKind;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::create_auth_storage;
+use crate::auth::storage::delete_auth_file_if_exists;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::create_client;
 use crate::default_client::create_default_auth_client;
@@ -2874,11 +2875,14 @@ impl AuthManager {
     /// unauthenticated state.
     pub async fn logout(&self) -> std::io::Result<bool> {
         self.ensure_logout_allowed()?;
-        let removed = logout_all_stores(
-            &self.codex_home,
-            self.auth_credentials_store_mode,
-            self.keyring_backend_kind,
-        )?;
+        let removed = match self.auth_file.as_deref() {
+            Some(auth_file) => delete_auth_file_if_exists(auth_file)?,
+            None => logout_all_stores(
+                &self.codex_home,
+                self.auth_credentials_store_mode,
+                self.keyring_backend_kind,
+            )?,
+        };
         // Always reload to clear any cached auth (even if file absent).
         self.clear_external_auth();
         self.reload().await;
@@ -2894,11 +2898,14 @@ impl AuthManager {
         {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
-        let result = logout_all_stores(
-            &self.codex_home,
-            self.auth_credentials_store_mode,
-            self.keyring_backend_kind,
-        )?;
+        let result = match self.auth_file.as_deref() {
+            Some(auth_file) => delete_auth_file_if_exists(auth_file)?,
+            None => logout_all_stores(
+                &self.codex_home,
+                self.auth_credentials_store_mode,
+                self.keyring_backend_kind,
+            )?,
+        };
         // Always reload to clear any cached auth (even if file absent).
         self.clear_external_auth();
         self.reload().await;
