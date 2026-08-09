@@ -149,10 +149,32 @@ jobs:
 
       - name: Install Zig for musl source builds
         if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl')
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.14.0
-          use-cache: false
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig_version=0.14.0
+          case "$(uname -m)" in
+            x86_64) zig_arch=x86_64 ;;
+            aarch64|arm64) zig_arch=aarch64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          zig_root="${RUNNER_TEMP}/zig-${zig_version}-${zig_arch}"
+          if [[ ! -x "${zig_root}/zig" ]]; then
+            archive="${RUNNER_TEMP}/zig-${zig_version}-${zig_arch}.tar.xz"
+            curl --fail --location --retry 3 --silent --show-error \
+              "https://ziglang.org/download/${zig_version}/zig-linux-${zig_arch}-${zig_version}.tar.xz" \
+              --output "${archive}"
+            rm -rf "${zig_root}"
+            mkdir -p "${zig_root}"
+            tar -xJf "${archive}" --strip-components=1 -C "${zig_root}"
+          fi
+          echo "${zig_root}" >> "${GITHUB_PATH}"
+          "${zig_root}/zig" version
+
+      - name: Build unsupported Rusty V8 targets from source
+        if: matrix.build_mode == 'direct' && matrix.target != 'x86_64-unknown-linux-musl'
+        shell: bash
+        run: echo 'V8_FROM_SOURCE=1' >> "${GITHUB_ENV}"
 
       - name: Configure musl build tools
         if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl')
