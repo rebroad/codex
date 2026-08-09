@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -755,6 +756,14 @@ pub async fn run_main_with_transport_options(
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
             .await
             .map_err(std::io::Error::other)?;
+    let mut remote_control_auth_config = config.auth_config();
+    remote_control_auth_config.auth_credentials_store_mode =
+        codex_config::types::AuthCredentialsStoreMode::File;
+    remote_control_auth_config.auth_file = Some(remote_control_auth_file(&config.codex_home));
+    let remote_control_auth_manager =
+        AuthManager::shared_from_auth_config(remote_control_auth_config, false)
+            .await
+            .map_err(std::io::Error::other)?;
 
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
         && remote_control_explicitly_requested
@@ -786,7 +795,7 @@ pub async fn run_main_with_transport_options(
             policy: remote_control_policy,
         },
         state_db.clone(),
-        auth_manager.clone(),
+        remote_control_auth_manager,
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),
         app_server_client_name_rx,
@@ -1370,16 +1379,47 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
     }
 }
 
+fn remote_control_auth_file(codex_home: &Path) -> PathBuf {
+    let remote_control_auth_file = codex_home.join("rc-auth.json");
+    if remote_control_auth_file.exists() {
+        remote_control_auth_file
+    } else {
+        codex_home.join("auth.json")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
+    use super::remote_control_auth_file;
     #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
     #[cfg(debug_assertions)]
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    #[test]
+    fn remote_control_auth_file_falls_back_to_backend_auth() {
+        let codex_home = tempdir().expect("temporary Codex home should be created");
+        let auth_file = codex_home.path().join("auth.json");
+
+        assert_eq!(remote_control_auth_file(codex_home.path()), auth_file);
+    }
+
+    #[test]
+    fn remote_control_auth_file_prefers_dedicated_auth() {
+        let codex_home = tempdir().expect("temporary Codex home should be created");
+        let remote_control_auth_file_path = codex_home.path().join("rc-auth.json");
+        std::fs::write(&remote_control_auth_file_path, "{}").expect("auth file should be written");
+
+        assert_eq!(
+            remote_control_auth_file(codex_home.path()),
+            remote_control_auth_file_path
+        );
+    }
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {

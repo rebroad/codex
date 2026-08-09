@@ -156,7 +156,10 @@ pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
 }
 
 pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
-    let auth_file = get_auth_file(codex_home);
+    delete_auth_file_if_exists(&get_auth_file(codex_home))
+}
+
+pub(crate) fn delete_auth_file_if_exists(auth_file: &Path) -> std::io::Result<bool> {
     match std::fs::remove_file(&auth_file) {
         Ok(()) => Ok(true),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -173,11 +176,19 @@ pub(super) trait AuthStorageBackend: Debug + Send + Sync {
 #[derive(Clone, Debug)]
 pub(super) struct FileAuthStorage {
     codex_home: PathBuf,
+    auth_file: Option<PathBuf>,
 }
 
 impl FileAuthStorage {
     pub(super) fn new(codex_home: PathBuf) -> Self {
-        Self { codex_home }
+        Self::with_auth_file(codex_home, None)
+    }
+
+    pub(super) fn with_auth_file(codex_home: PathBuf, auth_file: Option<PathBuf>) -> Self {
+        Self {
+            codex_home,
+            auth_file,
+        }
     }
 
     /// Attempt to read and parse the `auth.json` file in the given `CODEX_HOME` directory.
@@ -194,7 +205,10 @@ impl FileAuthStorage {
 
 impl AuthStorageBackend for FileAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        let auth_file = get_auth_file(&self.codex_home);
+        let auth_file = self
+            .auth_file
+            .clone()
+            .unwrap_or_else(|| get_auth_file(&self.codex_home));
         let auth_dot_json = match self.try_read_auth_json(&auth_file) {
             Ok(auth) => auth,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -204,7 +218,10 @@ impl AuthStorageBackend for FileAuthStorage {
     }
 
     fn save(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
-        let auth_file = get_auth_file(&self.codex_home);
+        let auth_file = self
+            .auth_file
+            .clone()
+            .unwrap_or_else(|| get_auth_file(&self.codex_home));
 
         if let Some(parent) = auth_file.parent() {
             std::fs::create_dir_all(parent)?;
@@ -223,7 +240,11 @@ impl AuthStorageBackend for FileAuthStorage {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        delete_file_if_exists(&self.codex_home)
+        let auth_file = self
+            .auth_file
+            .clone()
+            .unwrap_or_else(|| get_auth_file(&self.codex_home));
+        delete_auth_file_if_exists(&auth_file)
     }
 }
 
