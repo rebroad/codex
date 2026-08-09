@@ -1139,6 +1139,38 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
 }
 
 #[tokio::test]
+async fn auth_manager_logout_removes_only_custom_auth_file() -> Result<(), std::io::Error> {
+    let dir = tempdir()?;
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::ApiKey),
+        openai_api_key: Some("sk-test-key".to_string()),
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+    };
+    super::save_auth(
+        dir.path(),
+        &auth_dot_json,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let backend_auth_file = get_auth_file(dir.path());
+    let custom_auth_file = dir.path().join("rc-auth.json");
+    std::fs::copy(&backend_auth_file, &custom_auth_file)?;
+
+    let mut config = build_config(dir.path(), None, None).await;
+    config.auth_file = Some(custom_auth_file.clone());
+    let manager = AuthManager::shared_from_auth_config(config, false).await;
+
+    assert!(manager.logout().await?);
+    assert!(backend_auth_file.exists());
+    assert!(!custom_auth_file.exists());
+    Ok(())
+}
+
+#[tokio::test]
 #[serial(codex_auth_env)]
 async fn unauthorized_recovery_reports_mode_and_step_names() {
     let dir = tempdir().unwrap();
