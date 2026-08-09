@@ -35,7 +35,7 @@ export RUSTC_WRAPPER=
 export CARGO_NET_OFFLINE=true
 
 if [[ "$MODE" == linux ]]; then
-  export CARGO_TARGET_DIR="$BUILD_TREE/build/linux-release"
+  export CARGO_TARGET_DIR="$BUILD_TREE/codex-rs/target"
   (cd "$BUILD_TREE/codex-rs" && \
     rustup run "$RUST_TOOLCHAIN" cargo build --offline --release -p codex-cli)
   file "$CARGO_TARGET_DIR/release/codex"
