@@ -132,8 +132,6 @@ jobs:
       RUST_BACKTRACE: "1"
       RUST_TOOLCHAIN: "1.95.0"
       ANDROID_NDK_VERSION: "28.2.13676358"
-      RUSTY_V8_MUSL_ARCHIVE_SHA256: "9d9d1c14aa14f64231b051679b3350038f608f06be1d07a4c2c812f601a78e65"
-      RUSTY_V8_MUSL_BINDING_SHA256: "639421ae6a0d125dde076cdb4c5d5b3afc9e3ce764acad4a772b7182ea77da66"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: inputs.reuse_artifacts_run_id == ''
@@ -185,8 +183,6 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
-          archive-sha256: ${{ matrix.target == 'x86_64-unknown-linux-musl' && env.RUSTY_V8_MUSL_ARCHIVE_SHA256 || '' }}
-          binding-sha256: ${{ matrix.target == 'x86_64-unknown-linux-musl' && env.RUSTY_V8_MUSL_BINDING_SHA256 || '' }}
 
       - name: Build fork target from source
         if: matrix.build_mode == 'rebuild' && inputs.reuse_artifacts_run_id == ''
