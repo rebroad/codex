@@ -442,6 +442,7 @@ impl TurnContext {
                 .windows_sandbox_private_desktop,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: self.config.features.use_legacy_landlock(),
+            debug_log_id: Some(self.turn_metadata_state.thread_id().to_string()),
         }
     }
 
