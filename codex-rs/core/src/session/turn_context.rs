@@ -553,6 +553,33 @@ impl TurnContext {
         }
     }
 
+    pub(crate) fn file_system_sandbox_context(
+        &self,
+        additional_permissions: Option<AdditionalPermissionProfile>,
+        environment: &TurnEnvironment,
+    ) -> FileSystemSandboxContext {
+        let permissions = effective_permission_profile(
+            environment.permission_profile(),
+            additional_permissions.as_ref(),
+        );
+        FileSystemSandboxContext {
+            permissions: permissions.into(),
+            cwd: Some(environment.cwd().clone()),
+            workspace_roots: environment.workspace_roots().to_vec(),
+            windows_sandbox_level: executor_windows_sandbox_level(
+                self.windows_sandbox_level,
+                environment.cwd(),
+            ),
+            windows_sandbox_private_desktop: self
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
+            windows_sandbox_proxy_settings_mode: None,
+            use_legacy_landlock: self.config.features.use_legacy_landlock(),
+            debug_log_id: Some(self.turn_metadata_state.thread_id().to_string()),
+        }
+    }
+
     fn non_legacy_file_system_sandbox_policy(&self) -> Option<RawFileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
