@@ -274,6 +274,7 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
             windows_sandbox_private_desktop: false,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,
+            debug_log_id: None,
         })
     );
     assert!(request.exec_server_enforce_managed_network);
