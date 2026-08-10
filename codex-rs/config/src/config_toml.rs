@@ -170,6 +170,10 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
+    /// Compatibility switch for clients that expect the pre-v0.147 command-execution
+    /// presentation over app-server and remote control. Secret redaction remains enabled.
+    pub legacy_command_execution_presentation: Option<bool>,
+
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
