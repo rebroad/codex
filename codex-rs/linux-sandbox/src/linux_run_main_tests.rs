@@ -6,7 +6,8 @@ fn session_scoped_log_path_appends_session_id_to_filename() {
     let path = session_scoped_log_path_for_session(
         PathBuf::from("/var/log/codex-sandbox-debug.log"),
         Some("019fe6a7"),
-    );
+    )
+    .expect("valid session id should produce a path");
     assert!(path.ends_with("codex-sandbox-debug.log-019fe6a7"));
 }
 
@@ -15,12 +16,21 @@ fn session_scoped_log_path_falls_back_for_missing_or_unsafe_session_id() {
     let path = PathBuf::from("/var/log/codex-sandbox-debug.log");
     assert_eq!(
         session_scoped_log_path_for_session(path.clone(), None),
-        path
+        None
     );
     assert_eq!(
         session_scoped_log_path_for_session(path.clone(), Some("../../unsafe")),
-        path
+        None
     );
+}
+
+#[test]
+fn process_scoped_log_path_appends_process_id() {
+    let path = process_scoped_log_path(PathBuf::from("/var/log/codex-sandbox-debug.log"));
+    assert!(path.to_string_lossy().ends_with(&format!(
+        "codex-sandbox-debug.log-pid-{}",
+        std::process::id()
+    )));
 }
 #[cfg(test)]
 use crate::linux_run_main::install_bwrap_signal_forwarders;
