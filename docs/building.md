@@ -161,6 +161,10 @@ ARMv7, and Android arm64. Those three are downloaded from `rebroad/rusty_v8`;
 x64 musl and Android use the sandbox profile, while ARMv7 uses the ordinary
 release profile. Local npm publication uses the same target mapping:
 
+The ARMv7 package intentionally does not contain `codex-code-mode-host`,
+because that host depends on V8's 64-bit sandbox feature. Code Mode therefore
+fails closed on ARMv7; the other package targets include the host executable.
+
 Release tags and binary/npm candidate versions use the workspace version
 followed by the first 10 hexadecimal commit characters and a UTC timestamp in
 `YYYYMMDDHHMM` form, for example:
