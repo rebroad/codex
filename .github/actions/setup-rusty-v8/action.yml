@@ -46,7 +46,13 @@ runs:
         base_url="https://github.com/${release_repo}/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
         
-        profile="${RUSTY_V8_PROFILE:-ptrcomp_sandbox_release}"
+        profile="${RUSTY_V8_PROFILE:-}"
+        if [[ -z "${profile}" ]]; then
+          case "${TARGET}" in
+            armv7-unknown-linux-gnueabihf) profile=release ;;
+            *) profile=ptrcomp_sandbox_release ;;
+          esac
+        fi
 
         if [[ "$TARGET" == *-pc-windows-msvc ]]; then
           archive_name="rusty_v8_${profile}_${TARGET}.lib.gz"
