@@ -5561,6 +5561,10 @@
       "description": "System instructions.",
       "type": "string"
     },
+    "legacy_command_execution_presentation": {
+      "description": "Compatibility switch for clients that expect the pre-v0.147 command-execution presentation over app-server and remote control. Secret redaction remains enabled.",
+      "type": "boolean"
+    },
     "log_dir": {
       "allOf": [
         {
