@@ -661,6 +661,10 @@ pub struct Config {
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
+    /// Whether to use the pre-v0.147 command-execution presentation for app-server clients.
+    /// Secret redaction remains enabled.
+    pub legacy_command_execution_presentation: bool,
+
     /// Whether config explicitly selected named permissions profiles instead
     /// of the legacy `sandbox_mode` syntax.
     pub explicit_permission_profile_mode: bool,
@@ -4146,6 +4150,9 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            legacy_command_execution_presentation: cfg
+                .legacy_command_execution_presentation
+                .unwrap_or(false),
             explicit_permission_profile_mode,
             custom_permission_profiles,
             approvals_reviewer: constrained_approvals_reviewer.value(),
