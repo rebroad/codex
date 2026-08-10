@@ -990,3 +990,42 @@ fn effective_file_system_sandbox_policy_merges_additional_write_roots() {
         true
     );
 }
+
+#[test]
+fn effective_additional_write_permission_overrides_protected_codex_carveout() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let codex_dir = cwd.join(".codex");
+    let base_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: cwd.clone() },
+            access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: codex_dir.clone(),
+            },
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        },
+    ]);
+    let additional_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![codex_dir.clone()]),
+        )),
+        ..Default::default()
+    };
+
+    let effective_policy =
+        effective_file_system_sandbox_policy(&base_policy, Some(&additional_permissions));
+
+    assert!(
+        effective_policy
+            .can_write_path_with_cwd(codex_dir.join("config.toml").as_path(), cwd.as_path())
+    );
+}

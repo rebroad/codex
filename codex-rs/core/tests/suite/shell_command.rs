@@ -184,6 +184,22 @@ async fn output_with_login() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn login_shell_uses_isolated_test_home() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+
+    let call_id = "shell-command-call-isolated-home";
+    mount_shell_responses(&harness, call_id, "printf '%s' \"$HOME\"", Some(true)).await;
+    harness.submit("print the shell home").await?;
+
+    let output = harness.function_call_stdout(call_id).await;
+    assert_shell_command_output(&output, &harness.test().codex_home_path().to_string_lossy())?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn output_without_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
