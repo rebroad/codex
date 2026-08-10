@@ -533,6 +533,9 @@ pub async fn run_main_with_transport_options(
             })?
         }
     };
+    codex_app_server_protocol::configure_legacy_command_execution_presentation(
+        config.legacy_command_execution_presentation,
+    );
     config.auth_config().validate()?;
     let code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>> =
         match &runtime_options.code_mode_host_transport {
