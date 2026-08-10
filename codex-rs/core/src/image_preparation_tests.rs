@@ -174,8 +174,8 @@ fn preparation_reports_tool_output_item_id() {
 
 #[test]
 fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
-    let (large_image_url, _) = png_data_url(/*width*/ 2048, /*height*/ 2048);
-    let (small_image_url, _) = png_data_url(/*width*/ 64, /*height*/ 32);
+    let (large_image_url, _) = test_image_data_url(/*width*/ 2048, /*height*/ 2048);
+    let (small_image_url, _) = test_image_data_url(/*width*/ 64, /*height*/ 32);
     let mut items = vec![
         ResponseItem::Message {
             id: None,
