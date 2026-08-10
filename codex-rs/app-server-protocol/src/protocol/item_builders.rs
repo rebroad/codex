@@ -41,7 +41,20 @@ use codex_shell_command::parse_command::shlex_join;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tracing::warn;
+
+static LEGACY_COMMAND_EXECUTION_PRESENTATION: AtomicBool = AtomicBool::new(false);
+
+/// Configure the compatibility presentation used by app-server command items.
+///
+/// This is process-wide because the app-server protocol builders are also used by the
+/// app-server's live event and persisted-history paths. The setting is intended to be chosen
+/// at startup from `config.toml`.
+pub fn configure_legacy_command_execution_presentation(enabled: bool) {
+    LEGACY_COMMAND_EXECUTION_PRESENTATION.store(enabled, Ordering::Relaxed);
+}
 
 /// Client-facing command and parsed actions projected from a raw command.
 pub struct CommandExecutionPresentation {
@@ -54,10 +67,42 @@ pub struct CommandExecutionPresentation {
 impl CommandExecutionPresentation {
     /// Projects a raw command into its client-facing representation.
     pub fn from_raw(command: &[String], parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> Self {
+        Self::from_raw_with_mode(command, parsed_cmd, cwd, presentation_mode())
+    }
+
+    fn from_raw_with_mode(
+        command: &[String],
+        parsed_cmd: &[ParsedCommand],
+        cwd: &PathUri,
+        mode: CommandExecutionPresentationMode,
+    ) -> Self {
         Self {
             command: redact_secrets(shlex_join(command)),
-            command_actions: command_actions_for_path_uri(parsed_cmd, cwd),
+            command_actions: command_actions_for_path_uri(parsed_cmd, cwd, mode),
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CommandExecutionPresentationMode {
+    Redacted,
+    Legacy,
+}
+
+impl CommandExecutionPresentationMode {
+    fn redact(self, command: String) -> String {
+        match self {
+            Self::Redacted => redact_secrets(command),
+            Self::Legacy => redact_secrets(command),
+        }
+    }
+}
+
+fn presentation_mode() -> CommandExecutionPresentationMode {
+    if LEGACY_COMMAND_EXECUTION_PRESENTATION.load(Ordering::Relaxed) {
+        CommandExecutionPresentationMode::Legacy
+    } else {
+        CommandExecutionPresentationMode::Redacted
     }
 }
 
@@ -138,7 +183,11 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     }
 }
 
-fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> Vec<CommandAction> {
+fn command_actions_for_path_uri(
+    parsed_cmd: &[ParsedCommand],
+    cwd: &PathUri,
+    mode: CommandExecutionPresentationMode,
+) -> Vec<CommandAction> {
     parsed_cmd
         .iter()
         .cloned()
@@ -149,7 +198,7 @@ fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> 
                 // genuinely opaque cwd would require executor-native state unavailable here.
                 match cwd.join(path.to_string_lossy().as_ref()) {
                     Ok(path) => Some(CommandAction::Read {
-                        command: redact_secrets(cmd),
+                        command: mode.redact(cmd),
                         name,
                         path: path.into(),
                     }),
@@ -166,16 +215,16 @@ fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> 
                 }
             }
             ParsedCommand::ListFiles { cmd, path } => Some(CommandAction::ListFiles {
-                command: redact_secrets(cmd),
+                command: mode.redact(cmd),
                 path,
             }),
             ParsedCommand::Search { cmd, query, path } => Some(CommandAction::Search {
-                command: redact_secrets(cmd),
-                query: query.map(redact_secrets),
+                command: mode.redact(cmd),
+                query: query.map(|query| mode.redact(query)),
                 path,
             }),
             ParsedCommand::Unknown { cmd } => Some(CommandAction::Unknown {
-                command: redact_secrets(cmd),
+                command: mode.redact(cmd),
             }),
         })
         .collect()
