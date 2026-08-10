@@ -495,25 +495,35 @@ fn session_scoped_log_path(log_path: PathBuf) -> PathBuf {
         .as_deref()
         .map(str::to_owned);
 
-    session_scoped_log_path_for_session(log_path, session_id.as_deref())
+    session_scoped_log_path_for_session(log_path.clone(), session_id.as_deref())
+        .unwrap_or_else(|| process_scoped_log_path(log_path))
 }
 
-fn session_scoped_log_path_for_session(log_path: PathBuf, session_id: Option<&str>) -> PathBuf {
-    let Some(session_id) = session_id.filter(|value| {
+fn session_scoped_log_path_for_session(
+    log_path: PathBuf,
+    session_id: Option<&str>,
+) -> Option<PathBuf> {
+    let session_id = session_id.filter(|value| {
         value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    }) else {
-        return log_path;
-    };
+    })?;
 
+    Some(log_path_with_suffix(log_path, &format!("{session_id}")))
+}
+
+fn process_scoped_log_path(log_path: PathBuf) -> PathBuf {
+    log_path_with_suffix(log_path, &format!("pid-{}", std::process::id()))
+}
+
+fn log_path_with_suffix(log_path: PathBuf, suffix: &str) -> PathBuf {
     let Some(file_name) = log_path.file_name().and_then(|name| name.to_str()) else {
         return log_path;
     };
     let Some(parent) = log_path.parent() else {
-        return PathBuf::from(format!("{file_name}-{session_id}"));
+        return PathBuf::from(format!("{file_name}-{suffix}"));
     };
-    parent.join(format!("{file_name}-{session_id}"))
+    parent.join(format!("{file_name}-{suffix}"))
 }
 
 fn run_bwrap_with_proc_fallback(
