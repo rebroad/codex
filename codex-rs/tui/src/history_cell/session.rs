@@ -3,6 +3,7 @@
 use super::*;
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::version::cli_version_for_display;
 use crate::width::display_width;
 
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
@@ -137,7 +138,7 @@ pub(crate) fn new_session_info(
         session.reasoning_effort.clone(),
         show_fast_status,
         config.cwd.to_path_buf(),
-        CODEX_CLI_VERSION,
+        cli_version_for_display(),
     )
     .with_yolo_mode(has_yolo_permissions(
         session.approval_policy,
