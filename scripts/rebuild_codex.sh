@@ -606,7 +606,8 @@ cargo_build() {
     fi
   fi
 
-  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host -p codex-rmcp-client)
+  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-rmcp-client)
+  [[ "${target_mode}" != armv7 ]] && cmd+=(-p codex-code-mode-host)
   [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
   cmd+=( "${profile_args[@]}" --locked )
