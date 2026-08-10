@@ -116,6 +116,10 @@ pub(crate) struct TurnMetadataState {
 }
 
 impl TurnMetadataState {
+    pub(crate) fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session_id: String,
