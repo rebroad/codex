@@ -570,6 +570,9 @@ pub async fn run_main_with_transport_options(
             })?
         }
     };
+    codex_app_server_protocol::configure_legacy_command_execution_presentation(
+        config.legacy_command_execution_presentation,
+    );
     config.auth_config().validate()?;
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
