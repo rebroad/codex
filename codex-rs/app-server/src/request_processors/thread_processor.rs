@@ -4616,7 +4616,7 @@ impl ThreadRequestProcessor {
                 }
             }
             None if relation_filter.is_some() => None,
-            None => Some(vec![self.config.model_provider_id.clone()]),
+            None => None,
         };
         let (allowed_sources_vec, source_kind_filter) =
             if relation_filter.is_some() && source_kinds.is_none() {
