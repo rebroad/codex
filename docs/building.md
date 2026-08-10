@@ -152,13 +152,14 @@ packages, checks npm authentication and immutable-version collisions, then
 publishes the eight platform packages before the root alias package. It fails
 before publishing if any platform package is missing or invalid.
 
-The GitHub workflow builds the Codex npm payloads, audits the combined package,
-publishes the GitHub release, and then publishes npm packages through npm
-Trusted Publishing. Rusty V8 is supplied by the upstream artifact workflow for
-all targets except the three fork-specific targets: x64 musl, ARMv7, and
-Android arm64. Those three are downloaded from `rebroad/rusty_v8` and fail
-closed if the matching sandbox artifact is unavailable. Local npm publication
-uses the same target mapping:
+The GitHub workflow has two stages: one matrix job builds and packages one
+immutable npm payload per architecture, then a single assembly job combines,
+audits, and publishes the complete package set. The final npm job publishes
+through npm Trusted Publishing. Rusty V8 is supplied by the upstream artifact
+workflow for all targets except the three fork-specific targets: x64 musl,
+ARMv7, and Android arm64. Those three are downloaded from `rebroad/rusty_v8`;
+x64 musl and Android use the sandbox profile, while ARMv7 uses the ordinary
+release profile. Local npm publication uses the same target mapping:
 
 Release tags and binary/npm candidate versions use the workspace version
 followed by the first 10 hexadecimal commit characters and a UTC timestamp in
