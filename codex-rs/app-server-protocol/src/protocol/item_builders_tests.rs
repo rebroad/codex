@@ -58,8 +58,12 @@ fn read_command_actions_preserve_native_and_foreign_paths() {
         ];
 
         assert_eq!(
-            serde_json::to_value(command_actions_for_path_uri(&parsed_cmd, &cwd))
-                .expect("command actions should serialize"),
+            serde_json::to_value(command_actions_for_path_uri(
+                &parsed_cmd,
+                &cwd,
+                CommandExecutionPresentationMode::Redacted,
+            ))
+            .expect("command actions should serialize"),
             json!([
                 {
                     "type": "read",
@@ -172,4 +176,38 @@ fn guardian_stdin_reviews_preserve_parent_command_history() {
             items.pop();
         }
     }
+}
+
+fn legacy_command_presentation_preserves_command_details() {
+    let cwd = PathUri::parse("file:///home/alice/repo").expect("valid cwd");
+    let command = vec![
+        "git".to_string(),
+        "-c".to_string(),
+        "http.extraHeader=Authorization: Bearer example_bearer_token_1234567890".to_string(),
+        "status".to_string(),
+    ];
+    let parsed_cmd = vec![ParsedCommand::Unknown {
+        cmd:
+            "git -c 'http.extraHeader=Authorization: Bearer example_bearer_token_1234567890' status"
+                .to_string(),
+    }];
+
+    let presentation = CommandExecutionPresentation::from_raw_with_mode(
+        &command,
+        &parsed_cmd,
+        &cwd,
+        CommandExecutionPresentationMode::Legacy,
+    );
+
+    assert_eq!(
+        presentation.command,
+        "git -c 'http.extraHeader=Authorization: Bearer [REDACTED_SECRET]' status"
+    );
+    assert_eq!(
+        presentation.command_actions,
+        vec![CommandAction::Unknown {
+            command: "git -c 'http.extraHeader=Authorization: Bearer [REDACTED_SECRET]' status"
+                .to_string(),
+        }]
+    );
 }
