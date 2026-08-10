@@ -47,6 +47,7 @@ pub struct ApplyPatchRequest {
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     pub permissions_preapproved: bool,
+    pub debug_log_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -101,6 +102,7 @@ impl ApplyPatchRuntime {
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: attempt.use_legacy_landlock,
+            debug_log_id: req.debug_log_id.clone(),
         })
     }
 }
