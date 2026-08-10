@@ -130,7 +130,8 @@ if [[ -z "${REUSE_FORK_ARTIFACT_DIR}" ]]; then
         ;;
       armv7)
         ARMV7_DIR="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")"
-        stage_binary armv7-unknown-linux-gnueabihf "${ARMV7_DIR}/codex" "${ARMV7_DIR}/codex-code-mode-host"
+        # V8's sandbox (and therefore codex-code-mode-host) is 64-bit only.
+        stage_binary armv7-unknown-linux-gnueabihf "${ARMV7_DIR}/codex"
         ;;
       android)
         ANDROID_STAGE="${BUILD_TREE}/build/android-artifact"
