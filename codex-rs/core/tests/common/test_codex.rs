@@ -786,6 +786,15 @@ impl TestCodexBuilder {
         config.model = Some("gpt-5.5".to_string());
         config.cwd = cwd_override;
         config.model_provider = model_provider;
+        config.permissions.shell_environment_policy.r#set.insert(
+            "HOME".to_string(),
+            home.path().to_string_lossy().into_owned(),
+        );
+        #[cfg(windows)]
+        config.permissions.shell_environment_policy.r#set.insert(
+            "USERPROFILE".to_string(),
+            home.path().to_string_lossy().into_owned(),
+        );
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_self_exe = Some(path);
         } else if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex-exec") {
