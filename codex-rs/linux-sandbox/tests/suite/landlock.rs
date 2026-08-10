@@ -375,6 +375,45 @@ async fn test_writable_root() {
     .await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn writable_symlink_root_allows_writes_through_logical_path() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    use std::os::unix::fs::symlink;
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let real_root = tempdir.path().join("real-root");
+    let logical_root = tempdir.path().join("logical-root");
+    let target = logical_root.join("written-through-link");
+    std::fs::create_dir(&real_root).expect("create real root");
+    symlink(&real_root, &logical_root).expect("create symlinked root");
+
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-lc",
+            &format!("printf symlink-ok > {}", target.to_string_lossy()),
+        ],
+        &[logical_root],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(
+        std::fs::read_to_string(real_root.join("written-through-link"))
+            .expect("read file written through symlink"),
+        "symlink-ok"
+    );
+}
+
 #[tokio::test]
 async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
     if should_skip_bwrap_tests().await {
