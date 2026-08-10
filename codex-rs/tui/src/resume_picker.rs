@@ -2002,7 +2002,9 @@ fn thread_list_params(
         sort_direction: None,
         // The picker should show resumable sessions regardless of the currently configured
         // provider. The selected session's provider is restored when it is resumed.
-        model_providers: None,
+        // `None` means "use the configured provider" to the app server; an explicit empty
+        // list means no provider filter.
+        model_providers: Some(Vec::new()),
         source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         section_id: None,
@@ -3940,7 +3942,7 @@ mod tests {
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(
             params.source_kinds,
             Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
@@ -3963,7 +3965,7 @@ mod tests {
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         let source_kinds = crate::resume_source_kinds(/*include_non_interactive*/ true);
         assert_eq!(params.source_kinds, Some(source_kinds));
     }
