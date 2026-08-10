@@ -85,6 +85,7 @@ async fn approval_action_preserves_patch_path_uris() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        debug_log_id: None,
     };
 
     let approval_action = ApplyPatchRuntime::build_approval_action(&request, "call-1");
@@ -122,6 +123,7 @@ async fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        debug_log_id: None,
     };
 
     let payload =
@@ -156,6 +158,7 @@ async fn approval_keys_include_environment_id() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        debug_log_id: None,
     };
 
     let keys = runtime
@@ -194,6 +197,7 @@ async fn sandbox_cwd_uses_patch_action_cwd() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        debug_log_id: None,
     };
 
     assert_eq!(runtime.sandbox_cwd(&req), Some(&req.action.cwd));
@@ -225,6 +229,7 @@ async fn file_system_sandbox_context_preserves_executor_workspace_permissions() 
         },
         additional_permissions: Some(additional_permissions.clone()),
         permissions_preapproved: false,
+        debug_log_id: None,
     };
     let exec_server_permissions = PermissionProfile::workspace_write();
     let file_system_policy = exec_server_permissions.file_system_sandbox_policy();
@@ -298,6 +303,7 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        debug_log_id: None,
     };
     let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();
