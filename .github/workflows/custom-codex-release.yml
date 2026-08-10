@@ -94,39 +94,29 @@ jobs:
           - platform: linux-x64
             target: x86_64-unknown-linux-musl
             runner: ubuntu-24.04
-            build_mode: direct
           - platform: linux-arm64
             target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
-            build_mode: direct
           - platform: darwin-x64
             target: x86_64-apple-darwin
             runner: macos-15-intel
-            build_mode: direct
           - platform: darwin-arm64
             target: aarch64-apple-darwin
             runner: macos-15
-            build_mode: direct
           - platform: win32-x64
             target: x86_64-pc-windows-msvc
             runner: windows-2022
-            build_mode: direct
           - platform: win32-arm64
             target: aarch64-pc-windows-msvc
             # Rusty V8's GN bootstrap has no Windows ARM64 host package. Use
             # the upstream cross-compile arrangement: x64 host, ARM64 target.
             runner: windows-2022
-            build_mode: direct
           - platform: linux-armv7
             target: armv7-unknown-linux-gnueabihf
             runner: ubuntu-24.04
-            build_mode: rebuild
-            rebuild_target: armv7
           - platform: android-arm64
             target: aarch64-linux-android
             runner: ubuntu-24.04
-            build_mode: rebuild
-            rebuild_target: android
     env:
       CARGO_NET_OFFLINE: "false"
       RUST_BACKTRACE: "1"
@@ -146,22 +136,22 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install Linux build dependencies
-        if: runner.os == 'Linux' && inputs.reuse_artifacts_run_id == ''
+        if: runner.os == 'Linux' && matrix.target == 'armv7-unknown-linux-gnueabihf' && inputs.reuse_artifacts_run_id == ''
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
-            binutils-arm-linux-gnueabihf jq
+            binutils-arm-linux-gnueabihf
 
       - name: Configure musl build tools
-        if: matrix.build_mode == 'direct' && contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
+        if: contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
         env:
           TARGET: ${{ matrix.target }}
         run: bash .github/scripts/install-musl-build-tools.sh
 
       - name: Install Android NDK
-        if: matrix.rebuild_target == 'android' && inputs.reuse_artifacts_run_id == ''
+        if: matrix.target == 'aarch64-linux-android' && inputs.reuse_artifacts_run_id == ''
         run: |
           set -euo pipefail
           : "${ANDROID_HOME:?ANDROID_HOME must be set on the GitHub runner}"
@@ -184,25 +174,24 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Build fork target from source
-        if: matrix.build_mode == 'rebuild' && inputs.reuse_artifacts_run_id == ''
-        env:
-          CODEX_BUILD_FROM_SOURCE: "true"
-          VERSION: ${{ needs.prepare-release.outputs.package_version }}
+      - name: Configure Android linker
+        if: matrix.target == 'aarch64-linux-android' && inputs.reuse_artifacts_run_id == ''
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${GITHUB_WORKSPACE}.build"
-          ./scripts/rebuild_codex.sh \
-            --release \
-            --target "${{ matrix.rebuild_target }}" \
-            --package-npm \
-            --package-version "${VERSION}"
-          mkdir -p "${GITHUB_WORKSPACE}.build/npm-source-artifact"
-          cp "${GITHUB_WORKSPACE}.build/build/npm-artifact/codex-npm-${{ matrix.platform }}-${VERSION}.tgz" \
-            "${GITHUB_WORKSPACE}.build/npm-source-artifact/"
+          llvm="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+          test -x "${llvm}/bin/aarch64-linux-android29-clang++"
+          builtins="$(find "${llvm}" -name libclang_rt.builtins-aarch64-android.a -print -quit)"
+          [[ -n "${builtins}" ]] || { echo "Android compiler builtins archive not found" >&2; exit 1; }
+          echo "CC_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang" >> "${GITHUB_ENV}"
+          echo "CXX_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang++" >> "${GITHUB_ENV}"
+          echo "AR_aarch64_linux_android=${llvm}/bin/llvm-ar" >> "${GITHUB_ENV}"
+          echo "RANLIB_aarch64_linux_android=${llvm}/bin/llvm-ranlib" >> "${GITHUB_ENV}"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${llvm}/bin/aarch64-linux-android29-clang++" >> "${GITHUB_ENV}"
+          echo 'CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,$ORIGIN'" -Clink-arg=${builtins}" >> "${GITHUB_ENV}"
 
       - name: Build and package source target
-        if: matrix.build_mode == 'direct' && inputs.reuse_artifacts_run_id == ''
+        if: inputs.reuse_artifacts_run_id == ''
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.prepare-release.outputs.package_version }}
@@ -240,6 +229,10 @@ jobs:
           if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
             mkdir -p "${vendor_dir}/${TARGET}/codex-resources"
             cp "${release_dir}/bwrap" "${vendor_dir}/${TARGET}/codex-resources/bwrap"
+          fi
+          if [[ "${TARGET}" == aarch64-linux-android ]]; then
+            cp "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+              "${vendor_dir}/${TARGET}/bin/libc++_shared.so"
           fi
 
           mkdir -p "${OUTPUT_DIR}"
