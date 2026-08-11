@@ -85,6 +85,9 @@ commands that would enter the bubblewrap path.
   `--unshare-user` and the PID namespace via `--unshare-pid`.
 - When bubblewrap is active and network is restricted without proxy routing, the helper also
   isolates the network namespace via `--unshare-net`.
+- In that isolated restricted mode, IPv4/IPv6 socket operations are available for local IPC
+  within the sandbox namespace, while host-network access and filesystem Unix sockets remain
+  blocked.
 - In managed proxy mode, the helper uses `--unshare-net` plus an internal
   TCP->UDS->TCP routing bridge so tool traffic reaches only configured proxy
   endpoints.
