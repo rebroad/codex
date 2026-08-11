@@ -874,7 +874,20 @@ build_android() {
 }
 
 run_preflight() {
-  (cd "${SOURCE_REPO}" && bash -n scripts/rebuild_codex.sh scripts/build.sh scripts/package_npm.sh)
+  (
+    cd "${SOURCE_REPO}"
+    bash -n \
+      scripts/rebuild_codex.sh \
+      scripts/build.sh \
+      scripts/build_armv7.sh \
+      scripts/resolve_rusty_v8_artifacts.sh \
+      scripts/package_npm.sh \
+      scripts/publish_npm_local.sh
+    python3 -m py_compile \
+      scripts/audit_npm_packages.py \
+      scripts/assemble_npm_packages.py \
+      scripts/stage_npm_packages.py
+  )
   require_cmd rustup
   require_cmd cargo
   require_cmd npm
