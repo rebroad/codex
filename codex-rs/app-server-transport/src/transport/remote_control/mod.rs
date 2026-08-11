@@ -6,6 +6,7 @@ mod enroll;
 mod protocol;
 mod segment;
 mod server_api;
+mod traffic_capture;
 mod websocket;
 
 use self::auth::load_remote_control_auth;
@@ -41,6 +42,7 @@ use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::FutureExt;
 use gethostname::gethostname;
 use std::error::Error;
@@ -66,6 +68,16 @@ pub struct RemoteControlStartConfig {
     pub remote_control_url: String,
     pub installation_id: String,
     pub policy: RemoteControlPolicy,
+    pub traffic_log: Option<AbsolutePathBuf>,
+    pub traffic_log_redaction: RemoteControlTrafficLogRedaction,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RemoteControlTrafficLogRedaction {
+    #[default]
+    Secrets,
+    Content,
+    Disabled,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -978,6 +990,11 @@ pub async fn start_remote_control(
     let handle_state_db = state_db.clone();
     let server_name = gethostname().to_string_lossy().trim().to_string();
     let remote_control_url = config.remote_control_url;
+    let traffic_capture = traffic_capture::RemoteControlTrafficCapture::open(
+        config.traffic_log.as_ref(),
+        config.traffic_log_redaction,
+    )?
+    .map(Arc::new);
     let installation_id = config.installation_id;
     let initial_status = RemoteControlStatusChangedNotification {
         status: if initial_enabled {
@@ -1018,6 +1035,7 @@ pub async fn start_remote_control(
                 installation_id,
                 remote_control_target,
                 server_name,
+                traffic_capture,
             },
             state_db,
             auth_manager,
