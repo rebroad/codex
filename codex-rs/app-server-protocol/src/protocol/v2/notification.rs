@@ -56,6 +56,7 @@ pub struct ErrorNotification {
     pub will_retry: bool,
     pub thread_id: String,
     pub turn_id: String,
+    pub request_id: Option<RequestId>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
