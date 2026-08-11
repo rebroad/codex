@@ -23,6 +23,7 @@ pub(crate) use codex_app_server_transport::RemoteControlHandle;
 pub(crate) use codex_app_server_transport::RemoteControlPolicy;
 pub(crate) use codex_app_server_transport::RemoteControlStartConfig;
 pub use codex_app_server_transport::RemoteControlStartupMode;
+pub(crate) use codex_app_server_transport::RemoteControlTrafficLogRedaction;
 pub(crate) use codex_app_server_transport::RemoteControlUnavailable;
 pub(crate) use codex_app_server_transport::TransportEvent;
 pub(crate) use codex_app_server_transport::acquire_app_server_startup_lock;

@@ -427,6 +427,7 @@ pub(super) fn handle_error(
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
+            request_id: None,
         }),
         /*replay_kind*/ None,
     );
@@ -461,6 +462,7 @@ pub(super) fn handle_stream_error_with_replay(
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
+            request_id: None,
         }),
         replay_kind,
     );
