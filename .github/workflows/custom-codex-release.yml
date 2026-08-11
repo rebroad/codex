@@ -148,9 +148,26 @@ jobs:
 
       - name: Configure musl build tools
         if: contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        if: contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
         env:
           TARGET: ${{ matrix.target }}
         run: bash .github/scripts/install-musl-build-tools.sh
+
+      - name: Disable aws-lc jitter entropy (musl)
+        if: contains(matrix.target, 'unknown-linux-musl') && inputs.reuse_artifacts_run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "${GITHUB_ENV}"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "${GITHUB_ENV}"
 
       - name: Install Android NDK
         if: matrix.target == 'aarch64-linux-android' && inputs.reuse_artifacts_run_id == ''
