@@ -41,6 +41,7 @@ SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
 PAGABLE_ARMV7_PATCH="false"
+LOCKFILE_REGENERATION_REQUIRED="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
@@ -343,6 +344,11 @@ refresh_build_lockfile() {
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
   fi
+  if ! (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" metadata \
+    --format-version 1 --locked --offline >/dev/null 2>&1); then
+    LOCKFILE_REGENERATION_REQUIRED="true"
+    echo "Generated build-tree Cargo.lock requires offline regeneration; skipping locked Cargo builds." >&2
+  fi
 }
 
 workspace_version() {
@@ -626,24 +632,42 @@ cargo_build() {
   [[ "${target_mode}" != armv7 ]] && cmd+=(-p codex-code-mode-host)
   [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
-  cmd+=( "${profile_args[@]}" --locked )
+  cmd+=( "${profile_args[@]}" )
+  if [[ "${LOCKFILE_REGENERATION_REQUIRED}" == true ]]; then
+    cmd+=(--offline)
+  else
+    cmd+=(--locked)
+  fi
   echo "Building ${mode} ${target_mode} in ${target_dir} (incremental cache retained)..." >&2
   if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
-    echo "Locked Cargo build failed; retrying offline in the build tree without --locked." >&2
-    unset 'cmd[-1]'
-    cmd+=(--offline)
-    if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
+    if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
+      echo "Locked Cargo build failed; retrying offline in the build tree without --locked." >&2
+      unset 'cmd[-1]'
+      cmd+=(--offline)
+      if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
+        return 1
+      fi
+    else
       return 1
     fi
   fi
   if [[ "${target_mode}" == native ]]; then
     local -a test_cmd=(cargo +"${TOOLCHAIN}" build -p codex-rmcp-client --bin test_stdio_server)
-    test_cmd+=( "${profile_args[@]}" --locked )
-    if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
-      echo "Locked test_stdio_server build failed; retrying offline in the build tree without --locked." >&2
-      unset 'test_cmd[-1]'
+    test_cmd+=( "${profile_args[@]}" )
+    if [[ "${LOCKFILE_REGENERATION_REQUIRED}" == true ]]; then
       test_cmd+=(--offline)
-      if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
+    else
+      test_cmd+=(--locked)
+    fi
+    if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
+      if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
+        echo "Locked test_stdio_server build failed; retrying offline in the build tree without --locked." >&2
+        unset 'test_cmd[-1]'
+        test_cmd+=(--offline)
+        if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
+          return 1
+        fi
+      else
         return 1
       fi
     fi
