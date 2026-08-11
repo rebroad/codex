@@ -560,7 +560,14 @@ async fn execute_verified_patch(
         exec_approval_requirement: apply.exec_approval_requirement,
         additional_permissions: effective_additional_permissions.additional_permissions,
         permissions_preapproved: effective_additional_permissions.permissions_preapproved,
-        debug_log_id: Some(tool_ctx.turn.turn_metadata_state.thread_id().to_string()),
+        debug_log_id: Some(
+            tool_ctx
+                .step_context
+                .turn
+                .turn_metadata_state
+                .thread_id()
+                .to_string(),
+        ),
     };
     let mut orchestrator = ToolOrchestrator::new();
     let mut runtime = ApplyPatchRuntime::new();
