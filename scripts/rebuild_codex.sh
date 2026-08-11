@@ -366,7 +366,8 @@ verify_rusty_v8_artifacts() {
 }
 
 configure_rusty_v8_artifacts() {
-  local target_mode="${1}" target archive binding local_repo cache_dir release_tag base_url release_repo preferred_release_repo
+  local target_mode="${1}" target archive binding local_repo cache_dir release_tag
+  local -a resolver_args
   case "${target_mode}" in
     native)
       target="x86_64-unknown-linux-gnu"
@@ -439,33 +440,18 @@ configure_rusty_v8_artifacts() {
     RUSTY_V8_BINDING_PATH="${local_repo}/${binding}"
     echo "Using local Rusty V8 artifacts from ${local_repo} for ${target}." >&2
   else
-    require_cmd curl
     release_tag="${RUSTY_V8_RELEASE_TAG:-rusty-v8-v${crate_version}}"
-    RUSTY_V8_ARCHIVE_PATH="${cache_dir}/${archive}"
-    RUSTY_V8_BINDING_PATH="${cache_dir}/${binding}"
-    if [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]]; then
-      echo "Using cached Rusty V8 ${release_tag} artifacts for ${target}." >&2
-    else
-      preferred_release_repo="${RUSTY_V8_RELEASE_REPO:-}"
-      if [[ -z "${preferred_release_repo}" ]]; then
-        case "${target_mode}" in
-          musl|armv7|android) preferred_release_repo="rebroad/rusty_v8" ;;
-          *) preferred_release_repo="openai/codex" ;;
-        esac
-      fi
-      local release_repos=("${preferred_release_repo}")
-      for release_repo in "${release_repos[@]}"; do
-        base_url="https://github.com/${release_repo}/releases/download/${release_tag}"
-        echo "Downloading Rusty V8 ${release_tag} artifacts for ${target} from ${release_repo}." >&2
-        if curl --fail --location --retry 3 --silent --show-error \
-          "${base_url}/${archive}" --output "${RUSTY_V8_ARCHIVE_PATH}" \
-          && curl --fail --location --retry 3 --silent --show-error \
-            "${base_url}/${binding}" --output "${RUSTY_V8_BINDING_PATH}"; then
-          break
-        fi
-        rm -f "${RUSTY_V8_ARCHIVE_PATH}" "${RUSTY_V8_BINDING_PATH}"
-      done
-    fi
+    resolver_args=(
+      "--target=${target}"
+      "--output-dir=${cache_dir}"
+      "--release-repo=${RUSTY_V8_RELEASE_REPO:-auto}"
+      "--release-tag=${release_tag}"
+      "--profile=${profile}"
+      "--v8-version=${crate_version}"
+    )
+    eval "$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}")"
+    RUSTY_V8_ARCHIVE_PATH="${RUSTY_V8_ARCHIVE}"
+    RUSTY_V8_BINDING_PATH="${RUSTY_V8_SRC_BINDING_PATH}"
   fi
 
   [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]] || return 1
