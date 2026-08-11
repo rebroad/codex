@@ -3061,6 +3061,7 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<(), JSONRPCErrorError> {
+        let resume_started_at = std::time::Instant::now();
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -3137,6 +3138,7 @@ impl ThreadRequestProcessor {
         } = params;
         let include_turns = !exclude_turns;
 
+        let history_load_started_at = std::time::Instant::now();
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
                 .await
@@ -3168,6 +3170,13 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        tracing::info!(
+            thread_id = %thread_id,
+            history_load_ms = history_load_started_at.elapsed().as_millis(),
+            history_items = thread_history.get_rollout_items().len(),
+            exclude_turns,
+            "resume persisted history loaded"
+        );
         let paginated_thread_id = resume_source_thread.as_ref().and_then(|thread| {
             matches!(thread.history_mode, ThreadHistoryMode::Paginated).then_some(thread.thread_id)
         });
@@ -3200,6 +3209,7 @@ impl ThreadRequestProcessor {
             .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
+        let config_started_at = std::time::Instant::now();
         let mut config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
@@ -3212,6 +3222,11 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        tracing::info!(
+            thread_id = %thread_id,
+            config_ms = config_started_at.elapsed().as_millis(),
+            "resume configuration loaded"
+        );
         if !has_explicit_model_resume_override
             && persisted_metadata
                 .as_ref()
@@ -3222,6 +3237,7 @@ impl ThreadRequestProcessor {
 
         let response_history = thread_history.clone();
 
+        let thread_create_started_at = std::time::Instant::now();
         match self
             .thread_manager
             .resume_thread_with_history(
@@ -3239,6 +3255,13 @@ impl ThreadRequestProcessor {
                 session_configured,
                 ..
             }) => {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    thread_create_ms = thread_create_started_at.elapsed().as_millis(),
+                    paginated = paginated_resume,
+                    include_turns,
+                    "resume thread created"
+                );
                 if let Err(err) = Self::set_app_server_client_info(
                     codex_thread.as_ref(),
                     app_server_client_name,
@@ -3422,6 +3445,11 @@ impl ThreadRequestProcessor {
                 self.outgoing
                     .send_response_with_thread_originator(request_id, response, thread_originator)
                     .await;
+                tracing::info!(
+                    thread_id = %thread_id,
+                    total_ms = resume_started_at.elapsed().as_millis(),
+                    "resume response sent"
+                );
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_turn_id) = token_usage_turn_id {
