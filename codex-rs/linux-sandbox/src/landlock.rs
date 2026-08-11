@@ -45,6 +45,7 @@ pub(crate) fn apply_permission_profile_to_current_thread(
     apply_landlock_fs: bool,
     allow_network_for_proxy: bool,
     proxy_routed_network: bool,
+    local_ipc_policy: LocalIpcPolicy,
 ) -> Result<()> {
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
@@ -52,6 +53,7 @@ pub(crate) fn apply_permission_profile_to_current_thread(
         network_sandbox_policy,
         allow_network_for_proxy,
         proxy_routed_network,
+        local_ipc_policy,
     );
 
     // `PR_SET_NO_NEW_PRIVS` is required for seccomp, but it also prevents
@@ -90,7 +92,14 @@ pub(crate) fn apply_permission_profile_to_current_thread(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NetworkSeccompMode {
     Restricted,
+    IsolatedLocalIpc,
     ProxyRouted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalIpcPolicy {
+    Disabled,
+    IsolatedNetworkNamespace,
 }
 
 fn should_install_network_seccomp(
@@ -106,11 +115,14 @@ fn network_seccomp_mode(
     network_sandbox_policy: NetworkSandboxPolicy,
     allow_network_for_proxy: bool,
     proxy_routed_network: bool,
+    local_ipc_policy: LocalIpcPolicy,
 ) -> Option<NetworkSeccompMode> {
     if !should_install_network_seccomp(network_sandbox_policy, allow_network_for_proxy) {
         None
     } else if proxy_routed_network {
         Some(NetworkSeccompMode::ProxyRouted)
+    } else if matches!(local_ipc_policy, LocalIpcPolicy::IsolatedNetworkNamespace) {
+        Some(NetworkSeccompMode::IsolatedLocalIpc)
     } else {
         Some(NetworkSeccompMode::Restricted)
     }
@@ -212,8 +224,37 @@ fn install_network_seccomp_filter_on_current_thread(
                 libc::AF_UNIX as u64,
             )?])?;
 
-            rules.insert(libc::SYS_socket.into(), vec![unix_only_rule.clone()]);
-            rules.insert(libc::SYS_socketpair.into(), vec![unix_only_rule]);
+            rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
+            rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
+        }
+        NetworkSeccompMode::IsolatedLocalIpc => {
+            // Bubblewrap has already unshared the network namespace before
+            // this filter is installed. Permit the TCP/IPv6 operations
+            // needed by local build-tool servers such as sccache and Cargo,
+            // while keeping unrelated socket families unavailable.
+            let deny_non_ip_socket = SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET as u64,
+                )?,
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET6 as u64,
+                )?,
+            ])?;
+            let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                libc::AF_UNIX as u64,
+            )?])?;
+
+            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
+            rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
         }
         NetworkSeccompMode::ProxyRouted => {
             // In proxy-routed mode we allow IP sockets in the isolated
@@ -242,8 +283,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 SeccompCmpOp::Ne,
                 libc::AF_UNIX as u64,
             )?])?;
-            rules.insert(libc::SYS_socket.into(), vec![deny_non_ip_socket]);
-            rules.insert(libc::SYS_socketpair.into(), vec![deny_non_unix_socketpair]);
+            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
+            rules.insert(libc::SYS_socketpair, vec![deny_non_unix_socketpair]);
         }
     }
 
@@ -269,6 +310,7 @@ fn install_network_seccomp_filter_on_current_thread(
 
 #[cfg(test)]
 mod tests {
+    use super::LocalIpcPolicy;
     use super::NetworkSeccompMode;
     use super::network_seccomp_mode;
     use super::should_install_network_seccomp;
@@ -316,6 +358,7 @@ mod tests {
                 NetworkSandboxPolicy::Enabled,
                 /*allow_network_for_proxy*/ true,
                 /*proxy_routed_network*/ true,
+                LocalIpcPolicy::Disabled,
             ),
             Some(NetworkSeccompMode::ProxyRouted)
         );
@@ -328,6 +371,7 @@ mod tests {
                 NetworkSandboxPolicy::Restricted,
                 /*allow_network_for_proxy*/ false,
                 /*proxy_routed_network*/ false,
+                LocalIpcPolicy::Disabled,
             ),
             Some(NetworkSeccompMode::Restricted)
         );
@@ -340,8 +384,35 @@ mod tests {
                 NetworkSandboxPolicy::Enabled,
                 /*allow_network_for_proxy*/ false,
                 /*proxy_routed_network*/ false,
+                LocalIpcPolicy::Disabled,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn isolated_network_namespace_allows_local_ipc_mode() {
+        assert_eq!(
+            network_seccomp_mode(
+                NetworkSandboxPolicy::Restricted,
+                /*allow_network_for_proxy*/ false,
+                /*proxy_routed_network*/ false,
+                LocalIpcPolicy::IsolatedNetworkNamespace,
+            ),
+            Some(NetworkSeccompMode::IsolatedLocalIpc)
+        );
+    }
+
+    #[test]
+    fn local_ipc_does_not_override_managed_proxy_mode() {
+        assert_eq!(
+            network_seccomp_mode(
+                NetworkSandboxPolicy::Restricted,
+                /*allow_network_for_proxy*/ true,
+                /*proxy_routed_network*/ true,
+                LocalIpcPolicy::IsolatedNetworkNamespace,
+            ),
+            Some(NetworkSeccompMode::ProxyRouted)
         );
     }
 }
