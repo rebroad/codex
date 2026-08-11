@@ -97,24 +97,6 @@ set_v8_path_patch() {
   sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${build_repo}\" }" "${manifest}"
 }
 
-set_pagable_patch() {
-  local manifest="${1}" enabled="${2}"
-  sed -i '/^# ARMv7 support is not in the crates.io release yet\.$/,+1d' "${manifest}"
-  sed -i "/^# Keep pagable's shared workspace dependencies on crates.io so they use the$/,/^strong_hash = { version = \"0.1.0\" }$/d" "${manifest}"
-  if [[ "${enabled}" == true ]]; then
-    sed -i '/^\[patch\.crates-io\]$/a # ARMv7 support is not in the crates.io release yet.\npagable = { git = "https://github.com/facebook/starlark-rust", rev = "4190cefd570e05858cbb51815a4de11a7b49f951" }' "${manifest}"
-    cat >>"${manifest}" <<'EOF'
-
-# Keep pagable's shared workspace dependencies on crates.io so they use the
-# same Dupe/Allocative traits as the released Starlark crates.
-[patch."https://github.com/facebook/starlark-rust"]
-allocative = { version = "0.3.6" }
-dupe = { version = "0.9.1" }
-strong_hash = { version = "0.1.0" }
-EOF
-  fi
-}
-
 download_latest_fork_npm_release() {
   local output_dir="${BUILD_REPO}/build/npm-artifact"
   local tag
@@ -1031,7 +1013,11 @@ if [[ "${PACKAGE_NPM}" == true ]]; then
 elif [[ "${TARGET_MODE}" == armv7 ]]; then
   PAGABLE_ARMV7_PATCH="true"
 fi
-set_pagable_patch "${BUILD_WORKSPACE}/Cargo.toml" "${PAGABLE_ARMV7_PATCH}"
+pagable_target=native
+[[ "${PAGABLE_ARMV7_PATCH}" == true ]] && pagable_target=armv7-unknown-linux-gnueabihf
+bash "${SOURCE_REPO}/scripts/apply_target_cargo_patches.sh" \
+  "${BUILD_WORKSPACE}/Cargo.toml" \
+  "${pagable_target}"
 refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
