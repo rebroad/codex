@@ -37,3 +37,37 @@ the `codex` found on `PATH`. Existing managed installations are left alone.
 
 Use `codex-pairing-code --debug-log` when diagnosing daemon startup. This may
 replace an existing managed daemon so that remote-control logs are enabled.
+
+## Traffic capture
+
+The app-server can capture remote-control WebSocket traffic as JSON Lines for
+protocol debugging. Add the following to `~/.codex/config.toml`:
+
+```toml
+[remote_control]
+traffic_log = "/var/tmp/codex-remote-control.jsonl"
+traffic_log_redaction = "secrets"
+```
+
+`traffic_log` is a path prefix, not the final filename. Each app-server
+process writes a separate file named like
+`codex-remote-control.<timestamp-milliseconds>.<process-id>.jsonl`. The parent
+directory is created automatically. Omit this setting to disable capture.
+
+`traffic_log_redaction` controls what is written to the capture:
+
+- `"secrets"` (default) redacts secret-like fields such as authorization
+  headers, access or refresh tokens, cookies, passwords, and bearer values while
+  preserving normal request and response content.
+- `"content"` also redacts common payload fields such as `command`, `input`,
+  `output`, `prompt`, `text`, and `content`.
+- `"disabled"` writes the original wire JSON without parsing and
+  re-serializing it. This preserves formatting useful for protocol analysis
+  and has lower capture overhead, but can expose credentials and user data.
+
+Capture output is flushed periodically and when the remote-control connection
+worker stops, so the most recent records may not be visible immediately while
+the process is running. Restart the app-server after changing these settings.
+
+Treat capture files as sensitive whenever `traffic_log_redaction =
+"disabled"`, and remove them after the diagnostic run.
