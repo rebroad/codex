@@ -28,29 +28,18 @@ pub(crate) struct RemoteControlTrafficCapture {
 
 impl RemoteControlTrafficCapture {
     pub(crate) fn open(
-        path_prefix: Option<&AbsolutePathBuf>,
+        path_template: Option<&AbsolutePathBuf>,
         redaction: RemoteControlTrafficLogRedaction,
     ) -> std::io::Result<Option<Self>> {
-        let Some(path_prefix) = path_prefix else {
+        let Some(path_template) = path_template else {
             return Ok(None);
         };
-        let path_prefix = path_prefix.to_path_buf();
-        if let Some(parent) = path_prefix.parent() {
+        let path_template = path_template.to_path_buf();
+        let pid = std::process::id().to_string();
+        let path = std::path::PathBuf::from(path_template.to_string_lossy().replace("$$", &pid));
+        if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let timestamp_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let file_name = path_prefix
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("remote-control")
-            .to_string();
-        let path = path_prefix.with_file_name(format!(
-            "{file_name}.{timestamp_ms}.{}.jsonl",
-            std::process::id()
-        ));
         let file = OpenOptions::new().create_new(true).write(true).open(path)?;
         Ok(Some(Self {
             writer: Mutex::new(CaptureWriter {
