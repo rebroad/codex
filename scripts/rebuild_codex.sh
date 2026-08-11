@@ -40,7 +40,6 @@ DRY_RUN="false"
 SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
-PAGABLE_ARMV7_PATCH="false"
 LOCKFILE_REGENERATION_REQUIRED="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
@@ -322,9 +321,6 @@ refresh_build_lockfile() {
   else
     echo "Keeping generated build-tree Cargo.lock." >&2
   fi
-  if [[ "${PAGABLE_ARMV7_PATCH}" == true ]]; then
-    (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" cargo +"${TOOLCHAIN}" update -p pagable)
-  fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" cargo +"${TOOLCHAIN}" update -p v8 --offline)
   fi
@@ -550,6 +546,18 @@ cargo_build() {
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
   target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
+
+  if [[ "${target_mode}" == armv7 ]]; then
+    local armv7_builder="${BUILD_REPO}/scripts/build_armv7.sh"
+    [[ -x "${armv7_builder}" ]] || die "ARMv7 builder not found or not executable: ${armv7_builder}"
+    local -a armv7_args=("--${mode}" "--target=${triple}" --no-deploy-remote --no-publish-github --binary-only)
+    [[ -n "${CARGO_BUILD_JOBS:-}" ]] && armv7_args+=("--jobs=${CARGO_BUILD_JOBS}")
+    [[ -n "${CODEX_ARMV7_BUILD_ENV:-}" ]] && armv7_args+=("--build-env=${CODEX_ARMV7_BUILD_ENV}")
+    CARGO_TARGET_DIR="${target_dir}" "${armv7_builder}" "${armv7_args[@]}" >&2
+    printf '%s\n' "${target_dir}/${triple}/${mode}/codex"
+    return 0
+  fi
+
   prepare_target_dir "${target_dir}" "${target_mode}" "${triple}"
   if [[ -n "${triple}" ]]; then
     target="${triple}"
@@ -990,7 +998,7 @@ if [[ "${PACKAGE_NPM}" == true ]]; then
   for package_target in "${PACKAGE_TARGETS[@]}"; do
     case "${package_target}" in
       linux-armv7)
-        configure_rusty_v8_artifacts armv7 || prepare_armv7_rusty_v8_source
+        : # build_armv7.sh owns ARMv7 toolchain and Rusty V8 setup.
         ;;
       android-arm64)
         configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source
@@ -998,26 +1006,13 @@ if [[ "${PACKAGE_NPM}" == true ]]; then
     esac
   done
 elif [[ "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
-  configure_rusty_v8_artifacts "${TARGET_MODE}" || prepare_armv7_rusty_v8_source
+  if [[ "${TARGET_MODE}" == android ]]; then
+    configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source
+  fi
 elif [[ "${TARGET_MODE}" == native ]]; then
   [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] && die "native V8 source builds are disabled; use the upstream Rusty V8 artifact"
   configure_rusty_v8_artifacts native || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
 fi
-if [[ "${PACKAGE_NPM}" == true ]]; then
-  for package_target in "${PACKAGE_TARGETS[@]}"; do
-    if [[ "${package_target}" == linux-armv7 ]]; then
-      PAGABLE_ARMV7_PATCH="true"
-      break
-    fi
-  done
-elif [[ "${TARGET_MODE}" == armv7 ]]; then
-  PAGABLE_ARMV7_PATCH="true"
-fi
-pagable_target=native
-[[ "${PAGABLE_ARMV7_PATCH}" == true ]] && pagable_target=armv7-unknown-linux-gnueabihf
-bash "${SOURCE_REPO}/scripts/apply_target_cargo_patches.sh" \
-  "${BUILD_WORKSPACE}/Cargo.toml" \
-  "${pagable_target}"
 refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
