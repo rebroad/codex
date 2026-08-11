@@ -8,11 +8,11 @@ use codex_install_context::StandalonePlatform;
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// Update via `npm install -g @rebroad/codex@latest`.
+    /// Update via `npm install -g @reb.ai/codex@latest`.
     NpmGlobalLatest,
-    /// Update via `bun install -g @rebroad/codex@latest`.
+    /// Update via `bun install -g @reb.ai/codex@latest`.
     BunGlobalLatest,
-    /// Update via `pnpm add -g @rebroad/codex@latest`.
+    /// Update via `pnpm add -g @reb.ai/codex@latest`.
     PnpmGlobalLatest,
     /// Update a Homebrew-detected installation via the fork npm package.
     BrewUpgrade,
@@ -41,12 +41,12 @@ impl UpdateAction {
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@rebroad/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@rebroad/codex"]),
-            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@rebroad/codex"]),
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@reb.ai/codex"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@reb.ai/codex"]),
+            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@reb.ai/codex"]),
             UpdateAction::BrewUpgrade
             | UpdateAction::StandaloneUnix
-            | UpdateAction::StandaloneWindows => ("npm", &["install", "-g", "@rebroad/codex"]),
+            | UpdateAction::StandaloneWindows => ("npm", &["install", "-g", "@reb.ai/codex"]),
         }
     }
 
@@ -138,15 +138,15 @@ mod tests {
     fn fork_update_commands_do_not_target_upstream_installers() {
         assert_eq!(
             UpdateAction::StandaloneUnix.command_args(),
-            ("npm", &["install", "-g", "@rebroad/codex"][..])
+            ("npm", &["install", "-g", "@reb.ai/codex"][..])
         );
         assert_eq!(
             UpdateAction::StandaloneWindows.command_args(),
-            ("npm", &["install", "-g", "@rebroad/codex"][..])
+            ("npm", &["install", "-g", "@reb.ai/codex"][..])
         );
         assert_eq!(
             UpdateAction::BrewUpgrade.command_args(),
-            ("npm", &["install", "-g", "@rebroad/codex"][..])
+            ("npm", &["install", "-g", "@reb.ai/codex"][..])
         );
     }
 }

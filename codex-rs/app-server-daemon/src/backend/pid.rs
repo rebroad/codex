@@ -612,6 +612,12 @@ fn try_lock_file(file: &fs::File) -> Result<bool> {
     if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
         return Ok(false);
     }
+    if err.kind() == std::io::ErrorKind::Unsupported
+        || err.raw_os_error() == Some(libc::ENOTSUP)
+        || err.raw_os_error() == Some(libc::EOPNOTSUPP)
+    {
+        return Ok(true);
+    }
     Err(err).context("failed to lock pid reservation")
 }
 
@@ -697,7 +703,27 @@ async fn inspect_empty_pid_reservation(
     Ok(EmptyPidReservation::Stale)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "android")]
+async fn read_process_start_time(pid: u32) -> Result<String> {
+    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .await
+        .with_context(|| format!("failed to read /proc/{pid}/stat"))?;
+    parse_proc_stat_start_time(&stat, pid)
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn parse_proc_stat_start_time(stat: &str, pid: u32) -> Result<String> {
+    let after_comm = stat
+        .rfind(')')
+        .with_context(|| format!("malformed /proc/{pid}/stat: missing closing paren"))?;
+    let fields: Vec<&str> = stat[after_comm + 1..].split_whitespace().collect();
+    let starttime = fields
+        .get(19)
+        .with_context(|| format!("malformed /proc/{pid}/stat: starttime field missing"))?;
+    Ok(starttime.to_string())
+}
+
+#[cfg(all(unix, not(target_os = "android")))]
 async fn read_process_start_time(pid: u32) -> Result<String> {
     let output = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "lstart="])

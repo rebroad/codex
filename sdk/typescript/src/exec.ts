@@ -42,15 +42,15 @@ export type CodexExecArgs = {
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
-const CODEX_NPM_NAME = "@rebroad/codex";
+const CODEX_NPM_NAME = "@reb.ai/codex";
 
 const PLATFORM_PACKAGE_BY_TARGET: Record<string, string> = {
-  "x86_64-unknown-linux-musl": "@rebroad/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@rebroad/codex-linux-arm64",
-  "x86_64-apple-darwin": "@rebroad/codex-darwin-x64",
-  "aarch64-apple-darwin": "@rebroad/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@rebroad/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@rebroad/codex-win32-arm64",
+  "x86_64-unknown-linux-musl": "@reb.ai/codex-linux-x64",
+  "aarch64-unknown-linux-musl": "@reb.ai/codex-linux-arm64",
+  "x86_64-apple-darwin": "@reb.ai/codex-darwin-x64",
+  "aarch64-apple-darwin": "@reb.ai/codex-darwin-arm64",
+  "x86_64-pc-windows-msvc": "@reb.ai/codex-win32-x64",
+  "aarch64-pc-windows-msvc": "@reb.ai/codex-win32-arm64",
 };
 
 const moduleRequire = createRequire(import.meta.url);
