@@ -995,6 +995,12 @@ impl App {
         app_server: &mut AppServerSession,
         target_session: SessionTarget,
     ) -> Result<AppRunControl> {
+        let resume_started_at = std::time::Instant::now();
+        let target_thread_id = target_session.thread_id;
+        tracing::info!(
+            thread_id = %target_thread_id,
+            "resume session selected"
+        );
         if self.ignore_same_thread_resume(&target_session) {
             tui.frame_requester().schedule_frame();
             return Ok(AppRunControl::Continue);
@@ -1087,6 +1093,12 @@ impl App {
         };
         self.apply_runtime_policy_overrides(&mut resume_config);
 
+        tracing::info!(
+            thread_id = %target_thread_id,
+            preparation_ms = resume_started_at.elapsed().as_millis(),
+            "resume configuration preparation completed"
+        );
+
         let summary = session_summary(
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),
@@ -1099,7 +1111,7 @@ impl App {
         match app_server
             .resume_thread(
                 resume_config.clone(),
-                target_session.thread_id,
+                target_thread_id,
                 self.resume_model_settings(),
             )
             .await
@@ -1114,6 +1126,7 @@ impl App {
                 );
                 self.file_search
                     .update_search_dir(self.config.cwd.to_path_buf());
+                let attach_started_at = std::time::Instant::now();
                 match self
                     .replace_chat_widget_with_app_server_thread(
                         tui,
@@ -1124,7 +1137,18 @@ impl App {
                     .await
                 {
                     Ok(()) => {
+                        tracing::info!(
+                            thread_id = %resumed_thread_id,
+                            attach_ms = attach_started_at.elapsed().as_millis(),
+                            "resume chat widget attach completed"
+                        );
+                        let backfill_started_at = std::time::Instant::now();
                         self.backfill_loaded_subagent_threads(app_server).await;
+                        tracing::info!(
+                            thread_id = %resumed_thread_id,
+                            backfill_ms = backfill_started_at.elapsed().as_millis(),
+                            "resume loaded-subagent backfill completed"
+                        );
                         self.replay_agents_overview_requests(app_server, resumed_thread_id)
                             .await;
                         if let Some(summary) = summary {
@@ -1144,6 +1168,11 @@ impl App {
                             resumed_thread_id,
                         )
                         .await;
+                        tracing::info!(
+                            thread_id = %resumed_thread_id,
+                            total_ms = resume_started_at.elapsed().as_millis(),
+                            "resume session ready"
+                        );
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
