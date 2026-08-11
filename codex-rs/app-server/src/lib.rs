@@ -38,6 +38,7 @@ use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::RemoteControlPolicy;
 use crate::transport::RemoteControlStartConfig;
+use crate::transport::RemoteControlTrafficLogRedaction;
 use crate::transport::TransportEvent;
 use crate::transport::acquire_app_server_startup_lock;
 use crate::transport::app_server_startup_lock_path;
@@ -796,6 +797,18 @@ pub async fn run_main_with_transport_options(
             remote_control_url: config.chatgpt_base_url.clone(),
             installation_id: installation_id.clone(),
             policy: remote_control_policy,
+            traffic_log: config.remote_control_traffic_log.clone(),
+            traffic_log_redaction: match config.remote_control_traffic_log_redaction {
+                codex_config::config_toml::RemoteControlTrafficLogRedaction::Secrets => {
+                    RemoteControlTrafficLogRedaction::Secrets
+                }
+                codex_config::config_toml::RemoteControlTrafficLogRedaction::Content => {
+                    RemoteControlTrafficLogRedaction::Content
+                }
+                codex_config::config_toml::RemoteControlTrafficLogRedaction::Disabled => {
+                    RemoteControlTrafficLogRedaction::Disabled
+                }
+            },
         },
         state_db.clone(),
         remote_control_auth_manager,
