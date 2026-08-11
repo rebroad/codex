@@ -172,8 +172,8 @@ find_reusable_github_run() {
     fi
   done < <(gh run list --repo "${FORK_RELEASE_REPO}" \
     --workflow custom-codex-release.yml --status completed --limit 50 \
-    --json databaseId,headBranch,event \
-    | jq -r --arg tag "${tag}" '.[] | select(.event == "push" and .headBranch == $tag) | .databaseId')
+    --json databaseId,headBranch,event,conclusion \
+    | jq -r --arg tag "${tag}" '.[] | select(.event == "push" and .conclusion == "success" and .headBranch == $tag) | .databaseId')
   return 1
 }
 
