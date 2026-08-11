@@ -40,6 +40,7 @@ DRY_RUN="false"
 SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
+PAGABLE_ARMV7_PATCH="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 TOOLCHAIN=""
@@ -92,6 +93,24 @@ set_v8_path_patch() {
   local manifest="${1}" build_repo="${2}"
   sed -i '/^v8 = { path = /d' "${manifest}"
   sed -i "/^\[patch\.crates-io\]$/a v8 = { path = \"${build_repo}\" }" "${manifest}"
+}
+
+set_pagable_patch() {
+  local manifest="${1}" enabled="${2}"
+  sed -i '/^# ARMv7 support is not in the crates.io release yet\.$/,+1d' "${manifest}"
+  sed -i "/^# Keep pagable's shared workspace dependencies on crates.io so they use the$/,/^strong_hash = { version = \"0.1.0\" }$/d" "${manifest}"
+  if [[ "${enabled}" == true ]]; then
+    sed -i '/^\[patch\.crates-io\]$/a # ARMv7 support is not in the crates.io release yet.\npagable = { git = "https://github.com/facebook/starlark-rust", rev = "4190cefd570e05858cbb51815a4de11a7b49f951" }' "${manifest}"
+    cat >>"${manifest}" <<'EOF'
+
+# Keep pagable's shared workspace dependencies on crates.io so they use the
+# same Dupe/Allocative traits as the released Starlark crates.
+[patch."https://github.com/facebook/starlark-rust"]
+allocative = { version = "0.3.6" }
+dupe = { version = "0.9.1" }
+strong_hash = { version = "0.1.0" }
+EOF
+  fi
 }
 
 download_latest_fork_npm_release() {
@@ -318,10 +337,7 @@ refresh_build_lockfile() {
   else
     echo "Keeping generated build-tree Cargo.lock." >&2
   fi
-  # Keep the Starlark pagable override in every build profile. Removing it for
-  # native builds leaves the generated tree on crates.io pagable, while the
-  # ARMv7/npm path needs the patched Git revision and its unified Dupe graph.
-  if grep -Fq 'pagable = { git =' "${BUILD_WORKSPACE}/Cargo.toml"; then
+  if [[ "${PAGABLE_ARMV7_PATCH}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p pagable)
   fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
@@ -896,6 +912,17 @@ elif [[ "${TARGET_MODE}" == native ]]; then
   [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] && die "native V8 source builds are disabled; use the upstream Rusty V8 artifact"
   configure_rusty_v8_artifacts native || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
 fi
+if [[ "${PACKAGE_NPM}" == true ]]; then
+  for package_target in "${PACKAGE_TARGETS[@]}"; do
+    if [[ "${package_target}" == linux-armv7 ]]; then
+      PAGABLE_ARMV7_PATCH="true"
+      break
+    fi
+  done
+elif [[ "${TARGET_MODE}" == armv7 ]]; then
+  PAGABLE_ARMV7_PATCH="true"
+fi
+set_pagable_patch "${BUILD_WORKSPACE}/Cargo.toml" "${PAGABLE_ARMV7_PATCH}"
 refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
