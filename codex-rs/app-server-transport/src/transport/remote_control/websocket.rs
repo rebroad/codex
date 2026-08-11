@@ -16,6 +16,7 @@ use super::segment::ClientSegmentObservation;
 use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
 use super::segment::split_server_envelope_for_transport;
+use super::traffic_capture::RemoteControlTrafficCapture;
 use crate::transport::TransportEvent;
 use crate::transport::remote_control::auth::RemoteControlConnectionAuth;
 use crate::transport::remote_control::auth::load_remote_control_auth;
@@ -274,6 +275,7 @@ pub(crate) struct RemoteControlWebsocket {
     desired_state_tx: Arc<watch::Sender<RemoteControlDesiredState>>,
     desired_state_rx: watch::Receiver<RemoteControlDesiredState>,
     desired_state_persistence_lock: Arc<Semaphore>,
+    traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
 }
 
 pub(crate) struct RemoteControlWebsocketConfig {
@@ -281,6 +283,7 @@ pub(crate) struct RemoteControlWebsocketConfig {
     pub(crate) installation_id: String,
     pub(crate) remote_control_target: Option<RemoteControlTarget>,
     pub(crate) server_name: String,
+    pub(crate) traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
 }
 
 pub(super) struct RemoteControlAuthContext<'a> {
@@ -447,6 +450,7 @@ impl RemoteControlWebsocket {
             desired_state_tx,
             desired_state_rx,
             desired_state_persistence_lock: channels.desired_state_persistence_lock,
+            traffic_capture: config.traffic_capture,
         }
     }
 
@@ -846,6 +850,7 @@ impl RemoteControlWebsocket {
             websocket_writer,
             REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL,
             shutdown_token.clone(),
+            self.traffic_capture.clone(),
         ));
         join_set.spawn(Self::run_websocket_reader(
             self.client_tracker.clone(),
@@ -853,6 +858,7 @@ impl RemoteControlWebsocket {
             websocket_reader,
             REMOTE_CONTROL_WEBSOCKET_PONG_TIMEOUT,
             shutdown_token.clone(),
+            self.traffic_capture.clone(),
         ));
 
         let mut desired_state_rx = self.desired_state_rx.clone();
@@ -900,6 +906,10 @@ impl RemoteControlWebsocket {
         while join_set.join_next().await.is_some() {}
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "worker arguments map directly to the websocket writer state"
+    )]
     async fn run_server_writer(
         state: Arc<Mutex<WebsocketState>>,
         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
@@ -910,7 +920,9 @@ impl RemoteControlWebsocket {
         >,
         ping_interval: std::time::Duration,
         shutdown_token: CancellationToken,
+        traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
     ) {
+        let capture_for_flush = traffic_capture.clone();
         let result = Self::run_server_writer_inner(
             state,
             server_event_rx,
@@ -918,8 +930,12 @@ impl RemoteControlWebsocket {
             websocket_writer,
             ping_interval,
             shutdown_token,
+            traffic_capture,
         )
         .await;
+        if let Some(capture) = capture_for_flush {
+            capture.flush();
+        }
         if let Err(err) = result {
             warn!("remote control websocket writer disconnected, err: {err}");
         } else {
@@ -931,6 +947,10 @@ impl RemoteControlWebsocket {
         clippy::await_holding_invalid_type,
         reason = "remote-control server event receiver is shared across reconnects"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "worker arguments map directly to the websocket writer state"
+    )]
     async fn run_server_writer_inner(
         state: Arc<Mutex<WebsocketState>>,
         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
@@ -941,6 +961,7 @@ impl RemoteControlWebsocket {
         >,
         ping_interval: std::time::Duration,
         shutdown_token: CancellationToken,
+        traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
     ) -> io::Result<()> {
         let server_envelopes = state
             .lock()
@@ -957,11 +978,23 @@ impl RemoteControlWebsocket {
                     continue;
                 }
             };
+            let (capture_frame, capture_payload) = match traffic_capture.as_ref() {
+                Some(capture) if capture.captures_raw_wire() => (None, Some(payload.clone())),
+                Some(_) => (serde_json::from_str(&payload).ok(), None),
+                None => (None, None),
+            };
             tokio::select! {
                 _ = shutdown_token.cancelled() => return Ok(()),
                 send_result = websocket_writer.send(tungstenite::Message::Text(payload.into())) => {
                     if let Err(err) = send_result {
                         return Err(io::Error::other(err));
+                    }
+                    if let Some(capture) = &traffic_capture {
+                        if let Some(payload) = capture_payload.as_deref() {
+                            capture.record_raw("outbound", payload);
+                        } else if let Some(frame) = capture_frame {
+                            capture.record("outbound", frame);
+                        }
                     }
                 }
             };
@@ -1050,11 +1083,23 @@ impl RemoteControlWebsocket {
             };
 
             for payload in payloads {
+                let (capture_frame, capture_payload) = match traffic_capture.as_ref() {
+                    Some(capture) if capture.captures_raw_wire() => (None, Some(payload.clone())),
+                    Some(_) => (serde_json::from_str(&payload).ok(), None),
+                    None => (None, None),
+                };
                 tokio::select! {
                     _ = shutdown_token.cancelled() => return Ok(()),
                     send_result = websocket_writer.send(tungstenite::Message::Text(payload.into())) => {
                         if let Err(err) = send_result {
                             return Err(io::Error::other(err));
+                        }
+                        if let Some(capture) = &traffic_capture {
+                            if let Some(payload) = capture_payload.as_deref() {
+                                capture.record_raw("outbound", payload);
+                            } else if let Some(frame) = capture_frame {
+                                capture.record("outbound", frame);
+                            }
                         }
                     }
                 }
@@ -1071,15 +1116,21 @@ impl RemoteControlWebsocket {
         websocket_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         pong_timeout: std::time::Duration,
         shutdown_token: CancellationToken,
+        traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
     ) {
+        let capture_for_flush = traffic_capture.clone();
         let result = Self::run_websocket_reader_inner(
             client_tracker,
             state,
             websocket_reader,
             pong_timeout,
             shutdown_token,
+            traffic_capture,
         )
         .await;
+        if let Some(capture) = capture_for_flush {
+            capture.flush();
+        }
         if let Err(err) = result {
             warn!("remote control websocket reader disconnected, err: {err}");
         } else {
@@ -1097,6 +1148,7 @@ impl RemoteControlWebsocket {
         mut websocket_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         pong_timeout: std::time::Duration,
         shutdown_token: CancellationToken,
+        traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
     ) -> io::Result<()> {
         let mut client_tracker = client_tracker.lock().await;
         let mut idle_sweep_interval = tokio::time::interval(REMOTE_CONTROL_IDLE_SWEEP_INTERVAL);
@@ -1158,7 +1210,16 @@ impl RemoteControlWebsocket {
                 Ok(tungstenite::Message::Text(text)) => {
                     let wire_size_bytes = text.len();
                     match serde_json::from_str::<ClientEnvelope>(&text) {
-                        Ok(client_envelope) => (client_envelope, wire_size_bytes),
+                        Ok(client_envelope) => {
+                            if let Some(capture) = &traffic_capture {
+                                if capture.captures_raw_wire() {
+                                    capture.record_raw("inbound", &text);
+                                } else if let Ok(frame) = serde_json::from_str(&text) {
+                                    capture.record("inbound", frame);
+                                }
+                            }
+                            (client_envelope, wire_size_bytes)
+                        }
                         Err(err) => {
                             warn!("failed to deserialize remote-control client event: {err}");
                             continue;
@@ -2551,6 +2612,7 @@ mod tests {
                         installation_id: TEST_INSTALLATION_ID.to_string(),
                         remote_control_target: Some(remote_control_target),
                         server_name: "test-server".to_string(),
+                        traffic_capture: None,
                     },
                     /*state_db*/ None,
                     remote_control_auth_manager(),
@@ -2687,6 +2749,7 @@ mod tests {
             websocket_writer,
             Duration::from_millis(20),
             shutdown_token.clone(),
+            None,
         ));
 
         let message = timeout(Duration::from_secs(5), server_stream.next())
@@ -2736,6 +2799,7 @@ mod tests {
             websocket_writer,
             Duration::from_secs(60),
             shutdown_token.clone(),
+            None,
         ));
 
         let client_id = ClientId("client-1".to_string());
@@ -2823,6 +2887,7 @@ mod tests {
                 websocket_reader,
                 Duration::from_millis(100),
                 shutdown_token,
+                None,
             ),
         )
         .await
