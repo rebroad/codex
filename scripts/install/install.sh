@@ -809,10 +809,10 @@ handle_conflicting_install() {
       uninstall_cmd="brew uninstall --cask codex"
       ;;
     bun)
-      uninstall_cmd="bun remove -g @rebroad/codex"
+      uninstall_cmd="bun remove -g @reb.ai/codex"
       ;;
     *)
-      uninstall_cmd="npm uninstall -g @rebroad/codex"
+      uninstall_cmd="npm uninstall -g @reb.ai/codex"
       ;;
   esac
 

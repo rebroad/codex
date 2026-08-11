@@ -1,5 +1,5 @@
 {
-  "name": "@rebroad/codex-sdk",
+  "name": "@reb.ai/codex-sdk",
   "version": "0.0.0-dev",
   "description": "TypeScript SDK for Codex APIs.",
   "repository": {
