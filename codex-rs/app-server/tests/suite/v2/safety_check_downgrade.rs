@@ -144,6 +144,7 @@ async fn cyber_policy_response_emits_typed_error_notification_v2() -> Result<()>
             will_retry: false,
             thread_id: thread.id,
             turn_id: turn_start.turn.id,
+            request_id: None,
         }
     );
 
