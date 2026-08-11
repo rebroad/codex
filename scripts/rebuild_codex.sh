@@ -65,7 +65,7 @@ Options:
   --build-npm-vendor       Build the Linux musl payload for npm packaging
   --package-local-npm      Build/reuse local @reb.ai/codex npm archives
   --publish-local-npm      Assemble, audit, and publish npm locally
-  --start-github-release   Push a release tag and start/watch GitHub CI
+  --start-github-release   Push a release tag and start GitHub CI; print URLs
   --skip-build             With --start-github-release, reuse a completed CI build
   --package-npm            Alias for --package-local-npm
   --publish-npm            Alias for --publish-local-npm
