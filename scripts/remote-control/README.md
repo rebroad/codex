@@ -45,14 +45,17 @@ protocol debugging. Add the following to `~/.codex/config.toml`:
 
 ```toml
 [remote_control]
-traffic_log = "/var/tmp/codex-remote-control.jsonl"
+traffic_log = "/var/tmp/codex-remote-control-$$.jsonl"
 traffic_log_redaction = "secrets"
 ```
 
-`traffic_log` is a path prefix, not the final filename. Each app-server
-process writes a separate file named like
-`codex-remote-control.<timestamp-milliseconds>.<process-id>.jsonl`. The parent
-directory is created automatically. Omit this setting to disable capture.
+`traffic_log` is a filename template. Each `$$` in the path expands to the
+app-server process ID, so the example produces a file such as
+`codex-remote-control-2286612.jsonl`. The PID can appear anywhere in the path;
+the app-server does not add a timestamp or extension. If `$$` is omitted, the
+path is used exactly as written, and a second process cannot overwrite an
+existing capture file. The parent directory is created automatically. Omit
+this setting to disable capture.
 
 `traffic_log_redaction` controls what is written to the capture:
 
