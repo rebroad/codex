@@ -972,6 +972,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     will_retry: true,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
+                    request_id: None,
                 }))
                 .await;
         }
@@ -1629,6 +1630,7 @@ async fn handle_error_notification(
             will_retry: false,
             thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
+            request_id: None,
         }))
         .await;
 }
