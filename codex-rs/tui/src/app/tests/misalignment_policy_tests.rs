@@ -30,6 +30,7 @@ fn error_notification(
     ServerNotification::Error(codex_app_server_protocol::ErrorNotification {
         thread_id: thread_id.to_string(),
         turn_id: turn_id.into(),
+        request_id: None,
         error,
         will_retry: false,
     })

@@ -695,6 +695,7 @@ async fn misalignment_buffered_replay_preserves_input_after_continuation() {
         ServerNotification::Error(codex_app_server_protocol::ErrorNotification {
             thread_id: thread_id.to_string(),
             turn_id: "failed-turn".to_string(),
+            request_id: None,
             error,
             will_retry: false,
         }),
@@ -760,6 +761,7 @@ async fn misalignment_replay_blocks_when_turn_start_was_evicted() {
             ServerNotification::Error(codex_app_server_protocol::ErrorNotification {
                 thread_id: thread_id.to_string(),
                 turn_id: "new-turn".into(),
+                request_id: None,
                 error: error.clone(),
                 will_retry: false,
             }),
@@ -777,6 +779,7 @@ async fn misalignment_replay_blocks_when_turn_start_was_evicted() {
             ServerNotification::Error(codex_app_server_protocol::ErrorNotification {
                 thread_id: thread_id.to_string(),
                 turn_id: "settings-update".into(),
+                request_id: None,
                 error: AppServerTurnError {
                     codex_error_info: Some(AppServerCodexErrorInfo::BadRequest),
                     ..error
