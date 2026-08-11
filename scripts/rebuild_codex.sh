@@ -44,6 +44,7 @@ PAGABLE_ARMV7_PATCH="false"
 LOCKFILE_REGENERATION_REQUIRED="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
+BUILD_TIMESTAMP_SEPARATOR="-"
 TOOLCHAIN=""
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 SUDO_AUTHENTICATED="false"
@@ -569,7 +570,7 @@ cargo_build() {
   local -a env_args=(
     CARGO_TARGET_DIR="${target_dir}"
     RUSTUP_DISABLE_SELF_UPDATE=1
-    CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}-${TIMESTAMP}"
+    CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   )
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
   if [[ "${target_mode}" == native ]]; then
@@ -680,7 +681,7 @@ cargo_build() {
 }
 
 patch_timestamp() {
-  local binary="${1}" version="${2}" suffix="${3}-${TIMESTAMP}"
+  local binary="${1}" version="${2}" suffix="${3}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
 python3 - "${binary}" "${version}" "${suffix}" <<'PY'
 import mmap, sys
 import re
@@ -688,7 +689,7 @@ from pathlib import Path
 path = Path(sys.argv[1])
 version = sys.argv[2].encode()
 replacement = (sys.argv[2] + "-" + sys.argv[3]).encode()
-pattern = re.compile(re.escape(version) + rb"-[0-9a-f]{10}-[0-9]{12}")
+pattern = re.compile(re.escape(version) + rb"-[0-9a-f]{10}[-+][0-9]{12}")
 if len(replacement) != len(version) + 1 + 10 + 1 + 12:
     raise SystemExit("version placeholder width mismatch")
 with path.open("r+b") as handle:
@@ -954,6 +955,9 @@ if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
 fi
 
 COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
+if [[ -n "$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)" ]]; then
+  BUILD_TIMESTAMP_SEPARATOR="+"
+fi
 
 if [[ "${PACKAGE_NPM}" == true ]]; then
   if [[ "${#BUILD_PACKAGE_TARGETS[@]}" -gt 0 ]]; then
