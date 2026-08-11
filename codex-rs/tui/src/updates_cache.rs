@@ -11,6 +11,9 @@ pub(crate) struct VersionInfo {
     pub(crate) latest_version: String,
     // ISO-8601 timestamp (RFC3339)
     pub(crate) last_checked_at: DateTime<Utc>,
+    /// Identifies the release channel used to populate this cache entry.
+    #[serde(default)]
+    pub(crate) source: Option<String>,
     #[serde(default)]
     pub(crate) dismissed_version: Option<String>,
 }
@@ -35,6 +38,7 @@ pub(crate) async fn dismiss_version(config: &Config, version: &str) -> anyhow::R
         Err(_) => VersionInfo {
             latest_version: version.to_string(),
             last_checked_at: DateTime::<Utc>::UNIX_EPOCH,
+            source: None,
             dismissed_version: None,
         },
     };

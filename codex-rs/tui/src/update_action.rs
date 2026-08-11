@@ -14,11 +14,11 @@ pub enum UpdateAction {
     BunGlobalLatest,
     /// Update via `pnpm add -g @rebroad/codex@latest`.
     PnpmGlobalLatest,
-    /// Update via `brew upgrade codex`.
+    /// Update a Homebrew-detected installation via the fork npm package.
     BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh`.
+    /// Update via the fork npm package.
     StandaloneUnix,
-    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
+    /// Update via the fork npm package.
     StandaloneWindows,
 }
 
@@ -44,23 +44,9 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@rebroad/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@rebroad/codex"]),
             UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@rebroad/codex"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
-            UpdateAction::StandaloneUnix => (
-                "sh",
-                &[
-                    "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
-                ],
-            ),
-            UpdateAction::StandaloneWindows => (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
-                ],
-            ),
+            UpdateAction::BrewUpgrade
+            | UpdateAction::StandaloneUnix
+            | UpdateAction::StandaloneWindows => ("npm", &["install", "-g", "@rebroad/codex"]),
         }
     }
 
@@ -149,28 +135,18 @@ mod tests {
     }
 
     #[test]
-    fn standalone_update_commands_rerun_latest_installer() {
+    fn fork_update_commands_do_not_target_upstream_installers() {
         assert_eq!(
             UpdateAction::StandaloneUnix.command_args(),
-            (
-                "sh",
-                &[
-                    "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
-                ][..],
-            )
+            ("npm", &["install", "-g", "@rebroad/codex"][..])
         );
         assert_eq!(
             UpdateAction::StandaloneWindows.command_args(),
-            (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
-                ][..],
-            )
+            ("npm", &["install", "-g", "@rebroad/codex"][..])
+        );
+        assert_eq!(
+            UpdateAction::BrewUpgrade.command_args(),
+            ("npm", &["install", "-g", "@rebroad/codex"][..])
         );
     }
 }
