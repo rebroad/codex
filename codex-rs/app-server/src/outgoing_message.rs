@@ -7,6 +7,8 @@ use std::time::UNIX_EPOCH;
 
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::CodexErrorInfo;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
@@ -15,6 +17,7 @@ use codex_app_server_protocol::ServerNotificationEnvelope;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ServerResponse;
+use codex_app_server_protocol::TurnError;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
 use codex_otel::span_w3c_trace_context;
@@ -684,6 +687,32 @@ impl OutgoingMessageSender {
         request_id: ConnectionRequestId,
         error: JSONRPCErrorError,
     ) {
+        if error.data.as_ref().is_some_and(|data| {
+            data.get("errorCode").and_then(serde_json::Value::as_str) == Some("Auth")
+                && data.get("action").and_then(serde_json::Value::as_str) == Some("relogin")
+        }) {
+            let detail = error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("detail"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            self.send_server_notification_to_connections(
+                &[request_id.connection_id],
+                ServerNotification::Error(ErrorNotification {
+                    error: TurnError {
+                        message: error.message.clone(),
+                        codex_error_info: Some(CodexErrorInfo::Unauthorized),
+                        additional_details: detail,
+                    },
+                    will_retry: false,
+                    thread_id: String::new(),
+                    turn_id: String::new(),
+                    request_id: Some(request_id.request_id.clone()),
+                }),
+            )
+            .await;
+        }
         let outgoing_message = OutgoingMessage::Error(OutgoingError {
             id: request_id.request_id,
             error,
@@ -1165,6 +1194,68 @@ mod tests {
             }
             other => panic!("expected targeted error envelope, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn send_auth_error_also_notifies_target_connection() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing =
+            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(9),
+            request_id: RequestId::Integer(3),
+        };
+        let error = JSONRPCErrorError {
+            code: -32600,
+            data: Some(json!({
+                "errorCode": "Auth",
+                "action": "relogin",
+                "detail": "token has been revoked",
+            })),
+            message: "authentication failed".to_string(),
+        };
+
+        outgoing.send_error(request_id.clone(), error.clone()).await;
+
+        let notification = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("notification should arrive before timeout")
+            .expect("channel should contain a notification");
+        let OutgoingEnvelope::ToConnection { message, .. } = notification else {
+            panic!("expected targeted notification envelope");
+        };
+        let OutgoingMessage::AppServerNotification(envelope) = message else {
+            panic!("expected app-server notification");
+        };
+        let ServerNotification::Error(error_notification) = envelope.notification else {
+            panic!("expected error notification");
+        };
+        assert_eq!(
+            error_notification,
+            ErrorNotification {
+                error: TurnError {
+                    message: "authentication failed".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Unauthorized),
+                    additional_details: Some("token has been revoked".to_string()),
+                },
+                will_retry: false,
+                thread_id: String::new(),
+                turn_id: String::new(),
+                request_id: Some(RequestId::Integer(3)),
+            }
+        );
+
+        let response = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("error response should arrive before timeout")
+            .expect("channel should contain an error response");
+        let OutgoingEnvelope::ToConnection { message, .. } = response else {
+            panic!("expected targeted error envelope");
+        };
+        let OutgoingMessage::Error(outgoing_error) = message else {
+            panic!("expected JSON-RPC error response");
+        };
+        assert_eq!(outgoing_error.error, error);
     }
 
     #[tokio::test]

@@ -330,6 +330,7 @@ async fn replayed_errors_do_not_start_live_billing_refreshes() {
             will_retry: false,
             thread_id: thread_id.to_string(),
             turn_id: "replayed-turn".to_string(),
+            request_id: None,
         });
         chat.handle_server_notification(notification.clone(), Some(replay_kind));
         assert!(
