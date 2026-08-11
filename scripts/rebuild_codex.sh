@@ -325,9 +325,10 @@ prepare_armv7_rusty_v8_source() {
 }
 
 refresh_build_lockfile() {
-  local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock"
+  local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock" target_dir
   local build_lock="${BUILD_WORKSPACE}/Cargo.lock"
   local fingerprint_file="${BUILD_REPO}/build/.codex-source-lock-fingerprint"
+  target_dir="$(cargo_target_dir "${MODE}" "${TARGET_MODE}")"
   local source_fingerprint stored_fingerprint=""
   source_fingerprint="$(sed '/^version = /d' "${source_lock}" | sha256sum | awk '{print $1}')"
   [[ -f "${fingerprint_file}" ]] && read -r stored_fingerprint <"${fingerprint_file}"
@@ -340,12 +341,12 @@ refresh_build_lockfile() {
     echo "Keeping generated build-tree Cargo.lock." >&2
   fi
   if [[ "${PAGABLE_ARMV7_PATCH}" == true ]]; then
-    (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p pagable)
+    (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" cargo +"${TOOLCHAIN}" update -p pagable)
   fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
-    (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" update -p v8 --offline)
+    (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" cargo +"${TOOLCHAIN}" update -p v8 --offline)
   fi
-  if ! (cd "${BUILD_WORKSPACE}" && cargo +"${TOOLCHAIN}" metadata \
+  if ! (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" cargo +"${TOOLCHAIN}" metadata \
     --format-version 1 --locked --offline >/dev/null 2>&1); then
     LOCKFILE_REGENERATION_REQUIRED="true"
     echo "Generated build-tree Cargo.lock requires offline regeneration; skipping locked Cargo builds." >&2
@@ -501,14 +502,6 @@ read_toolchain() {
 
 cargo_target_dir() {
   local mode="${1}" target_mode="${2}"
-  if [[ "${mode}" == debug && "${target_mode}" == native ]]; then
-    if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
-      echo "${CARGO_TARGET_DIR}"
-    else
-      echo "${BUILD_WORKSPACE}/target"
-    fi
-    return
-  fi
   case "${target_mode}" in
     native) echo "${BUILD_WORKSPACE}/target" ;;
     musl) echo "${BUILD_REPO}/build/musl-${mode}" ;;
@@ -516,6 +509,22 @@ cargo_target_dir() {
     android) echo "${BUILD_REPO}/build/android-${mode}" ;;
     *) die "unknown target mode: ${target_mode}" ;;
   esac
+}
+
+prepare_target_dir() {
+  local target_dir="${1}" target_mode="${2}" triple="${3}" host marker expected
+  host="$(rustc +"${TOOLCHAIN}" -vV | sed -n 's/^host: //p')"
+  marker="${target_dir}/.codex-target"
+  printf -v expected 'target_mode=%s\ntriple=%s\nhost=%s\n' "${target_mode}" "${triple}" "${host}"
+
+  if [[ -e "${target_dir}" ]]; then
+    if [[ ! -f "${marker}" ]] || ! cmp -s <(printf '%s' "${expected}") "${marker}"; then
+      echo "Clearing legacy or incompatible Cargo target directory: ${target_dir}" >&2
+      rm -rf "${target_dir}"
+    fi
+  fi
+  mkdir -p "${target_dir}"
+  printf '%s' "${expected}" >"${marker}"
 }
 
 target_triple() {
@@ -559,7 +568,7 @@ cargo_build() {
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
   target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
-  mkdir -p "${target_dir}"
+  prepare_target_dir "${target_dir}" "${target_mode}" "${triple}"
   if [[ -n "${triple}" ]]; then
     target="${triple}"
     ensure_target "${triple}"
@@ -567,7 +576,31 @@ cargo_build() {
     target=""
   fi
 
-  local -a env_args=(
+  local -a env_args=()
+  if [[ "${target_mode}" == native ]]; then
+    env_args+=(
+      -u CARGO_TARGET_DIR
+      -u CC
+      -u CXX
+      -u AR
+      -u RANLIB
+      -u CFLAGS
+      -u CXXFLAGS
+      -u TARGET_CC
+      -u TARGET_CXX
+      -u TARGET_AR
+      -u TARGET_RANLIB
+      -u PKG_CONFIG_ALLOW_CROSS
+      -u PKG_CONFIG_ALL_STATIC
+      -u PKG_CONFIG_PATH
+      -u PKG_CONFIG_LIBDIR
+      -u PKG_CONFIG_SYSROOT_DIR
+      -u CMAKE_C_COMPILER
+      -u CMAKE_CXX_COMPILER
+      -u CMAKE_ARGS
+    )
+  fi
+  env_args+=(
     CARGO_TARGET_DIR="${target_dir}"
     RUSTUP_DISABLE_SELF_UPDATE=1
     CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
