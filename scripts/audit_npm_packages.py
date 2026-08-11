@@ -110,6 +110,23 @@ def check_file(path: Path, expected_tokens: tuple[str, ...]) -> str:
     return output
 
 
+def expected_binary_versions(package_version: str) -> tuple[str, ...]:
+    try:
+        base_version, commit, timestamp = package_version.rsplit(".", 2)
+    except ValueError as error:
+        raise RuntimeError(
+            f"Candidate version does not contain commit and timestamp: {package_version}"
+        ) from error
+    if len(commit) != 10 or len(timestamp) != 12:
+        raise RuntimeError(
+            f"Candidate version has invalid build identity: {package_version}"
+        )
+    return (
+        f"{base_version}-{commit}-{timestamp}",
+        f"{base_version}-{commit}+{timestamp}",
+    )
+
+
 def main() -> int:
     args = parse_args()
     artifact_dir = args.artifact_dir.resolve()
@@ -217,6 +234,12 @@ def main() -> int:
             strings = subprocess.run(
                 ["strings", str(binary)], capture_output=True, text=True, check=True
             ).stdout.lower()
+            binary_versions = expected_binary_versions(args.expected_version)
+            if not any(version.lower() in strings for version in binary_versions):
+                raise RuntimeError(
+                    f"{platform} binary is missing the candidate version stamp "
+                    f"for {args.expected_version}"
+                )
             if "mcp" not in strings:
                 raise RuntimeError(
                     f"{platform} binary does not contain MCP support markers"
