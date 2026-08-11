@@ -2924,6 +2924,37 @@
         }
       ]
     },
+    "RemoteControlToml": {
+      "additionalProperties": false,
+      "description": "Remote-control diagnostics settings.",
+      "properties": {
+        "traffic_log": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional path prefix for per-process remote-control traffic captures."
+        },
+        "traffic_log_redaction": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RemoteControlTrafficLogRedaction"
+            }
+          ],
+          "description": "Redaction policy for captured traffic. Defaults to `secrets`."
+        }
+      },
+      "type": "object"
+    },
+    "RemoteControlTrafficLogRedaction": {
+      "description": "Controls which sensitive values are removed from remote-control captures.",
+      "enum": [
+        "secrets",
+        "content"
+      ],
+      "type": "string"
+    },
     "ResumeCwdMode": {
       "description": "Working directory to use when resuming or forking a session.",
       "oneOf": [
@@ -5820,6 +5851,15 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "remote_control": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RemoteControlToml"
+        }
+      ],
+      "default": null,
+      "description": "Remote-control diagnostics settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
