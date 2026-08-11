@@ -200,6 +200,11 @@ pub(crate) fn is_history_pagination_unsupported(source: &JSONRPCErrorError) -> b
                 .any(|error| message.contains(error)))
 }
 
+fn is_active_writer_conflict(source: &JSONRPCErrorError) -> bool {
+    source.code == JSONRPC_INVALID_REQUEST
+        && source.message.contains("already has an active writer")
+}
+
 async fn request_thread_start_with_history_fallback(
     request_handle: &AppServerRequestHandle,
     request_id: RequestId,
