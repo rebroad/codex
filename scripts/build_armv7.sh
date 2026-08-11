@@ -1229,7 +1229,7 @@ patch_binary_version_suffix() {
   if [[ -n "${BUILD_VERSION_SUFFIX_FIXED}" ]]; then
     now_suffix="${BUILD_VERSION_SUFFIX_FIXED}"
   else
-    now_suffix="${commit_short}-$(date +%Y%m%d%H%M)"
+    now_suffix="${commit_short}-$(date -u +%Y%m%d%H%M)"
   fi
   PATCHED_VERSION_SUFFIX="${now_suffix}"
   if [[ "${from_suffix}" == "${now_suffix}" ]]; then
@@ -1486,7 +1486,7 @@ fi
 
 BUILD_COMMIT_SHORT="$(resolve_build_commit_short)"
 if [[ -z "${BUILD_VERSION_SUFFIX_FIXED}" ]]; then
-  BUILD_VERSION_SUFFIX_FIXED="${BUILD_COMMIT_SHORT}-$(date +%Y%m%d%H%M)"
+  BUILD_VERSION_SUFFIX_FIXED="${BUILD_COMMIT_SHORT}-$(date -u +%Y%m%d%H%M)"
 fi
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
   CARGO_TARGET_DIR="${REPO_DIR}/build/armv7-${PROFILE}"
