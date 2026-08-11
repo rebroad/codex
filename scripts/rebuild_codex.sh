@@ -501,6 +501,14 @@ read_toolchain() {
 
 cargo_target_dir() {
   local mode="${1}" target_mode="${2}"
+  if [[ "${mode}" == debug && "${target_mode}" == native ]]; then
+    if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+      echo "${CARGO_TARGET_DIR}"
+    else
+      echo "${BUILD_WORKSPACE}/target"
+    fi
+    return
+  fi
   case "${target_mode}" in
     native) echo "${BUILD_WORKSPACE}/target" ;;
     musl) echo "${BUILD_REPO}/build/musl-${mode}" ;;
