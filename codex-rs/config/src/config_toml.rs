@@ -144,6 +144,31 @@ pub struct OrchestratorFeatureToml {
     pub enabled: Option<bool>,
 }
 
+/// Remote-control diagnostics settings.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RemoteControlToml {
+    /// Optional path prefix for per-process remote-control traffic captures.
+    pub traffic_log: Option<AbsolutePathBuf>,
+    /// Redaction policy for captured traffic. Defaults to `secrets`.
+    pub traffic_log_redaction: Option<RemoteControlTrafficLogRedaction>,
+}
+
+/// Controls which sensitive values are removed from remote-control captures.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteControlTrafficLogRedaction {
+    Secrets,
+    Content,
+    Disabled,
+}
+
+impl Default for RemoteControlTrafficLogRedaction {
+    fn default() -> Self {
+        Self::Secrets
+    }
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -152,6 +177,10 @@ pub struct ConfigToml {
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
+
+    /// Remote-control diagnostics settings.
+    #[serde(default)]
+    pub remote_control: Option<RemoteControlToml>,
 
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
