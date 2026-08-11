@@ -40,10 +40,12 @@ jobs:
     steps:
       - name: Resolve release tag
         id: release
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
+            tag="${DISPATCH_TAG}"
           else
             tag="${GITHUB_REF_NAME}"
           fi
