@@ -22,8 +22,9 @@ async fn dismiss_version_creates_cache_file_when_missing() {
     assert_eq!(
         (
             info.latest_version.as_str(),
+            info.source.as_deref(),
             info.dismissed_version.as_deref()
         ),
-        ("999.0.0", Some("999.0.0"))
+        ("999.0.0", None, Some("999.0.0"))
     );
 }
