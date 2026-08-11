@@ -91,3 +91,22 @@ fn raw_capture_preserves_wire_json() {
     let expected_suffix = format!(",\"direction\":\"inbound\",\"frame\":{wire_json}}}\n");
     assert!(line.ends_with(&expected_suffix), "capture line: {line:?}");
 }
+
+#[test]
+fn capture_path_expands_pid_placeholders_without_timestamp() {
+    let temp_dir = TempDir::new().expect("temporary directory should be created");
+    let path_template = temp_dir.path().join("before-$$-after.jsonl");
+    let expected_path = path_template
+        .to_string_lossy()
+        .replace("$$", &std::process::id().to_string());
+
+    let _capture = RemoteControlTrafficCapture::open(
+        Some(&path_template.abs()),
+        RemoteControlTrafficLogRedaction::Secrets,
+    )
+    .expect("capture should open")
+    .expect("capture should be enabled");
+
+    assert!(std::path::Path::new(&expected_path).is_file());
+    assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 1);
+}
