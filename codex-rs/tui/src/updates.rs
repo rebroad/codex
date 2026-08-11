@@ -31,7 +31,10 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 
     let action = update_action::get_update_action();
     let version_file = version_filepath(config);
-    let info = read_version_info(&version_file).ok();
+    let expected_source = current_update_source(action);
+    let info = read_version_info(&version_file)
+        .ok()
+        .filter(|info| info.source.as_deref() == Some(expected_source));
 
     if match &info {
         None => true,
@@ -57,9 +60,8 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
-// We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/rebroad/codex/releases/latest";
+const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@reb.ai%2fcodex/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
@@ -67,7 +69,7 @@ struct ReleaseInfo {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct HomebrewCaskInfo {
+struct NpmLatestInfo {
     version: String,
 }
 
@@ -81,15 +83,16 @@ async fn check_for_update(
         ClientRouteClass::Other,
     )
     .with_legacy_custom_ca_fallback();
+    let source = current_update_source(action);
     let latest_version = match action {
         Some(UpdateAction::BrewUpgrade) => {
-            let HomebrewCaskInfo { version } = client_pool
-                .get(HOMEBREW_CASK_API_URL)
+            let NpmLatestInfo { version } = client_pool
+                .get(NPM_LATEST_URL)
                 .headers(default_headers())
                 .send()
                 .await?
                 .error_for_status()?
-                .json::<HomebrewCaskInfo>()
+                .json::<NpmLatestInfo>()
                 .await?;
             version
         }
@@ -118,7 +121,10 @@ async fn check_for_update(
     let info = VersionInfo {
         latest_version,
         last_checked_at: Utc::now(),
-        dismissed_version: prev_info.and_then(|p| p.dismissed_version),
+        source: Some(source.to_string()),
+        dismissed_version: prev_info
+            .filter(|p| p.source.as_deref() == Some(source))
+            .and_then(|p| p.dismissed_version),
     };
 
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
@@ -127,6 +133,18 @@ async fn check_for_update(
     }
     tokio::fs::write(version_file, json_line).await?;
     Ok(())
+}
+
+fn current_update_source(action: Option<UpdateAction>) -> &'static str {
+    match action {
+        Some(UpdateAction::NpmGlobalLatest)
+        | Some(UpdateAction::BunGlobalLatest)
+        | Some(UpdateAction::PnpmGlobalLatest)
+        | Some(UpdateAction::BrewUpgrade) => "npm",
+        Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
+            "github-release"
+        }
+    }
 }
 
 async fn fetch_latest_github_release_version(
