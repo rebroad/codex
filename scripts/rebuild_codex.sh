@@ -31,6 +31,7 @@ VERSION=""
 PACKAGE_VERSION=""
 MODE="debug"
 TARGET_MODE="native"
+ARMV7_BUILD_ENV="${CODEX_ARMV7_BUILD_ENV:-host}"
 PUBLISH="false"
 SKIP_BUILD="false"
 PACKAGE_NPM="false"
@@ -61,6 +62,7 @@ Options:
   --target <names>         native, musl, armv7, android, all, or comma-separated targets
                            (all means the complete eight-architecture npm candidate)
   --armv7                  Alias for --target armv7
+  --armv7-build-env MODE   ARMv7 environment: host (default), auto, or docker-buster
   --build-npm-vendor       Build the Linux musl payload for npm packaging
   --package-local-npm      Build/reuse local @reb.ai/codex npm archives
   --publish-local-npm      Assemble, audit, and publish npm locally
@@ -552,8 +554,10 @@ cargo_build() {
     [[ -x "${armv7_builder}" ]] || die "ARMv7 builder not found or not executable: ${armv7_builder}"
     local -a armv7_args=("--${mode}" "--target=${triple}" --no-deploy-remote --no-publish-github --binary-only)
     [[ -n "${CARGO_BUILD_JOBS:-}" ]] && armv7_args+=("--jobs=${CARGO_BUILD_JOBS}")
-    [[ -n "${CODEX_ARMV7_BUILD_ENV:-}" ]] && armv7_args+=("--build-env=${CODEX_ARMV7_BUILD_ENV}")
-    CARGO_TARGET_DIR="${target_dir}" "${armv7_builder}" "${armv7_args[@]}" >&2
+    armv7_args+=("--build-env=${ARMV7_BUILD_ENV}")
+    if ! CARGO_TARGET_DIR="${target_dir}" "${armv7_builder}" "${armv7_args[@]}" >&2; then
+      die "ARMv7 build failed; refusing to use a possibly stale binary at ${target_dir}/${triple}/${mode}/codex"
+    fi
     printf '%s\n' "${target_dir}/${triple}/${mode}/codex"
     return 0
   fi
@@ -884,6 +888,8 @@ while (($#)); do
     --target) TARGET_MODE="${2:-}"; shift 2 ;;
     --target=*) TARGET_MODE="${1#*=}"; shift ;;
     --armv7) TARGET_MODE=armv7; shift ;;
+    --armv7-build-env) ARMV7_BUILD_ENV="${2:-}"; shift 2 ;;
+    --armv7-build-env=*) ARMV7_BUILD_ENV="${1#*=}"; shift ;;
     --build-npm-vendor) TARGET_MODE=musl; PACKAGE_NPM=true; shift ;;
     --package-local-npm|--package-npm) PACKAGE_NPM=true; shift ;;
     --publish-local-npm|--publish-npm) PACKAGE_NPM=true; PUBLISH_NPM=true; shift ;;
