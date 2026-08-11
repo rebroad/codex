@@ -26,6 +26,7 @@ use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
+use codex_config::config_toml::RemoteControlTrafficLogRedaction;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::loader::load_config_layers_state;
@@ -915,6 +916,11 @@ pub struct Config {
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
+    /// Optional per-process remote-control traffic capture path prefix.
+    pub remote_control_traffic_log: Option<AbsolutePathBuf>,
+
+    /// Redaction policy for remote-control traffic captures.
+    pub remote_control_traffic_log_redaction: RemoteControlTrafficLogRedaction,
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -4175,6 +4181,15 @@ impl Config {
             codex_home,
             sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
             log_dir,
+            remote_control_traffic_log: cfg
+                .remote_control
+                .as_ref()
+                .and_then(|remote_control| remote_control.traffic_log.clone()),
+            remote_control_traffic_log_redaction: cfg
+                .remote_control
+                .as_ref()
+                .and_then(|remote_control| remote_control.traffic_log_redaction)
+                .unwrap_or_default(),
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
