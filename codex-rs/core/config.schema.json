@@ -2934,7 +2934,7 @@
               "$ref": "#/definitions/AbsolutePathBuf"
             }
           ],
-          "description": "Optional path prefix for per-process remote-control traffic captures."
+          "description": "Optional filename template for remote-control traffic captures. Each `$$` expands to the app-server process ID."
         },
         "traffic_log_redaction": {
           "allOf": [
