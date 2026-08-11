@@ -6,6 +6,7 @@ use super::HistoryHydrationScope;
 use super::ResumeModelSettings;
 use super::ThreadHistorySupport;
 use super::bootstrap_request_error;
+use super::is_active_writer_conflict;
 use super::is_history_pagination_unsupported;
 use super::started_thread_from_resume_response;
 use super::thread_resume_params_from_config;
@@ -23,6 +24,7 @@ use codex_app_server_protocol::TurnItemsView;
 use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
 
 // Bound recovery to recent messages when item paging is unavailable.
 const READ_ONLY_HISTORY_TURN_LIMIT: u32 = 100;
@@ -199,6 +201,24 @@ impl AppServerSession {
             {
                 self.history_support = ThreadHistorySupport::LegacyOnly;
                 params.exclude_turns = false;
+                let request_id = self.next_request_id();
+                self.client
+                    .request_typed(ClientRequest::ThreadResume { request_id, params })
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
+                    })?
+            }
+            Err(TypedRequestError::Server { source, .. }) if is_active_writer_conflict(&source) => {
+                let take_over =
+                    crate::thread_takeover::offer(thread_id, config.codex_home.as_path())
+                        .await
+                        .wrap_err("failed to take over the active session")?;
+                if !take_over {
+                    return Err(color_eyre::eyre::eyre!(
+                        "thread/resume cancelled because the session is already open elsewhere"
+                    ));
+                }
                 let request_id = self.next_request_id();
                 self.client
                     .request_typed(ClientRequest::ThreadResume { request_id, params })
