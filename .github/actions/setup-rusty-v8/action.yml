@@ -25,6 +25,18 @@ runs:
           --release-repo="${RELEASE_REPO}"
         )
         [[ -n "${RUSTY_V8_PROFILE:-}" ]] && resolver_args+=(--profile="${RUSTY_V8_PROFILE}")
-        while IFS= read -r assignment; do
-          [[ -n "${assignment}" ]] && printf '%s\n' "${assignment}" >> "${GITHUB_ENV}"
-        done < <(bash "${GITHUB_WORKSPACE}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}")
+        resolver_output="${RUNNER_TEMP}/rusty_v8-env"
+        if ! bash "${GITHUB_WORKSPACE}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}" > "${resolver_output}"; then
+          echo "Rusty V8 artifact resolution failed; refusing to let Cargo fall back to an unpinned download." >&2
+          exit 1
+        fi
+        # The resolver emits shell-escaped assignments for local `eval` callers.
+        # Decode them before writing GitHub's raw environment-file syntax, which
+        # is especially important for Windows runner paths.
+        source "${resolver_output}"
+        : "${RUSTY_V8_ARCHIVE:?resolver did not provide RUSTY_V8_ARCHIVE}"
+        : "${RUSTY_V8_SRC_BINDING_PATH:?resolver did not provide RUSTY_V8_SRC_BINDING_PATH}"
+        printf 'RUSTY_V8_ARCHIVE=%s\n' "${RUSTY_V8_ARCHIVE}" >> "${GITHUB_ENV}"
+        printf 'RUSTY_V8_SRC_BINDING_PATH=%s\n' "${RUSTY_V8_SRC_BINDING_PATH}" >> "${GITHUB_ENV}"
+        printf 'Resolved Rusty V8 archive: %s\n' "${RUSTY_V8_ARCHIVE}"
+        printf 'Resolved Rusty V8 binding: %s\n' "${RUSTY_V8_SRC_BINDING_PATH}"
