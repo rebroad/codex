@@ -35,7 +35,6 @@ const MAX_VERSION_RESPONSE_BYTES: usize = 1024 * 1024;
 const VERSION_FILE_NAME: &str = "version.json";
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/rebroad/codex/releases/latest";
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const DESKTOP_UPDATE_URL: &str = "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml";
 #[cfg(all(target_os = "macos", not(target_arch = "x86_64")))]
@@ -45,6 +44,7 @@ const BACKEND_DESKTOP_UPDATE_URL: &str = "https://chatgpt.com/backend-api/wham/a
 #[cfg(target_os = "windows")]
 const DESKTOP_UPDATE_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/windows-store-update.json";
+const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@reb.ai%2fcodex/latest";
 
 /// Builds the update-health row for the current installation.
 ///
@@ -394,7 +394,7 @@ fn update_action_label(context: &InstallContext) -> &'static str {
         InstallMethod::Bun => "bun install -g @reb.ai/codex",
         InstallMethod::VitePlus => "vp install -g @reb.ai/codex",
         InstallMethod::Pnpm => "pnpm add -g @reb.ai/codex",
-        InstallMethod::Brew => "brew upgrade --cask codex",
+        InstallMethod::Brew => "npm install -g @reb.ai/codex",
         InstallMethod::Standalone { .. } => "standalone installer",
         InstallMethod::Other => "manual or unknown",
     }
@@ -405,13 +405,14 @@ async fn fetch_latest_version(
     context: &InstallContext,
 ) -> Result<String, String> {
     match &context.method {
-        InstallMethod::Brew => fetch_homebrew_cask_version(client).await,
         InstallMethod::Npm
         | InstallMethod::Bun
         | InstallMethod::VitePlus
         | InstallMethod::Pnpm
-        | InstallMethod::Standalone { .. }
-        | InstallMethod::Other => fetch_latest_github_release_version(client).await,
+        | InstallMethod::Brew => fetch_npm_latest_version(client).await,
+        InstallMethod::Standalone { .. } | InstallMethod::Other => {
+            fetch_latest_github_release_version(client).await
+        }
     }
 }
 
@@ -426,17 +427,18 @@ async fn fetch_latest_github_release_version(
     let info = http_get_json::<ReleaseInfo>(client, GITHUB_LATEST_RELEASE_URL).await?;
     info.tag_name
         .strip_prefix("rust-v")
+        .or_else(|| info.tag_name.strip_prefix('v'))
         .map(str::to_string)
         .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
 }
 
-async fn fetch_homebrew_cask_version(client: &RouteAwareClientPool) -> Result<String, String> {
+async fn fetch_npm_latest_version(client: &RouteAwareClientPool) -> Result<String, String> {
     #[derive(Deserialize)]
-    struct HomebrewCaskInfo {
+    struct NpmLatestInfo {
         version: String,
     }
 
-    http_get_json::<HomebrewCaskInfo>(client, HOMEBREW_CASK_API_URL)
+    http_get_json::<NpmLatestInfo>(client, NPM_LATEST_URL)
         .await
         .map(|info| info.version)
 }
@@ -700,6 +702,13 @@ mod tests {
                 package_layout: None,
             }),
             "pnpm add -g @reb.ai/codex"
+        );
+        assert_eq!(
+            update_action_label(&InstallContext {
+                method: InstallMethod::Brew,
+                package_layout: None,
+            }),
+            "npm install -g @reb.ai/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {
