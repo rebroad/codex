@@ -622,6 +622,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         model_settings: ResumeModelSettings,
     ) -> Result<AppServerStartedThread> {
+        let resume_started_at = Instant::now();
         let request_id = self.next_request_id();
         let session_config = if model_settings == ResumeModelSettings::RestoreFromThread {
             config.clone()
@@ -640,6 +641,8 @@ impl AppServerSession {
                 .history_pagination
                 .get(&thread_id)
                 .is_none_or(|state| state.history_mode == ThreadHistoryMode::Paginated);
+        let mut exclude_turns = params.exclude_turns;
+        let request_started_at = Instant::now();
         let mut response: ThreadResumeResponse = match self
             .client
             .request_typed(ClientRequest::ThreadResume {
@@ -654,6 +657,7 @@ impl AppServerSession {
             {
                 self.history_support = ThreadHistorySupport::LegacyOnly;
                 params.exclude_turns = false;
+                exclude_turns = false;
                 let request_id = self.next_request_id();
                 self.client
                     .request_typed(ClientRequest::ThreadResume { request_id, params })
@@ -669,6 +673,13 @@ impl AppServerSession {
                 ));
             }
         };
+        tracing::info!(
+            thread_id = %thread_id,
+            request_ms = request_started_at.elapsed().as_millis(),
+            exclude_turns,
+            "resume thread/resume request completed"
+        );
+        let hydration_started_at = Instant::now();
         self.hydrate_initial_thread_history(
             &mut response.thread,
             response.turns_backwards_cursor.clone(),
@@ -677,6 +688,13 @@ impl AppServerSession {
             HistoryHydrationScope::Initial,
         )
         .await?;
+        tracing::info!(
+            thread_id = %thread_id,
+            hydration_ms = hydration_started_at.elapsed().as_millis(),
+            history_mode = ?response.thread.history_mode,
+            turns = response.thread.turns.len(),
+            "resume initial history hydration completed"
+        );
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -684,6 +702,11 @@ impl AppServerSession {
             started_thread_from_resume_response(response, &config, self.thread_params_mode())
                 .await?;
         started.session.fork_parent_title = fork_parent_title;
+        tracing::info!(
+            thread_id = %thread_id,
+            total_ms = resume_started_at.elapsed().as_millis(),
+            "resume client bootstrap completed"
+        );
         Ok(started)
     }
 
