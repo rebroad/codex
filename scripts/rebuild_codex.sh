@@ -711,7 +711,7 @@ install_binary() {
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   mkdir -p "${INSTALL_BIN_DIR}"
   short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-  local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}-${TIMESTAMP}"
+  local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
   if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
     rm -f "${INSTALL_BIN_DIR}/${name}"
