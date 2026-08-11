@@ -1145,6 +1145,7 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
             will_retry: false,
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            request_id: None,
         }),
         /*replay_kind*/ None,
     );
