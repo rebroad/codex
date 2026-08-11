@@ -1190,6 +1190,16 @@
         "error": {
           "$ref": "#/definitions/TurnError"
         },
+        "requestId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         },

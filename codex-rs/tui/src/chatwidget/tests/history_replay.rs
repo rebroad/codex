@@ -1030,6 +1030,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
             will_retry: true,
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            request_id: None,
         }),
         Some(ReplayKind::ThreadSnapshot),
     );
