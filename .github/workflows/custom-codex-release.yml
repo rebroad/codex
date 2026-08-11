@@ -34,6 +34,7 @@ jobs:
   prepare-release:
     outputs:
       package_version: ${{ steps.candidate.outputs.version }}
+      build_timestamp: ${{ steps.candidate.outputs.build_timestamp }}
       release_tag: ${{ steps.candidate.outputs.release_tag }}
       source_tag: ${{ steps.candidate.outputs.source_tag }}
     runs-on: ubuntu-24.04
@@ -78,8 +79,10 @@ jobs:
             echo "Release tag commit does not match checked-out commit: ${tag}" >&2
             exit 1
           }
+          build_timestamp="${candidate_suffix/./-}"
           echo "base_version=${base_version}" >> "${GITHUB_OUTPUT}"
           echo "version=${package_version}" >> "${GITHUB_OUTPUT}"
+          echo "build_timestamp=${build_timestamp}" >> "${GITHUB_OUTPUT}"
           echo "source_tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=codex-npm-v${package_version}" >> "${GITHUB_OUTPUT}"
 
@@ -124,6 +127,7 @@ jobs:
       RUST_BACKTRACE: "1"
       RUST_TOOLCHAIN: "1.95.0"
       ANDROID_NDK_VERSION: "28.2.13676358"
+      CODEX_BUILD_TIMESTAMP: ${{ needs.prepare-release.outputs.build_timestamp }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: inputs.reuse_artifacts_run_id == ''
