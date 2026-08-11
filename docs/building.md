@@ -174,8 +174,8 @@ codex-v0.148.0-alpha.5.9084226b62.202608082151
 ```
 
 ```bash
-# Create/push the source release tag, wait for CI to appear, print its run and
-# job URLs, and watch it.
+# Create/push the source release tag, wait for CI to appear, and print its run
+# and job URLs plus the command to watch it. The script does not watch CI.
 # No local cargo compilation or npm packaging is performed by this command.
 scripts/rebuild_codex.sh --release --start-github-release
 
