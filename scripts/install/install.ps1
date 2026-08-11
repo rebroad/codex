@@ -837,9 +837,9 @@ function Maybe-HandleConflictingInstall {
     $manager = $Conflict.Manager
 
     $uninstallArgs = if ($manager -eq "bun") {
-        @("remove", "-g", "@rebroad/codex")
+        @("remove", "-g", "@reb.ai/codex")
     } else {
-        @("uninstall", "-g", "@rebroad/codex")
+        @("uninstall", "-g", "@reb.ai/codex")
     }
     $uninstallCommand = if ($manager -eq "bun") { "bun" } else { "npm" }
 

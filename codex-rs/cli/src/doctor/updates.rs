@@ -24,7 +24,7 @@ use super::run_command;
 const VERSION_FILE_NAME: &str = "version.json";
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/rebroad/codex/releases/latest";
-const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@rebroad%2fcodex/latest";
+const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@reb.ai%2fcodex/latest";
 
 /// Builds the update-health row for the current installation.
 ///
@@ -132,10 +132,10 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 
 fn update_action_label(context: &InstallContext) -> &'static str {
     match &context.method {
-        InstallMethod::Npm => "npm install -g @rebroad/codex",
-        InstallMethod::Bun => "bun install -g @rebroad/codex",
-        InstallMethod::Pnpm => "pnpm add -g @rebroad/codex",
-        InstallMethod::Brew => "npm install -g @rebroad/codex",
+        InstallMethod::Npm => "npm install -g @reb.ai/codex",
+        InstallMethod::Bun => "bun install -g @reb.ai/codex",
+        InstallMethod::Pnpm => "pnpm add -g @reb.ai/codex",
+        InstallMethod::Brew => "npm install -g @reb.ai/codex",
         InstallMethod::Standalone { .. } => "standalone installer",
         InstallMethod::Other => "manual or unknown",
     }
@@ -225,21 +225,21 @@ mod tests {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            "npm install -g @rebroad/codex"
+            "npm install -g @reb.ai/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Pnpm,
                 package_layout: None,
             }),
-            "pnpm add -g @rebroad/codex"
+            "pnpm add -g @reb.ai/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Brew,
                 package_layout: None,
             }),
-            "npm install -g @rebroad/codex"
+            "npm install -g @reb.ai/codex"
         );
         assert_eq!(
             update_action_label(&InstallContext {
