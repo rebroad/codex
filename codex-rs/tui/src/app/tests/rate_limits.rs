@@ -96,6 +96,7 @@ fn deliver_usage_limit_error(app: &mut App) {
             will_retry: false,
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            request_id: None,
         }),
         /*replay_kind*/ None,
     );
