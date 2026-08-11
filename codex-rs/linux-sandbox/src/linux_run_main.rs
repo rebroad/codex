@@ -25,6 +25,7 @@ use std::time::Duration;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
+use crate::landlock::LocalIpcPolicy;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
@@ -141,6 +142,15 @@ pub struct LandlockCommand {
     #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
     pub allow_network_for_proxy: bool,
 
+    /// Internal: permit local TCP IPC after bubblewrap has isolated the
+    /// network namespace, for build-tool servers such as sccache and Cargo.
+    #[arg(
+        long = "allow-isolated-local-ipc",
+        hide = true,
+        default_value_t = false
+    )]
+    pub allow_isolated_local_ipc: bool,
+
     /// Internal route spec used for managed proxy routing in bwrap mode.
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
@@ -175,6 +185,7 @@ pub fn run_main() -> ! {
         use_legacy_landlock,
         apply_seccomp_then_exec,
         allow_network_for_proxy,
+        allow_isolated_local_ipc,
         proxy_route_spec,
         verify_fd_mounts,
         no_proc,
@@ -246,6 +257,11 @@ pub fn run_main() -> ! {
             /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
             proxy_routing_active,
+            if allow_isolated_local_ipc {
+                LocalIpcPolicy::IsolatedNetworkNamespace
+            } else {
+                LocalIpcPolicy::Disabled
+            },
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -292,6 +308,7 @@ pub fn run_main() -> ! {
             /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
             /*proxy_routed_network*/ false,
+            LocalIpcPolicy::Disabled,
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -319,6 +336,8 @@ pub fn run_main() -> ! {
             permission_profile: &permission_profile,
             allow_network_for_proxy,
             proxy_route_spec,
+            allow_isolated_local_ipc: !network_sandbox_policy.is_enabled()
+                && !allow_network_for_proxy,
             command,
         });
         run_bwrap_with_proc_fallback(
@@ -339,6 +358,7 @@ pub fn run_main() -> ! {
         /*apply_landlock_fs*/ true,
         allow_network_for_proxy,
         /*proxy_routed_network*/ false,
+        LocalIpcPolicy::Disabled,
     ) {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }
@@ -509,7 +529,7 @@ fn session_scoped_log_path_for_session(
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     })?;
 
-    Some(log_path_with_suffix(log_path, &format!("{session_id}")))
+    Some(log_path_with_suffix(log_path, session_id))
 }
 
 fn process_scoped_log_path(log_path: PathBuf) -> PathBuf {
@@ -1667,6 +1687,7 @@ struct InnerSeccompCommandArgs<'a> {
     permission_profile: &'a PermissionProfile,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
+    allow_isolated_local_ipc: bool,
     command: Vec<String>,
 }
 
@@ -1678,6 +1699,7 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         permission_profile,
         allow_network_for_proxy,
         proxy_route_spec,
+        allow_isolated_local_ipc,
         command,
     } = args;
     let current_exe = match std::env::current_exe() {
@@ -1709,6 +1731,9 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
             .unwrap_or_else(|| panic!("managed proxy mode requires a proxy route spec"));
         inner.push("--proxy-route-spec".to_string());
         inner.push(proxy_route_spec);
+    }
+    if allow_isolated_local_ipc {
+        inner.push("--allow-isolated-local-ipc".to_string());
     }
     inner.push("--".to_string());
     inner.extend(command);

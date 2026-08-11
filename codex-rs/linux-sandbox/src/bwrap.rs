@@ -395,11 +395,13 @@ fn create_filesystem_args(
             let root = writable_root.root.as_path();
             let explicitly_approved = file_system_sandbox_policy.entries.iter().any(|entry| {
                 entry.access.can_write()
-                    && matches!(&entry.path, FileSystemPath::Path { path } if path == &writable_root.root)
+                    && matches!(&entry.path, FileSystemPath::Path { path } if path
+                        .to_abs_path()
+                        .ok()
+                        .is_some_and(|path| path == writable_root.root))
             });
-            let is_protected_metadata_root = root
-                .file_name()
-                .is_some_and(is_protected_metadata_name);
+            let is_protected_metadata_root =
+                root.file_name().is_some_and(is_protected_metadata_name);
             if root.exists()
                 || (explicitly_approved
                     && !is_protected_metadata_root
@@ -469,6 +471,31 @@ fn create_filesystem_args(
     );
     unreadable_roots.sort();
     unreadable_roots.dedup();
+    let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
+
+    // A writable root with a protected read-only subpath behind a writable
+    // symlink cannot be mounted safely: bwrap would protect the symlink's
+    // current target, but the sandboxed process could retarget the symlink.
+    // Keep the sandbox usable by dropping write access to that root instead of
+    // aborting the entire command. The root remains subject to the policy's
+    // read mounts, so this is a conservative reduction of capability.
+    let candidate_allowed_write_paths = allowed_write_paths_for_roots(&writable_roots);
+    writable_roots.retain(|writable_root| {
+        let root = writable_root.root.as_path();
+        let symlink_target = canonical_target_if_symlinked_path(root);
+        let mount_root = symlink_target.as_deref().unwrap_or(root);
+        let read_only_subpaths = read_only_subpaths_for_writable_root(
+            writable_root,
+            root,
+            mount_root,
+            &unreadable_paths,
+            &missing_auto_metadata_read_only_project_root_subpaths,
+        );
+        !read_only_subpaths.iter().any(|subpath| {
+            first_writable_symlink_component_in_path(subpath, &candidate_allowed_write_paths)
+                .is_some()
+        })
+    });
 
     let args = if file_system_sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
@@ -549,15 +576,7 @@ fn create_filesystem_args(
         synthetic_mount_targets: Vec::new(),
         protected_create_targets: Vec::new(),
     };
-    let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
-    for writable_root in &writable_roots {
-        let root = writable_root.root.as_path();
-        allowed_write_paths.push(root.to_path_buf());
-        if let Some(target) = canonical_target_if_symlinked_path(root) {
-            allowed_write_paths.push(target);
-        }
-    }
-    let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
+    let allowed_write_paths = allowed_write_paths_for_roots(&writable_roots);
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
     // Mask only the unreadable ancestors that sit outside every writable root.
@@ -601,25 +620,16 @@ fn create_filesystem_args(
         bwrap_args.args.push(path_to_string(mount_root));
         bwrap_args.args.push(path_to_string(mount_root));
 
-        let mut read_only_subpaths: Vec<PathBuf> = writable_root
-            .read_only_subpaths
-            .iter()
-            .map(|path| path.as_path().to_path_buf())
-            .filter(|path| !unreadable_paths.contains(path))
-            .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
-            .collect();
-        let protected_metadata_names = writable_root.protected_metadata_names.clone();
-        append_metadata_path_masks_for_writable_root(
-            &mut read_only_subpaths,
+        let mut read_only_subpaths = read_only_subpaths_for_writable_root(
+            writable_root,
             root,
-            &protected_metadata_names,
+            mount_root,
+            &unreadable_paths,
+            &missing_auto_metadata_read_only_project_root_subpaths,
         );
-        if let Some(target) = &symlink_target {
-            read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, target);
-        }
         append_protected_create_targets_for_writable_root(
             &mut bwrap_args,
-            &protected_metadata_names,
+            &writable_root.protected_metadata_names,
             root,
             symlink_target.as_deref(),
             &read_only_subpaths,
@@ -659,6 +669,45 @@ fn create_filesystem_args(
     }
 
     Ok(bwrap_args)
+}
+
+fn allowed_write_paths_for_roots(writable_roots: &[WritableRoot]) -> Vec<PathBuf> {
+    writable_roots
+        .iter()
+        .flat_map(|writable_root| {
+            let root = writable_root.root.as_path();
+            let mut paths = vec![root.to_path_buf()];
+            if let Some(target) = canonical_target_if_symlinked_path(root) {
+                paths.push(target);
+            }
+            paths
+        })
+        .collect()
+}
+
+fn read_only_subpaths_for_writable_root(
+    writable_root: &WritableRoot,
+    root: &Path,
+    mount_root: &Path,
+    unreadable_paths: &HashSet<PathBuf>,
+    missing_auto_metadata_read_only_project_root_subpaths: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut read_only_subpaths: Vec<PathBuf> = writable_root
+        .read_only_subpaths
+        .iter()
+        .map(|path| path.as_path().to_path_buf())
+        .filter(|path| !unreadable_paths.contains(path))
+        .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
+        .collect();
+    append_metadata_path_masks_for_writable_root(
+        &mut read_only_subpaths,
+        root,
+        &writable_root.protected_metadata_names,
+    );
+    if mount_root != root {
+        read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, mount_root);
+    }
+    read_only_subpaths
 }
 
 fn append_protected_create_targets_for_writable_root(
@@ -1638,7 +1687,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn protected_symlinked_directory_subpaths_fail_closed() {
+    fn protected_symlinked_directory_subpaths_drop_writable_root() {
         let temp_dir = TempDir::new().expect("temp dir");
         let root = temp_dir.path().join("root");
         let agents_target = root.join("agents-target");
@@ -1647,23 +1696,23 @@ mod tests {
         std::os::unix::fs::symlink(&agents_target, &agents_link).expect("create symlinked .agents");
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
-        let agents_link_str = path_to_string(&agents_link);
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: root.into(),
+            path: root.clone().into(),
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
 
-        let err =
+        let args =
             create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect_err("protected symlinked subpath should fail closed");
-        let message = err.to_string();
+                .expect("protected symlinked subpath should not abort sandbox construction");
 
+        let root = path_to_string(&root);
         assert!(
-            message.contains("cannot enforce sandbox read-only path"),
-            "{message}"
+            !args
+                .args
+                .windows(3)
+                .any(|window| { window == ["--bind", root.as_str(), root.as_str()] })
         );
-        assert!(message.contains(&agents_link_str), "{message}");
     }
 
     #[cfg(unix)]
