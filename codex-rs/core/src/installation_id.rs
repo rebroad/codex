@@ -1,4 +1,5 @@
 use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Result;
 use std::io::Seek;
@@ -16,6 +17,13 @@ use uuid::Uuid;
 
 pub(crate) const INSTALLATION_ID_FILENAME: &str = "installation_id";
 
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    // Some Termux storage backends do not implement advisory file locking.
+    // Treat that limitation as best-effort locking so Codex can still persist
+    // its installation identity on those filesystems.
+    err.kind() == ErrorKind::Unsupported
+}
+
 pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<String> {
     let path = codex_home.join(INSTALLATION_ID_FILENAME);
     fs::create_dir_all(codex_home).await?;
@@ -29,7 +37,11 @@ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<Str
         }
 
         let mut file = options.open(&path)?;
-        file.lock()?;
+        if let Err(err) = file.lock()
+            && !is_unsupported_file_lock_error(&err)
+        {
+            return Err(err);
+        }
 
         #[cfg(unix)]
         {
@@ -66,11 +78,26 @@ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::INSTALLATION_ID_FILENAME;
+    use super::is_unsupported_file_lock_error;
     use super::resolve_installation_id;
     use core_test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    #[test]
+    fn unsupported_file_lock_classifier_accepts_unsupported_kind() {
+        assert!(is_unsupported_file_lock_error(&std::io::Error::from(
+            std::io::ErrorKind::Unsupported,
+        )));
+    }
+
+    #[test]
+    fn unsupported_file_lock_classifier_rejects_other_kinds() {
+        assert!(!is_unsupported_file_lock_error(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )));
+    }
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;

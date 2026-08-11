@@ -11,10 +11,25 @@ use super::PidCommandKind;
 use super::PidFileState;
 use super::PidLogTail;
 use super::PidRecord;
+use super::parse_proc_stat_start_time;
 use super::read_process_start_time;
 use super::read_stderr_log_tail;
 use super::stderr_log_file_for_pid_file;
 use super::try_lock_file;
+
+#[test]
+fn parses_android_proc_stat_start_time_after_process_name() {
+    let stat = "123 (codex) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22";
+    assert_eq!(
+        parse_proc_stat_start_time(stat, 123).expect("parse proc stat"),
+        "19"
+    );
+}
+
+#[test]
+fn rejects_malformed_android_proc_stat() {
+    assert!(parse_proc_stat_start_time("123 (codex", 123).is_err());
+}
 
 #[tokio::test]
 async fn locked_empty_pid_file_is_treated_as_active_reservation() {
