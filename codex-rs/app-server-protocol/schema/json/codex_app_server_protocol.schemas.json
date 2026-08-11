@@ -9727,6 +9727,16 @@
           "error": {
             "$ref": "#/definitions/v2/TurnError"
           },
+          "requestId": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RequestId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "threadId": {
             "type": "string"
           },
