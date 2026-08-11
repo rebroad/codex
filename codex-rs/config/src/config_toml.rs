@@ -148,7 +148,8 @@ pub struct OrchestratorFeatureToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RemoteControlToml {
-    /// Optional path prefix for per-process remote-control traffic captures.
+    /// Optional filename template for remote-control traffic captures. Each `$$`
+    /// expands to the app-server process ID.
     pub traffic_log: Option<AbsolutePathBuf>,
     /// Redaction policy for captured traffic. Defaults to `secrets`.
     pub traffic_log_redaction: Option<RemoteControlTrafficLogRedaction>,
