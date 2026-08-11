@@ -711,15 +711,66 @@ install_binary() {
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   mkdir -p "${INSTALL_BIN_DIR}"
   short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-  local name="codex-${version}-${short}-${TIMESTAMP}"
+  local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}-${TIMESTAMP}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
   if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
     rm -f "${INSTALL_BIN_DIR}/${name}"
     return 1
   fi
   ln -sfn "${name}" "${INSTALL_BIN_DIR}/codex"
+  cleanup_adjacent_same_size_binaries "${INSTALL_BIN_DIR}/${name}"
   echo "Installed ${INSTALL_BIN_DIR}/${name}"
   echo "Linked ${INSTALL_BIN_DIR}/codex"
+}
+
+cleanup_adjacent_same_size_binaries() {
+  python3 - "${INSTALL_BIN_DIR}" "${1}" <<'PY'
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+directory = sys.argv[1]
+current_path = os.path.abspath(sys.argv[2])
+filename_pattern = re.compile(r"^codex-.*-[0-9a-f]{10,12}[-+][0-9]{12}$")
+fuser = shutil.which("fuser")
+if fuser is None:
+    print("Skipping adjacent binary cleanup: fuser is unavailable.", file=sys.stderr)
+    raise SystemExit
+
+files = []
+for entry in os.scandir(directory):
+    if not entry.is_file(follow_symlinks=False) or not filename_pattern.fullmatch(entry.name):
+        continue
+    try:
+        stat = entry.stat(follow_symlinks=False)
+    except OSError as error:
+        print(f"Skipping {entry.path}: could not stat file: {error}", file=sys.stderr)
+        continue
+    files.append((stat.st_mtime_ns, stat.st_size, entry.path))
+
+files.sort()
+start = 0
+while start < len(files):
+    end = start + 1
+    while end < len(files) and files[end][1] == files[start][1]:
+        end += 1
+    for _, _, path in files[start : end - 1]:
+        if os.path.abspath(path) == current_path:
+            continue
+        usage = subprocess.run([fuser, "-s", path], check=False).returncode
+        if usage != 1:
+            print(f"Keeping adjacent binary in use or uncheckable: {path}", file=sys.stderr)
+            continue
+        try:
+            os.unlink(path)
+        except OSError as error:
+            print(f"Could not remove adjacent binary {path}: {error}", file=sys.stderr)
+        else:
+            print(f"Removed older adjacent binary {path}")
+    start = end
+PY
 }
 
 install_code_mode_host() {
