@@ -559,22 +559,7 @@ cargo_build() {
     target=""
   fi
 
-  local -a env_args=()
-  if [[ "${target_mode}" == native ]]; then
-    # Cross-build setup exports generic compiler selectors. Do not let those
-    # selectors leak into a later native build in the same invocation.
-    env_args+=(
-      -u CC
-      -u CXX
-      -u AR
-      -u RANLIB
-      -u TARGET_CC
-      -u TARGET_CXX
-      -u TARGET_AR
-      -u TARGET_RANLIB
-    )
-  fi
-  env_args+=(
+  local -a env_args=(
     CARGO_TARGET_DIR="${target_dir}"
     RUSTUP_DISABLE_SELF_UPDATE=1
     CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
