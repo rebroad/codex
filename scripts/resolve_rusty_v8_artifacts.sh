@@ -88,10 +88,34 @@ mkdir -p "${OUTPUT_DIR}"
 [[ -s "${BINDING_PATH}" ]] || curl -fsSL "${BASE_URL}/${BINDING_NAME}" -o "${BINDING_PATH}"
 [[ -s "${CHECKSUMS_PATH}" ]] || curl -fsSL "${BASE_URL}/${CHECKSUMS_NAME}" -o "${CHECKSUMS_PATH}"
 
+checksum_lines="$(tr -d '\r' < "${CHECKSUMS_PATH}")"
+checksum_count=0
+archive_checksum_seen=false
+binding_checksum_seen=false
+while read -r digest name extra; do
+  [[ -n "${digest:-}" ]] || continue
+  [[ -z "${extra:-}" ]] || { echo "Invalid checksum line in ${CHECKSUMS_PATH}" >&2; exit 1; }
+  name="${name#\*}"
+  [[ "${digest}" =~ ^[0-9a-fA-F]{64}$ ]] || {
+    echo "Invalid checksum digest in ${CHECKSUMS_PATH}: ${digest}" >&2
+    exit 1
+  }
+  case "${name}" in
+    "${ARCHIVE_NAME}") archive_checksum_seen=true ;;
+    "${BINDING_NAME}") binding_checksum_seen=true ;;
+    *) echo "Unexpected checksum artifact in ${CHECKSUMS_PATH}: ${name}" >&2; exit 1 ;;
+  esac
+  checksum_count=$((checksum_count + 1))
+done <<< "${checksum_lines}"
+[[ "${checksum_count}" -eq 2 && "${archive_checksum_seen}" == true && "${binding_checksum_seen}" == true ]] || {
+  echo "Expected exactly ${ARCHIVE_NAME} and ${BINDING_NAME} in ${CHECKSUMS_PATH}" >&2
+  exit 1
+}
+
 if command -v sha256sum >/dev/null 2>&1; then
-  (cd "${OUTPUT_DIR}" && tr -d '\r' < "${CHECKSUMS_PATH}" | sha256sum -c - >&2)
+  (cd "${OUTPUT_DIR}" && printf '%s\n' "${checksum_lines}" | sha256sum -c - >&2)
 else
-  (cd "${OUTPUT_DIR}" && tr -d '\r' < "${CHECKSUMS_PATH}" | shasum -a 256 -c - >&2)
+  (cd "${OUTPUT_DIR}" && printf '%s\n' "${checksum_lines}" | shasum -a 256 -c - >&2)
 fi
 
 printf 'RUSTY_V8_ARCHIVE=%q\n' "${ARCHIVE_PATH}"
