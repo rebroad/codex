@@ -95,11 +95,36 @@ mkdir -p "${OUTPUT_DIR}"
 download_release_asset() {
   local name="$1"
   local path="$2"
+  local partial_path="${path}.part"
 
-  curl --fail --silent --show-error --location \
-    --retry 5 --retry-all-errors --retry-delay 2 \
+  rm -f "${partial_path}"
+  if curl --fail --silent --show-error --location \
+    --retry 8 --retry-all-errors --retry-delay 5 --retry-max-time 180 \
     --connect-timeout 20 --max-time 300 \
-    "${BASE_URL}/${name}" -o "${path}"
+    "${BASE_URL}/${name}" -o "${partial_path}"; then
+    mv -- "${partial_path}" "${path}"
+    return 0
+  fi
+  rm -f "${partial_path}"
+
+  # Release downloads occasionally fail at GitHub's CDN while the release API
+  # remains available. Use the API as a transport fallback, but retain the
+  # checksum verification below as the trust boundary for every artifact.
+  if command -v gh >/dev/null 2>&1 && [[ -n "${GH_TOKEN:-}" ]]; then
+    local asset_id
+    asset_id="$(gh api "repos/${RELEASE_REPO}/releases/tags/${RELEASE_TAG}" \
+      --jq ".assets[] | select(.name == \"${name}\") | .id")" || asset_id=""
+    if [[ -n "${asset_id}" ]] && gh api \
+      --header 'Accept: application/octet-stream' \
+      "repos/${RELEASE_REPO}/releases/assets/${asset_id}" > "${partial_path}"; then
+      mv -- "${partial_path}" "${path}"
+      return 0
+    fi
+    rm -f "${partial_path}"
+  fi
+
+  echo "Unable to download Rusty V8 release asset ${name} from ${RELEASE_REPO}:${RELEASE_TAG}" >&2
+  return 1
 }
 
 [[ -s "${CHECKSUMS_PATH}" ]] || download_release_asset "${CHECKSUMS_NAME}" "${CHECKSUMS_PATH}"
