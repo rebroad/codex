@@ -44,15 +44,21 @@ jobs:
           # Release tags must match the version in Cargo.toml.
           # Keep this pattern in sync with VERSION_RE in
           # .github/scripts/publish_r2_release.py.
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]] \
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?)(\.[0-9a-f]{10}\.[0-9]{12})?)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           tag_ver="${GITHUB_REF_NAME#rust-v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
-          [[ "${tag_ver}" == "${cargo_ver}" ]] \
-            || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+          if [[ "${tag_ver}" != "${cargo_ver}" ]]; then
+            candidate_suffix="${tag_ver#${cargo_ver}.}"
+            [[ "${tag_ver}" == "${cargo_ver}."* && "${candidate_suffix}" =~ ^[0-9a-f]{10}\.[0-9]{12}$ ]] \
+              || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+            commit="$(git rev-parse --short=10 HEAD)"
+            [[ "${candidate_suffix%%.*}" == "${commit}" ]] \
+              || { echo "❌  Candidate tag commit does not match HEAD"; exit 1; }
+          fi
 
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
@@ -1418,7 +1424,7 @@ jobs:
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
-          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+(\.[0-9]+)?$ ]]; then
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+(\.[0-9]+)?(\.[0-9a-f]{10}\.[0-9]{12})?$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
           else
