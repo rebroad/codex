@@ -144,17 +144,13 @@ has_local_npm_platform_archive() {
 }
 
 find_reusable_github_run() {
-  local tag="${1}" run_id artifact_count
+  local tag="${1}" run_id
   while read -r run_id; do
     [[ -n "${run_id}" ]] || continue
-    artifact_count="$(gh api "repos/${FORK_RELEASE_REPO}/actions/runs/${run_id}/artifacts?per_page=100" \
-      --jq '[.artifacts[] | select(.expired == false and (.name | startswith("npm-source-"))) | .name] | unique | length')"
-    if [[ "${artifact_count}" == 8 ]]; then
-      echo "${run_id}"
-      return 0
-    fi
+    echo "${run_id}"
+    return 0
   done < <(gh run list --repo "${FORK_RELEASE_REPO}" \
-    --workflow custom-codex-release.yml --status completed --limit 50 \
+    --workflow rust-release.yml --status completed --limit 50 \
     --json databaseId,headBranch,event,conclusion \
     | jq -r --arg tag "${tag}" '.[] | select(.event == "push" and .conclusion == "success" and .headBranch == $tag) | .databaseId')
   return 1
@@ -177,37 +173,20 @@ show_github_run() {
 start_github_release() {
   require_cmd gh
   require_cmd jq
-  local release_version tag run_info run_id run_url workflow_ref dispatch_started
-  release_version="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
-  tag="codex-v${release_version}"
-  echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/custom-codex-release.yml" >&2
+  local release_version tag run_info run_id run_url
+  release_version="${VERSION}"
+  tag="rust-v${release_version}"
+  echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/rust-release.yml" >&2
   if [[ "${SKIP_BUILD}" == true ]]; then
-    workflow_ref="$(git -C "${SOURCE_REPO}" branch --show-current)"
-    [[ -n "${workflow_ref}" ]] || die "--skip-build requires a checked-out branch"
     if [[ "${DRY_RUN}" == true ]]; then
-      echo "Would dispatch GitHub CI for ${tag} using the latest completed artifact run." >&2
+      echo "Would locate the latest successful rust-release run for ${tag}." >&2
       return 0
     fi
     git -C "${SOURCE_REPO}" ls-remote --exit-code origin "refs/tags/${tag}" >/dev/null \
       || die "release tag ${tag} does not exist; --skip-build can only retry an existing tagged build"
     run_id="$(find_reusable_github_run "${tag}")" \
-      || die "no completed ${tag} run has all eight reusable npm source artifacts"
-    echo "Reusing artifacts from GitHub CI run: https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}" >&2
-    dispatch_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    gh workflow run custom-codex-release.yml --repo "${FORK_RELEASE_REPO}" --ref "${workflow_ref}" \
-      -f "tag=${tag}" -f "reuse_artifacts_run_id=${run_id}" -f publish_npm=true
-    echo "Waiting for the fast-path GitHub workflow run..." >&2
-    run_info=""
-    for _ in {1..30}; do
-      run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
-        --workflow custom-codex-release.yml --event workflow_dispatch --limit 20 \
-        --json databaseId,url,createdAt \
-        | jq -r --arg started "${dispatch_started}" '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | .[0] | [.databaseId, .url] | @tsv')"
-      read -r run_id run_url <<<"${run_info}"
-      [[ -n "${run_id}" ]] && break
-      sleep 2
-    done
-    [[ -n "${run_id}" ]] || die "fast-path workflow was dispatched but did not appear"
+      || die "no successful rust-release run found for ${tag}"
+    run_url="https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}"
     show_github_run "${run_id}" "${run_url}"
     return 0
   fi
@@ -221,7 +200,7 @@ start_github_release() {
   run_info=""
   for _ in {1..30}; do
     run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
-      --workflow custom-codex-release.yml --limit 20 --json databaseId,headBranch,url \
+      --workflow rust-release.yml --limit 20 --json databaseId,headBranch,url \
       | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag)] | .[0] | [.databaseId, .url] | @tsv')"
     read -r run_id run_url <<<"${run_info}"
     [[ -n "${run_id}" ]] && break
