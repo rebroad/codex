@@ -1042,6 +1042,7 @@ run_in_docker_buster() {
     -e DEBIAN_FRONTEND=noninteractive
     "${maybe_user_args[@]}"
     -e CODEX_ARMV7_IN_DOCKER=1
+    -e CODEX_ALLOW_SOURCE_BUILD=1
     -e CODEX_BUILD_COMMIT_SHORT="${BUILD_COMMIT_SHORT}"
     -e CODEX_BUILD_VERSION_SUFFIX_FIXED="${BUILD_VERSION_SUFFIX_FIXED}"
     -e CARGO_TARGET_DIR="${container_cargo_target_dir}"
