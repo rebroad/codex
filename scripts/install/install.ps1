@@ -84,7 +84,7 @@ function Assert-ValidReleaseVersion {
         [string]$Version
     )
 
-    if ($Version -cne "latest" -and $Version -cne "latest-alpha" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?$") {
+    if ($Version -cne "latest" -and $Version -cne "latest-alpha" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?(?:\.[0-9a-f]{10}\.[0-9]{12})?$") {
         throw "Invalid Codex release version: $Version. Expected latest, alpha, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]."
     }
 }

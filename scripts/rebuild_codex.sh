@@ -174,7 +174,11 @@ start_github_release() {
   require_cmd gh
   require_cmd jq
   local release_version tag run_info run_id run_url
-  release_version="${VERSION}"
+  if [[ "${VERSION}" == *-alpha* ]]; then
+    release_version="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
+  else
+    release_version="${VERSION}"
+  fi
   tag="rust-v${release_version}"
   echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/rust-release.yml" >&2
   if [[ "${SKIP_BUILD}" == true ]]; then
