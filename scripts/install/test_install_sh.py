@@ -79,6 +79,40 @@ class InstallShTest(unittest.TestCase):
         )
         self.assertIn(f"Resolved version: {VERSION}", result.stdout)
 
+    def test_alpha_alias_resolves_latest_alpha_release(self) -> None:
+        alpha_version = "0.145.0-alpha.1"
+        result, requests = run_installer(
+            "alpha", metadata_json=alpha_release_metadata(alpha_version)
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{alpha_version}/codex-package_SHA256SUMS",
+            ],
+        )
+        self.assertIn(f"Resolved version: {alpha_version}", result.stdout)
+
+    def test_latest_alpha_alias_resolves_latest_alpha_release(self) -> None:
+        alpha_version = "0.145.0-alpha.1"
+        result, requests = run_installer(
+            "latest-alpha", metadata_json=alpha_release_metadata(alpha_version)
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{alpha_version}/codex-package_SHA256SUMS",
+            ],
+        )
+        self.assertIn(f"Resolved version: {alpha_version}", result.stdout)
+
     def test_compact_metadata_is_independent_of_field_order(self) -> None:
         result, requests = run_installer(
             "latest", metadata_json=release_metadata(compact=True, reorder=True)
@@ -824,6 +858,13 @@ def release_metadata(*, compact: bool = False, reorder: bool = False) -> str:
         indent=None if compact else 2,
         separators=separators,
     )
+
+
+def alpha_release_metadata(version: str) -> str:
+    metadata = json.loads(release_metadata())
+    metadata["tag_name"] = "latest-alpha"
+    metadata["name"] = version
+    return json.dumps(metadata)
 
 
 def asset_metadata(name: str, digest: str, *, reorder: bool) -> dict[str, str]:
