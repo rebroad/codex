@@ -72,12 +72,6 @@ if [[ "${RELEASE_REPO}" == auto ]]; then
   esac
 fi
 V8_TARGET="${TARGET}"
-if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
-  # Rusty V8's ARMv7 archive is libc-independent and is currently published
-  # under the GNU target name; the final Codex binary is still linked against
-  # musl.
-  V8_TARGET=armv7-unknown-linux-gnueabihf
-fi
 RELEASE_TAG="${RELEASE_TAG:-rusty-v8-v${V8_VERSION}}"
 if [[ -z "${PROFILE}" ]]; then
   case "${TARGET}" in
