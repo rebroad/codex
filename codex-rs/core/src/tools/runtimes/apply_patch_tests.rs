@@ -359,6 +359,7 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
             windows_sandbox_private_desktop: false,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,
+            debug_log_id: None,
         })
     );
 }
