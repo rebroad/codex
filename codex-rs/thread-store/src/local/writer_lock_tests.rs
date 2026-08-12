@@ -23,6 +23,10 @@ fn writer_locks_reject_competing_owners_and_release_their_files() {
         .join(WRITER_LOCK_DIR)
         .join(format!("{thread_id}.lock"));
     assert!(lock_path.exists());
+    assert_eq!(
+        fs::read_to_string(&lock_path).expect("read writer lock metadata"),
+        format!("pid={}\n", std::process::id())
+    );
 
     let err = match secondary.acquire(thread_id) {
         Ok(_) => panic!("competing owner should fail"),

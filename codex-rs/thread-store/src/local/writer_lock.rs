@@ -2,6 +2,7 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -77,6 +78,21 @@ impl WriterLockCoordinator {
                 });
             }
         }
+
+        file.set_len(0).map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to write thread writer lock {}: {err}",
+                path.display()
+            ),
+        })?;
+        writeln!(&file, "pid={}", std::process::id()).map_err(|err| {
+            ThreadStoreError::Internal {
+                message: format!(
+                    "failed to write thread writer lock {}: {err}",
+                    path.display()
+                ),
+            }
+        })?;
 
         drop(coordination_lock);
         Ok(WriterLockGuard {
