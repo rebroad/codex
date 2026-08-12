@@ -1304,6 +1304,10 @@ jobs:
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
           else
+            # Stable native npm packages, including ARMv7 and Android, are
+            # assembled by custom-codex-release.yml. Keeping stable npm
+            # publication there prevents this workflow from advancing the
+            # root package before those two additional platform packages exist.
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
           fi
