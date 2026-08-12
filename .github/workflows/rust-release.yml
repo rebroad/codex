@@ -570,10 +570,12 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-15-intel
             prefix: macos_x86_64
-          - platform: linux-armv7
+          - package: linux-armv7
+            package_type: npm
             target: armv7-unknown-linux-gnueabihf
             runner: ubuntu-24.04
-          - platform: android-arm64
+          - package: android-arm64
+            package_type: npm
             target: aarch64-linux-android
             runner: ubuntu-24.04
     env:
@@ -622,7 +624,7 @@ jobs:
           path: voice-unsigned-${{ matrix.target }}.tar.gz
           if-no-files-found: error
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-        if: matrix.platform != ''
+        if: matrix.package_type == 'npm'
         with:
           targets: ${{ matrix.target }}
       - name: Build ARMv7 binary in Debian Buster
@@ -658,7 +660,7 @@ jobs:
           echo "ANDROID_NDK_HOME=${ndk_home}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=${ndk_home}" >> "$GITHUB_ENV"
       - name: Configure Rusty V8 artifacts
-        if: matrix.platform != ''
+        if: matrix.package_type == 'npm'
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
@@ -684,7 +686,7 @@ jobs:
           cd codex-rs
           cargo update -p pagable
       - name: Build and package fork npm target
-        if: matrix.platform != ''
+        if: matrix.package_type == 'npm'
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -712,13 +714,13 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/dist/npm-fork"
           python3 "${GITHUB_WORKSPACE}/codex-cli/scripts/build_npm_package.py" \
             --release-version "${VERSION}" \
-            --package "codex-${{ matrix.platform }}" \
+            --package "codex-${{ matrix.package }}" \
             --vendor-src "${vendor_dir}" \
-            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${{ matrix.platform }}-${VERSION}.tgz"
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${{ matrix.package }}-${VERSION}.tgz"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: matrix.platform != ''
+        if: matrix.package_type == 'npm'
         with:
-          name: fork-npm-${{ matrix.platform }}
+          name: fork-npm-${{ matrix.package }}
           path: dist/npm-fork/*.tgz
           if-no-files-found: error
 
