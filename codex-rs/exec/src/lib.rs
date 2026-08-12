@@ -425,6 +425,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         default_zsh_path: None,
         base_instructions: None,
+        bare_prompt: None,
         developer_instructions: None,
         personality: None,
         compact_prompt: None,

@@ -53,6 +53,15 @@ impl Default for Prompt {
 }
 
 impl Prompt {
+    /// Removes Codex scaffolding from a prompt while preserving its user input
+    /// and response-shape settings.
+    pub(crate) fn without_scaffolding(mut self) -> Self {
+        self.tools = Arc::default();
+        self.parallel_tool_calls = false;
+        self.base_instructions = BaseInstructions::default();
+        self
+    }
+
     pub(crate) fn get_formatted_input_for_request(
         &self,
         use_responses_lite: bool,
