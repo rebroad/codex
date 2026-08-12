@@ -60,10 +60,15 @@ pub(super) async fn run_remote_compact_attempt(
         .then(|| history.raw_items().cloned().collect());
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = &step_context.tool_router;
+    let bare_prompt = turn_context.config.bare_prompt;
     let prompt = Prompt {
         input: prompt_input,
-        tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        tools: if bare_prompt {
+            Vec::new().into()
+        } else {
+            tool_router.model_visible_specs()
+        },
+        parallel_tool_calls: !bare_prompt && turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         output_schema: None,
         output_schema_strict: true,

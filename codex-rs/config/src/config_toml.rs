@@ -255,6 +255,9 @@ pub struct ConfigToml {
     /// System instructions.
     pub instructions: Option<String>,
 
+    /// Send only the user prompt, without Codex scaffolding or tools.
+    pub bare_prompt: Option<bool>,
+
     /// Developer instructions inserted as a `developer` role message.
     #[serde(default)]
     pub developer_instructions: Option<String>,

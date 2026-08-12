@@ -74,11 +74,16 @@ pub(super) async fn run_remote_compact_v2_attempt(
         .map(|envelope| (envelope.item, envelope.metadata))
         .unzip();
     let tool_router = &step_context.tool_router;
+    let bare_prompt = turn_context.config.bare_prompt;
     input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {
         input,
-        tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        tools: if bare_prompt {
+            Vec::new().into()
+        } else {
+            tool_router.model_visible_specs()
+        },
+        parallel_tool_calls: !bare_prompt && turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         output_schema: None,
         output_schema_strict: true,
