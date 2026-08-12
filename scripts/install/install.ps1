@@ -60,8 +60,12 @@ function Normalize-Version {
         [string]$RawVersion
     )
 
-    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -eq "latest" -or $RawVersion -eq "latest-alpha") {
+    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -eq "latest") {
         return "latest"
+    }
+
+    if ($RawVersion -eq "alpha" -or $RawVersion -eq "latest-alpha") {
+        return "latest-alpha"
     }
 
     if ($RawVersion.StartsWith("rust-v")) {
@@ -81,7 +85,7 @@ function Assert-ValidReleaseVersion {
     )
 
     if ($Version -cne "latest" -and $Version -cne "latest-alpha" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?$") {
-        throw "Invalid Codex release version: $Version. Expected latest, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]."
+        throw "Invalid Codex release version: $Version. Expected latest, alpha, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]."
     }
 }
 
