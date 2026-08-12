@@ -202,6 +202,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      AZURE_ARTIFACT_SIGNING_ENABLED: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID != '' && secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID != '' }}
     defaults:
       run:
         working-directory: codex-rs
@@ -256,6 +258,7 @@ jobs:
       - name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
+          enabled: ${{ env.AZURE_ARTIFACT_SIGNING_ENABLED }}
           target: ${{ matrix.target }}
           binaries: ${{ env.WINDOWS_BINARIES }}
           client-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
