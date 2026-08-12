@@ -14,6 +14,10 @@ use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions;
+use codex_login::build_authorize_url;
+use codex_login::complete_oauth_login_with_callback_url;
+use codex_login::generate_oauth_state;
+use codex_login::generate_pkce;
 use codex_login::is_workload_identity_selected;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
@@ -42,6 +46,8 @@ const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
 const ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE: &str =
     "Access token login is disabled. Use API key login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const PENDING_LOGIN_FILENAME: &str = "login-pending.json";
+const PENDING_LOGIN_MAX_AGE_SECONDS: u64 = 15 * 60;
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -132,6 +138,175 @@ async fn clear_existing_auth_before_login(
     .await
     {
         tracing::warn!("failed to clear existing auth before login: {err}");
+    }
+}
+
+fn pending_login_path(config: &Config) -> PathBuf {
+    config.codex_home.join(PENDING_LOGIN_FILENAME).to_path_buf()
+}
+
+fn write_pending_login(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    serde_json::to_writer_pretty(file, value).map_err(std::io::Error::other)
+}
+
+fn read_pending_login(path: &Path) -> std::io::Result<serde_json::Value> {
+    let file = std::fs::File::open(path)?;
+    serde_json::from_reader(file).map_err(std::io::Error::other)
+}
+
+fn pending_login_is_expired(value: &serde_json::Value) -> bool {
+    let created_at = value
+        .get("created_at")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(u64::MAX);
+    now.saturating_sub(created_at) > PENDING_LOGIN_MAX_AGE_SECONDS
+}
+
+/// Start a browser login without keeping a process alive for the user interaction.
+pub async fn run_login_start(cli_config_overrides: CliConfigOverrides, json: bool) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    if !config
+        .auth_config()
+        .is_login_method_allowed(ForcedLoginMethod::Chatgpt)
+    {
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+
+    clear_existing_auth_before_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+        &config.auth_route_config(),
+    )
+    .await;
+    let opts = ServerOptions::new(
+        config.codex_home.to_path_buf(),
+        CLIENT_ID.to_string(),
+        config.auth_config().effective_chatgpt_workspaces(),
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+        config.auth_route_config(),
+    );
+    let pkce = generate_pkce();
+    let state = generate_oauth_state();
+    let redirect_uri = format!("http://localhost:{}/auth/callback", opts.port);
+    let authorization_url = build_authorize_url(
+        &opts.issuer,
+        &opts.client_id,
+        &redirect_uri,
+        &pkce,
+        &state,
+        opts.forced_chatgpt_workspace_id.as_deref(),
+    );
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let pending = serde_json::json!({
+        "created_at": created_at,
+        "issuer": opts.issuer,
+        "client_id": opts.client_id,
+        "forced_chatgpt_workspace_id": opts.forced_chatgpt_workspace_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "code_verifier": pkce.code_verifier,
+        "code_challenge": pkce.code_challenge,
+    });
+    if let Err(err) = write_pending_login(&pending_login_path(&config), &pending) {
+        eprintln!("Error saving pending login: {err}");
+        std::process::exit(1);
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "authorizationUrl": authorization_url,
+                "expiresInSeconds": PENDING_LOGIN_MAX_AGE_SECONDS,
+            })
+        );
+    } else {
+        println!("{authorization_url}");
+    }
+    std::process::exit(0);
+}
+
+/// Complete a previously started browser login using its pasted callback URL.
+pub async fn run_login_complete(
+    cli_config_overrides: CliConfigOverrides,
+    callback_url: String,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    let path = pending_login_path(&config);
+    let pending = match read_pending_login(&path) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("No pending login was found: {err}");
+            std::process::exit(1);
+        }
+    };
+    if pending_login_is_expired(&pending) {
+        let _ = std::fs::remove_file(&path);
+        eprintln!("The pending login has expired. Run `codex login start` again.");
+        std::process::exit(1);
+    }
+    let required = |name: &str| -> String {
+        pending
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                eprintln!("Pending login is missing {name}");
+                std::process::exit(1);
+            })
+    };
+    let mut opts = ServerOptions::new(
+        config.codex_home.to_path_buf(),
+        required("client_id"),
+        pending
+            .get("forced_chatgpt_workspace_id")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+        config.auth_route_config(),
+    );
+    opts.issuer = required("issuer");
+    let pkce = codex_login::PkceCodes {
+        code_verifier: required("code_verifier"),
+        code_challenge: required("code_challenge"),
+    };
+    let result = complete_oauth_login_with_callback_url(
+        &opts,
+        &callback_url,
+        &required("redirect_uri"),
+        &required("state"),
+        &pkce,
+    )
+    .await;
+    match result {
+        Ok(()) => {
+            let _ = std::fs::remove_file(path);
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error completing login: {err}");
+            std::process::exit(1);
+        }
     }
 }
 
