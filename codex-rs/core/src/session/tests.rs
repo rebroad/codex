@@ -6156,6 +6156,34 @@ pub(crate) async fn build_world_state_from_turn_context(
         .expect("world state should build")
 }
 
+#[tokio::test]
+async fn bare_prompt_has_no_contextual_instructions_or_visible_tools() {
+    let (session, turn_context) = make_session_and_context().await;
+    let mut turn_context = turn_context;
+    Arc::make_mut(&mut turn_context.config).bare_prompt = true;
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+
+    let initial_context = session
+        .build_initial_context_with_world_state(&turn_context, &world_state)
+        .await;
+    let prompt = super::turn::build_prompt(
+        Vec::new(),
+        &step_context.tool_router,
+        &turn_context,
+        BaseInstructions {
+            text: String::new(),
+            provenance: None,
+        },
+    );
+
+    assert!(initial_context.is_empty());
+    assert!(prompt.base_instructions.text.is_empty());
+    assert!(prompt.tools.is_empty());
+    assert!(!prompt.parallel_tool_calls);
+}
+
 // todo: use online model info
 pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let (tx_event, _rx_event) = async_channel::unbounded();

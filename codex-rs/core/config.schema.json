@@ -5719,6 +5719,10 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "bare_prompt": {
+      "description": "Send only the user prompt, without Codex scaffolding or tools.",
+      "type": "boolean"
+    },
     "browser_use": {
       "$ref": "#/definitions/BrowserUseConfigToml"
     },

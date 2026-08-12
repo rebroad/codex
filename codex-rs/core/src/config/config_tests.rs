@@ -373,6 +373,22 @@ async fn goal_max_token_budget_requires_positive_integer() {
     }
 }
 
+#[tokio::test]
+async fn bare_prompt_cli_override_is_loaded() {
+    let codex_home = tempdir().expect("tempdir");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "bare_prompt".to_string(),
+            toml::Value::Boolean(true),
+        )])
+        .build()
+        .await
+        .expect("bare_prompt override should load");
+
+    assert!(config.bare_prompt);
+}
+
 #[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
