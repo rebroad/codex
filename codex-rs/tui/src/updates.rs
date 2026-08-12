@@ -61,11 +61,14 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 }
 
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/rebroad/codex/releases/latest";
+const LATEST_ALPHA_RELEASE_URL: &str =
+    "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha";
 const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@reb.ai%2fcodex/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
     tag_name: String,
+    name: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -99,7 +102,7 @@ async fn check_for_update(
         Some(UpdateAction::NpmGlobalLatest)
         | Some(UpdateAction::BunGlobalLatest)
         | Some(UpdateAction::PnpmGlobalLatest) => {
-            let latest_version = fetch_latest_github_release_version(&client_pool).await?;
+            let latest_version = fetch_latest_github_release_version(&client_pool, false).await?;
             let package_info = client_pool
                 .get(npm_registry::PACKAGE_URL)
                 .headers(default_headers())
@@ -112,7 +115,12 @@ async fn check_for_update(
             latest_version
         }
         Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
-            fetch_latest_github_release_version(&client_pool).await?
+            fetch_latest_github_release_version(&client_pool, false).await?
+        }
+        Some(UpdateAction::BrewUpgradeAlpha)
+        | Some(UpdateAction::StandaloneUnixAlpha)
+        | Some(UpdateAction::StandaloneWindowsAlpha) => {
+            fetch_latest_github_release_version(&client_pool, true).await?
         }
     };
 
@@ -142,25 +150,38 @@ fn current_update_source(action: Option<UpdateAction>) -> &'static str {
         | Some(UpdateAction::PnpmGlobalLatest)
         | Some(UpdateAction::BrewUpgrade) => "npm",
         Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
-            "github-release"
+            "github-release-stable"
         }
+        Some(UpdateAction::BrewUpgradeAlpha)
+        | Some(UpdateAction::StandaloneUnixAlpha)
+        | Some(UpdateAction::StandaloneWindowsAlpha) => "github-release-alpha",
     }
 }
 
 async fn fetch_latest_github_release_version(
     client_pool: &RouteAwareClientPool,
+    alpha: bool,
 ) -> anyhow::Result<String> {
     let ReleaseInfo {
         tag_name: latest_tag_name,
+        name,
     } = client_pool
-        .get(LATEST_RELEASE_URL)
+        .get(if alpha {
+            LATEST_ALPHA_RELEASE_URL
+        } else {
+            LATEST_RELEASE_URL
+        })
         .headers(default_headers())
         .send()
         .await?
         .error_for_status()?
         .json::<ReleaseInfo>()
         .await?;
-    extract_version_from_latest_tag(&latest_tag_name)
+    if alpha {
+        name.ok_or_else(|| anyhow::anyhow!("Alpha release did not include a release name"))
+    } else {
+        extract_version_from_latest_tag(&latest_tag_name)
+    }
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.
