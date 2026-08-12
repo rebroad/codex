@@ -817,32 +817,36 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 /// Run the update action and print the result.
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
-    let cmd_str = action.command_str();
+    let cmd_str = action.display_command_str();
     println!("Updating Codex via `{cmd_str}`...");
     let status = {
         #[cfg(windows)]
         {
             let (cmd, args) = action.command_args();
-            let cmd = if action == UpdateAction::StandaloneWindows {
-                // These args contain PowerShell metacharacters, so do not let
-                // PATHEXT select a batch shim for this action.
-                "powershell.exe"
+            if matches!(
+                action,
+                UpdateAction::StandaloneWindows | UpdateAction::StandaloneWindowsAlpha
+            ) {
+                // Run the standalone PowerShell installer with PowerShell
+                // itself. Routing this through `cmd.exe /C` would parse
+                // PowerShell metacharacters like `|` before PowerShell sees
+                // the installer command.
+                std::process::Command::new(cmd).args(args).status()?
             } else {
-                cmd
-            };
-            let path_env =
-                std::env::var_os("PATH").ok_or_else(|| anyhow::anyhow!("PATH is not set"))?;
-            let command_path = resolve_windows_update_command_from_path(cmd, &path_env)?;
-            // Do not let a project-local command or package-manager config
-            // influence the updater after the user accepts the update prompt.
-            let update_cwd = tempfile::tempdir()?;
-            // Resolve through PATH without consulting the project cwd. When
-            // this returns a .cmd/.bat shim, std::process::Command routes the
-            // absolute path through the system command processor.
-            std::process::Command::new(command_path)
-                .args(args)
-                .current_dir(update_cwd.path())
-                .status()?
+                let path_env =
+                    std::env::var_os("PATH").ok_or_else(|| anyhow::anyhow!("PATH is not set"))?;
+                let command_path = resolve_windows_update_command_from_path(cmd, &path_env)?;
+                // Do not let a project-local command or package-manager config
+                // influence the updater after the user accepts the update prompt.
+                let update_cwd = tempfile::tempdir()?;
+                // Resolve through PATH without consulting the project cwd. When
+                // this returns a .cmd/.bat shim, std::process::Command routes the
+                // absolute path through the system command processor.
+                std::process::Command::new(command_path)
+                    .args(args)
+                    .current_dir(update_cwd.path())
+                    .status()?
+            }
         }
         #[cfg(not(windows))]
         {
