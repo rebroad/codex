@@ -61,6 +61,11 @@ def parse_args() -> argparse.Namespace:
         help="Upstream Cargo version whose successful rust-release run supplies desktop targets.",
     )
     parser.add_argument(
+        "--upstream-artifact-dir",
+        type=Path,
+        help="Directory containing locally staged upstream codex-npm-*.tgz archives.",
+    )
+    parser.add_argument(
         "--no-upstream",
         action="store_true",
         help="Assemble solely from fork archives already in --fork-artifact-dir.",
@@ -222,6 +227,12 @@ def main() -> int:
                         "platform": platform,
                         "payload_sha256": sha256_tree(vendor_root / target),
                     }
+        elif args.upstream_artifact_dir:
+            source_manifest.update(
+                extract_fork_payloads(args.upstream_artifact_dir, vendor_root)
+            )
+            for target in source_manifest:
+                source_manifest[target]["source"] = "rust-release-npm-stage"
         elif not args.no_upstream:
             if not args.upstream_version:
                 raise RuntimeError(
