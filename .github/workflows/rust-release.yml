@@ -491,7 +491,7 @@ jobs:
 
   build-fork-npm:
     needs: tag-check
-    name: Build fork npm target - ${{ matrix.platform }}
+    name: Build fork npm platform package - ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -500,10 +500,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-armv7
+          - package: linux-armv7
+            package_type: npm
             target: armv7-unknown-linux-gnueabihf
             runner: ubuntu-24.04
-          - platform: android-arm64
+          - package: android-arm64
+            package_type: npm
             target: aarch64-linux-android
             runner: ubuntu-24.04
     env:
@@ -600,12 +602,12 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/dist/npm-fork"
           python3 "${GITHUB_WORKSPACE}/codex-cli/scripts/build_npm_package.py" \
             --release-version "${VERSION}" \
-            --package "codex-${{ matrix.platform }}" \
+            --package "codex-${{ matrix.package }}" \
             --vendor-src "${vendor_dir}" \
-            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${{ matrix.platform }}-${VERSION}.tgz"
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${{ matrix.package }}-${VERSION}.tgz"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: fork-npm-${{ matrix.platform }}
+          name: fork-npm-${{ matrix.package }}
           path: dist/npm-fork/*.tgz
           if-no-files-found: error
 
