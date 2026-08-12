@@ -7,6 +7,11 @@ class VersionComparisonTest(unittest.TestCase):
     def test_validation_accepts_alpha_hotfix(self) -> None:
         self.assertTrue(is_valid_release_version("0.123.0-alpha.5.2"))
 
+    def test_validation_accepts_candidate_release(self) -> None:
+        self.assertTrue(
+            is_valid_release_version("0.123.0-alpha.5.2.0123456789.202609241200")
+        )
+
     def test_validation_rejects_extra_component(self) -> None:
         self.assertFalse(is_valid_release_version("0.123.0-alpha.5.2.3"))
 
@@ -28,6 +33,22 @@ class VersionComparisonTest(unittest.TestCase):
     def test_hotfix_numbers_compare_numerically(self) -> None:
         self.assertTrue(
             should_update_version("0.123.0-alpha.5.10", "0.123.0-alpha.5.2")
+        )
+
+    def test_later_candidate_updates_prerelease_channel(self) -> None:
+        self.assertTrue(
+            should_update_version(
+                "0.123.0-alpha.5.0123456789.202609241201",
+                "0.123.0-alpha.5.abcdef0123.202609241200",
+            )
+        )
+
+    def test_older_candidate_does_not_update_prerelease_channel(self) -> None:
+        self.assertFalse(
+            should_update_version(
+                "0.123.0-alpha.5.0123456789.202609241200",
+                "0.123.0-alpha.5.abcdef0123.202609241201",
+            )
         )
 
     def test_numbered_alpha_after_bare_alpha(self) -> None:
