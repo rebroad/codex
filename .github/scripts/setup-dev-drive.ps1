@@ -31,3 +31,4 @@ if ((Test-Path "D:\") -and (Test-DevDrive "D:")) {
 }
 
 "CI_BUILD_ROOT=$Drive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+exit 0
