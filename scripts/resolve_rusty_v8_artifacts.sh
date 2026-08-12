@@ -92,7 +92,17 @@ BINDING_PATH="${OUTPUT_DIR}/${BINDING_NAME}"
 CHECKSUMS_PATH="${OUTPUT_DIR}/${CHECKSUMS_NAME}"
 
 mkdir -p "${OUTPUT_DIR}"
-[[ -s "${CHECKSUMS_PATH}" ]] || curl -fsSL "${BASE_URL}/${CHECKSUMS_NAME}" -o "${CHECKSUMS_PATH}"
+download_release_asset() {
+  local name="$1"
+  local path="$2"
+
+  curl --fail --silent --show-error --location \
+    --retry 5 --retry-all-errors --retry-delay 2 \
+    --connect-timeout 20 --max-time 300 \
+    "${BASE_URL}/${name}" -o "${path}"
+}
+
+[[ -s "${CHECKSUMS_PATH}" ]] || download_release_asset "${CHECKSUMS_NAME}" "${CHECKSUMS_PATH}"
 
 checksum_lines="$(tr -d '\r' < "${CHECKSUMS_PATH}")"
 checksum_count=0
@@ -138,7 +148,7 @@ ensure_artifact() {
     return 0
   fi
   rm -f "${path}"
-  curl -fsSL "${BASE_URL}/${name}" -o "${path}"
+  download_release_asset "${name}" "${path}"
   verify_checksum "${digest}" "${path}" || {
     echo "Checksum verification failed for ${name}" >&2
     return 1
