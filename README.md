@@ -13,27 +13,32 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
-Run the following on Mac or Linux to install Codex CLI:
+Run the following on Mac or Linux to install the latest stable Codex CLI:
 
 ```shell
-curl -fsSL https://github.com/rebroad/codex/releases/latest/download/install.sh | sh
+curl -fsSL https://reb.ai/codex/install.sh | sh
 ```
 
 Run the following on Windows to install Codex CLI:
 
 ```shell
-powershell -ExecutionPolicy ByPass -c "irm https://github.com/rebroad/codex/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://reb.ai/codex/install.ps1 | iex"
 ```
 
-For the latest alpha channel, use the fork's maintained `latest-alpha` release:
+For the latest alpha channel, set `CODEX_RELEASE` to either `alpha` or
+`latest-alpha`:
 
 ```shell
-curl -fsSL https://github.com/rebroad/codex/releases/download/latest-alpha/install.sh | CODEX_RELEASE=latest-alpha sh
+curl -fsSL https://reb.ai/codex/install.sh | CODEX_RELEASE=alpha sh
 ```
 
 ```powershell
-$env:CODEX_RELEASE='latest-alpha'; irm https://github.com/rebroad/codex/releases/download/latest-alpha/install.ps1 | iex
+$env:CODEX_RELEASE='alpha'; irm https://reb.ai/codex/install.ps1 | iex
 ```
+
+`latest` (the default) installs the latest stable release. `alpha` and
+`latest-alpha` install the latest release from the alpha channel. A specific
+version can still be selected with `CODEX_RELEASE` or `--release`.
 
 Codex CLI can also be installed via the following package managers:
 
