@@ -42,6 +42,9 @@ normalize_version() {
     "" | latest)
       printf 'latest\n'
       ;;
+    latest-alpha)
+      printf 'latest-alpha\n'
+      ;;
     rust-v*)
       printf '%s\n' "${1#rust-v}"
       ;;
@@ -57,12 +60,12 @@ normalize_version() {
 validate_version() {
   version="$1"
 
-  if [ "$version" = "latest" ]; then
+  if [ "$version" = "latest" ] || [ "$version" = "latest-alpha" ]; then
     return
   fi
 
   if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-alpha(\.[0-9]+){0,2}|-beta(\.[0-9]+)?)?$'; then
-    echo "Invalid Codex release version: $version. Expected latest or x.y.z[-alpha[.N[.M]]|-beta[.N]]." >&2
+    echo "Invalid Codex release version: $version. Expected latest, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]." >&2
     return 1
   fi
 }
@@ -203,6 +206,8 @@ parse_release_metadata() {
     function finish_string(value) {
       if (object_depth == 1 && key == "tag_name") {
         print "tag_name\t" value
+      } else if (object_depth == 1 && key == "name") {
+        print "release_name\t" value
       } else if (object_depth == asset_object_depth) {
         if (key == "name") {
           asset_name = value
@@ -335,6 +340,7 @@ resolve_metadata_version() {
   release_tag="$(printf '%s\n' "$release_metadata" | awk -F '\t' '$1 == "tag_name" { print $2; exit }')"
   case "$release_tag" in
     rust-v*) metadata_version="${release_tag#rust-v}" ;;
+    latest-alpha) metadata_version="$(printf '%s\n' "$release_metadata" | awk -F '\t' '$1 == "release_name" { print $2; exit }')" ;;
     *) metadata_version="" ;;
   esac
   if [ -z "$metadata_version" ]; then
@@ -349,6 +355,9 @@ resolve_release_from_github() {
   if [ "$normalized_version" = "latest" ]; then
     requested_release="latest"
     metadata_url="https://api.github.com/repos/rebroad/codex/releases/latest"
+  elif [ "$normalized_version" = "latest-alpha" ]; then
+    requested_release="latest-alpha"
+    metadata_url="https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha"
   else
     resolved_version="$normalized_version"
     requested_release="$resolved_version"
@@ -362,7 +371,7 @@ resolve_release_from_github() {
 
   parse_downloaded_release_metadata "$requested_release" "GitHub"
 
-  if [ "$normalized_version" = "latest" ]; then
+  if [ "$normalized_version" = "latest" ] || [ "$normalized_version" = "latest-alpha" ]; then
     resolve_metadata_version
     resolved_version="$metadata_version"
   fi
@@ -405,6 +414,11 @@ resolve_release() {
 
   case "$PREFER_RELEASES_OPENAI_COM" in
     1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss])
+      if [ "$normalized_version" = "latest-alpha" ]; then
+        resolve_release_from_github "$normalized_version"
+        select_release_assets
+        return
+      fi
       if resolve_release_from_releases "$normalized_version" &&
         select_release_assets; then
         return
