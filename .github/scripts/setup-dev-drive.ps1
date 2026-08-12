@@ -25,41 +25,9 @@ if ((Test-Path "D:\") -and (Test-DevDrive "D:")) {
     Write-Output "Using existing Dev Drive at D:"
     $Drive = "D:"
 } else {
-    if (Test-Path "D:\") {
-        Write-Output "Existing D: volume is not a Dev Drive; provisioning a new Dev Drive VHD."
-    }
-
-    try {
-        $VhdPath = Join-Path $env:RUNNER_TEMP "codex-dev-drive.vhdx"
-        $SizeBytes = 64GB
-
-        if (Test-Path $VhdPath) {
-            Remove-Item -Path $VhdPath -Force
-        }
-
-        New-VHD -Path $VhdPath -SizeBytes $SizeBytes -Dynamic -ErrorAction Stop | Out-Null
-        $Mounted = Mount-VHD -Path $VhdPath -Passthru -ErrorAction Stop
-        $Disk = $Mounted | Get-Disk -ErrorAction Stop
-        $Disk | Initialize-Disk -PartitionStyle GPT -ErrorAction Stop
-        $Partition = $Disk | New-Partition -AssignDriveLetter -UseMaximumSize -ErrorAction Stop
-        $Volume = $Partition | Format-Volume -FileSystem ReFS -NewFileSystemLabel "CodexDevDrive" -DevDrive -Confirm:$false -Force -ErrorAction Stop
-
-        $Drive = "$($Volume.DriveLetter):"
-
-        if (-not (Test-DevDrive $Drive)) {
-            throw "Provisioned volume at $Drive did not pass Dev Drive verification."
-        }
-
-        Invoke-BestEffort { fsutil devdrv trust $Drive } "Trusting Dev Drive $Drive"
-        Invoke-BestEffort { fsutil devdrv enable /disallowAv } "Disabling AV filter attachment for Dev Drives"
-
-        Write-Output "Using Dev Drive at $Drive"
-    } catch {
-        Write-Warning "Failed to create Dev Drive: $($_.Exception.Message)"
-        $Drive = Join-Path $env:RUNNER_TEMP "codex-ci"
-        New-Item -ItemType Directory -Force -Path $Drive | Out-Null
-        Write-Output "Using normal temporary workspace at $Drive"
-    }
+    $Drive = Join-Path $env:RUNNER_TEMP "codex-ci"
+    New-Item -ItemType Directory -Force -Path $Drive | Out-Null
+    Write-Output "Using normal temporary workspace at $Drive"
 }
 
 "CI_BUILD_ROOT=$Drive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
