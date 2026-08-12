@@ -52,7 +52,8 @@ PLATFORMS = {
         "target": "aarch64-pc-windows-msvc",
         "os": "win32",
         "cpu": "arm64",
-        "file_tokens": ("PE32+", "ARM64"),
+        # GNU file reports this architecture as Aarch64 on the Linux runner.
+        "file_tokens": ("PE32+", "Aarch64"),
         "host": True,
     },
     "linux-armv7": {
