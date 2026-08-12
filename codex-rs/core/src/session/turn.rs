@@ -1317,7 +1317,7 @@ pub(crate) fn build_prompt(
     base_instructions: BaseInstructions,
 ) -> Prompt {
     let turn_context = &step_context.turn;
-    Prompt {
+    let prompt = Prompt {
         input,
         tools: step_context.tool_router.model_visible_specs(),
         parallel_tool_calls: true,
@@ -1326,6 +1326,11 @@ pub(crate) fn build_prompt(
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
+    };
+    if turn_context.config.bare_prompt {
+        prompt.without_scaffolding()
+    } else {
+        prompt
     }
 }
 

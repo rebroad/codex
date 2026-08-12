@@ -5317,6 +5317,10 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "bare_prompt": {
+      "description": "Send only the user prompt, without Codex scaffolding or tools.",
+      "type": "boolean"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
