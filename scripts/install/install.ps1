@@ -60,7 +60,7 @@ function Normalize-Version {
         [string]$RawVersion
     )
 
-    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -eq "latest") {
+    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -eq "latest" -or $RawVersion -eq "latest-alpha") {
         return "latest"
     }
 
@@ -80,8 +80,8 @@ function Assert-ValidReleaseVersion {
         [string]$Version
     )
 
-    if ($Version -cne "latest" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?$") {
-        throw "Invalid Codex release version: $Version. Expected latest or x.y.z[-alpha[.N[.M]]|-beta[.N]]."
+    if ($Version -cne "latest" -and $Version -cne "latest-alpha" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?$") {
+        throw "Invalid Codex release version: $Version. Expected latest, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]."
     }
 }
 
@@ -320,7 +320,8 @@ function Resolve-VersionFromReleaseMetadata {
         throw "Failed to resolve the latest Codex release version."
     }
 
-    $resolvedVersion = Normalize-Version -RawVersion $ReleaseMetadata.tag_name
+    $rawVersion = if ($ReleaseMetadata.tag_name -eq "latest-alpha") { $ReleaseMetadata.name } else { $ReleaseMetadata.tag_name }
+    $resolvedVersion = Normalize-Version -RawVersion $rawVersion
     Assert-ValidReleaseVersion -Version $resolvedVersion
     return $resolvedVersion
 }
@@ -333,6 +334,9 @@ function Resolve-ReleaseFromGitHub {
     if ($NormalizedVersion -eq "latest") {
         $requestedRelease = "latest"
         $metadataUri = "https://api.github.com/repos/rebroad/codex/releases/latest"
+    } elseif ($NormalizedVersion -eq "latest-alpha") {
+        $requestedRelease = "latest-alpha"
+        $metadataUri = "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha"
     } else {
         $resolvedVersion = $NormalizedVersion
         $requestedRelease = $resolvedVersion
@@ -345,7 +349,7 @@ function Resolve-ReleaseFromGitHub {
         throw "Could not fetch GitHub release metadata for Codex $requestedRelease. GitHub API may be unavailable or rate limited. $($_.Exception.Message)"
     }
 
-    if ($NormalizedVersion -eq "latest") {
+    if ($NormalizedVersion -eq "latest" -or $NormalizedVersion -eq "latest-alpha") {
         $resolvedVersion = Resolve-VersionFromReleaseMetadata -ReleaseMetadata $releaseMetadata
     }
 
@@ -389,7 +393,7 @@ function Resolve-Release {
     $normalizedVersion = Normalize-Version -RawVersion $Release
     Assert-ValidReleaseVersion -Version $normalizedVersion
 
-    if ($PreferReleasesOpenAICom) {
+    if ($PreferReleasesOpenAICom -and $normalizedVersion -ne "latest-alpha") {
         $release = Resolve-ReleaseFromReleases -NormalizedVersion $normalizedVersion
         if ($null -ne $release) {
             return $release
