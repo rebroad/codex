@@ -651,11 +651,15 @@ impl Session {
         let history_mode = conversation_history.get_history_mode(
             requested_history_mode.unwrap_or_else(|| thread_store.default_history_mode()),
         );
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = if config.bare_prompt {
+            String::new()
+        } else {
+            config
+                .base_instructions
+                .clone()
+                .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality))
+        };
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
@@ -1290,6 +1294,16 @@ impl Session {
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
+        if state
+            .session_configuration
+            .original_config_do_not_use
+            .bare_prompt
+        {
+            return BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            };
+        }
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
             provenance: state.base_instructions_provenance.clone(),
@@ -3438,6 +3452,9 @@ impl Session {
         &self,
         step_context: &StepContext,
     ) -> Vec<ResponseItem> {
+        if step_context.turn.config.bare_prompt {
+            return Vec::new();
+        }
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::new();
         let mut contextual_user_sections = Vec::new();
@@ -3491,6 +3508,9 @@ impl Session {
         turn_context: &TurnContext,
         world_state: &WorldState,
     ) -> Vec<ResponseItem> {
+        if turn_context.config.bare_prompt {
+            return Vec::new();
+        }
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let mut separate_developer_sections = Vec::<String>::new();
