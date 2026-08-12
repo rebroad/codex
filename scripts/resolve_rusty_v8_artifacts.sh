@@ -66,26 +66,33 @@ fi
 
 if [[ "${RELEASE_REPO}" == auto ]]; then
   case "${TARGET}" in
-    x86_64-unknown-linux-musl|armv7-unknown-linux-gnueabihf|aarch64-linux-android)
+    x86_64-unknown-linux-musl|armv7-unknown-linux-gnueabihf|armv7-unknown-linux-musleabihf|aarch64-linux-android)
       RELEASE_REPO="rebroad/rusty_v8" ;;
     *) RELEASE_REPO="openai/codex" ;;
   esac
 fi
+V8_TARGET="${TARGET}"
+if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+  # Rusty V8's ARMv7 archive is libc-independent and is currently published
+  # under the GNU target name; the final Codex binary is still linked against
+  # musl.
+  V8_TARGET=armv7-unknown-linux-gnueabihf
+fi
 RELEASE_TAG="${RELEASE_TAG:-rusty-v8-v${V8_VERSION}}"
 if [[ -z "${PROFILE}" ]]; then
   case "${TARGET}" in
-    armv7-unknown-linux-gnueabihf) PROFILE=release ;;
+    armv7-unknown-linux-gnueabihf|armv7-unknown-linux-musleabihf) PROFILE=release ;;
     *) PROFILE=ptrcomp_sandbox_release ;;
   esac
 fi
 
-if [[ "${TARGET}" == *-pc-windows-msvc ]]; then
-  ARCHIVE_NAME="rusty_v8_${PROFILE}_${TARGET}.lib.gz"
+if [[ "${V8_TARGET}" == *-pc-windows-msvc ]]; then
+  ARCHIVE_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.lib.gz"
 else
-  ARCHIVE_NAME="librusty_v8_${PROFILE}_${TARGET}.a.gz"
+  ARCHIVE_NAME="librusty_v8_${PROFILE}_${V8_TARGET}.a.gz"
 fi
-BINDING_NAME="src_binding_${PROFILE}_${TARGET}.rs"
-CHECKSUMS_NAME="rusty_v8_${PROFILE}_${TARGET}.sha256"
+BINDING_NAME="src_binding_${PROFILE}_${V8_TARGET}.rs"
+CHECKSUMS_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.sha256"
 BASE_URL="https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}"
 ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 BINDING_PATH="${OUTPUT_DIR}/${BINDING_NAME}"
