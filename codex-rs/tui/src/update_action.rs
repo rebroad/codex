@@ -16,10 +16,14 @@ pub enum UpdateAction {
     PnpmGlobalLatest,
     /// Update a Homebrew-detected installation via the fork npm package.
     BrewUpgrade,
-    /// Update via the fork npm package.
+    /// Update via the fork standalone installer.
     StandaloneUnix,
-    /// Update via the fork npm package.
+    /// Update via the fork standalone installer.
     StandaloneWindows,
+    /// Update via the fork alpha standalone installer.
+    StandaloneUnixAlpha,
+    /// Update via the fork alpha standalone installer.
+    StandaloneWindowsAlpha,
 }
 
 impl UpdateAction {
@@ -44,9 +48,39 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@reb.ai/codex"]),
-            UpdateAction::BrewUpgrade
-            | UpdateAction::StandaloneUnix
-            | UpdateAction::StandaloneWindows => ("npm", &["install", "-g", "@reb.ai/codex"]),
+            UpdateAction::BrewUpgrade => ("npm", &["install", "-g", "@reb.ai/codex"]),
+            UpdateAction::StandaloneUnix => (
+                "sh",
+                &[
+                    "-c",
+                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+                ],
+            ),
+            UpdateAction::StandaloneWindows => (
+                "powershell",
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
+                ],
+            ),
+            UpdateAction::StandaloneUnixAlpha => (
+                "sh",
+                &[
+                    "-c",
+                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_RELEASE=alpha CODEX_NON_INTERACTIVE=1 sh",
+                ],
+            ),
+            UpdateAction::StandaloneWindowsAlpha => (
+                "powershell",
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_RELEASE='alpha'; $env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
+                ],
+            ),
         }
     }
 
@@ -60,7 +94,15 @@ impl UpdateAction {
 
 #[cfg(not(debug_assertions))]
 pub fn get_update_action() -> Option<UpdateAction> {
-    UpdateAction::from_install_context(InstallContext::current())
+    let action = UpdateAction::from_install_context(InstallContext::current())?;
+    if crate::version::CODEX_CLI_VERSION.contains("-alpha") {
+        return Some(match action {
+            UpdateAction::StandaloneUnix => UpdateAction::StandaloneUnixAlpha,
+            UpdateAction::StandaloneWindows => UpdateAction::StandaloneWindowsAlpha,
+            action => action,
+        });
+    }
+    Some(action)
 }
 
 #[cfg(test)]
@@ -135,18 +177,42 @@ mod tests {
     }
 
     #[test]
-    fn fork_update_commands_do_not_target_upstream_installers() {
+    fn standalone_update_commands_use_fork_installer() {
         assert_eq!(
             UpdateAction::StandaloneUnix.command_args(),
-            ("npm", &["install", "-g", "@reb.ai/codex"][..])
+            (
+                "sh",
+                &[
+                    "-c",
+                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+                ][..]
+            )
         );
         assert_eq!(
             UpdateAction::StandaloneWindows.command_args(),
-            ("npm", &["install", "-g", "@reb.ai/codex"][..])
+            (
+                "powershell",
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex"
+                ][..]
+            )
         );
-        assert_eq!(
-            UpdateAction::BrewUpgrade.command_args(),
-            ("npm", &["install", "-g", "@reb.ai/codex"][..])
+    }
+
+    #[test]
+    fn alpha_standalone_update_commands_select_alpha_channel() {
+        assert!(
+            UpdateAction::StandaloneUnixAlpha
+                .command_str()
+                .contains("CODEX_RELEASE=alpha")
+        );
+        assert!(
+            UpdateAction::StandaloneWindowsAlpha
+                .command_str()
+                .contains("CODEX_RELEASE='alpha'")
         );
     }
 }
