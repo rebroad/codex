@@ -16,23 +16,23 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 Run the following on Mac or Linux to install Codex CLI:
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/rebroad/codex/hybrid-latest-alpha-cli/scripts/install/install.sh | sh
+curl -fsSL https://github.com/rebroad/codex/releases/latest/download/install.sh | sh
 ```
 
 Run the following on Windows to install Codex CLI:
 
 ```shell
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/rebroad/codex/hybrid-latest-alpha-cli/scripts/install/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/rebroad/codex/releases/latest/download/install.ps1 | iex"
 ```
 
-The standalone installers download from the fork's GitHub Releases by default. To explicitly use the upstream release service, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `true` (`1` and `yes` are also accepted):
+For the latest alpha channel, use the fork's maintained `latest-alpha` release:
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/rebroad/codex/hybrid-latest-alpha-cli/scripts/install/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=true sh
+curl -fsSL https://github.com/rebroad/codex/releases/download/latest-alpha/install.sh | CODEX_RELEASE=latest-alpha sh
 ```
 
 ```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='true'; irm https://raw.githubusercontent.com/rebroad/codex/hybrid-latest-alpha-cli/scripts/install/install.ps1 | iex
+$env:CODEX_RELEASE='latest-alpha'; irm https://github.com/rebroad/codex/releases/download/latest-alpha/install.ps1 | iex
 ```
 
 Codex CLI can also be installed via the following package managers:
