@@ -69,6 +69,11 @@ pub(super) async fn run_remote_compact_attempt(
         output_schema_strict: true,
         cyber_access_program: turn_context.cyber_access_program,
     };
+    let prompt = if turn_context.config.bare_prompt {
+        prompt.without_scaffolding()
+    } else {
+        prompt
+    };
     let responses_metadata = sess
         .responses_metadata(
             turn_context.as_ref(),
