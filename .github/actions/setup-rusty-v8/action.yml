@@ -16,6 +16,7 @@ runs:
       env:
         TARGET: ${{ inputs.target }}
         RELEASE_REPO: ${{ inputs.release-repo }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         binding_dir="${RUNNER_TEMP}/rusty_v8"
