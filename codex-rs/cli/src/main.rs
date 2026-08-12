@@ -12,6 +12,8 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
+use codex_cli::run_login_complete;
+use codex_cli::run_login_start;
 use codex_cli::run_login_status;
 use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
@@ -510,6 +512,24 @@ struct LoginCommand {
 enum LoginSubcommand {
     /// Show login status.
     Status,
+    /// Start a browser login and print its authorization URL without waiting.
+    Start(LoginStartCommand),
+    /// Complete a previously started browser login with its pasted callback URL.
+    Complete(LoginCompleteCommand),
+}
+
+#[derive(Debug, Parser)]
+struct LoginStartCommand {
+    /// Emit machine-readable JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+struct LoginCompleteCommand {
+    /// Localhost callback URL copied from the browser.
+    #[arg(long = "callback-url", value_name = "URL")]
+    callback_url: String,
 }
 
 #[derive(Debug, Parser)]
@@ -1387,6 +1407,12 @@ async fn cli_main(
             match login_cli.action {
                 Some(LoginSubcommand::Status) => {
                     run_login_status(login_cli.config_overrides).await;
+                }
+                Some(LoginSubcommand::Start(start)) => {
+                    run_login_start(login_cli.config_overrides, start.json).await;
+                }
+                Some(LoginSubcommand::Complete(complete)) => {
+                    run_login_complete(login_cli.config_overrides, complete.callback_url).await;
                 }
                 None => {
                     if login_cli.with_api_key && login_cli.with_access_token {
@@ -2855,6 +2881,38 @@ mod tests {
 
         assert!(cli.subcommand.is_none());
         assert_eq!(cli.interactive.prompt.as_deref(), Some("import"));
+    }
+
+    #[test]
+    fn login_start_and_complete_parse_as_subcommands() {
+        let cli = MultitoolCli::try_parse_from(["codex", "login", "start", "--json"])
+            .expect("login start should parse");
+        let Some(Subcommand::Login(login)) = cli.subcommand else {
+            panic!("expected login subcommand");
+        };
+        let Some(LoginSubcommand::Start(start)) = login.action else {
+            panic!("expected login start");
+        };
+        assert!(start.json);
+
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "login",
+            "complete",
+            "--callback-url",
+            "http://localhost:1455/auth/callback?code=abc&state=xyz",
+        ])
+        .expect("login complete should parse");
+        let Some(Subcommand::Login(login)) = cli.subcommand else {
+            panic!("expected login subcommand");
+        };
+        let Some(LoginSubcommand::Complete(complete)) = login.action else {
+            panic!("expected login complete");
+        };
+        assert_eq!(
+            complete.callback_url,
+            "http://localhost:1455/auth/callback?code=abc&state=xyz"
+        );
     }
 
     #[test]
