@@ -27,7 +27,7 @@ BINARY_TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
-    "armv7-unknown-linux-gnueabihf",
+    "armv7-unknown-linux-musleabihf",
     "aarch64-linux-android",
 )
 UPSTREAM_WORKFLOW_TARGETS = BINARY_TARGETS[:6]
