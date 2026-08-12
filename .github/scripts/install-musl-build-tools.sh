@@ -26,6 +26,9 @@ case "${TARGET}" in
   aarch64-unknown-linux-musl)
     arch="aarch64"
     ;;
+  armv7-unknown-linux-musleabihf)
+    arch="armv7"
+    ;;
   *)
     echo "Unexpected musl target: ${TARGET}" >&2
     exit 1
@@ -38,7 +41,19 @@ libcap_tarball_name="libcap-${libcap_version}.tar.xz"
 libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
 
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
-if command -v "${arch}-linux-musl-gcc" >/dev/null; then
+if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+  # Ubuntu does not ship an ARMv7 musl cross compiler. Use Zig's musl target
+  # while keeping the Rust target and resulting binary genuinely musl-linked.
+  tool_root="${RUNNER_TEMP:-/tmp}/codex-musl-tools-${TARGET}"
+  mkdir -p "${tool_root}"
+  musl_linker="${tool_root}/armv7-musl-gcc"
+  cat >"${musl_linker}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec zig cc -target arm-linux-musleabihf "$@"
+EOF
+  chmod +x "${musl_linker}"
+elif command -v "${arch}-linux-musl-gcc" >/dev/null; then
   musl_linker="$(command -v "${arch}-linux-musl-gcc")"
 elif command -v musl-gcc >/dev/null; then
   musl_linker="$(command -v musl-gcc)"
@@ -48,6 +63,9 @@ else
 fi
 
 zig_target="${TARGET/-unknown-linux-musl/-linux-musl}"
+if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+  zig_target="arm-linux-musleabihf"
+fi
 runner_temp="${RUNNER_TEMP:-/tmp}"
 tool_root="${runner_temp}/codex-musl-tools-${TARGET}"
 mkdir -p "${tool_root}"
