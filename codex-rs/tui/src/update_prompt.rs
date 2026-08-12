@@ -189,7 +189,7 @@ impl WidgetRef for &UpdatePromptScreen {
         Clear.render(area, buf);
         let mut column = ColumnRenderable::new();
 
-        let update_command = self.update_action.command_str();
+        let update_command = self.update_action.display_command_str();
 
         column.push("");
         column.push(Line::from(vec![
