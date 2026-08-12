@@ -576,6 +576,17 @@ require_command() {
 add_to_path() {
   path_action="already"
 
+  npm_global_bin="$(resolve_npm_global_bin || true)"
+  if [ -n "$npm_global_bin" ]; then
+    case "$PATH:" in
+      "$npm_global_bin:"*) ;;
+      *)
+        path_action="manual"
+        return
+        ;;
+    esac
+  fi
+
   case ":$PATH:" in
     *":$BIN_DIR:"*)
       if [ -z "$conflict_manager" ]; then
@@ -585,6 +596,14 @@ add_to_path() {
   esac
 
   path_action="manual"
+}
+
+resolve_npm_global_bin() {
+  command -v npm >/dev/null 2>&1 || return 1
+  npm_global_prefix="$(npm prefix -g 2>/dev/null || true)"
+  npm_global_root="$(npm root -g 2>/dev/null || true)"
+  [ -n "$npm_global_prefix" ] && [ -d "$npm_global_root/@reb.ai/codex" ] || return 1
+  printf '%s/bin\n' "$npm_global_prefix"
 }
 
 mkdir_lock_is_stale() {
@@ -780,13 +799,7 @@ prompt_yes_no() {
 }
 
 print_launch_instructions() {
-  npm_global_bin=""
-  if [ "$conflict_manager" = "npm" ] && command -v npm >/dev/null 2>&1; then
-    npm_global_prefix="$(npm prefix -g 2>/dev/null || true)"
-    if [ -n "$npm_global_prefix" ]; then
-      npm_global_bin="$npm_global_prefix/bin"
-    fi
-  fi
+  npm_global_bin="$(resolve_npm_global_bin || true)"
 
   launch_path="$BIN_DIR"
   if [ -n "$npm_global_bin" ]; then
