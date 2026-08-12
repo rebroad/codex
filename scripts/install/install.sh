@@ -780,10 +780,23 @@ prompt_yes_no() {
 }
 
 print_launch_instructions() {
+  npm_global_bin=""
+  if [ "$conflict_manager" = "npm" ] && command -v npm >/dev/null 2>&1; then
+    npm_global_prefix="$(npm prefix -g 2>/dev/null || true)"
+    if [ -n "$npm_global_prefix" ]; then
+      npm_global_bin="$npm_global_prefix/bin"
+    fi
+  fi
+
+  launch_path="$BIN_DIR"
+  if [ -n "$npm_global_bin" ]; then
+    launch_path="$npm_global_bin:$launch_path"
+  fi
+
   case "$path_action" in
     manual)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "PATH was not modified automatically; add $BIN_DIR to PATH manually if desired"
+      step "Current terminal: export PATH=\"$launch_path:\$PATH\" && codex"
+      step "PATH was not modified automatically; add $launch_path to PATH manually if desired"
       ;;
     *)
       step "Current terminal: codex"
