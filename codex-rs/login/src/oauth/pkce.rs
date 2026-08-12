@@ -5,13 +5,17 @@ use rand::RngCore;
 use sha2::Digest;
 use sha2::Sha256;
 
+/// Proof-key values for an OAuth authorization-code exchange.
 #[derive(Clone)]
-pub(crate) struct PkceCodes {
+pub struct PkceCodes {
+    /// Secret verifier submitted when exchanging the authorization code.
     pub code_verifier: String,
+    /// Public S256 challenge sent in the authorization request.
     pub code_challenge: String,
 }
 
-pub(crate) fn generate_pkce() -> PkceCodes {
+/// Generates a fresh PKCE verifier and its S256 challenge.
+pub fn generate_pkce() -> PkceCodes {
     let mut bytes = [0u8; 64];
     rand::rng().fill_bytes(&mut bytes);
 
