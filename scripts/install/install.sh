@@ -42,7 +42,7 @@ normalize_version() {
     "" | latest)
       printf 'latest\n'
       ;;
-    latest-alpha)
+    alpha | latest-alpha)
       printf 'latest-alpha\n'
       ;;
     rust-v*)
@@ -65,7 +65,7 @@ validate_version() {
   fi
 
   if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-alpha(\.[0-9]+){0,2}|-beta(\.[0-9]+)?)?$'; then
-    echo "Invalid Codex release version: $version. Expected latest, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]." >&2
+    echo "Invalid Codex release version: $version. Expected latest, alpha, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]." >&2
     return 1
   fi
 }
