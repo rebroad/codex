@@ -7,7 +7,11 @@ RUST_WORKSPACE_DIR="${REPO_DIR}/codex-rs"
 
 # Never compile from the source checkout. When invoked from the source tree,
 # synchronize into its sibling build tree and continue there.
-if [[ ${REPO_DIR} != *.build && ${REPO_DIR} != *.make ]]; then
+ALLOW_SOURCE_BUILD="false"
+if [[ ${CODEX_ALLOW_SOURCE_BUILD:-} == 1 || ${CODEX_ALLOW_SOURCE_BUILD:-} == true ]]; then
+  ALLOW_SOURCE_BUILD="true"
+fi
+if [[ ${REPO_DIR} != *.build && ${REPO_DIR} != *.make && ${ALLOW_SOURCE_BUILD} != true ]]; then
   build_repo_candidate="${REPO_DIR}.build"
   if [[ ! -d "${build_repo_candidate}" ]]; then
     echo "ARMv7 builds require a sibling build tree: ${build_repo_candidate}" >&2
