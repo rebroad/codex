@@ -20,6 +20,7 @@ use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
+use crate::thread_takeover;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerPath;
@@ -197,6 +198,11 @@ pub(crate) fn is_history_pagination_unsupported(source: &JSONRPCErrorError) -> b
             && ["unknown variant", "unsupported variant", "invalid enum"]
                 .into_iter()
                 .any(|error| message.contains(error)))
+}
+
+fn is_active_writer_conflict(source: &JSONRPCErrorError) -> bool {
+    source.code == JSONRPC_INVALID_REQUEST
+        && source.message.contains("already has an active writer")
 }
 
 async fn request_thread_start_with_history_fallback(
@@ -658,6 +664,23 @@ impl AppServerSession {
                 self.history_support = ThreadHistorySupport::LegacyOnly;
                 params.exclude_turns = false;
                 exclude_turns = false;
+                let request_id = self.next_request_id();
+                self.client
+                    .request_typed(ClientRequest::ThreadResume { request_id, params })
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
+                    })?
+            }
+            Err(TypedRequestError::Server { source, .. }) if is_active_writer_conflict(&source) => {
+                let take_over = thread_takeover::offer(thread_id, config.codex_home.as_path())
+                    .await
+                    .wrap_err("failed to take over the active session")?;
+                if !take_over {
+                    return Err(color_eyre::eyre::eyre!(
+                        "thread/resume cancelled because the session is already open elsewhere"
+                    ));
+                }
                 let request_id = self.next_request_id();
                 self.client
                     .request_typed(ClientRequest::ThreadResume { request_id, params })
