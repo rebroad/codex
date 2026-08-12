@@ -1,9 +1,8 @@
 # Configure a fast drive for Windows CI jobs.
 #
 # GitHub-hosted Windows runners do not always expose a secondary D: volume. When
-# they do not, create a Dev Drive VHD. CI depends on this path for its
-# build directories where CI spends significant time doing I/O, so fail the
-# job if no real Dev Drive is available.
+# they do not, create a Dev Drive VHD. If the hosted image does not permit
+# VHD/Dev Drive provisioning, fall back to the runner's temporary directory.
 
 function Test-DevDrive {
     param([string]$Drive)
@@ -56,7 +55,10 @@ if ((Test-Path "D:\") -and (Test-DevDrive "D:")) {
 
         Write-Output "Using Dev Drive at $Drive"
     } catch {
-        throw "Failed to create Dev Drive: $($_.Exception.Message)"
+        Write-Warning "Failed to create Dev Drive: $($_.Exception.Message)"
+        $Drive = Join-Path $env:RUNNER_TEMP "codex-ci"
+        New-Item -ItemType Directory -Force -Path $Drive | Out-Null
+        Write-Output "Using normal temporary workspace at $Drive"
     }
 }
 
