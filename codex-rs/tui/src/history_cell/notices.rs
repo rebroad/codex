@@ -34,7 +34,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         let update_instruction = if let Some(update_action) = self.update_action {
             line![
                 "Run ",
-                update_action.command_str().fg(accent_color()),
+                update_action.display_command_str().fg(accent_color()),
                 " to update."
             ]
         } else {
@@ -70,7 +70,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let update_instruction = if let Some(update_action) = self.update_action {
-            format!("Run {} to update.", update_action.command_str())
+            format!("Run {} to update.", update_action.display_command_str())
         } else {
             "See https://github.com/rebroad/codex for installation options.".to_string()
         };
