@@ -1633,7 +1633,7 @@ jobs:
           token: ${{ secrets.WINGET_PUBLISH_PAT }}
 
   update-branch:
-    name: Update latest-alpha-cli branch
+    name: Update alpha branch
     if: >-
       ${{
         !cancelled() &&
@@ -1654,13 +1654,72 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Update latest-alpha-cli branch
+      - name: Update alpha branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh api \
-            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+            repos/${GITHUB_REPOSITORY}/git/refs/heads/alpha \
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
             -F force=true
+
+  update-alpha-release:
+    name: Update latest-alpha release
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.prerelease == 'true'
+      }}
+    permissions:
+      contents: write
+    needs:
+      - release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Point latest-alpha tag at this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="repos/${GITHUB_REPOSITORY}/git/refs/tags/latest-alpha"
+          if ! gh api "$ref" -X PATCH -f sha="${GITHUB_SHA}" -F force=true; then
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -X POST \
+              -f ref=refs/tags/latest-alpha \
+              -f sha="${GITHUB_SHA}"
+          fi
+
+      - name: Create or update latest-alpha release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! gh release view latest-alpha --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create latest-alpha \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${VERSION}" \
+              --prerelease \
+              --latest=false
+          else
+            gh release edit latest-alpha \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${VERSION}" \
+              --prerelease \
+              --latest=false
+          fi
+
+          mkdir -p "${RUNNER_TEMP}/latest-alpha"
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern install.sh \
+            --pattern install.ps1 \
+            --dir "${RUNNER_TEMP}/latest-alpha"
+          gh release upload latest-alpha \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            "${RUNNER_TEMP}/latest-alpha/install.sh" \
+            "${RUNNER_TEMP}/latest-alpha/install.ps1"
