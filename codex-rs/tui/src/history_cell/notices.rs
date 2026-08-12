@@ -25,7 +25,11 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         use ratatui_macros::line;
         use ratatui_macros::text;
         let update_instruction = if let Some(update_action) = self.update_action {
-            line!["Run ", update_action.command_str().cyan(), " to update."]
+            line![
+                "Run ",
+                update_action.display_command_str().cyan(),
+                " to update."
+            ]
         } else {
             line![
                 "See ",
@@ -59,7 +63,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let update_instruction = if let Some(update_action) = self.update_action {
-            format!("Run {} to update.", update_action.command_str())
+            format!("Run {} to update.", update_action.display_command_str())
         } else {
             "See https://github.com/rebroad/codex for installation options.".to_string()
         };
