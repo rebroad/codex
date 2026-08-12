@@ -308,10 +308,17 @@ prepare_armv7_rusty_v8_source() {
 }
 
 refresh_build_lockfile() {
-  local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock" target_dir
+  local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock" target_dir lock_target_mode
   local build_lock="${BUILD_WORKSPACE}/Cargo.lock"
   local fingerprint_file="${BUILD_REPO}/build/.codex-source-lock-fingerprint"
-  target_dir="$(cargo_target_dir "${MODE}" "${TARGET_MODE}")"
+  # A comma-separated npm target selection has no single Cargo target
+  # directory. Use the first selected package target for metadata/lockfile
+  # work; each actual build still selects its own target directory below.
+  lock_target_mode="${TARGET_MODE}"
+  if [[ "${PACKAGE_NPM}" == true && "${#PACKAGE_TARGETS[@]}" -gt 0 ]]; then
+    lock_target_mode="${PACKAGE_TARGETS[0]}"
+  fi
+  target_dir="$(cargo_target_dir "${MODE}" "${lock_target_mode}")"
   local source_fingerprint stored_fingerprint=""
   source_fingerprint="$(sed '/^version = /d' "${source_lock}" | sha256sum | awk '{print $1}')"
   [[ -f "${fingerprint_file}" ]] && read -r stored_fingerprint <"${fingerprint_file}"
