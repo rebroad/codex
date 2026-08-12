@@ -630,6 +630,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Whether to send only the user prompt, without Codex scaffolding or tools.
+    pub bare_prompt: bool,
+
     /// Origin of the configured base instructions when supplied by another session or lockfile.
     pub base_instructions_provenance: Option<BaseInstructionsProvenance>,
 
@@ -2523,6 +2526,7 @@ pub struct ConfigOverrides {
     pub main_execve_wrapper_exe: Option<PathBuf>,
     pub default_zsh_path: Option<AbsolutePathBuf>,
     pub base_instructions: Option<String>,
+    pub bare_prompt: Option<bool>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
@@ -3168,6 +3172,7 @@ impl Config {
             main_execve_wrapper_exe,
             default_zsh_path,
             base_instructions,
+            bare_prompt,
             developer_instructions,
             personality,
             compact_prompt,
@@ -3802,6 +3807,7 @@ impl Config {
         let base_instructions = base_instructions
             .or(file_base_instructions)
             .or(cfg.instructions.clone());
+        let bare_prompt = bare_prompt.or(cfg.bare_prompt).unwrap_or(false);
         let base_instructions_provenance = base_instructions
             .as_ref()
             .map(|_| BaseInstructionsProvenance::Custom);
@@ -4014,6 +4020,7 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             base_instructions,
+            bare_prompt,
             base_instructions_provenance,
             personality,
             developer_instructions,

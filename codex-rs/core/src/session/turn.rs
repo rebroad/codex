@@ -1297,11 +1297,23 @@ pub(crate) fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
+    let bare_prompt = turn_context.config.bare_prompt;
     Prompt {
         input,
-        tools: router.model_visible_specs(),
-        parallel_tool_calls: true,
-        base_instructions,
+        tools: if bare_prompt {
+            Vec::new().into()
+        } else {
+            router.model_visible_specs()
+        },
+        parallel_tool_calls: !bare_prompt,
+        base_instructions: if bare_prompt {
+            BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            }
+        } else {
+            base_instructions
+        },
         output_schema: turn_context.final_output_json_schema.clone(),
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
