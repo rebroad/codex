@@ -139,7 +139,7 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 openssl-sys = { workspace = true, features = ["vendored"] }
 
 # Build OpenSSL from source for ARMv7 cross-builds.
-[target.armv7-unknown-linux-gnueabihf.dependencies]
+[target.armv7-unknown-linux-musleabihf.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
 
 [target.'cfg(unix)'.dependencies]
