@@ -18,6 +18,7 @@ env:
   CODEX_REPO_ROOT: ${{ github.workspace }}
   CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
   CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
+  CODEX_ZSH_RELEASE_REPO: rebroad/codex
 
 concurrency:
   group: ${{ github.workflow }}
@@ -361,7 +362,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            "https://github.com/${CODEX_ZSH_RELEASE_REPO}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "${RUNNER_TEMP}/codex-zsh"
           bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
             "${RUNNER_TEMP}/codex-zsh" "$CODEX_ZSH_MANIFEST_SHA256"
@@ -477,6 +478,116 @@ jobs:
           # prebuilt archives staged above.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
+
+  build-fork-npm:
+    needs: tag-check
+    name: Build fork npm target - ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-armv7
+            target: armv7-unknown-linux-gnueabihf
+            runner: ubuntu-24.04
+          - platform: android-arm64
+            target: aarch64-linux-android
+            runner: ubuntu-24.04
+    env:
+      ANDROID_NDK_VERSION: "28.2.13676358"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install ARMv7 build dependencies
+        if: matrix.target == 'armv7-unknown-linux-gnueabihf'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+            binutils-arm-linux-gnueabihf
+          {
+            echo 'CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc'
+            echo 'CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc'
+            echo 'CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++'
+            echo 'AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar'
+            echo 'RANLIB_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ranlib'
+          } >> "$GITHUB_ENV"
+      - name: Install Android NDK
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/cmdline-tools/bin:${PATH}"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          ndk_home="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ndk_home}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ndk_home}" >> "$GITHUB_ENV"
+      - name: Configure Rusty V8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - name: Configure Android linker
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+          builtins="$(find "${llvm}" -name libclang_rt.builtins-aarch64-android.a -print -quit)"
+          test -x "${llvm}/bin/aarch64-linux-android29-clang++"
+          test -n "${builtins}"
+          echo "CC_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${llvm}/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=${llvm}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${llvm}/bin/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}" >> "$GITHUB_ENV"
+      - name: Apply ARMv7 Cargo patches
+        if: matrix.target == 'armv7-unknown-linux-gnueabihf'
+        run: |
+          bash scripts/apply_target_cargo_patches.sh codex-rs/Cargo.toml "${{ matrix.target }}"
+          cd codex-rs
+          cargo update -p pagable
+      - name: Build and package fork npm target
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#rust-v}"
+          cd codex-rs
+          build_args=(cargo build --target "${TARGET}" --release --timings --bin codex)
+          [[ "${TARGET}" != armv7-unknown-linux-gnueabihf ]] && build_args+=(--bin codex-code-mode-host)
+          "${build_args[@]}"
+          release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
+          vendor_dir="${RUNNER_TEMP}/codex-npm-vendor-${TARGET}"
+          mkdir -p "${vendor_dir}/${TARGET}/bin"
+          suffix=""
+          [[ "${TARGET}" == *-pc-windows-msvc ]] && suffix=.exe
+          cp "${release_dir}/codex${suffix}" "${vendor_dir}/${TARGET}/bin/codex${suffix}"
+          if [[ "${TARGET}" != armv7-unknown-linux-gnueabihf ]]; then
+            cp "${release_dir}/codex-code-mode-host${suffix}" "${vendor_dir}/${TARGET}/bin/codex-code-mode-host${suffix}"
+          fi
+          if [[ "${TARGET}" == aarch64-linux-android ]]; then
+            cp "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "${vendor_dir}/${TARGET}/bin/libc++_shared.so"
+          fi
+          mkdir -p "${GITHUB_WORKSPACE}/dist/npm-fork"
+          python3 "${GITHUB_WORKSPACE}/codex-cli/scripts/build_npm_package.py" \
+            --release-version "${VERSION}" \
+            --package "codex-${{ matrix.platform }}" \
+            --vendor-src "${vendor_dir}" \
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${{ matrix.platform }}-${VERSION}.tgz"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: fork-npm-${{ matrix.platform }}
+          path: dist/npm-fork/*.tgz
+          if-no-files-found: error
 
   sign-macos-binaries:
     needs: build
@@ -601,7 +712,7 @@ jobs:
           zsh_manifest="${RUNNER_TEMP}/codex-zsh-${TARGET}"
           mkdir -p "$signed_root"
           curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            "https://github.com/${CODEX_ZSH_RELEASE_REPO}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "$zsh_manifest"
           bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
             "$zsh_manifest" "$CODEX_ZSH_MANIFEST_SHA256"
@@ -1187,6 +1298,7 @@ jobs:
     needs:
       - tag-check
       - build
+      - build-fork-npm
       - finalize-macos
       - build-windows
       - argument-comment-lint-release-assets
@@ -1195,6 +1307,7 @@ jobs:
         always() &&
         needs.tag-check.result == 'success' &&
         needs.build.result == 'success' &&
+        needs.build-fork-npm.result == 'success' &&
         needs.finalize-macos.result == 'success' &&
         needs.build-windows.result == 'success' &&
         needs.argument-comment-lint-release-assets.result == 'success'
@@ -1310,12 +1423,8 @@ jobs:
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
           else
-            # Stable native npm packages, including ARMv7 and Android, are
-            # assembled by custom-codex-release.yml. Keeping stable npm
-            # publication there prevents this workflow from advancing the
-            # root package before those two additional platform packages exist.
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+            echo "Unsupported npm release version: ${version}" >&2
+            exit 1
           fi
 
       - name: Setup pnpm
@@ -1341,9 +1450,31 @@ jobs:
             --release-version "$RELEASE_VERSION" \
             --workflow-url "$workflow_url" \
             --artifacts-dir "${GITHUB_WORKSPACE}/dist" \
+            --output-dir "${RUNNER_TEMP}/npm-staged" \
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk
+
+      - name: Download fork npm artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/npm-fork
+          pattern: fork-npm-*
+          merge-multiple: true
+
+      - name: Assemble complete npm packages
+        env:
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          python3 scripts/assemble_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --upstream-artifact-dir "${RUNNER_TEMP}/npm-staged" \
+            --fork-artifact-dir dist/npm-fork \
+            --output-dir dist/npm
+          cp "${RUNNER_TEMP}/npm-staged/codex-responses-api-proxy-npm-${RELEASE_VERSION}.tgz" dist/npm/
+          cp "${RUNNER_TEMP}/npm-staged/codex-sdk-npm-${RELEASE_VERSION}.tgz" dist/npm/
 
       - name: Stage installer scripts
         run: |
@@ -1440,7 +1571,7 @@ jobs:
           # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-          scope: "@openai"
+          scope: "@reb.ai"
 
       - name: Download npm tarballs from release
         env:
@@ -1457,6 +1588,7 @@ jobs:
             "codex-npm-linux-*-${version}.tgz"
             "codex-npm-darwin-*-${version}.tgz"
             "codex-npm-win32-*-${version}.tgz"
+            "codex-npm-android-*-${version}.tgz"
             "codex-responses-api-proxy-npm-${version}.tgz"
             "codex-sdk-npm-${version}.tgz"
           )
@@ -1492,6 +1624,8 @@ jobs:
             "dist/npm/codex-npm-darwin-arm64-${VERSION}.tgz"
             "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
             "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-linux-armv7-${VERSION}.tgz"
+            "dist/npm/codex-npm-android-arm64-${VERSION}.tgz"
           )
 
           for required_tarball in "${platform_tarballs[@]}" "${root_tarball}"; do
@@ -1540,7 +1674,7 @@ jobs:
             tag=""
 
             case "${filename}" in
-              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
+              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz|codex-npm-android-*-"${VERSION}".tgz)
                 platform="${filename#codex-npm-}"
                 platform="${platform%-${VERSION}.tgz}"
                 tag="${prefix}${platform}"
