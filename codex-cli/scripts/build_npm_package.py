@@ -66,7 +66,7 @@ CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "codex-linux-armv7": {
         "npm_name": "@reb.ai/codex-linux-armv7",
         "npm_tag": "linux-armv7",
-        "target_triple": "armv7-unknown-linux-gnueabihf",
+        "target_triple": "armv7-unknown-linux-musleabihf",
         "os": "linux",
         "cpu": "arm",
     },

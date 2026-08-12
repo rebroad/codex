@@ -31,7 +31,7 @@ PLATFORM_TARGETS = {
     "darwin-arm64": "aarch64-apple-darwin",
     "win32-x64": "x86_64-pc-windows-msvc",
     "win32-arm64": "aarch64-pc-windows-msvc",
-    "linux-armv7": "armv7-unknown-linux-gnueabihf",
+    "linux-armv7": "armv7-unknown-linux-musleabihf",
     "android-arm64": "aarch64-linux-android",
 }
 TIMESTAMP_RE = re.compile(r"\.(\d{12})(?:\.|$|-)")
