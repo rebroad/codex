@@ -36,7 +36,7 @@ MAX_UPLOAD_WORKERS = 8
 # .github/workflows/rust-release.yml.
 VERSION_RE = re.compile(
     r"^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha(?:\.[0-9]+){0,2}"
-    r"|beta(?:\.[0-9]+)?))?$"
+    r"|beta(?:\.[0-9]+)?)(?:\.[0-9a-f]{10}\.[0-9]{12})?)?$"
 )
 CRC64_RE = re.compile(r"^[A-Za-z0-9+/]{11}=$")
 SHA256_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
