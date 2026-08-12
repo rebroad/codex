@@ -520,6 +520,7 @@ jobs:
         if: matrix.target == 'armv7-unknown-linux-gnueabihf'
         env:
           TARGET: ${{ matrix.target }}
+          CODEX_ALLOW_SOURCE_BUILD: "1"
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/codex-rs/target" \
