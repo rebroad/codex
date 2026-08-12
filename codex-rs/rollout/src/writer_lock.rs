@@ -5,6 +5,7 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ impl WriterLockCoordinator {
 
     /// Acquires exclusive writer ownership, returning `WouldBlock` for an active writer.
     pub fn acquire(self: &Arc<Self>, thread_id: ThreadId) -> io::Result<WriterLockGuard> {
-        let _coordination_lock = self.lock_coordination()?;
+        let coordination_lock = self.lock_coordination()?;
         if !self.cleanup_attempted.swap(true, Ordering::Relaxed)
             && let Err(err) = self.remove_stale_thread_locks()
         {
@@ -78,6 +79,20 @@ impl WriterLockCoordinator {
             }
         }
 
+        file.set_len(0).map_err(|err| {
+            io::Error::other(format!(
+                "failed to write thread writer lock {}: {err}",
+                path.display()
+            ))
+        })?;
+        writeln!(&file, "pid={}", std::process::id()).map_err(|err| {
+            io::Error::other(format!(
+                "failed to write thread writer lock {}: {err}",
+                path.display()
+            ))
+        })?;
+
+        drop(coordination_lock);
         Ok(WriterLockGuard {
             coordinator: Arc::clone(self),
             path,
