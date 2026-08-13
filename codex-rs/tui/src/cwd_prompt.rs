@@ -54,6 +54,7 @@ pub(crate) enum CwdSelection {
     Session,
     CurrentAndRemember,
     SessionAndRemember,
+    CurrentAndRememberForSession,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +69,8 @@ impl CwdSelection {
             CwdSelection::Session => CwdSelection::Current,
             CwdSelection::Current => CwdSelection::SessionAndRemember,
             CwdSelection::SessionAndRemember => CwdSelection::CurrentAndRemember,
-            CwdSelection::CurrentAndRemember => CwdSelection::Session,
+            CwdSelection::CurrentAndRemember => CwdSelection::CurrentAndRememberForSession,
+            CwdSelection::CurrentAndRememberForSession => CwdSelection::Session,
         }
     }
 
@@ -78,6 +80,7 @@ impl CwdSelection {
             CwdSelection::Current => CwdSelection::Session,
             CwdSelection::SessionAndRemember => CwdSelection::Current,
             CwdSelection::CurrentAndRemember => CwdSelection::SessionAndRemember,
+            CwdSelection::CurrentAndRememberForSession => CwdSelection::CurrentAndRemember,
         }
     }
 
@@ -86,6 +89,7 @@ impl CwdSelection {
             CwdSelection::Current | CwdSelection::Session => None,
             CwdSelection::CurrentAndRemember => Some(ResumeCwdMode::Current),
             CwdSelection::SessionAndRemember => Some(ResumeCwdMode::Session),
+            CwdSelection::CurrentAndRememberForSession => None,
         }
     }
 
@@ -99,6 +103,7 @@ impl CwdSelection {
             CwdSelection::Current => current_cwd,
             CwdSelection::CurrentAndRemember => remembered_current_cwd,
             CwdSelection::Session | CwdSelection::SessionAndRemember => session_cwd,
+            CwdSelection::CurrentAndRememberForSession => current_cwd,
         }
     }
 }
@@ -226,11 +231,21 @@ impl CwdPromptScreen {
                 if !self.allow_remember_current && highlighted == CwdSelection::CurrentAndRemember {
                     highlighted = highlighted.prev();
                 }
+                if !matches!(self.action, CwdPromptAction::Resume)
+                    && highlighted == CwdSelection::CurrentAndRememberForSession
+                {
+                    highlighted = highlighted.prev();
+                }
                 self.set_highlight(highlighted);
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let mut highlighted = self.highlighted.next();
                 if !self.allow_remember_current && highlighted == CwdSelection::CurrentAndRemember {
+                    highlighted = highlighted.next();
+                }
+                if !matches!(self.action, CwdPromptAction::Resume)
+                    && highlighted == CwdSelection::CurrentAndRememberForSession
+                {
                     highlighted = highlighted.next();
                 }
                 self.set_highlight(highlighted);
@@ -240,6 +255,9 @@ impl CwdPromptScreen {
             KeyCode::Char('3') => self.select(CwdSelection::SessionAndRemember),
             KeyCode::Char('4') if self.allow_remember_current => {
                 self.select(CwdSelection::CurrentAndRemember);
+            }
+            KeyCode::Char('5') if matches!(self.action, CwdPromptAction::Resume) => {
+                self.select(CwdSelection::CurrentAndRememberForSession);
             }
             KeyCode::Enter => self.select(self.highlighted),
             KeyCode::Esc => self.select(CwdSelection::Session),
@@ -329,6 +347,13 @@ impl WidgetRef for &CwdPromptScreen {
                 /*index*/ 3,
                 label,
                 self.highlighted == CwdSelection::CurrentAndRemember,
+            ));
+        }
+        if matches!(self.action, CwdPromptAction::Resume) {
+            column.push(selection_option_row(
+                /*index*/ 4,
+                "Use current directory and update this session".to_string(),
+                self.highlighted == CwdSelection::CurrentAndRememberForSession,
             ));
         }
         column.push("");
@@ -459,6 +484,16 @@ mod tests {
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(screen.selection(), Some(CwdSelection::Current));
+    }
+
+    #[test]
+    fn cwd_prompt_can_update_current_session_directory() {
+        let mut screen = new_prompt();
+        screen.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+        assert_eq!(
+            screen.selection(),
+            Some(CwdSelection::CurrentAndRememberForSession)
+        );
     }
 
     #[test]
