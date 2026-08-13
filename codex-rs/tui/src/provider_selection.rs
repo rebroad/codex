@@ -1,6 +1,8 @@
 use crate::legacy_core::config::Config;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_rollout::RolloutItem;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -8,13 +10,9 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
-use ratatui::prelude::Stylize;
-use ratatui::style::Color;
 use ratatui::text::Line;
-use ratatui::widgets::Block;
-use ratatui::widgets::Borders;
-use ratatui::widgets::ListState;
 use ratatui::widgets::Paragraph;
+use std::path::Path;
 use tokio_stream::StreamExt;
 
 pub(crate) async fn select_model_provider(
@@ -39,18 +37,43 @@ pub(crate) async fn select_model_provider(
         };
         tui.screen_size_for_event(&event)?;
         match event {
-            TuiEvent::Key(key) => screen.handle_key(key),
+            TuiEvent::Key(key) => {
+                screen.handle_key(key);
+                draw(tui, &screen)?;
+            }
             TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume => draw(tui, &screen)?,
-            TuiEvent::Paste(_) => {}
+            TuiEvent::Paste(_) | TuiEvent::FocusGained | TuiEvent::FocusLost => {}
         }
     }
 
     Ok(screen.selection())
 }
 
+pub(crate) async fn persist_model_provider(
+    rollout_path: Option<&Path>,
+    provider: &str,
+) -> Result<()> {
+    let Some(rollout_path) = rollout_path else {
+        color_eyre::eyre::bail!(
+            "cannot remember the selected provider because the session has no local rollout path"
+        );
+    };
+    let mut session_meta = codex_rollout::read_session_meta_line(rollout_path).await?;
+    session_meta.meta.model_provider = Some(provider.to_string());
+    codex_rollout::append_rollout_item_to_path(
+        rollout_path,
+        &RolloutItem::SessionMeta(SessionMetaLine {
+            meta: session_meta.meta,
+            git: session_meta.git,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
 fn draw(tui: &mut Tui, screen: &ProviderSelectionScreen) -> Result<()> {
     tui.draw(u16::MAX, |frame| {
-        let [header, providers, footer] = Layout::vertical([
+        let [message, providers, footer] = Layout::vertical([
             Constraint::Length(4),
             Constraint::Min(1),
             Constraint::Length(2),
@@ -60,33 +83,20 @@ fn draw(tui: &mut Tui, screen: &ProviderSelectionScreen) -> Result<()> {
             &Paragraph::new(vec![
                 Line::from("The saved session uses an unavailable model provider."),
                 Line::from(format!(
-                    "Missing provider: {}. Choose one available in the current configuration:",
+                    "Missing provider: {}. Press the number of the provider to use:",
                     screen.missing_provider
                 )),
             ]),
-            header,
+            message,
         );
-        let lines = screen
+        let provider_lines = screen
             .providers
             .iter()
             .enumerate()
-            .map(|(index, provider)| {
-                let line = Line::from(format!("{}. {provider}", index + 1));
-                if screen.state.selected() == Some(index) {
-                    line.bg(Color::Cyan).fg(Color::Black)
-                } else {
-                    line
-                }
-            })
+            .map(|(index, provider)| Line::from(format!("{}: {provider}", index + 1)))
             .collect::<Vec<_>>();
-        frame.render_widget_ref(
-            &Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Providers")),
-            providers,
-        );
-        frame.render_widget_ref(
-            &Paragraph::new("Up/Down or j/k to move • Enter to use • Esc to cancel"),
-            footer,
-        );
+        frame.render_widget_ref(&Paragraph::new(provider_lines), providers);
+        frame.render_widget_ref(&Paragraph::new("Press Esc or Ctrl-C to cancel."), footer);
     })?;
     Ok(())
 }
@@ -94,18 +104,14 @@ fn draw(tui: &mut Tui, screen: &ProviderSelectionScreen) -> Result<()> {
 struct ProviderSelectionScreen {
     providers: Vec<String>,
     missing_provider: String,
-    state: ListState,
     selected: Option<String>,
 }
 
 impl ProviderSelectionScreen {
     fn new(providers: Vec<String>, missing_provider: String) -> Self {
-        let mut state = ListState::default();
-        state.select(Some(0));
         Self {
             providers,
             missing_provider,
-            state,
             selected: None,
         }
     }
@@ -121,37 +127,15 @@ impl ProviderSelectionScreen {
             return;
         }
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => self.previous(),
-            KeyCode::Down | KeyCode::Char('j') => self.next(),
-            KeyCode::Enter => self.selected = self.current().cloned(),
-            KeyCode::Esc => self.selected = Some(String::new()),
             KeyCode::Char(value) if value.is_ascii_digit() => {
                 let index = value.to_digit(10).unwrap_or_default() as usize;
-                if index > 0 && index <= self.providers.len() {
-                    self.state.select(Some(index - 1));
-                    self.selected = self.current().cloned();
+                if index > 0 {
+                    self.selected = self.providers.get(index - 1).cloned();
                 }
             }
+            KeyCode::Esc => self.selected = Some(String::new()),
             _ => {}
         }
-    }
-
-    fn previous(&mut self) {
-        let index = self.state.selected().unwrap_or_default();
-        self.state.select(Some(
-            index.checked_sub(1).unwrap_or(self.providers.len() - 1),
-        ));
-    }
-
-    fn next(&mut self) {
-        let index = self.state.selected().unwrap_or_default();
-        self.state.select(Some((index + 1) % self.providers.len()));
-    }
-
-    fn current(&self) -> Option<&String> {
-        self.state
-            .selected()
-            .and_then(|index| self.providers.get(index))
     }
 
     fn is_done(&self) -> bool {
@@ -168,13 +152,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_selection_wraps_and_selects() {
+    fn numeric_selection_chooses_provider() {
         let mut screen = ProviderSelectionScreen::new(
             vec!["openai".to_string(), "amazon-bedrock".to_string()],
             "openai-custom".to_string(),
         );
-        screen.handle_key(KeyEvent::from(KeyCode::Up));
-        screen.handle_key(KeyEvent::from(KeyCode::Enter));
+        screen.handle_key(KeyEvent::from(KeyCode::Char('2')));
         assert_eq!(screen.selection(), Some("amazon-bedrock".to_string()));
+    }
+
+    #[test]
+    fn invalid_numeric_selection_keeps_prompt_open() {
+        let mut screen =
+            ProviderSelectionScreen::new(vec!["openai".to_string()], "openai-custom".to_string());
+        screen.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert!(!screen.is_done());
     }
 }
