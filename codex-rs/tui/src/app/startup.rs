@@ -7,6 +7,7 @@ use super::*;
 use crate::session_start::SessionStartAction;
 use crate::session_start::cancel_session_start;
 use crate::session_start::complete_session_start;
+use crate::session_start::session_start_error;
 use crate::unarchive_prompt::run_unarchive_prompt;
 
 async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
@@ -39,6 +40,13 @@ fn spawn_startup_thread_start(
         .map_err(|err| format!("{err:#}"));
         app_event_tx.send(AppEvent::StartupThreadStarted { result });
     });
+}
+
+fn missing_model_provider_from_error(err: &color_eyre::eyre::Report) -> Option<String> {
+    let message = err.to_string();
+    let prefix = "Model provider `";
+    let provider = message.split_once(prefix)?.1.split_once("` not found")?.0;
+    Some(provider.to_string())
 }
 
 impl App {
@@ -308,7 +316,56 @@ impl App {
                     )
                     .await
                 {
-                    Ok(resumed) => resumed,
+                    Ok(Ok(resumed)) => Ok(resumed),
+                    Ok(Err(err)) => {
+                        let Some(missing_provider) = missing_model_provider_from_error(&err) else {
+                            return Err(session_start_error("resume", &target_session, err));
+                        };
+                        let Some(provider_id) = crate::provider_selection::select_model_provider(
+                            tui,
+                            &config,
+                            &missing_provider,
+                        )
+                        .await?
+                        else {
+                            return Err(session_start_error("resume", &target_session, err));
+                        };
+                        crate::provider_selection::persist_model_provider(
+                            target_session.path.as_deref(),
+                            &provider_id,
+                        )
+                        .await
+                        .map_err(|persist_err| {
+                            session_start_error(
+                                "remember provider for",
+                                &target_session,
+                                persist_err,
+                            )
+                        })?;
+                        let Some(provider) = config.model_providers.get(&provider_id).cloned()
+                        else {
+                            unreachable!("provider selection returned an unknown provider");
+                        };
+                        config.model_provider_id = provider_id;
+                        config.model_provider = provider;
+                        match startup_draft
+                            .run_until(
+                                tui,
+                                app_server.resume_thread(
+                                    config.clone(),
+                                    target_session.thread_id,
+                                    crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+                                ),
+                            )
+                            .await
+                        {
+                            Ok(Ok(resumed)) => Ok(resumed),
+                            Ok(Err(err)) => {
+                                return Err(session_start_error("resume", &target_session, err));
+                            }
+                            Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                        }
+                    }
                     Err(err) => return shutdown_on_startup_error(app_server, err).await,
                 };
                 let action = SessionStartAction::Resume(model_settings);

@@ -97,7 +97,7 @@ pub(crate) async fn cancel_session_start(app_server: AppServerSession) -> AppExi
     }
 }
 
-fn session_start_error(
+pub(crate) fn session_start_error(
     action: &str,
     target_session: &SessionTarget,
     err: color_eyre::Report,
