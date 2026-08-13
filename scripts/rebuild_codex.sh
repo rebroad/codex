@@ -593,6 +593,17 @@ cargo_build() {
     CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   )
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
+  if [[ "${target_mode}" == native \
+    && "$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" == aarch64-linux-android \
+    && -x "$(command -v aarch64-linux-android-clang || true)" ]]; then
+    env_args+=(
+      CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android-clang"
+      CC_aarch64_linux_android="aarch64-linux-android-clang"
+      CXX_aarch64_linux_android="aarch64-linux-android-clang++"
+      AR_aarch64_linux_android="llvm-ar"
+      RANLIB_aarch64_linux_android="llvm-ranlib"
+    )
+  fi
   if [[ "${target_mode}" == native ]]; then
     configure_rusty_v8_artifacts "${target_mode}" || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
     env_args+=(
