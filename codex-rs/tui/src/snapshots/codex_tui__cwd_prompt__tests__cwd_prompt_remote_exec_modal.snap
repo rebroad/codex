@@ -1,5 +1,6 @@
 ---
 source: tui/src/cwd_prompt.rs
+assertion_line: 447
 expression: rendered
 ---
 
@@ -11,5 +12,6 @@ Choose working directory to resume this session
 › 1. Use session directory (/Users/example/session)
   2. Use current directory (/Users/example/current)
   3. Always use session directory
+  5. Use current directory and update this session
 
   Press enter to continue

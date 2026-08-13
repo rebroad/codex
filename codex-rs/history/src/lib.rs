@@ -391,7 +391,7 @@ impl InitialHistory {
 }
 
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
-    items.iter().find_map(|item| match item {
+    items.iter().rev().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.cwd.clone()),
         _ => None,
     })

@@ -1,5 +1,6 @@
 ---
 source: tui/src/cwd_prompt.rs
+assertion_line: 405
 expression: terminal.backend()
 ---
 
@@ -12,5 +13,6 @@ Choose working directory to resume this session
   2. Use current directory (/Users/example/current)
   3. Always use session directory
   4. Always use current directory
+  5. Use current directory and update this session
 
   Press enter to continue
