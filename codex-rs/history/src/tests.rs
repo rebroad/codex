@@ -551,3 +551,35 @@ fn multi_agent_version_uses_newest_present_session_meta_value() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn session_cwd_uses_newest_session_meta_value() -> Result<()> {
+    let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+    let older_cwd = PathBuf::from("/old/session/cwd");
+    let newer_cwd = PathBuf::from("/new/session/cwd");
+    let session_meta = |cwd| {
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                cwd,
+                ..Default::default()
+            },
+            git: None,
+        })
+    };
+
+    assert_eq!(
+        InitialHistory::Resumed(ResumedHistory {
+            conversation_id: thread_id,
+            history: Arc::new(vec![
+                session_meta(older_cwd),
+                session_meta(newer_cwd.clone())
+            ]),
+            rollout_path: None,
+        })
+        .session_cwd(),
+        Some(newer_cwd)
+    );
+    Ok(())
+}
