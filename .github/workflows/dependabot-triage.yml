@@ -1,0 +1,31 @@
+name: Dependabot triage
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  security-events: write
+
+jobs:
+  dismiss-low-development-alerts:
+    name: Dismiss low development alerts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Dismiss low-severity development alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate repos/${GITHUB_REPOSITORY}/dependabot/alerts \
+            --jq '.[] | select(.state == "open" and .dependency.scope == "development" and .security_vulnerability.severity == "low") | [.number, .dependency.package.name] | @tsv' |
+            while IFS=$'\t' read -r alert_number package_name; do
+              [ -n "$alert_number" ] || continue
+              gh api --method PATCH "repos/${GITHUB_REPOSITORY}/dependabot/alerts/${alert_number}" \
+                -f state=dismissed \
+                -f dismissed_reason=tolerable_risk \
+                -f dismissed_comment="Automated policy: low-severity development-only dependency (${package_name}); review if its scope changes." \
+                >/dev/null
+            done
