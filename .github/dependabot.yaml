@@ -6,37 +6,70 @@ updates:
     directory: .github/actions/codex
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 7
+    groups:
+      security-updates:
+        applies-to: security-updates
   - package-ecosystem: cargo
     directories:
       - codex-rs
       - codex-rs/*
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 7
+    groups:
+      security-updates:
+        applies-to: security-updates
   - package-ecosystem: devcontainers
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 7
+    groups:
+      security-updates:
+        applies-to: security-updates
   - package-ecosystem: docker
     directory: codex-cli
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 7
+    groups:
+      security-updates:
+        applies-to: security-updates
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
+    groups:
+      security-updates:
+        applies-to: security-updates
   - package-ecosystem: rust-toolchain
     directory: codex-rs
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 7
+    groups:
+      security-updates:
+        applies-to: security-updates
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      security-updates:
+        applies-to: security-updates
