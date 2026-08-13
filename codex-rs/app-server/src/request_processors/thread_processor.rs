@@ -3423,7 +3423,7 @@ impl ThreadRequestProcessor {
             exclude_turns,
             initial_turns_page,
         } = params;
-        let include_turns = !exclude_turns;
+        let mut include_turns = !exclude_turns;
 
         let history_load_started_at = std::time::Instant::now();
         let resume_result = if let Some(history) = history {
@@ -3468,6 +3468,12 @@ impl ThreadRequestProcessor {
             matches!(thread.history_mode, ThreadHistoryMode::Paginated).then_some(thread.thread_id)
         });
         let paginated_resume = paginated_thread_id.is_some();
+        if resume_source_thread
+            .as_ref()
+            .is_some_and(|thread| matches!(thread.history_mode, ThreadHistoryMode::Legacy))
+        {
+            include_turns = true;
+        }
 
         let history_cwd = thread_history.session_cwd();
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
