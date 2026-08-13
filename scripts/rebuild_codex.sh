@@ -537,7 +537,7 @@ configure_musl_build_tools() {
 }
 
 cargo_build() {
-  local mode="${1}" target_mode="${2}" profile_args=() target triple target_dir
+  local mode="${1}" target_mode="${2}" profile_args=() target triple target_dir native_host_target=""
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
   target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
@@ -561,6 +561,9 @@ cargo_build() {
     ensure_target "${triple}"
   else
     target=""
+  fi
+  if [[ "${target_mode}" == native ]]; then
+    native_host_target="$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')"
   fi
 
   local -a env_args=()
@@ -661,7 +664,11 @@ cargo_build() {
   fi
 
   local -a cmd=("${CARGO_CMD[@]}" build -p codex-cli -p codex-rmcp-client)
-  [[ "${target_mode}" != armv7 ]] && cmd+=(-p codex-code-mode-host)
+  if [[ "${target_mode}" != armv7 && "${native_host_target}" != aarch64-linux-android ]]; then
+    cmd+=(-p codex-code-mode-host)
+  elif [[ "${native_host_target}" == aarch64-linux-android ]]; then
+    echo "Skipping unsupported codex-code-mode-host build on Android." >&2
+  fi
   [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
   cmd+=( "${profile_args[@]}" )
@@ -1078,7 +1085,9 @@ else
   binary="$(cargo_build "${MODE}" "${TARGET_MODE}")"
   if [[ "${TARGET_MODE}" == native ]]; then
     install_binary "${binary}" "${VERSION}"
-    install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
+    if [[ "$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" != aarch64-linux-android ]]; then
+      install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
+    fi
     install_test_stdio_server "$(dirname "${binary}")/test_stdio_server"
   else
     echo "Built target binary: ${binary}"
