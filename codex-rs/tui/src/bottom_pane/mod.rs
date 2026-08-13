@@ -1124,6 +1124,13 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn increment_status_poll_count(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.increment_poll_count();
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
         if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
         {
