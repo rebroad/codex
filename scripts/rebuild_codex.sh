@@ -606,6 +606,10 @@ cargo_build() {
       AR_aarch64_linux_android="llvm-ar"
       RANLIB_aarch64_linux_android="llvm-ranlib"
     )
+    local protoc_path="$(command -v protoc || true)"
+    [[ -n "${protoc_path}" ]] \
+      || die "protobuf compiler is required on Android; install it with: pkg install protobuf"
+    env_args+=(PROTOC="${protoc_path}")
   fi
   if [[ "${target_mode}" == native ]]; then
     configure_rusty_v8_artifacts "${target_mode}" || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
