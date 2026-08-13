@@ -1,5 +1,6 @@
 ---
 source: tui/src/cwd_prompt.rs
+assertion_line: 471
 expression: rendered
 ---
 
@@ -11,5 +12,6 @@ expression: rendered
   2. Use current directory (/Users/example/current)
   3. Always use session directory
   4. Always use current directory (/Users/example/launched)
+  5. Use current directory and update this session
 
   enter continue · esc use session · ctrl+c quit
