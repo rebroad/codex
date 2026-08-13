@@ -46,6 +46,8 @@ TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 BUILD_TIMESTAMP_SEPARATOR="-"
 TOOLCHAIN=""
+CARGO_CMD=(cargo)
+RUSTC_CMD=(rustc)
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 SUDO_AUTHENTICATED="false"
 
@@ -314,9 +316,9 @@ refresh_build_lockfile() {
     echo "Keeping generated build-tree Cargo.lock." >&2
   fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
-    (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" cargo +"${TOOLCHAIN}" update -p v8 --offline)
+    (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" update -p v8 --offline)
   fi
-  if ! (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" cargo +"${TOOLCHAIN}" metadata \
+  if ! (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" metadata \
     --format-version 1 --locked --offline >/dev/null 2>&1); then
     LOCKFILE_REGENERATION_REQUIRED="true"
     echo "Generated build-tree Cargo.lock requires offline regeneration; skipping locked Cargo builds." >&2
@@ -360,7 +362,7 @@ configure_rusty_v8_artifacts() {
   local -a resolver_args
   case "${target_mode}" in
     native)
-      target="$(rustc +"${TOOLCHAIN}" -vV | sed -n 's/^host: //p')"
+      target="$("${RUSTC_CMD[@]}" -vV | sed -n 's/^host: //p')"
       [[ -n "${target}" ]] || die "could not determine the Rust host target"
       ;;
     musl)
@@ -460,6 +462,14 @@ read_toolchain() {
     TOOLCHAIN="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "${BUILD_WORKSPACE}/rust-toolchain.toml" | head -n 1)"
   fi
   TOOLCHAIN="${TOOLCHAIN:-stable}"
+  if command -v rustup >/dev/null 2>&1; then
+    CARGO_CMD=(cargo +"${TOOLCHAIN}")
+    RUSTC_CMD=(rustc +"${TOOLCHAIN}")
+  else
+    CARGO_CMD=(cargo)
+    RUSTC_CMD=(rustc)
+    echo "rustup unavailable; using standalone Cargo and Rustc." >&2
+  fi
 }
 
 cargo_target_dir() {
@@ -475,7 +485,7 @@ cargo_target_dir() {
 
 prepare_target_dir() {
   local target_dir="${1}" target_mode="${2}" triple="${3}" host marker expected
-  host="$(rustc +"${TOOLCHAIN}" -vV | sed -n 's/^host: //p')"
+  host="$("${RUSTC_CMD[@]}" -vV | sed -n 's/^host: //p')"
   marker="${target_dir}/.codex-target"
   printf -v expected 'target_mode=%s\ntriple=%s\nhost=%s\n' "${target_mode}" "${triple}" "${host}"
 
@@ -500,6 +510,11 @@ target_triple() {
 
 ensure_target() {
   local triple="${1}"
+  if ! command -v rustup >/dev/null 2>&1; then
+    [[ "$("${RUSTC_CMD[@]}" -vV | sed -n 's/^host: //p')" == "${triple}" ]] \
+      || die "rustup is required to install the Rust target ${triple}"
+    return
+  fi
   if ! rustup target list --toolchain "${TOOLCHAIN}" --installed | grep -Fxq "${triple}"; then
     echo "Installing Rust target ${triple} for ${TOOLCHAIN}..." >&2
     rustup target add --toolchain "${TOOLCHAIN}" "${triple}"
@@ -638,7 +653,7 @@ cargo_build() {
     fi
   fi
 
-  local -a cmd=(cargo +"${TOOLCHAIN}" build -p codex-cli -p codex-rmcp-client)
+  local -a cmd=("${CARGO_CMD[@]}" build -p codex-cli -p codex-rmcp-client)
   [[ "${target_mode}" != armv7 ]] && cmd+=(-p codex-code-mode-host)
   [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
@@ -662,7 +677,7 @@ cargo_build() {
     fi
   fi
   if [[ "${target_mode}" == native ]]; then
-    local -a test_cmd=(cargo +"${TOOLCHAIN}" build -p codex-rmcp-client --bin test_stdio_server)
+    local -a test_cmd=("${CARGO_CMD[@]}" build -p codex-rmcp-client --bin test_stdio_server)
     test_cmd+=( "${profile_args[@]}" )
     if [[ "${LOCKFILE_REGENERATION_REQUIRED}" == true ]]; then
       test_cmd+=(--offline)
@@ -870,8 +885,12 @@ run_preflight() {
       scripts/assemble_npm_packages.py \
       scripts/stage_npm_packages.py
   )
-  require_cmd rustup
   require_cmd cargo
+  if command -v rustup >/dev/null 2>&1; then
+    echo "rustup is available; using the configured ${TOOLCHAIN} toolchain."
+  else
+    echo "rustup is unavailable; using standalone Cargo and Rustc."
+  fi
   require_cmd npm
   echo "Shell and required-tool preflight passed."
 }
