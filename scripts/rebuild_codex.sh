@@ -318,10 +318,15 @@ refresh_build_lockfile() {
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
     (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" update -p v8 --offline)
   fi
-  if ! (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" metadata \
+  if (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" metadata \
+    --format-version 1 --locked >/dev/null 2>&1); then
+    echo "Generated build-tree Cargo.lock is usable with online dependency resolution." >&2
+  elif (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" metadata \
     --format-version 1 --locked --offline >/dev/null 2>&1); then
+    echo "Generated build-tree Cargo.lock is usable from the local Cargo cache." >&2
+  else
     LOCKFILE_REGENERATION_REQUIRED="true"
-    echo "Generated build-tree Cargo.lock requires offline regeneration; skipping locked Cargo builds." >&2
+    echo "Generated build-tree Cargo.lock is unavailable online and offline; retrying builds offline." >&2
   fi
 }
 
