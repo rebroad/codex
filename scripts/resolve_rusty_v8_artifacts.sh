@@ -66,7 +66,7 @@ fi
 
 if [[ "${RELEASE_REPO}" == auto ]]; then
   case "${TARGET}" in
-    x86_64-unknown-linux-musl|armv7-unknown-linux-gnueabihf|armv7-unknown-linux-musleabihf|aarch64-linux-android)
+    armv7-unknown-linux-gnueabihf|armv7-unknown-linux-musleabihf|aarch64-linux-android)
       RELEASE_REPO="rebroad/rusty_v8" ;;
     *) RELEASE_REPO="openai/codex" ;;
   esac
