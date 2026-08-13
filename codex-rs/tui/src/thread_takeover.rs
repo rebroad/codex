@@ -9,6 +9,10 @@ use tokio::time::sleep;
 
 const WRITER_LOCK_DIR: &str = "thread-writer-locks";
 
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 pub(crate) async fn offer(thread_id: codex_protocol::ThreadId, codex_home: &Path) -> Result<bool> {
     let path = codex_home
         .join(WRITER_LOCK_DIR)
@@ -67,6 +71,9 @@ pub(crate) async fn offer(thread_id: codex_protocol::ThreadId, codex_home: &Path
                     return Ok(true);
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(err)) if is_unsupported_file_lock_error(&err) => {
+                    return Ok(true);
+                }
                 Err(std::fs::TryLockError::Error(err)) => return Err(err.into()),
             },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(true),
