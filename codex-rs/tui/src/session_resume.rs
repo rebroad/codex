@@ -16,7 +16,12 @@ use crate::resume_picker::SessionTarget;
 use crate::tui::Tui;
 use codex_config::types::ResumeCwdMode;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_rollout::RolloutItem;
+use codex_rollout::append_rollout_item_to_path;
+use codex_rollout::builder_from_items;
 use codex_rollout::open_rollout_line_reader;
+use codex_rollout::read_session_meta_line;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
 use serde::Deserialize;
@@ -151,19 +156,51 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
         )
         .await?;
         return Ok(match selection_outcome {
-            CwdPromptOutcome::Selection(selection) => ResolveCwdOutcome::ContinueAfterPrompt(
-                selection
+            CwdPromptOutcome::Selection(selection) => {
+                let selected_cwd = selection
                     .selected_cwd(
                         cwd_context.current_cwd,
                         &history_cwd,
                         cwd_context.remembered_current_cwd,
                     )
-                    .to_path_buf(),
-            ),
+                    .to_path_buf();
+                if selection == cwd_prompt::CwdSelection::CurrentAndRememberForSession {
+                    persist_session_cwd(state_db_ctx, target_session, selected_cwd.as_path())
+                        .await?;
+                }
+                ResolveCwdOutcome::ContinueAfterPrompt(selected_cwd)
+            }
             CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
         });
     }
     Ok(ResolveCwdOutcome::Continue(Some(history_cwd)))
+}
+
+async fn persist_session_cwd(
+    state_db_ctx: Option<&StateRuntime>,
+    target_session: &SessionTarget,
+    cwd: &Path,
+) -> color_eyre::Result<()> {
+    let Some(rollout_path) = target_session.path.as_deref() else {
+        color_eyre::eyre::bail!("cannot update the session directory without a local rollout path");
+    };
+    let mut session_meta = read_session_meta_line(rollout_path).await?;
+    session_meta.meta.cwd = cwd.to_path_buf();
+    let item = RolloutItem::SessionMeta(SessionMetaLine {
+        meta: session_meta.meta,
+        git: session_meta.git,
+    });
+    append_rollout_item_to_path(rollout_path, &item).await?;
+
+    if let Some(state_db_ctx) = state_db_ctx {
+        let builder = builder_from_items(std::slice::from_ref(&item), rollout_path)
+            .ok_or_else(|| color_eyre::eyre::eyre!("session metadata has no thread ID"))?;
+        state_db_ctx
+            .apply_rollout_items(&builder, std::slice::from_ref(&item), None, None)
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+    }
+    Ok(())
 }
 
 async fn read_session_cwd(
@@ -215,10 +252,14 @@ async fn read_rollout_resume_state(path: &Path) -> io::Result<RolloutResumeState
         };
 
         match record.item_type.as_str() {
-            "session_meta" if state.thread_id.is_none() => {
+            "session_meta" => {
                 if let Ok(metadata) = serde_json::from_value::<SessionMetadata>(payload) {
-                    state.thread_id = Some(metadata.id);
-                    state.cwd.get_or_insert(metadata.cwd);
+                    if state.thread_id.is_none() {
+                        state.thread_id = Some(metadata.id);
+                    }
+                    if state.thread_id == Some(metadata.id) {
+                        state.cwd = Some(metadata.cwd);
+                    }
                 }
             }
             "turn_context" => {
@@ -336,6 +377,45 @@ mod tests {
         assert_eq!(state.thread_id, Some(thread_id));
         assert_eq!(state.cwd, Some(cwd));
         assert_eq!(state.model, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rollout_resume_state_uses_latest_matching_session_meta() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let thread_id = ThreadId::new();
+        let initial_cwd = temp_dir.path().join("initial");
+        let updated_cwd = temp_dir.path().join("updated");
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        write_rollout_lines(
+            &rollout_path,
+            &[
+                rollout_line(
+                    "t0",
+                    "session_meta",
+                    serde_json::json!({
+                        "id": thread_id,
+                        "cwd": initial_cwd,
+                        "originator": "test",
+                        "cli_version": "test",
+                    }),
+                ),
+                rollout_line(
+                    "t1",
+                    "session_meta",
+                    serde_json::json!({
+                        "id": thread_id,
+                        "cwd": updated_cwd.clone(),
+                        "originator": "test",
+                        "cli_version": "test",
+                    }),
+                ),
+            ],
+        )?;
+
+        let state = read_rollout_resume_state(&rollout_path).await?;
+
+        assert_eq!(state.cwd, Some(updated_cwd));
         Ok(())
     }
 
