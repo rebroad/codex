@@ -58,6 +58,10 @@ const HISTORY_SOFT_CAP_RATIO: f64 = 0.8;
 const MAX_RETRIES: usize = 10;
 const RETRY_SLEEP: Duration = Duration::from_millis(100);
 
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HistoryEntry {
     pub session_id: String,
@@ -173,6 +177,15 @@ pub async fn append_entry(
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
                     std::thread::sleep(RETRY_SLEEP);
+                }
+                Err(std::fs::TryLockError::Error(ref error))
+                    if is_unsupported_file_lock_error(error) =>
+                {
+                    history_file.seek(SeekFrom::End(0))?;
+                    history_file.write_all(line.as_bytes())?;
+                    history_file.flush()?;
+                    enforce_history_limit(&mut history_file, history_max_bytes)?;
+                    return Ok(());
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -411,6 +424,18 @@ fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<Histo
             }
             Err(std::fs::TryLockError::WouldBlock) => {
                 std::thread::sleep(RETRY_SLEEP);
+            }
+            Err(std::fs::TryLockError::Error(ref error))
+                if is_unsupported_file_lock_error(error) =>
+            {
+                let reader = BufReader::new(&file);
+                for (idx, line_res) in reader.lines().enumerate() {
+                    let line = line_res.ok()?;
+                    if idx == offset {
+                        return serde_json::from_str::<HistoryEntry>(&line).ok();
+                    }
+                }
+                return None;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to acquire shared lock on history file");
