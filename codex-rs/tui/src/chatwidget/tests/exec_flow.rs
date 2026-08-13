@@ -759,6 +759,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Waiting for background terminal");
     assert_eq!(status.details(), Some("just fix"));
+    assert_eq!(status.poll_count(), 2);
 
     handle_turn_completed(&mut chat, "turn-wait-3", /*duration_ms*/ None);
 

@@ -91,6 +91,7 @@ impl ChatWidget {
             // Surface this in the status indicator (single "waiting" surface) instead of
             // the transcript. Keep the header short so the interrupt hint remains visible.
             self.bottom_pane.ensure_status_indicator();
+            self.bottom_pane.increment_status_poll_count();
             self.bottom_pane
                 .set_interrupt_hint_visible(/*visible*/ true);
             self.status_state.terminal_title_status_kind =
