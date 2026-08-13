@@ -55,6 +55,7 @@ pub(crate) struct StatusIndicatorWidget {
     elapsed_running: Duration,
     last_resume_at: Instant,
     is_paused: bool,
+    poll_count: usize,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
     animations_enabled: bool,
@@ -93,6 +94,7 @@ impl StatusIndicatorWidget {
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
+            poll_count: 0,
 
             app_event_tx,
             frame_requester,
@@ -197,6 +199,15 @@ impl StatusIndicatorWidget {
         self.elapsed_seconds_at(Instant::now())
     }
 
+    pub(crate) fn increment_poll_count(&mut self) {
+        self.poll_count = self.poll_count.saturating_add(1);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poll_count(&self) -> usize {
+        self.poll_count
+    }
+
     /// Wrap the details text into a fixed width and return the lines, truncating if necessary.
     fn wrapped_details_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(details) = self.details.as_deref() else {
@@ -248,6 +259,11 @@ impl Renderable for StatusIndicatorWidget {
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
+        let poll_count = self.poll_count;
+        let poll_prefix = (poll_count > 0).then(|| {
+            let label = if poll_count == 1 { "poll" } else { "polls" };
+            format!("{poll_count} {label} • ")
+        });
         let motion_mode = MotionMode::from_animations_enabled(self.animations_enabled);
 
         let mut spans = Vec::with_capacity(5);
@@ -267,12 +283,16 @@ impl Renderable for StatusIndicatorWidget {
             && let Some(interrupt_binding) = self.interrupt_binding
         {
             spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
+                format!(
+                    "({}{pretty_elapsed} • ",
+                    poll_prefix.as_deref().unwrap_or("")
+                )
+                .dim(),
                 interrupt_binding.into(),
                 " to interrupt)".dim(),
             ]);
         } else {
-            spans.push(format!("({pretty_elapsed})").dim());
+            spans.push(format!("({}{pretty_elapsed})", poll_prefix.as_deref().unwrap_or("")).dim());
         }
         if let Some(message) = &self.inline_message {
             // Keep optional context after elapsed/interrupt text so that core
