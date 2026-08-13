@@ -33,7 +33,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ModelProviderInfoOverrides;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
@@ -324,10 +324,9 @@ pub struct ConfigToml {
     /// to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).
     pub mcp_oauth_callback_url: Option<String>,
 
-    /// User-defined provider entries that extend the built-in list. Built-in
-    /// IDs cannot be overridden.
+    /// Provider entries that extend or override the built-in provider list.
     #[serde(default, deserialize_with = "deserialize_model_providers")]
-    pub model_providers: HashMap<String, ModelProviderInfo>,
+    pub model_providers: HashMap<String, ModelProviderInfoOverrides>,
 
     /// Maximum total bytes of project instruction content across all selected environments.
     #[serde(default = "default_project_doc_max_bytes")]
@@ -930,7 +929,7 @@ fn project_config_for_lookup_key(
 }
 
 pub fn validate_reserved_model_provider_ids(
-    model_providers: &HashMap<String, ModelProviderInfo>,
+    model_providers: &HashMap<String, ModelProviderInfoOverrides>,
 ) -> Result<(), String> {
     let mut conflicts = model_providers
         .keys()
@@ -955,9 +954,8 @@ Built-in providers cannot be overridden. Rename your custom provider (for exampl
 }
 
 pub fn validate_model_providers(
-    model_providers: &HashMap<String, ModelProviderInfo>,
+    model_providers: &HashMap<String, ModelProviderInfoOverrides>,
 ) -> Result<(), String> {
-    validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
         if !matches!(
             key.as_str(),
@@ -969,13 +967,27 @@ pub fn validate_model_providers(
 `{AMAZON_BEDROCK_PROVIDER_ID}` or `{AMAZON_BEDROCK_RUNTIME_PROVIDER_ID}`"
                 ));
             }
-            if provider.name.trim().is_empty() {
+            if provider
+                .name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+                && ![
+                    OPENAI_PROVIDER_ID,
+                    AMAZON_BEDROCK_PROVIDER_ID,
+                    AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+                    OLLAMA_OSS_PROVIDER_ID,
+                    LMSTUDIO_OSS_PROVIDER_ID,
+                ]
+                .contains(&key.as_str())
+            {
                 return Err(format!(
                     "model_providers.{key}: provider name must not be empty"
                 ));
             }
         }
         provider
+            .clone()
+            .into_provider()
             .validate()
             .map_err(|message| format!("model_providers.{key}: {message}"))?;
     }
@@ -984,11 +996,11 @@ pub fn validate_model_providers(
 
 fn deserialize_model_providers<'de, D>(
     deserializer: D,
-) -> Result<HashMap<String, ModelProviderInfo>, D::Error>
+) -> Result<HashMap<String, ModelProviderInfoOverrides>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let model_providers = HashMap::<String, ModelProviderInfo>::deserialize(deserializer)?;
+    let model_providers = HashMap::<String, ModelProviderInfoOverrides>::deserialize(deserializer)?;
     validate_model_providers(&model_providers).map_err(serde::de::Error::custom)?;
     Ok(model_providers)
 }
