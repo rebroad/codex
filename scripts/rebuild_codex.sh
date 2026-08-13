@@ -360,7 +360,8 @@ configure_rusty_v8_artifacts() {
   local -a resolver_args
   case "${target_mode}" in
     native)
-      target="x86_64-unknown-linux-gnu"
+      target="$(rustc +"${TOOLCHAIN}" -vV | sed -n 's/^host: //p')"
+      [[ -n "${target}" ]] || die "could not determine the Rust host target"
       ;;
     musl)
       target="x86_64-unknown-linux-musl"
@@ -439,7 +440,12 @@ configure_rusty_v8_artifacts() {
       "--profile=${profile}"
       "--v8-version=${crate_version}"
     )
-    eval "$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}")"
+    local resolved_artifacts
+    if ! resolved_artifacts="$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}")"; then
+      echo "Rusty V8 artifact resolution failed for ${target}." >&2
+      return 1
+    fi
+    eval "${resolved_artifacts}"
     RUSTY_V8_ARCHIVE_PATH="${RUSTY_V8_ARCHIVE}"
     RUSTY_V8_BINDING_PATH="${RUSTY_V8_SRC_BINDING_PATH}"
   fi
