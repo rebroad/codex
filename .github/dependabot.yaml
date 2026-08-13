@@ -12,6 +12,7 @@ updates:
     groups:
       security-updates:
         applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: cargo
     directories:
       - codex-rs
@@ -24,6 +25,7 @@ updates:
     groups:
       security-updates:
         applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: devcontainers
     directory: /
     schedule:
@@ -34,6 +36,7 @@ updates:
     groups:
       security-updates:
         applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: codex-cli
     schedule:
@@ -44,6 +47,7 @@ updates:
     groups:
       security-updates:
         applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -53,6 +57,7 @@ updates:
     groups:
       security-updates:
         applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: rust-toolchain
     directory: codex-rs
     schedule:
@@ -63,6 +68,7 @@ updates:
     groups:
       security-updates:
         applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -73,3 +79,4 @@ updates:
     groups:
       security-updates:
         applies-to: security-updates
+        patterns: ["*"]
