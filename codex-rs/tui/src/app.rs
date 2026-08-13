@@ -950,6 +950,18 @@ impl App {
                         else {
                             return Err(session_start_error("resume", &target_session, err));
                         };
+                        crate::provider_selection::persist_model_provider(
+                            target_session.path.as_deref(),
+                            &provider_id,
+                        )
+                        .await
+                        .map_err(|persist_err| {
+                            session_start_error(
+                                "remember provider for",
+                                &target_session,
+                                persist_err,
+                            )
+                        })?;
                         let Some(provider) = config.model_providers.get(&provider_id).cloned()
                         else {
                             unreachable!("provider selection returned an unknown provider");
