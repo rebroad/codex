@@ -60,6 +60,10 @@ pub enum AmendError {
     },
 }
 
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 /// Note this thread uses advisory file locking and performs blocking I/O, so it should be used with
 /// [`tokio::task::spawn_blocking`] when called from an async context.
 pub fn blocking_append_allow_prefix_rule(
@@ -154,10 +158,14 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
             path: policy_path.to_path_buf(),
             source,
         })?;
-    file.lock().map_err(|source| AmendError::LockPolicyFile {
-        path: policy_path.to_path_buf(),
-        source,
-    })?;
+    if let Err(source) = file.lock()
+        && !is_unsupported_file_lock_error(&source)
+    {
+        return Err(AmendError::LockPolicyFile {
+            path: policy_path.to_path_buf(),
+            source,
+        });
+    }
 
     file.seek(SeekFrom::Start(0))
         .map_err(|source| AmendError::SeekPolicyFile {
