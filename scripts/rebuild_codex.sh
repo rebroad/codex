@@ -662,11 +662,16 @@ cargo_build() {
   echo "Building ${mode} ${target_mode} in ${target_dir} (incremental cache retained)..." >&2
   if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
     if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
-      echo "Locked Cargo build failed; retrying offline in the build tree without --locked." >&2
+      echo "Locked Cargo build failed; retrying online in the build tree without --locked." >&2
       unset 'cmd[-1]'
-      cmd+=(--offline)
-      if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
-        return 1
+      if (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
+        :
+      else
+        echo "Online Cargo build without --locked failed; retrying offline." >&2
+        cmd+=(--offline)
+        if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
+          return 1
+        fi
       fi
     else
       return 1
@@ -682,11 +687,16 @@ cargo_build() {
     fi
     if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
       if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
-        echo "Locked test_stdio_server build failed; retrying offline in the build tree without --locked." >&2
+        echo "Locked test_stdio_server build failed; retrying online in the build tree without --locked." >&2
         unset 'test_cmd[-1]'
-        test_cmd+=(--offline)
-        if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
-          return 1
+        if (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
+          :
+        else
+          echo "Online test_stdio_server build without --locked failed; retrying offline." >&2
+          test_cmd+=(--offline)
+          if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${test_cmd[@]}") >&2; then
+            return 1
+          fi
         fi
       else
         return 1
