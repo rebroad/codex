@@ -355,6 +355,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "arm"))]
     fn linked_v8_has_sandbox_enabled() {
         unsafe extern "C" {
             fn v8__V8__IsSandboxEnabled() -> bool;

@@ -1597,7 +1597,7 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
     "${RUST_WORKSPACE_DIR}/Cargo.toml" "${TARGET}"
   cargo_use_locked="false"
 fi
-cargo_args=(+"${TOOLCHAIN}" build -p codex-cli --target "${TARGET}")
+cargo_args=(+"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host --target "${TARGET}")
 if [[ "${PROFILE}" == "release" ]]; then
   cargo_args+=(--release)
 fi
@@ -1617,7 +1617,7 @@ if [[ "${cargo_use_locked}" == "true" ]]; then
   cargo_args+=(--locked)
 fi
 
-echo "Building codex-cli (${PROFILE}) for ${TARGET}..."
+echo "Building codex-cli and codex-code-mode-host (${PROFILE}) for ${TARGET}..."
 echo "Using prebuilt rusty_v8 from ${RUSTY_V8_RELEASE_REPO} (${release_tag})"
 echo "Using Cargo build jobs: ${BUILD_JOBS}"
 if [[ "${PROFILE}" == "release" && "${FAST_RELEASE_BUILD}" == "true" ]]; then
