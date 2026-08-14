@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const path = require("node:path");
+const fs = require("node:fs/promises");
 const { spawn } = require("node:child_process");
 const http = require("node:http");
 
@@ -9,7 +10,7 @@ const HEALTH_RETRY_MS = 250;
 
 function usage() {
   console.log(`Usage:
-  node tools/rollout-inspector/view-rollout.js <rollout.jsonl> [options]
+  node tools/rollout-inspector/view-rollout.js <session-id|rollout.jsonl> [options]
 
 Options:
   --port <n>           Server port (default: 8787)
@@ -18,6 +19,73 @@ Options:
   --no-analyze         Do not auto-run payload analysis on page load
   --help, -h           Show help
 `);
+}
+
+async function findRolloutFile(sessionId, codexHome) {
+  const roots = ["sessions", "archived_sessions"].map((segment) =>
+    path.join(codexHome, segment),
+  );
+  const suffix = `${sessionId}.jsonl`;
+  const matches = [];
+
+  async function visit(dirPath) {
+    let entries;
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return;
+      }
+      throw error;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        await visit(fullPath);
+      } else if (
+        entry.isFile() &&
+        (entry.name === suffix || entry.name.endsWith(`-${suffix}`))
+      ) {
+        matches.push(fullPath);
+      }
+    }
+  }
+
+  for (const root of roots) {
+    await visit(root);
+  }
+
+  if (matches.length === 0) {
+    throw new Error(
+      `could not find rollout for session-id ${sessionId} under ${codexHome}`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `found multiple rollouts for session-id ${sessionId}:\n${matches.join("\n")}`,
+    );
+  }
+  return matches[0];
+}
+
+async function resolveRolloutFile(input, codexHome) {
+  const explicitPath = path.resolve(input);
+  try {
+    const stat = await fs.stat(explicitPath);
+    if (stat.isFile() && explicitPath.endsWith(".jsonl")) {
+      return explicitPath;
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const sessionId = input.endsWith(".jsonl")
+    ? path.basename(input, ".jsonl")
+    : path.basename(input);
+  return findRolloutFile(sessionId, codexHome);
 }
 
 function parseArgs(argv) {
@@ -63,9 +131,6 @@ function parseArgs(argv) {
   if (!args.file) {
     usage();
     process.exit(1);
-  }
-  if (!args.file.endsWith(".jsonl")) {
-    throw new Error(`expected a .jsonl file, got: ${args.file}`);
   }
   if (!Number.isFinite(args.port) || args.port <= 0) {
     throw new Error(`invalid --port value: ${args.port}`);
@@ -144,6 +209,10 @@ function waitForHealthy(port) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  args.file = await resolveRolloutFile(
+    args.file,
+    args.codexHome || path.join(process.env.HOME || "", ".codex"),
+  );
   const serverPath = path.join(__dirname, "server.js");
 
   const serverArgs = [serverPath, "--port", String(args.port)];
@@ -188,7 +257,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}
+
+module.exports = { findRolloutFile, resolveRolloutFile };
