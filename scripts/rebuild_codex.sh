@@ -537,7 +537,7 @@ configure_musl_build_tools() {
 }
 
 cargo_build() {
-  local mode="${1}" target_mode="${2}" profile_args=() target triple target_dir native_host_target=""
+  local mode="${1}" target_mode="${2}" profile_args=() target triple target_dir
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
   target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
@@ -562,10 +562,6 @@ cargo_build() {
   else
     target=""
   fi
-  if [[ "${target_mode}" == native ]]; then
-    native_host_target="$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')"
-  fi
-
   local -a env_args=()
   if [[ "${target_mode}" == native ]]; then
     env_args+=(
@@ -668,10 +664,8 @@ cargo_build() {
   fi
 
   local -a cmd=("${CARGO_CMD[@]}" build -p codex-cli -p codex-rmcp-client)
-  if [[ "${target_mode}" != armv7 && "${native_host_target}" != aarch64-linux-android ]]; then
+  if [[ "${target_mode}" != armv7 ]]; then
     cmd+=(-p codex-code-mode-host)
-  elif [[ "${native_host_target}" == aarch64-linux-android ]]; then
-    echo "Skipping unsupported codex-code-mode-host build on Android." >&2
   fi
   [[ "${target_mode}" == musl ]] && cmd+=(-p codex-bwrap)
   [[ -n "${target}" ]] && cmd+=(--target "${target}")
@@ -892,6 +886,7 @@ build_android() {
   local stage="${BUILD_REPO}/build/android-artifact"
   mkdir -p "${stage}"
   install -m 0755 "${binary}" "${stage}/codex.bin"
+  install -m 0755 "$(dirname "${binary}")/codex-code-mode-host" "${stage}/codex-code-mode-host"
   install -m 0644 "${llvm}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "${stage}/libc++_shared.so"
   "${llvm}/bin/llvm-strip" --strip-all "${stage}/codex.bin"
   patch_timestamp "${stage}/codex.bin" "${VERSION}" "${COMMIT_SHORT}"
@@ -1089,9 +1084,7 @@ else
   binary="$(cargo_build "${MODE}" "${TARGET_MODE}")"
   if [[ "${TARGET_MODE}" == native ]]; then
     install_binary "${binary}" "${VERSION}"
-    if [[ "$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" != aarch64-linux-android ]]; then
-      install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
-    fi
+    install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
     install_test_stdio_server "$(dirname "${binary}")/test_stdio_server"
   else
     echo "Built target binary: ${binary}"
