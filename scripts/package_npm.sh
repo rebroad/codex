@@ -135,12 +135,13 @@ if [[ -z "${REUSE_FORK_ARTIFACT_DIR}" ]]; then
         ;;
       android)
         ANDROID_STAGE="${BUILD_TREE}/build/android-artifact"
-        [[ -x "${ANDROID_STAGE}/codex.bin" && -f "${ANDROID_STAGE}/libc++_shared.so" ]] || {
+        [[ -x "${ANDROID_STAGE}/codex.bin" && -x "${ANDROID_STAGE}/codex-code-mode-host" && -f "${ANDROID_STAGE}/libc++_shared.so" ]] || {
           echo "Missing Android npm artifacts under ${ANDROID_STAGE}" >&2
           exit 1
         }
         mkdir -p "${VENDOR_ROOT}/aarch64-linux-android/bin"
         install -m 0755 "${ANDROID_STAGE}/codex.bin" "${VENDOR_ROOT}/aarch64-linux-android/bin/codex"
+        install -m 0755 "${ANDROID_STAGE}/codex-code-mode-host" "${VENDOR_ROOT}/aarch64-linux-android/bin/codex-code-mode-host"
         install -m 0644 "${ANDROID_STAGE}/libc++_shared.so" "${VENDOR_ROOT}/aarch64-linux-android/bin/libc++_shared.so"
         ;;
     esac
