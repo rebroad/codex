@@ -24,8 +24,12 @@ API endpoints:
 ## 1b) One-shot CLI: open a specific rollout file in browser
 
 ```bash
-node tools/rollout-inspector/view-rollout.js ~/.codex/sessions/2026/03/08/rollout-....jsonl
+node tools/rollout-inspector/view-rollout.js 019c336c-9ced-7553-a843-15c04790ca4f
 ```
+
+The positional argument may be a session-id without `.jsonl`. The inspector
+searches both `~/.codex/sessions` and `~/.codex/archived_sessions`; an explicit
+rollout path remains supported.
 
 Useful options:
 
@@ -34,7 +38,8 @@ Useful options:
 - `--port <n>`: choose a specific local port
 - `--codex-home <path>`: root used for "Recent Files"
 
-If you already have a path from `grep`/`find`, pass it directly:
+If you already have a path from `grep`/`find`, pass it directly (with or without
+the `.jsonl` suffix):
 
 ```bash
 node tools/rollout-inspector/view-rollout.js "$(find ~/.codex/sessions -name 'rollout-*.jsonl' | head -n1)"
