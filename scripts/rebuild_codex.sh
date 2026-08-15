@@ -64,7 +64,7 @@ Options:
   --target <names>         native, musl, armv7, android, all, or comma-separated targets
                            (all means the complete eight-architecture npm candidate)
   --armv7                  Alias for --target armv7
-  --armv7-build-env MODE   ARMv7 environment: host (default), auto, or docker-buster
+  --armv7-build-env MODE   ARMv7 environment: host (default); ARMv7 builds are musl
   --build-npm-vendor       Build the Linux musl payload for npm packaging
   --package-local-npm      Build/reuse local @reb.ai/codex npm archives
   --publish-local-npm      Assemble, audit, and publish npm locally
@@ -365,7 +365,7 @@ configure_rusty_v8_artifacts() {
       target="x86_64-unknown-linux-musl"
       ;;
     armv7)
-      target="${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}"
+      target="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"
       ;;
     android)
       target="aarch64-linux-android"
@@ -499,7 +499,7 @@ target_triple() {
   case "${1}" in
     native) echo "" ;;
     musl) echo "x86_64-unknown-linux-musl" ;;
-    armv7) echo "${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}" ;;
+    armv7) echo "${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}" ;;
     android) echo "aarch64-linux-android" ;;
   esac
 }
