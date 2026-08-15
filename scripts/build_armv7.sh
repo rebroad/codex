@@ -1676,7 +1676,7 @@ cargo_args=(+"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host --target 
 if [[ "${PROFILE}" == "release" ]]; then
   cargo_args+=(--release)
 fi
-if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
+if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
   # Codex pins v8 = <resolved_v8_version>; prepare a matching patched source.
   effective_rusty_v8_source_repo="$(ensure_rusty_v8_source_repo_for_version "${RUSTY_V8_LOCAL_PATH}" "${resolved_v8_version}")"
   patched_v8_dir="${ARMV7_CACHE_DIR}/v8-${resolved_v8_version}-armv7-patched"
