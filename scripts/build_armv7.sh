@@ -1736,6 +1736,21 @@ else
   status=${PIPESTATUS[0]}
 fi
 set -e
+if (( status != 0 )) && [[ "${TARGET}" == armv7-unknown-linux-* ]] \
+  && [[ "${cargo_use_locked}" == false ]]; then
+  metadata_args=(
+    +"${TOOLCHAIN}" metadata
+    --no-deps
+    --format-version=1
+    --locked
+    --config
+    "patch.crates-io.v8.path=\"${patched_v8_dir}\""
+  )
+  if env "${cargo_env[@]}" cargo "${metadata_args[@]}" >/dev/null 2>&1; then
+    printf '%s\n' "${resolution_fingerprint}" >"${resolution_fingerprint_file}"
+    echo "Cached ARMv7 Cargo resolution after dependency resolution succeeded." >&2
+  fi
+fi
 if (( status != 0 )); then
   if [[ "${BENCHMARK_LINKERS}" == "true" && -f "${LINKER_CAPTURE_DONE_FILE}" ]]; then
     echo "Captured final link command for benchmark; skipping artifact build."
