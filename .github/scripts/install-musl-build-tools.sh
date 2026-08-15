@@ -64,8 +64,6 @@ libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
 libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
-zig_bin="${ZIG_BIN:-$(command -v zig || true)}"
-
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
 if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
   # Ubuntu does not ship an ARMv7 musl cross compiler. Use Zig's musl target
