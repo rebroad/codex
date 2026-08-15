@@ -94,12 +94,16 @@ set -euo pipefail
 args=()
 rust_libc=""
 for arg in "\$@"; do
-  if [[ "\${arg}" == */rustlib/armv7-unknown-linux-musleabihf/lib/self-contained/crt1.o ]]; then
+  if [[ "\${arg}" == */self-contained/crt1.o ]]; then
     rust_libc="\${arg%/crt1.o}/libc.a"
   fi
 done
 for arg in "\$@"; do
-  if [[ "\${arg}" == -lc && -s "\${rust_libc}" ]]; then
+  if [[ "\${arg}" == -lc && -n "\${rust_libc}" ]]; then
+    [[ -s "\${rust_libc}" ]] || {
+      echo "Rust ARMv7 self-contained libc archive is missing: \${rust_libc}" >&2
+      exit 1
+    }
     args+=("\${rust_libc}")
   else
     args+=("\${arg}")
