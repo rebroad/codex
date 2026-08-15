@@ -155,6 +155,9 @@ async fn rollout_maintenance_contention_disables_cached_legacy_resume_shortcut()
         .resume_thread(config, thread_id, ResumeModelSettings::RestoreFromThread)
         .await?;
 
+    #[cfg(target_os = "android")]
+    assert_eq!(app_server.next_request_id, next_request_id + 4);
+    #[cfg(not(target_os = "android"))]
     assert_eq!(app_server.next_request_id, next_request_id + 3);
     assert_eq!(resumed.session.thread_id, thread_id);
     assert_eq!(
