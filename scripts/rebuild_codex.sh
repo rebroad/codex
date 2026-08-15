@@ -316,7 +316,22 @@ refresh_build_lockfile() {
     echo "Keeping generated build-tree Cargo.lock." >&2
   fi
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
-    (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" update -p v8 --offline)
+    local lock_update_fingerprint_file="${BUILD_REPO}/build/.codex-armv7-lock-update-fingerprint"
+    local lock_update_fingerprint stored_lock_update_fingerprint=""
+    lock_update_fingerprint="$({
+      sha256sum "${BUILD_WORKSPACE}/Cargo.toml" "${build_lock}"
+    } | sha256sum | awk '{print $1}')"
+    [[ -f "${lock_update_fingerprint_file}" ]] \
+      && read -r stored_lock_update_fingerprint <"${lock_update_fingerprint_file}"
+    if [[ "${lock_update_fingerprint}" != "${stored_lock_update_fingerprint}" ]]; then
+      (cd "${BUILD_WORKSPACE}" && env CARGO_TARGET_DIR="${target_dir}" "${CARGO_CMD[@]}" update -p v8 --offline)
+      lock_update_fingerprint="$({
+        sha256sum "${BUILD_WORKSPACE}/Cargo.toml" "${build_lock}"
+      } | sha256sum | awk '{print $1}')"
+      printf '%s\n' "${lock_update_fingerprint}" >"${lock_update_fingerprint_file}"
+    else
+      echo "Keeping cached ARMv7 V8 Cargo resolution." >&2
+    fi
   fi
   echo "Cargo will try locked online dependency resolution before an offline retry." >&2
 }
