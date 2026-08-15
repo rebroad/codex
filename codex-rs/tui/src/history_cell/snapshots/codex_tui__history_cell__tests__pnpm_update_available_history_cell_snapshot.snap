@@ -1,10 +1,11 @@
 ---
 source: tui/src/history_cell/tests.rs
+assertion_line: 1216
 expression: rendered
 ---
 ╭──────────────────────────────────────────────────╮
 │ ✨ Update available! 0.0.0 -> 9.9.9              │
-│ Run pnpm add -g @reb.ai/codex to update.        │
+│ Run pnpm add -g @reb.ai/codex to update.         │
 │                                                  │
 │ See full release notes:                          │
 │ https://github.com/rebroad/codex/releases/latest │
