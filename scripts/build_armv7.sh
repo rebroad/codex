@@ -592,14 +592,13 @@ configure_armv7_musl_toolchain() {
     echo "ARMv7 musl tool setup script not found: ${setup_script}" >&2
     exit 1
   }
-  if [[ ! -s "${env_file}" ]]; then
-    mkdir -p "${runner_temp}"
-    TARGET="${TARGET}" \
-      GITHUB_ENV="${env_file}" \
-      RUNNER_TEMP="${runner_temp}" \
-      CODEX_BUILD_TOOLS_DIR="${REPO_DIR}/build/tools" \
-      bash "${setup_script}"
-  fi
+  mkdir -p "${runner_temp}"
+  : >"${env_file}"
+  TARGET="${TARGET}" \
+    GITHUB_ENV="${env_file}" \
+    RUNNER_TEMP="${runner_temp}" \
+    CODEX_BUILD_TOOLS_DIR="${REPO_DIR}/build/tools" \
+    bash "${setup_script}"
   while IFS= read -r assignment; do
     [[ -n "${assignment}" ]] && export "${assignment}"
   done <"${env_file}"
