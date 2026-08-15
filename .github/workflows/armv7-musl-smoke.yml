@@ -38,7 +38,8 @@ jobs:
           env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
             -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
             -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
-            bash scripts/build_armv7.sh --release --binary-only \
+            CODEX_ALLOW_SOURCE_BUILD=true bash scripts/build_armv7.sh \
+              --release --binary-only \
               --no-deploy-remote --no-publish-github
           release_dir="${GITHUB_WORKSPACE}/build/armv7-release/${target}/release"
           for binary in codex codex-code-mode-host; do
