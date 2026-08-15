@@ -1666,6 +1666,7 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
 fi
 
 cargo_use_locked="true"
+resolution_fingerprint_file="${ARMV7_CACHE_DIR}/cargo-resolution-fingerprint"
 if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
   bash "${REPO_DIR}/scripts/apply_target_cargo_patches.sh" \
     "${RUST_WORKSPACE_DIR}/Cargo.toml" "${TARGET}"
@@ -1685,7 +1686,21 @@ if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
     --config
     "patch.crates-io.v8.path=\"${patched_v8_dir}\""
   )
-  cargo_use_locked="false"
+  resolution_fingerprint="$({
+    printf '%s\n' "target=${TARGET}" "profile=${PROFILE}"
+    sha256sum "${RUST_WORKSPACE_DIR}/Cargo.toml" "${CARGO_LOCK_PATH}"
+    sha256sum "${patched_v8_dir}/Cargo.toml" "${patched_v8_dir}/.codex-armv7-v8-patch.meta"
+  } | sha256sum | awk '{print $1}')"
+  stored_resolution_fingerprint=""
+  [[ -f "${resolution_fingerprint_file}" ]] \
+    && read -r stored_resolution_fingerprint <"${resolution_fingerprint_file}"
+  if [[ "${resolution_fingerprint}" != "${stored_resolution_fingerprint}" ]]; then
+    cargo_use_locked="false"
+    echo "ARMv7 Cargo resolution inputs changed; refreshing the lockfile." >&2
+  else
+    cargo_use_locked="true"
+    echo "Using cached ARMv7 Cargo resolution." >&2
+  fi
 fi
 if [[ "${cargo_use_locked}" == "true" ]]; then
   cargo_args+=(--locked)
@@ -1777,6 +1792,9 @@ if (( status != 0 )); then
   fi
 fi
 rm -f "${build_log}"
+if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
+  printf '%s\n' "${resolution_fingerprint}" >"${resolution_fingerprint_file}"
+fi
 
 target_dir="$(resolve_cargo_target_dir)"
 bin_path="${target_dir}/${TARGET}/${PROFILE}/codex"
