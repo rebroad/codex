@@ -572,19 +572,15 @@ jobs:
           set -euo pipefail
           VERSION="${VERSION#rust-v}"
           cd codex-rs
-          if [[ "${TARGET}" != armv7-unknown-linux-musleabihf ]]; then
-            build_args=(cargo build --target "${TARGET}" --release --timings --bin codex --bin codex-code-mode-host)
-            "${build_args[@]}"
-          fi
+          build_args=(cargo build --target "${TARGET}" --release --timings --bin codex --bin codex-code-mode-host)
+          "${build_args[@]}"
           release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
           vendor_dir="${RUNNER_TEMP}/codex-npm-vendor-${TARGET}"
           mkdir -p "${vendor_dir}/${TARGET}/bin"
           suffix=""
           [[ "${TARGET}" == *-pc-windows-msvc ]] && suffix=.exe
           cp "${release_dir}/codex${suffix}" "${vendor_dir}/${TARGET}/bin/codex${suffix}"
-          if [[ "${TARGET}" != armv7-unknown-linux-musleabihf ]]; then
-            cp "${release_dir}/codex-code-mode-host${suffix}" "${vendor_dir}/${TARGET}/bin/codex-code-mode-host${suffix}"
-          fi
+          cp "${release_dir}/codex-code-mode-host${suffix}" "${vendor_dir}/${TARGET}/bin/codex-code-mode-host${suffix}"
           if [[ "${TARGET}" == aarch64-linux-android ]]; then
             cp "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "${vendor_dir}/${TARGET}/bin/libc++_shared.so"
           fi
