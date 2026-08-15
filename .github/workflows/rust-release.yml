@@ -573,7 +573,14 @@ jobs:
           export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/build/fork-npm"
           cd codex-rs
           build_args=(cargo build --target "${TARGET}" --release --timings --bin codex --bin codex-code-mode-host)
-          "${build_args[@]}"
+          if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+            env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
+              -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
+              -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
+              "${build_args[@]}"
+          else
+            "${build_args[@]}"
+          fi
           release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
           vendor_dir="${RUNNER_TEMP}/codex-npm-vendor-${TARGET}"
           mkdir -p "${vendor_dir}/${TARGET}/bin"
