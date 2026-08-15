@@ -305,10 +305,15 @@ refresh_build_lockfile() {
   fi
   target_dir="$(cargo_target_dir "${MODE}" "${lock_target_mode}")"
   local source_fingerprint stored_fingerprint=""
+  local armv7_lock_cache="${target_dir}/cache/cargo-resolution-lock"
   source_fingerprint="$(sed '/^version = /d' "${source_lock}" | sha256sum | awk '{print $1}')"
   [[ -f "${fingerprint_file}" ]] && read -r stored_fingerprint <"${fingerprint_file}"
   echo "Refreshing generated build-tree Cargo.lock..." >&2
-  if [[ ! -f "${build_lock}" || "${source_fingerprint}" != "${stored_fingerprint}" ]]; then
+  if [[ "${lock_target_mode}" == armv7 && "${source_fingerprint}" == "${stored_fingerprint}" \
+    && -f "${armv7_lock_cache}" ]]; then
+    cp "${armv7_lock_cache}" "${build_lock}"
+    echo "Restored cached ARMv7 Cargo resolution." >&2
+  elif [[ ! -f "${build_lock}" || "${source_fingerprint}" != "${stored_fingerprint}" ]]; then
     cp "${source_lock}" "${build_lock}"
     mkdir -p "$(dirname "${fingerprint_file}")"
     printf '%s\n' "${source_fingerprint}" >"${fingerprint_file}"
