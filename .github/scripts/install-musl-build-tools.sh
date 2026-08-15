@@ -16,8 +16,20 @@ if [[ -n "${APT_INSTALL_ARGS:-}" ]]; then
   apt_install_args=(${APT_INSTALL_ARGS})
 fi
 
-sudo apt-get update "${apt_update_args[@]}"
-sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld xz-utils
+need_apt_install=false
+for required_command in curl musl-gcc pkg-config g++ clang clang++ ld.lld xz sha256sum make tar nproc; do
+  if ! command -v "${required_command}" >/dev/null 2>&1; then
+    need_apt_install=true
+    break
+  fi
+done
+if [[ ! -f /usr/include/sys/capability.h ]]; then
+  need_apt_install=true
+fi
+if [[ "${need_apt_install}" == true ]]; then
+  sudo apt-get update "${apt_update_args[@]}"
+  sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld xz-utils
+fi
 
 zig_bin="${ZIG_BIN:-$(command -v zig || true)}"
 if [[ "${TARGET}" == armv7-unknown-linux-musleabihf && -z "${zig_bin}" ]]; then
