@@ -1,0 +1,57 @@
+name: ARMv7 musl smoke
+
+on:
+  push:
+    branches:
+      - ci/armv7-musl-smoke
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust-toolchain
+        with:
+          target: armv7-unknown-linux-musleabihf
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - name: Install ARMv7 musl build tools
+        env:
+          TARGET: armv7-unknown-linux-musleabihf
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+      - name: Configure Rusty V8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: armv7-unknown-linux-musleabihf
+      - name: Apply ARMv7 Cargo patches
+        run: |
+          bash scripts/apply_target_cargo_patches.sh codex-rs/Cargo.toml armv7-unknown-linux-musleabihf
+          cd codex-rs
+          cargo update -p pagable
+      - name: Build and verify both ARMv7 binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=armv7-unknown-linux-musleabihf
+          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/build/armv7-smoke"
+          cd codex-rs
+          cargo build --target "${target}" --release --timings \
+            --bin codex --bin codex-code-mode-host
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          for binary in codex codex-code-mode-host; do
+            test -x "${release_dir}/${binary}"
+            description="$(file -b "${release_dir}/${binary}")"
+            grep -Eq 'ARM|arm' <<<"${description}"
+            if [[ "${description}" != *"statically linked"* ]]; then
+              readelf -l "${release_dir}/${binary}" \
+                | grep -Fq 'Requesting program interpreter: /lib/ld-musl-armhf.so.1'
+            fi
+            file "${release_dir}/${binary}"
+          done
