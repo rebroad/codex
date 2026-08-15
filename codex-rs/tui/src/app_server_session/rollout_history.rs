@@ -75,24 +75,21 @@ impl AppServerSession {
                 .history_pagination
                 .get(&thread_id)
                 .is_some_and(|state| state.history_mode == ThreadHistoryMode::Legacy)
-                && (!self.uses_embedded_app_server()
-                    || (!self.background_rollout_migration_enabled
-                        && !config
-                            .features
-                            .enabled(Feature::BackgroundPaginatedRolloutMigration)
-                        && {
-                            rollout_maintenance_guard =
-                                codex_rollout::try_acquire_rollout_maintenance_lock(
-                                    config.codex_home.as_path(),
-                                )
-                                .ok()
-                                .flatten();
-                            rollout_maintenance_guard.is_some()
-                        }
+                && if !self.uses_embedded_app_server() {
+                    true
+                } else {
+                    rollout_maintenance_guard =
+                        codex_rollout::try_acquire_rollout_maintenance_lock(
+                            config.codex_home.as_path(),
+                        )
+                        .ok()
+                        .flatten();
+                    rollout_maintenance_guard.is_some()
                         && self
                             .thread_read(thread_id, /*include_turns*/ false)
                             .await
-                            .is_ok_and(|thread| thread.history_mode == ThreadHistoryMode::Legacy)));
+                            .is_ok_and(|thread| thread.history_mode == ThreadHistoryMode::Legacy)
+                };
             !known_legacy_history
         } else {
             false
