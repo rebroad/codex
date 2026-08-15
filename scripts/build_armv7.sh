@@ -1661,6 +1661,7 @@ eval "$(bash "${REPO_DIR}/scripts/resolve_rusty_v8_artifacts.sh" \
   --release-tag="${release_tag}" \
   --profile=release \
   --v8-version="${resolved_v8_version}")"
+export RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH
 if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
 fi
