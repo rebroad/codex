@@ -616,7 +616,20 @@ configure_armv7_musl_toolchain() {
 
 authenticate_armv7_musl_sudo() {
   local cached_zig="${REPO_DIR}/build/tools/zig-linux-$(uname -m)-${CODEX_ZIG_VERSION:-0.14.0}/zig"
+  local need_sudo=false
   if [[ -z "${ZIG_BIN:-}" ]] && ! command -v zig >/dev/null 2>&1 && [[ ! -x "${cached_zig}" ]]; then
+    need_sudo=true
+  fi
+  for required_command in curl musl-gcc pkg-config g++ clang clang++ ld.lld xz sha256sum make tar nproc; do
+    if ! command -v "${required_command}" >/dev/null 2>&1; then
+      need_sudo=true
+      break
+    fi
+  done
+  if [[ ! -f /usr/include/sys/capability.h ]]; then
+    need_sudo=true
+  fi
+  if [[ "${need_sudo}" == true ]]; then
     command -v sudo >/dev/null 2>&1 || {
       echo "ARMv7 musl builds need sudo to install their build tools, but sudo is unavailable." >&2
       exit 1
