@@ -30,6 +30,11 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: armv7-unknown-linux-musleabihf
+      - name: Provide Rusty V8 source
+        run: |
+          v8_version="$(sed -n '/^name = "v8"$/,/^$/ s/^version = "\(.*\)"$/\1/p' codex-rs/Cargo.lock)"
+          git clone --depth 1 --branch "v${v8_version}" \
+            https://github.com/denoland/rusty_v8.git "${RUNNER_TEMP}/rusty_v8"
       - name: Build and verify both ARMv7 binaries
         shell: bash
         run: |
@@ -38,7 +43,9 @@ jobs:
           env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
             -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
             -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
-            CODEX_ALLOW_SOURCE_BUILD=true bash scripts/build_armv7.sh \
+            CODEX_ALLOW_SOURCE_BUILD=true \
+            RUSTY_V8_LOCAL_PATH="${RUNNER_TEMP}/rusty_v8" \
+            bash scripts/build_armv7.sh \
               --release --binary-only \
               --no-deploy-remote --no-publish-github
           release_dir="${GITHUB_WORKSPACE}/build/armv7-release/${target}/release"
