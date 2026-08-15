@@ -117,7 +117,9 @@ async fn check_for_update(
         Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
             fetch_latest_github_release_version(&client_pool, false).await?
         }
-        Some(UpdateAction::StandaloneUnixAlpha) | Some(UpdateAction::StandaloneWindowsAlpha) => {
+        Some(UpdateAction::BrewUpgradeAlpha)
+        | Some(UpdateAction::StandaloneUnixAlpha)
+        | Some(UpdateAction::StandaloneWindowsAlpha) => {
             fetch_latest_github_release_version(&client_pool, true).await?
         }
     };
@@ -150,9 +152,9 @@ fn current_update_source(action: Option<UpdateAction>) -> &'static str {
         Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
             "github-release-stable"
         }
-        Some(UpdateAction::StandaloneUnixAlpha) | Some(UpdateAction::StandaloneWindowsAlpha) => {
-            "github-release-alpha"
-        }
+        Some(UpdateAction::BrewUpgradeAlpha)
+        | Some(UpdateAction::StandaloneUnixAlpha)
+        | Some(UpdateAction::StandaloneWindowsAlpha) => "github-release-alpha",
     }
 }
 

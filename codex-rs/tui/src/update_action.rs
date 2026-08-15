@@ -16,6 +16,8 @@ pub enum UpdateAction {
     PnpmGlobalLatest,
     /// Update a Homebrew-detected installation via the fork npm package.
     BrewUpgrade,
+    /// Update a Homebrew-detected alpha installation via the fork installer.
+    BrewUpgradeAlpha,
     /// Update via the fork standalone installer.
     StandaloneUnix,
     /// Update via the fork standalone installer.
@@ -48,7 +50,14 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@reb.ai/codex"]),
-            UpdateAction::BrewUpgrade | UpdateAction::StandaloneUnix => (
+            UpdateAction::BrewUpgrade => (
+                "sh",
+                &[
+                    "-c",
+                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+                ],
+            ),
+            UpdateAction::StandaloneUnix => (
                 "sh",
                 &[
                     "-c",
@@ -89,6 +98,25 @@ impl UpdateAction {
         shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
             .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
     }
+
+    /// Returns the npm command shown to users for Unix update actions.
+    pub fn display_command_str(self) -> String {
+        let (command, args) = match self {
+            UpdateAction::BrewUpgrade | UpdateAction::StandaloneUnix => {
+                ("npm", &["install", "-g", "@reb.ai/codex"][..])
+            }
+            UpdateAction::BrewUpgradeAlpha | UpdateAction::StandaloneUnixAlpha => {
+                ("npm", &["install", "-g", "@reb.ai/codex@alpha"][..])
+            }
+            UpdateAction::NpmGlobalLatest
+            | UpdateAction::BunGlobalLatest
+            | UpdateAction::PnpmGlobalLatest
+            | UpdateAction::StandaloneWindows
+            | UpdateAction::StandaloneWindowsAlpha => return self.command_str(),
+        };
+        shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
+            .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
+    }
 }
 
 #[cfg(not(debug_assertions))]
@@ -96,6 +124,7 @@ pub fn get_update_action() -> Option<UpdateAction> {
     let action = UpdateAction::from_install_context(InstallContext::current())?;
     if crate::version::CODEX_CLI_VERSION.contains("-alpha") {
         return Some(match action {
+            UpdateAction::BrewUpgrade => UpdateAction::BrewUpgradeAlpha,
             UpdateAction::StandaloneUnix => UpdateAction::StandaloneUnixAlpha,
             UpdateAction::StandaloneWindows => UpdateAction::StandaloneWindowsAlpha,
             action => action,
@@ -209,6 +238,10 @@ mod tests {
                 .contains("CODEX_RELEASE=alpha")
         );
         assert_eq!(
+            UpdateAction::BrewUpgradeAlpha.command_args(),
+            UpdateAction::StandaloneUnixAlpha.command_args()
+        );
+        assert_eq!(
             UpdateAction::StandaloneWindowsAlpha.command_args(),
             (
                 "powershell",
@@ -219,6 +252,10 @@ mod tests {
                     "$env:CODEX_RELEASE='alpha'; $env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
                 ][..],
             )
+        );
+        assert_eq!(
+            UpdateAction::StandaloneUnixAlpha.display_command_str(),
+            "npm install -g @reb.ai/codex@alpha"
         );
     }
 }

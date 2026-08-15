@@ -808,13 +808,16 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 /// Run the update action and print the result.
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
-    let cmd_str = action.command_str();
+    let cmd_str = action.display_command_str();
     println!("Updating Codex via `{cmd_str}`...");
 
     let status = {
         #[cfg(windows)]
         {
-            if action == UpdateAction::StandaloneWindows {
+            if matches!(
+                action,
+                UpdateAction::StandaloneWindows | UpdateAction::StandaloneWindowsAlpha
+            ) {
                 let (cmd, args) = action.command_args();
                 // Run the standalone PowerShell installer with PowerShell
                 // itself. Routing this through `cmd.exe /C` would parse
