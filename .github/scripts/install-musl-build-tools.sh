@@ -124,11 +124,16 @@ if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"
   libcap_source_dir="${libcap_src_root}/libcap-${libcap_version}"
+  # A prior cross-build can leave _makenames as an ARM executable and
+  # cap_names.h as an empty redirected output file. Clean generated objects
+  # so the host build compiler recreates them before target compilation.
+  make -C "${libcap_source_dir}/libcap" clean >/dev/null 2>&1 || true
   make -C "${libcap_source_dir}/libcap" -j"$(nproc)" \
     CC="${musl_linker}" \
     BUILD_CC="${BUILD_CC:-cc}" \
     AR=ar \
-    RANLIB=ranlib
+    RANLIB=ranlib \
+    libcap.a
 
   cp "${libcap_source_dir}/libcap/libcap.a" "${libcap_prefix}/lib/libcap.a"
   cp "${libcap_source_dir}/libcap/include/uapi/linux/capability.h" "${libcap_prefix}/include/linux/capability.h"
