@@ -90,7 +90,7 @@ if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
   cat >"${musl_linker}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec "${zig_bin}" cc -target arm-linux-musleabihf "\$@"
+exec "${zig_bin}" cc -target arm-linux-musleabihf -nostdlib "\$@"
 EOF
   chmod +x "${musl_linker}"
 elif command -v "${arch}-linux-musl-gcc" >/dev/null; then
