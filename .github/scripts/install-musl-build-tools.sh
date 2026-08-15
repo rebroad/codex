@@ -90,7 +90,22 @@ if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
   cat >"${musl_linker}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec "${zig_bin}" cc -target arm-linux-musleabihf -nostdlib "\$@"
+
+args=()
+rust_libc=""
+for arg in "\$@"; do
+  if [[ "\${arg}" == */rustlib/armv7-unknown-linux-musleabihf/lib/self-contained/crt1.o ]]; then
+    rust_libc="\${arg%/crt1.o}/libc.a"
+  fi
+done
+for arg in "\$@"; do
+  if [[ "\${arg}" == -lc && -s "\${rust_libc}" ]]; then
+    args+=("\${rust_libc}")
+  else
+    args+=("\${arg}")
+  fi
+done
+exec "${zig_bin}" cc -target arm-linux-musleabihf -nostdlib "\${args[@]}"
 EOF
   chmod +x "${musl_linker}"
 elif command -v "${arch}-linux-musl-gcc" >/dev/null; then
