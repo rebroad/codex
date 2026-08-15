@@ -42,8 +42,11 @@ jobs:
           target=armv7-unknown-linux-musleabihf
           export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/build/armv7-smoke"
           cd codex-rs
-          cargo build --target "${target}" --release --timings \
-            --bin codex --bin codex-code-mode-host
+          env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
+            -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
+            -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
+            cargo build --target "${target}" --release --timings \
+              --bin codex --bin codex-code-mode-host
           release_dir="${CARGO_TARGET_DIR}/${target}/release"
           for binary in codex codex-code-mode-host; do
             test -x "${release_dir}/${binary}"
