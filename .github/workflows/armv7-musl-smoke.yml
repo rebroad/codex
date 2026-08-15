@@ -30,24 +30,17 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: armv7-unknown-linux-musleabihf
-      - name: Apply ARMv7 Cargo patches
-        run: |
-          bash scripts/apply_target_cargo_patches.sh codex-rs/Cargo.toml armv7-unknown-linux-musleabihf
-          cd codex-rs
-          cargo update -p pagable
       - name: Build and verify both ARMv7 binaries
         shell: bash
         run: |
           set -euo pipefail
           target=armv7-unknown-linux-musleabihf
-          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/build/armv7-smoke"
-          cd codex-rs
           env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
             -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
             -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
-            cargo build --target "${target}" --release --timings \
-              --bin codex --bin codex-code-mode-host
-          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+            bash scripts/build_armv7.sh --release --binary-only \
+              --no-deploy-remote --no-publish-github
+          release_dir="${GITHUB_WORKSPACE}/build/armv7-release/${target}/release"
           for binary in codex codex-code-mode-host; do
             test -x "${release_dir}/${binary}"
             description="$(file -b "${release_dir}/${binary}")"
