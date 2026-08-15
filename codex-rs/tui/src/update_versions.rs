@@ -1,7 +1,12 @@
 pub(crate) fn is_newer(latest: &str, current: &str) -> Option<bool> {
     match (parse_version(latest), parse_version(current)) {
         (Some((l, l_pre)), Some((c, c_pre))) => Some(match l.cmp(&c) {
-            std::cmp::Ordering::Equal => l_pre > c_pre,
+            std::cmp::Ordering::Equal => match (l_pre, c_pre) {
+                (None, None) => false,
+                (None, Some(_)) => true,
+                (Some(_), None) => false,
+                (Some(l_pre), Some(c_pre)) => l_pre > c_pre,
+            },
             ordering => ordering.is_gt(),
         }),
         _ => None,
@@ -21,7 +26,7 @@ pub(crate) fn is_source_build_version(version: &str) -> bool {
 }
 
 fn parse_version(v: &str) -> Option<((u64, u64, u64), Option<(u8, u64, u64)>)> {
-    let mut iter = v.trim().split('.');
+    let mut iter = v.trim().splitn(3, '.');
     let maj = iter.next()?.parse::<u64>().ok()?;
     let min = iter.next()?.parse::<u64>().ok()?;
     let patch = iter.next()?;

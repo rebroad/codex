@@ -209,10 +209,17 @@ mod tests {
                 .command_str()
                 .contains("CODEX_RELEASE=alpha")
         );
-        assert!(
-            UpdateAction::StandaloneWindowsAlpha
-                .command_str()
-                .contains("CODEX_RELEASE='alpha'")
+        assert_eq!(
+            UpdateAction::StandaloneWindowsAlpha.command_args(),
+            (
+                "powershell",
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_RELEASE='alpha'; $env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
+                ][..],
+            )
         );
     }
 }
