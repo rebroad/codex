@@ -47,6 +47,7 @@ def configure_uv_cache() -> None:
 class Command:
     args: tuple[str, ...]
     cwd: Path = REPO_ROOT
+    env: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,19 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
 
 def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
     # Each `--project` retains its local dependency and Ruff configuration context.
+    build_tree = next(
+        (
+            candidate
+            for suffix in (".build", ".make")
+            if (candidate := REPO_ROOT.parent / f"{REPO_ROOT.name}{suffix}").is_dir()
+        ),
+        None,
+    )
+    sdk_env = (
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "sdk-python-venv")),)
+        if build_tree is not None
+        else ()
+    )
     uv_run_args = [
         "uv",
         "run",
@@ -138,8 +152,8 @@ def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
     return FormatterGroup(
         "Python SDK",
         (
-            Command((*uv_run_args, *lint_args, "sdk/python")),
-            Command((*format_args, "sdk/python")),
+            Command((*uv_run_args, *lint_args, "sdk/python"), env=sdk_env),
+            Command((*format_args, "sdk/python"), env=sdk_env),
         ),
     )
 
@@ -183,6 +197,7 @@ def run_formatter_group(group: FormatterGroup) -> FormatterResult:
                 stderr=subprocess.STDOUT,
                 text=True,
                 check=False,
+                env={**os.environ, **dict(command.env)},
             )
         except OSError as error:
             output = f"$ {shlex.join(command.args)}\n{error}\n"
