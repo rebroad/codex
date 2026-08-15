@@ -1367,7 +1367,10 @@ strip_binary_if_requested() {
   if [[ "${target}" == "armv7-unknown-linux-gnueabihf" ]]; then
     strip_candidates+=("arm-linux-gnueabihf-strip")
   fi
-  strip_candidates+=("llvm-strip" "strip")
+  strip_candidates+=("llvm-strip" "llvm-objcopy" "strip")
+  for strip_cmd in /usr/lib/llvm-*/bin/llvm-objcopy /usr/local/swift/usr/bin/llvm-objcopy; do
+    [[ -x "${strip_cmd}" ]] && strip_candidates+=("${strip_cmd}")
+  done
 
   for strip_cmd in "${strip_candidates[@]}"; do
     if command -v "${strip_cmd}" >/dev/null 2>&1; then
@@ -1771,7 +1774,7 @@ if (( status != 0 )); then
     if [[ "${PROFILE}" == "release" ]]; then
       cargo_args+=(--release)
     fi
-    if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
+    if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
       cargo_args+=(
         --config
         "patch.crates-io.v8.path=\"${patched_v8_dir}\""
@@ -1809,6 +1812,7 @@ fi
 rm -f "${build_log}"
 if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
   printf '%s\n' "${resolution_fingerprint}" >"${resolution_fingerprint_file}"
+  cp "${CARGO_LOCK_PATH}" "${ARMV7_CACHE_DIR}/cargo-resolution-lock"
 fi
 
 target_dir="$(resolve_cargo_target_dir)"
@@ -1851,8 +1855,15 @@ echo "Description: ${bin_desc}"
 echo "Code Mode host: ${host_bin_path}"
 echo "Description: ${host_bin_desc}"
 if [[ "${TARGET}" == "armv7-unknown-linux-musleabihf" ]]; then
-  readelf -l "${bin_path}" "${host_bin_path}" \
-    | grep -F 'Requesting program interpreter: /lib/ld-musl-armhf.so.1'
+  if readelf -l "${bin_path}" "${host_bin_path}" \
+    | grep -Fq 'Requesting program interpreter: /lib/ld-musl-armhf.so.1'; then
+    :
+  elif [[ "${bin_desc}" == *"statically linked"* && "${host_bin_desc}" == *"statically linked"* ]]; then
+    echo "Verified statically linked ARMv7 musl binaries."
+  else
+    echo "ARMv7 musl binaries are neither dynamically linked to musl nor static." >&2
+    exit 1
+  fi
 elif [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   if [[ "${BUILD_ENV}" == host ]]; then
     echo "Skipping Pi OS Buster ABI gate for explicit host build."
