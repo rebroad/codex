@@ -129,8 +129,9 @@ if [[ -z "${REUSE_FORK_ARTIFACT_DIR}" ]]; then
         stage_binary x86_64-unknown-linux-musl "${MUSL_DIR}/codex" "${MUSL_DIR}/codex-code-mode-host" "${MUSL_DIR}/bwrap"
         ;;
       armv7)
-        ARMV7_DIR="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET:-armv7-unknown-linux-gnueabihf}/$(profile_path "${PROFILE}")"
-        stage_binary armv7-unknown-linux-gnueabihf "${ARMV7_DIR}/codex" "${ARMV7_DIR}/codex-code-mode-host"
+        ARMV7_TARGET_TRIPLE="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"
+        ARMV7_DIR="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET_TRIPLE}/$(profile_path "${PROFILE}")"
+        stage_binary "${ARMV7_TARGET_TRIPLE}" "${ARMV7_DIR}/codex" "${ARMV7_DIR}/codex-code-mode-host"
         ;;
       android)
         ANDROID_STAGE="${BUILD_TREE}/build/android-artifact"
