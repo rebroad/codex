@@ -597,6 +597,7 @@ configure_armv7_musl_toolchain() {
     TARGET="${TARGET}" \
       GITHUB_ENV="${env_file}" \
       RUNNER_TEMP="${runner_temp}" \
+      CODEX_BUILD_TOOLS_DIR="${REPO_DIR}/build/tools" \
       bash "${setup_script}"
   fi
   while IFS= read -r assignment; do
@@ -614,7 +615,8 @@ configure_armv7_musl_toolchain() {
 }
 
 authenticate_armv7_musl_sudo() {
-  if [[ -z "${ZIG_BIN:-}" ]] && ! command -v zig >/dev/null 2>&1; then
+  local cached_zig="${REPO_DIR}/build/tools/zig-linux-$(uname -m)-${CODEX_ZIG_VERSION:-0.14.0}/zig"
+  if [[ -z "${ZIG_BIN:-}" ]] && ! command -v zig >/dev/null 2>&1 && [[ ! -x "${cached_zig}" ]]; then
     command -v sudo >/dev/null 2>&1 || {
       echo "ARMv7 musl builds need sudo to install their build tools, but sudo is unavailable." >&2
       exit 1
