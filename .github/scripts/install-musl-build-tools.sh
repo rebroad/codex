@@ -91,6 +91,10 @@ if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="\$(cd -- "\$(dirname -- "\${BASH_SOURCE[0]}")" && pwd)"
+export ZIG_GLOBAL_CACHE_DIR="\${ZIG_GLOBAL_CACHE_DIR:-\${script_dir}/zig-global-cache}"
+mkdir -p "\${ZIG_GLOBAL_CACHE_DIR}"
+
 args=()
 rust_libc=""
 for arg in "\$@"; do
@@ -99,6 +103,18 @@ for arg in "\$@"; do
   fi
 done
 for arg in "\$@"; do
+  case "\${arg}" in
+    -fuse-ld=*|-Wl,--threads=*)
+      continue
+      ;;
+    */self-contained/crt1.o|*/self-contained/crti.o|*/self-contained/crtbegin.o|*/self-contained/crtend.o|*/self-contained/crtn.o)
+      continue
+      ;;
+  esac
+  if [[ "\${arg}" == --target=armv7-unknown-linux-musleabihf ]]; then
+    args+=("-target" "arm-linux-musleabihf")
+    continue
+  fi
   if [[ "\${arg}" == -lc && -n "\${rust_libc}" ]]; then
     [[ -s "\${rust_libc}" ]] || {
       echo "Rust ARMv7 self-contained libc archive is missing: \${rust_libc}" >&2
@@ -109,7 +125,7 @@ for arg in "\$@"; do
     args+=("\${arg}")
   fi
 done
-exec "${zig_bin}" cc -target arm-linux-musleabihf -nostdlib "\${args[@]}"
+exec "${zig_bin}" cc -target arm-linux-musleabihf "\${args[@]}"
 EOF
   chmod +x "${musl_linker}"
 elif command -v "${arch}-linux-musl-gcc" >/dev/null; then
