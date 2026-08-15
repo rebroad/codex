@@ -21,7 +21,6 @@ use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
-use crate::thread_takeover;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerPath;
@@ -637,117 +636,6 @@ impl AppServerSession {
             self.history_support = ThreadHistorySupport::LegacyOnly;
         }
         started_thread_from_start_response(response, config, self.thread_params_mode()).await
-    }
-
-    pub(crate) async fn resume_thread(
-        &mut self,
-        config: Config,
-        thread_id: ThreadId,
-        model_settings: ResumeModelSettings,
-    ) -> Result<AppServerStartedThread> {
-        let resume_started_at = Instant::now();
-        let request_id = self.next_request_id();
-        let session_config = if model_settings == ResumeModelSettings::RestoreFromThread {
-            config.clone()
-        } else {
-            self.session_config_with_effective_service_tier(&config)
-        };
-        let mut params = thread_resume_params_from_config(
-            session_config,
-            thread_id,
-            self.thread_params_mode(),
-            self.remote_cwd_override.as_deref(),
-            model_settings,
-        );
-        params.exclude_turns = self.history_support == ThreadHistorySupport::Paginated
-            && self
-                .history_pagination
-                .get(&thread_id)
-                .is_none_or(|state| state.history_mode == ThreadHistoryMode::Paginated);
-        let mut exclude_turns = params.exclude_turns;
-        let request_started_at = Instant::now();
-        let mut response: ThreadResumeResponse = match self
-            .client
-            .request_typed(ClientRequest::ThreadResume {
-                request_id,
-                params: params.clone(),
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(TypedRequestError::Server { source, .. })
-                if params.exclude_turns && is_history_pagination_unsupported(&source) =>
-            {
-                self.history_support = ThreadHistorySupport::LegacyOnly;
-                params.exclude_turns = false;
-                exclude_turns = false;
-                let request_id = self.next_request_id();
-                self.client
-                    .request_typed(ClientRequest::ThreadResume { request_id, params })
-                    .await
-                    .map_err(|err| {
-                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-                    })?
-            }
-            Err(TypedRequestError::Server { source, .. }) if is_active_writer_conflict(&source) => {
-                let take_over = thread_takeover::offer(thread_id, config.codex_home.as_path())
-                    .await
-                    .wrap_err("failed to take over the active session")?;
-                if !take_over {
-                    return Err(color_eyre::eyre::eyre!(
-                        "thread/resume cancelled because the session is already open elsewhere"
-                    ));
-                }
-                let request_id = self.next_request_id();
-                self.client
-                    .request_typed(ClientRequest::ThreadResume { request_id, params })
-                    .await
-                    .map_err(|err| {
-                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-                    })?
-            }
-            Err(err) => {
-                return Err(bootstrap_request_error(
-                    "thread/resume failed during TUI bootstrap",
-                    err,
-                ));
-            }
-        };
-        tracing::info!(
-            thread_id = %thread_id,
-            request_ms = request_started_at.elapsed().as_millis(),
-            exclude_turns,
-            "resume thread/resume request completed"
-        );
-        let hydration_started_at = Instant::now();
-        self.hydrate_initial_thread_history(
-            &mut response.thread,
-            response.turns_backwards_cursor.clone(),
-            response.items_backwards_cursor.clone(),
-            Some(&config),
-            HistoryHydrationScope::Initial,
-        )
-        .await?;
-        tracing::info!(
-            thread_id = %thread_id,
-            hydration_ms = hydration_started_at.elapsed().as_millis(),
-            history_mode = ?response.thread.history_mode,
-            turns = response.thread.turns.len(),
-            "resume initial history hydration completed"
-        );
-        let fork_parent_title = self
-            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
-            .await;
-        let mut started =
-            started_thread_from_resume_response(response, &config, self.thread_params_mode())
-                .await?;
-        started.session.fork_parent_title = fork_parent_title;
-        tracing::info!(
-            thread_id = %thread_id,
-            total_ms = resume_started_at.elapsed().as_millis(),
-            "resume client bootstrap completed"
-        );
-        Ok(started)
     }
 
     pub(crate) async fn fork_thread(
