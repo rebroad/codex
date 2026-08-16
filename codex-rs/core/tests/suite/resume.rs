@@ -58,6 +58,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
             EventMsg::TurnStarted(started),
             EventMsg::UserMessage(first_user),
             EventMsg::AgentMessage(assistant_message),
+            EventMsg::RawResponseCompleted(_),
             EventMsg::TokenCount(_),
             EventMsg::TurnComplete(completed),
         ] => {
@@ -115,6 +116,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
             EventMsg::AgentReasoning(reasoning),
             EventMsg::AgentReasoningRawContent(raw),
             EventMsg::AgentMessage(assistant_message),
+            EventMsg::RawResponseCompleted(_),
             EventMsg::TokenCount(_),
             EventMsg::TurnComplete(completed),
         ] => {
