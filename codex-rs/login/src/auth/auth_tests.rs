@@ -1162,7 +1162,9 @@ async fn auth_manager_logout_removes_only_custom_auth_file() -> Result<(), std::
 
     let mut config = build_config(dir.path(), None, None).await;
     config.auth_file = Some(custom_auth_file.clone());
-    let manager = AuthManager::shared_from_auth_config(config, false).await;
+    let manager = AuthManager::shared_from_auth_config(config, false)
+        .await
+        .map_err(std::io::Error::other)?;
 
     assert!(manager.logout().await?);
     assert!(backend_auth_file.exists());
