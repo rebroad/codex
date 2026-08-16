@@ -42,9 +42,7 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
         // Treating the filesystem root as a repository would make every
         // temporary directory appear to belong to one and can trigger
         // unbounded metadata scans.
-        if repo_root.parent().is_none() {
-            return None;
-        }
+        repo_root.parent()?;
         // A directory named `.git` is only a repository marker when it has
         // the repository's HEAD file. This avoids accepting placeholder
         // directories and then allowing Git to discover an unrelated parent
