@@ -63,12 +63,9 @@ impl RemoteControlTrafficCapture {
             "direction": direction,
             "frame": frame,
         });
-        redact_value(
-            record
-                .get_mut("frame")
-                .expect("capture record always contains a frame"),
-            self.redaction,
-        );
+        if let Some(frame) = record.get_mut("frame") {
+            redact_value(frame, self.redaction);
+        }
         let mut writer = match self.writer.lock() {
             Ok(writer) => writer,
             Err(_) => {
