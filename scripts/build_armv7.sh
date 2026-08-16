@@ -1628,11 +1628,9 @@ if (( status != 0 )); then
       echo "Full Cargo log preserved at ${build_log}" >&2
     fi
   else
-    if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
-      echo "Full Cargo log preserved at ${build_log}" >&2
-    else
-      rm -f "${build_log}"
-    fi
+    echo "Last 40 lines from ${build_log}:" >&2
+    tail -n 40 "${build_log}" >&2 || true
+    echo "Full Cargo log preserved at ${build_log}" >&2
     exit "${status}"
   fi
 fi
