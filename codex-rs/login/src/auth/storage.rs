@@ -156,7 +156,7 @@ pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> 
 }
 
 pub(crate) fn delete_auth_file_if_exists(auth_file: &Path) -> std::io::Result<bool> {
-    match std::fs::remove_file(&auth_file) {
+    match std::fs::remove_file(auth_file) {
         Ok(()) => Ok(true),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
