@@ -243,6 +243,7 @@ async fn watchable_skill_root_paths_exclude_plugin_and_system_roots() {
 #[tokio::test]
 async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
     let codex_home = tempfile::tempdir().expect("tempdir");
+    let home_dir = tempfile::tempdir().expect("home tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     write_user_skill(&codex_home, "user", "user-skill", "from the host loader");
     let plugin_skill_path = write_plugin_skill(
@@ -260,7 +261,8 @@ async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
         cwd.path().abs(),
         vec![plugin_skill_root],
         config_layer_stack,
-    );
+    )
+    .with_home_dir(home_dir.path().abs());
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
@@ -288,6 +290,7 @@ async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root
     use std::os::unix::fs::symlink;
 
     let codex_home = tempfile::tempdir().expect("tempdir");
+    let home_dir = tempfile::tempdir().expect("home tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     let plugin_skill_path = write_plugin_skill(
         &codex_home,
@@ -310,13 +313,17 @@ async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root
         /*bundled_skills_enabled*/ false,
     );
 
-    let outcome = skills_for_config_with_stack(
-        &skills_service,
-        &cwd,
-        &config_layer_stack,
-        &[plugin_skill_root],
+    let input = HostSkillsLoadInput::new(
+        cwd.path().abs(),
+        vec![plugin_skill_root],
+        config_layer_stack,
     )
-    .await;
+    .with_home_dir(home_dir.path().abs());
+    let outcome = skills_service
+        .snapshot_for_config(&input, Some(Arc::clone(&LOCAL_FS)))
+        .await
+        .outcome()
+        .clone();
 
     assert_eq!(
         outcome.skills,
