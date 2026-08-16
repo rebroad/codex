@@ -563,6 +563,7 @@ jobs:
           bash scripts/apply_target_cargo_patches.sh codex-rs/Cargo.toml "${{ matrix.target }}"
           cd codex-rs
           cargo update -p pagable
+          cargo update -p v8
       - name: Build and package fork npm target
         shell: bash
         env:
