@@ -394,13 +394,20 @@ async fn unique_extra_root_loads_as_recursive_user_root() {
 
 #[tokio::test]
 async fn repo_ancestry_without_project_marker_does_not_walk_parents() {
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TempDir::new_in("/var/tmp").expect("temp dir");
     let outer = absolute(temp_dir.path().join("outer"));
     let cwd = outer.join("nested/inner");
     fs::create_dir_all(outer.join(".agents/skills")).expect("create outer skills");
     fs::create_dir_all(cwd.join(".agents/skills")).expect("create cwd skills");
+    let config_stack = stack(vec![ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: outer.join("config.toml"),
+            profile: None,
+        },
+        toml::from_str("project_root_markers = []").expect("disable project root markers"),
+    )]);
 
-    let roots = repo_agents_skill_roots(Some(Arc::clone(&LOCAL_FS)), &stack(Vec::new()), &cwd)
+    let roots = repo_agents_skill_roots(Some(Arc::clone(&LOCAL_FS)), &config_stack, &cwd)
         .await
         .into_iter()
         .map(|root| root.path)
