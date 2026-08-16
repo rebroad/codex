@@ -254,6 +254,18 @@ select_preferred_linker() {
   return 1
 }
 
+armv7_linker_command() {
+  if [[ -n "${CODEX_ARMV7_REAL_LINKER:-}" ]]; then
+    printf '%s\n' "${CODEX_ARMV7_REAL_LINKER}"
+    return
+  fi
+  if [[ "${TARGET}" == "armv7-unknown-linux-musleabihf" ]]; then
+    printf '%s\n' "${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER:-armv7-musl-gcc}"
+  else
+    printf '%s\n' "${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
+  fi
+}
+
 get_mold_root_dir() {
   local mold_cmd mold_bin_dir
   mold_cmd="$(command -v mold 2>/dev/null || true)"
@@ -271,7 +283,7 @@ can_use_lld_linker() {
     return 1
   fi
 
-  cc_cmd="${CODEX_ARMV7_REAL_LINKER:-${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}}"
+  cc_cmd="$(armv7_linker_command)"
   if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
     return 1
   fi
@@ -302,7 +314,7 @@ detect_mold_link_mode() {
     return 1
   fi
 
-  cc_cmd="${CODEX_ARMV7_REAL_LINKER:-${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}}"
+  cc_cmd="$(armv7_linker_command)"
   if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
     return 1
   fi
