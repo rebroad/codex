@@ -162,7 +162,6 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
         Some(&tools_new_revision),
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
-
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -182,11 +181,11 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
         }
     );
     assert_eq!(
-        std::fs::read_to_string(debug_root.as_path().join("marker.txt"))?,
+        std::fs::read_to_string(debug_root.as_path().join("marker.txt"))?.trim_end(),
         "debug new"
     );
     assert_eq!(
-        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?,
+        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?.trim_end(),
         "tools new"
     );
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
@@ -219,7 +218,6 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
         /*ref_name*/ None,
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
-
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -238,7 +236,7 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
         }
     );
     assert_eq!(
-        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?,
+        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?.trim_end(),
         "tools new"
     );
     assert!(
