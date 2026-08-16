@@ -708,7 +708,7 @@ pub(crate) async fn drain_async_hook_results(
             .map(|entry| entry.text.clone())
             .collect::<Vec<_>>();
 
-        if before_user_prompt {
+        if before_user_prompt || result.turn_id.as_deref() != Some(turn_context.sub_id.as_str()) {
             record_additional_contexts(sess, turn_context, additional_contexts).await;
         } else if !additional_contexts.is_empty() {
             let _ = sess
