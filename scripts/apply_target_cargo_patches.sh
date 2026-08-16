@@ -17,7 +17,7 @@ case "${target}" in
       exit 1
     }
     rusty_v8_repo="${RUSTY_V8_REPO_URL:-https://github.com/rebroad/rusty_v8.git}"
-    rusty_v8_source_tag="${RUSTY_V8_SOURCE_TAG:-v${v8_version}-armv7-release}"
+    rusty_v8_source_tag="${RUSTY_V8_SOURCE_TAG:-v${v8_version}-armv7}"
     escaped_rusty_v8_repo="${rusty_v8_repo//\//\\/}"
     sed -i "/^\[patch\.crates-io\]$/a # ARMv7 Rusty V8 support comes from the matching compatibility release.\nv8 = { git = \"${escaped_rusty_v8_repo}\", tag = \"${rusty_v8_source_tag}\" }\n# ARMv7 support is not in the crates.io release yet.\npagable = { git = \"https://github.com/facebook/starlark-rust\", rev = \"4190cefd570e05858cbb51815a4de11a7b49f951\" }" "${manifest}"
     cat >>"${manifest}" <<'EOF'

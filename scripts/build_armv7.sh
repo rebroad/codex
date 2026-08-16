@@ -1531,13 +1531,21 @@ cp "${CARGO_LOCK_PATH}" "${tmp_lock_backup}"
 
 mkdir -p "${ARMV7_CACHE_DIR}"
 
-eval "$(bash "${REPO_DIR}/scripts/resolve_rusty_v8_artifacts.sh" \
-  --target="${TARGET}" \
-  --output-dir="${ARMV7_CACHE_DIR}" \
-  --release-repo="${RUSTY_V8_RELEASE_REPO}" \
-  --release-tag="${release_tag}" \
-  --profile=release \
-  --v8-version="${resolved_v8_version}")"
+if [[ -n "${RUSTY_V8_ARCHIVE:-}" || -n "${RUSTY_V8_SRC_BINDING_PATH:-}" ]]; then
+  [[ -s "${RUSTY_V8_ARCHIVE:-}" && -s "${RUSTY_V8_SRC_BINDING_PATH:-}" ]] || {
+    echo "Preconfigured Rusty V8 archive and binding must both exist." >&2
+    exit 1
+  }
+  echo "Using preconfigured Rusty V8 archive and binding."
+else
+  eval "$(bash "${REPO_DIR}/scripts/resolve_rusty_v8_artifacts.sh" \
+    --target="${TARGET}" \
+    --output-dir="${ARMV7_CACHE_DIR}" \
+    --release-repo="${RUSTY_V8_RELEASE_REPO}" \
+    --release-tag="${release_tag}" \
+    --profile=release \
+    --v8-version="${resolved_v8_version}")"
+fi
 export RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH
 if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
