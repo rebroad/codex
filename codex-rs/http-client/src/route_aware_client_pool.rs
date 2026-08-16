@@ -130,6 +130,13 @@ impl RouteAwareRequestError {
             source = error.source();
         }
 
+        if let Self::Request(error) = self {
+            let debug = format!("{error:?}");
+            if debug.contains("InvalidCertificate") {
+                return Some(RouteFailureClass::TlsError);
+            }
+        }
+
         match self {
             Self::Route(RouteAwareClientPoolError::Build(
                 BuildRouteAwareHttpClientError::CustomCa(_),
