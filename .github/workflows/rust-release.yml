@@ -518,17 +518,6 @@ jobs:
       - uses: ./.github/actions/setup-rust-toolchain
         with:
           target: ${{ matrix.target }}
-      - if: matrix.target == 'armv7-unknown-linux-musleabihf'
-        name: Install Zig for ARMv7 musl
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.14.0
-          use-cache: false
-      - if: matrix.target == 'armv7-unknown-linux-musleabihf'
-        name: Install ARMv7 musl build tools
-        env:
-          TARGET: ${{ matrix.target }}
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
       - name: Install Android NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
@@ -557,13 +546,6 @@ jobs:
           echo "RANLIB_aarch64_linux_android=${llvm}/bin/llvm-ranlib" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${llvm}/bin/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}" >> "$GITHUB_ENV"
-      - name: Apply ARMv7 Cargo patches
-        if: matrix.target == 'armv7-unknown-linux-musleabihf'
-        run: |
-          bash scripts/apply_target_cargo_patches.sh codex-rs/Cargo.toml "${{ matrix.target }}"
-          cd codex-rs
-          cargo update -p pagable
-          cargo update -p v8
       - name: Build and package fork npm target
         shell: bash
         env:
@@ -573,14 +555,18 @@ jobs:
           set -euo pipefail
           VERSION="${VERSION#rust-v}"
           export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/build/fork-npm"
-          cd codex-rs
-          build_args=(cargo build --target "${TARGET}" --release --timings --bin codex --bin codex-code-mode-host)
           if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+            cd "${GITHUB_WORKSPACE}"
             env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
               -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
               -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
-              "${build_args[@]}"
+              CODEX_ALLOW_SOURCE_BUILD=true \
+              bash scripts/build_armv7.sh \
+                --release --binary-only \
+                --no-deploy-remote --no-publish-github
           else
+            cd codex-rs
+            build_args=(cargo build --target "${TARGET}" --release --timings --bin codex --bin codex-code-mode-host)
             "${build_args[@]}"
           fi
           release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
