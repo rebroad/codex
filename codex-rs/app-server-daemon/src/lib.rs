@@ -851,7 +851,6 @@ mod tests {
     use super::RemoteControlStatus;
     use super::RestartDecision;
     use super::RestartMode;
-    use super::UpdaterRefreshMode;
     use super::restart_decision;
     use crate::client::ProbeInfo;
 
