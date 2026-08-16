@@ -22,10 +22,6 @@ jobs:
         with:
           version: 0.14.0
           use-cache: false
-      - name: Install ARMv7 musl build tools
-        env:
-          TARGET: armv7-unknown-linux-musleabihf
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
       - name: Configure Rusty V8 artifacts
         uses: ./.github/actions/setup-rusty-v8
         with:
@@ -39,7 +35,7 @@ jobs:
             -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
             -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
             CODEX_ALLOW_SOURCE_BUILD=true \
-            bash -x scripts/build_armv7.sh \
+            bash scripts/build_armv7.sh \
               --release --binary-only \
               --no-deploy-remote --no-publish-github
           release_dir="${GITHUB_WORKSPACE}/build/armv7-release/${target}/release"
