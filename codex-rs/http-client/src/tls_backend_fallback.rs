@@ -111,19 +111,21 @@ fn has_retryable_tls_error(error: &(dyn Error + 'static)) -> bool {
 
     while let Some(error) = source {
         let message = error.to_string().to_ascii_lowercase();
-        if [
-            "certificate",
-            "unknown issuer",
-            "unknown ca",
-            "untrusted",
-            "self signed",
-            "self-signed",
-            "hostname",
-            "expired",
-            "revoked",
-        ]
-        .iter()
-        .any(|marker| message.contains(marker))
+        let is_reqwest_error = error.downcast_ref::<reqwest::Error>().is_some();
+        if !is_reqwest_error
+            && [
+                "certificate",
+                "unknown issuer",
+                "unknown ca",
+                "untrusted",
+                "self signed",
+                "self-signed",
+                "hostname",
+                "expired",
+                "revoked",
+            ]
+            .iter()
+            .any(|marker| message.contains(marker))
         {
             return false;
         }
@@ -133,7 +135,7 @@ fn has_retryable_tls_error(error: &(dyn Error + 'static)) -> bool {
         // Linux OpenSSL reports the peer's "tlsv1 alert protocol version".
         let is_linux_protocol_version_error = message.contains("tlsv1 alert protocol version");
         // Rustls may surface the same peer alert through reqwest as `AlertReceived(ProtocolVersion)`.
-        let is_rustls_protocol_version_error = message.contains("alertreceived(protocolversion)");
+        let is_rustls_protocol_version_error = message.contains("protocolversion");
         // Windows Schannel may expose the protocol alert as a raw or formatted OS error.
         let is_schannel_protocol_version_error = error
             .downcast_ref::<std::io::Error>()
