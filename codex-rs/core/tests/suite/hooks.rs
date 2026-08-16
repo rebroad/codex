@@ -347,6 +347,7 @@ fn write_async_user_prompt_submit_hook(home: &Path, gated: bool) -> Result<()> {
     let started_path = home.join("async_user_prompt_submit_started");
     let finished_path = home.join("async_user_prompt_submit_finished");
     let release_path = home.join("async_user_prompt_submit_release");
+    let seen_path = home.join("async_user_prompt_submit_seen");
     let script = format!(
         r#"import json
 from pathlib import Path
@@ -354,6 +355,11 @@ import sys
 import time
 
 prompt = json.load(sys.stdin).get("prompt")
+seen_path = Path(r"{seen_path}")
+if seen_path.exists():
+    print("{{}}", flush=True)
+    sys.exit(0)
+seen_path.write_text("seen", encoding="utf-8")
 Path(r"{started_path}").write_text(prompt, encoding="utf-8")
 while {gated} and not Path(r"{release_path}").exists():
     time.sleep(0.01)
@@ -372,6 +378,7 @@ Path(r"{finished_path}").write_text(prompt, encoding="utf-8")
         started_path = started_path.display(),
         finished_path = finished_path.display(),
         release_path = release_path.display(),
+        seen_path = seen_path.display(),
         gated = if gated { "True" } else { "False" },
     );
     let hooks = serde_json::json!({
