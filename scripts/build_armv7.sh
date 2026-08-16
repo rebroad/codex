@@ -1638,7 +1638,6 @@ if (( status != 0 )); then
 fi
 rm -f "${build_log}"
 if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
-  printf '%s\n' "${resolution_fingerprint}" >"${resolution_fingerprint_file}"
   cp "${CARGO_LOCK_PATH}" "${ARMV7_CACHE_DIR}/cargo-resolution-lock"
 fi
 
