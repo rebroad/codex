@@ -22,48 +22,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
             bundle: primary
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundle: primary
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
             bundle: app-server
             binaries: "codex-app-server codex-code-mode-host"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundle: app-server
             binaries: "codex-app-server codex-code-mode-host"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -150,7 +132,7 @@ jobs:
 
   build-windows-voice:
     name: Build Windows voice - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: windows-2022
     timeout-minutes: 120
     permissions:
       contents: read
@@ -161,15 +143,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             arch: x86_64
             python_arch: x64
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
           - target: aarch64-pc-windows-msvc
             arch: aarch64
             python_arch: arm64
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -342,16 +318,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-x64
+          - runner: windows-2022
             target: aarch64-pc-windows-msvc
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
