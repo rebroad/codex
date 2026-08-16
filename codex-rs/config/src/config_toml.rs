@@ -161,18 +161,13 @@ pub struct RemoteControlToml {
 }
 
 /// Controls which sensitive values are removed from remote-control captures.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteControlTrafficLogRedaction {
+    #[default]
     Secrets,
     Content,
     Disabled,
-}
-
-impl Default for RemoteControlTrafficLogRedaction {
-    fn default() -> Self {
-        Self::Secrets
-    }
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
