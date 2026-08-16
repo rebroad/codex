@@ -9,6 +9,7 @@ RELEASE_REPO="auto"
 RELEASE_TAG=""
 PROFILE=""
 V8_VERSION=""
+PREFER_LATEST="true"
 
 usage() {
   cat <<'EOF'
@@ -23,6 +24,8 @@ Options:
   --profile=PROFILE     Rusty V8 profile (default: release for ARMv7,
                         ptrcomp_sandbox_release otherwise)
   --v8-version=VERSION  Pinned V8 crate version (auto-detected if omitted)
+  --prefer-latest       Use the latest suitable release when available (default)
+  --no-prefer-latest    Use the version-pinned release tag
 EOF
 }
 
@@ -34,6 +37,8 @@ for arg in "$@"; do
     --release-tag=*) RELEASE_TAG="${arg#*=}" ;;
     --profile=*) PROFILE="${arg#*=}" ;;
     --v8-version=*) V8_VERSION="${arg#*=}" ;;
+    --prefer-latest) PREFER_LATEST="true" ;;
+    --no-prefer-latest) PREFER_LATEST="false" ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: ${arg}" >&2; usage >&2; exit 1 ;;
   esac
@@ -72,7 +77,6 @@ if [[ "${RELEASE_REPO}" == auto ]]; then
   esac
 fi
 V8_TARGET="${TARGET}"
-RELEASE_TAG="${RELEASE_TAG:-rusty-v8-v${V8_VERSION}}"
 if [[ -z "${PROFILE}" ]]; then
   case "${TARGET}" in
     armv7-unknown-linux-gnueabihf|armv7-unknown-linux-musleabihf) PROFILE=release ;;
@@ -87,6 +91,40 @@ else
 fi
 BINDING_NAME="src_binding_${PROFILE}_${V8_TARGET}.rs"
 CHECKSUMS_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.sha256"
+
+release_has_assets() {
+  local tag="$1" metadata
+  metadata="$(curl --fail --silent --show-error --location \
+    --connect-timeout 20 --max-time 60 \
+    "https://api.github.com/repos/${RELEASE_REPO}/releases/tags/${tag}")" || return 1
+  python3 -c '
+import json
+import sys
+
+required = set(sys.argv[1:])
+assets = {asset["name"] for asset in json.load(sys.stdin).get("assets", [])}
+raise SystemExit(0 if required <= assets else 1)
+' "${ARCHIVE_NAME}" "${BINDING_NAME}" "${CHECKSUMS_NAME}" <<<"${metadata}"
+}
+
+if [[ -z "${RELEASE_TAG}" && "${PREFER_LATEST}" == true ]]; then
+  latest_tag="$(curl --fail --silent --show-error --location \
+    --connect-timeout 20 --max-time 60 \
+    "https://api.github.com/repos/${RELEASE_REPO}/releases/latest" \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin).get("tag_name", ""))' \
+    || true)"
+  if [[ "${latest_tag}" == "rusty-v8-v${V8_VERSION}" ]] \
+    && release_has_assets "${latest_tag}"; then
+    RELEASE_TAG="${latest_tag}"
+    echo "Using latest suitable Rusty V8 release: ${RELEASE_TAG}" >&2
+  else
+    RELEASE_TAG="rusty-v8-v${V8_VERSION}"
+    echo "Latest Rusty V8 release is unsuitable; using pinned release: ${RELEASE_TAG}" >&2
+  fi
+else
+  RELEASE_TAG="${RELEASE_TAG:-rusty-v8-v${V8_VERSION}}"
+fi
+
 BASE_URL="https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}"
 ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 BINDING_PATH="${OUTPUT_DIR}/${BINDING_NAME}"
