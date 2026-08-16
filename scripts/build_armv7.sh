@@ -42,8 +42,6 @@ BUILD_ENV="${BUILD_ENV:-host}"
 EPHEMERAL="false"
 RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
 RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
-RUSTY_V8_LOCAL_PATH_DEFAULT="${HOME}/src/rusty_v8"
-RUSTY_V8_LOCAL_PATH="${RUSTY_V8_LOCAL_PATH:-${RUSTY_V8_LOCAL_PATH_DEFAULT}}"
 ARMV7_CACHE_DIR="${ARMV7_CACHE_DIR:-}"
 DOCKER_BUSTER_IMAGE="${DOCKER_BUSTER_IMAGE:-codex-armv7-buster-builder:6}"
 # Docker's default bridge DNS has been flaky here; host networking keeps apt/rustup working.
@@ -92,7 +90,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--benchmark-linkers[=N]] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
+Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--benchmark-linkers[=N]] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
 
 Build codex-cli and codex-code-mode-host with the same core ARMv7 musl
 environment as release CI:
@@ -120,8 +118,6 @@ Options:
                         GitHub repo hosting rusty_v8 release assets (default: rebroad/rusty_v8)
   --rusty-v8-release-tag=<tag>
                         Release tag containing armv7 assets (default: rusty-v8-v<resolved v8 crate version>)
-  --rusty-v8-local-path=<path>
-                        Local rusty_v8 checkout used for crates.io patch (default: ~/src/rusty_v8 when present)
   --publish-github      Upload generated artifacts to a GitHub release (opt-in)
   --no-publish-github   Skip GitHub release upload
   --github-release-repo=<owner/repo>
@@ -668,114 +664,6 @@ resolve_build_commit_short() {
   echo "${BUILD_COMMIT_HASH_PLACEHOLDER}"
 }
 
-prepare_patched_v8_source() {
-  local source_repo="$1"
-  local version="$2"
-  local output_dir="$3"
-  local ref expected_commit meta_file
-  ref="v${version}"
-  meta_file="${output_dir}/.codex-armv7-v8-patch.meta"
-
-  require_cmd git
-  require_cmd tar
-
-  if [[ ! -d "${source_repo}/.git" ]]; then
-    echo "rusty_v8 source repo not found: ${source_repo}" >&2
-    exit 1
-  fi
-  if ! git -C "${source_repo}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
-    echo "Missing ${ref} in ${source_repo}; cannot prepare v8 ${version} patch source." >&2
-    exit 1
-  fi
-  expected_commit="$(git -C "${source_repo}" rev-parse "${ref}^{commit}")"
-
-  if [[ -f "${meta_file}" ]] \
-    && [[ -f "${output_dir}/Cargo.toml" ]] \
-    && grep -Fxq "source_repo=${source_repo}" "${meta_file}" \
-    && grep -Fxq "ref=${ref}" "${meta_file}" \
-    && grep -Fxq "commit=${expected_commit}" "${meta_file}" \
-    && grep -Fxq "patch=remove_typeid_alignment_assert_v1" "${meta_file}"; then
-    return 0
-  fi
-
-  rm -rf "${output_dir}"
-  mkdir -p "${output_dir}"
-  git -C "${source_repo}" archive --format=tar "${ref}" | tar -xf - -C "${output_dir}"
-
-  python3 - "${output_dir}/src/isolate.rs" <<'PY'
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-needle = """  assert!(
-    align_of::<TypeId>() == align_of::<u64>()
-      || align_of::<TypeId>() == align_of::<u128>()
-  );
-"""
-replacement = """  // armv7: keep size assertions, but avoid strict alignment assertions that
-  // can fail on 32-bit targets.
-"""
-if needle not in text:
-    print(f"Expected TypeId alignment assert block not found in {path}", file=sys.stderr)
-    sys.exit(1)
-path.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
-PY
-
-  cat > "${meta_file}" <<EOF
-source_repo=${source_repo}
-ref=${ref}
-commit=${expected_commit}
-patch=remove_typeid_alignment_assert_v1
-EOF
-}
-
-ensure_rusty_v8_source_repo_for_version() {
-  local requested_repo_path="$1"
-  local version="$2"
-  local ref cache_repo remote_url
-  ref="v${version}"
-
-  # Docker builds operate on bind-mounted host paths that may be owned by a
-  # different uid/gid than the in-container user. Mark these repos safe so
-  # git -C checks don't fail with "dubious ownership".
-  if [[ -d "${requested_repo_path}/.git" ]]; then
-    git config --global --add safe.directory "${requested_repo_path}" >/dev/null 2>&1 || true
-  fi
-
-  if [[ -d "${requested_repo_path}/.git" ]] \
-    && git -C "${requested_repo_path}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
-    echo "${requested_repo_path}"
-    return 0
-  fi
-
-  cache_repo="${ARMV7_CACHE_DIR}/rusty_v8-source-cache"
-  remote_url="https://github.com/${RUSTY_V8_RELEASE_REPO}.git"
-  mkdir -p "${ARMV7_CACHE_DIR}"
-  if [[ -d "${cache_repo}/.git" ]]; then
-    git config --global --add safe.directory "${cache_repo}" >/dev/null 2>&1 || true
-  fi
-
-  if [[ ! -d "${cache_repo}/.git" ]]; then
-    echo "Local rusty_v8 checkout lacks ${ref}; cloning ${remote_url} into cache..." >&2
-    git clone --filter=blob:none "${remote_url}" "${cache_repo}" >/dev/null
-    git config --global --add safe.directory "${cache_repo}" >/dev/null 2>&1 || true
-  fi
-
-  if ! git -C "${cache_repo}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
-    echo "Fetching ${ref} in cached rusty_v8 source repo..." >&2
-    git -C "${cache_repo}" fetch --tags origin >/dev/null
-  fi
-
-  if ! git -C "${cache_repo}" rev-parse -q --verify "${ref}^{commit}" >/dev/null 2>&1; then
-    echo "Missing ${ref} in both ${requested_repo_path} and ${cache_repo}." >&2
-    echo "Tried remote: ${remote_url}" >&2
-    exit 1
-  fi
-
-  echo "${cache_repo}"
-}
-
 ensure_armv7_cross_packages() {
   local -a packages
   packages=(
@@ -1081,14 +969,6 @@ run_in_docker_buster() {
     forwarded_args+=("--ephemeral")
   fi
 
-  if [[ -d "${RUSTY_V8_LOCAL_PATH}/.git" ]]; then
-    container_rusty_v8_path="/work/rusty_v8"
-    maybe_mount=(-v "${RUSTY_V8_LOCAL_PATH}:${container_rusty_v8_path}:ro")
-    forwarded_args+=("--rusty-v8-local-path=${container_rusty_v8_path}")
-  else
-    forwarded_args+=("--rusty-v8-local-path=${RUSTY_V8_LOCAL_PATH}")
-  fi
-
   container_cargo_target_dir="${CARGO_TARGET_DIR}"
   if [[ "${container_cargo_target_dir}" == "${RUST_WORKSPACE_DIR}/"* ]]; then
     container_cargo_target_dir="/work/codex/codex-rs/${container_cargo_target_dir#"${RUST_WORKSPACE_DIR}/"}"
@@ -1220,7 +1100,7 @@ publish_local_artifacts() {
   tar -C "${out_dir}" -czf "${tarball}" "${artifact_base}"
   sha256sum "${tarball}" > "${checksum_file}"
 
-  python3 - <<'PY' "${metadata_file}" "${artifact_base}" "${target}" "${profile}" "${version}" "${release_tag}" "${RUSTY_V8_RELEASE_REPO}" "${RUSTY_V8_LOCAL_PATH}" "${bin_path}"
+  python3 - <<'PY' "${metadata_file}" "${artifact_base}" "${target}" "${profile}" "${version}" "${release_tag}" "${RUSTY_V8_RELEASE_REPO}" "${bin_path}"
 import json
 import sys
 from datetime import datetime, timezone
@@ -1233,8 +1113,7 @@ profile = sys.argv[4]
 version = sys.argv[5]
 release_tag = sys.argv[6]
 release_repo = sys.argv[7]
-local_rusty_v8_path = sys.argv[8]
-binary_path = sys.argv[9]
+binary_path = sys.argv[8]
 
 metadata = {
     "createdAtUtc": datetime.now(timezone.utc).isoformat(),
@@ -1244,7 +1123,6 @@ metadata = {
     "version": version,
     "rustyV8ReleaseRepo": release_repo,
     "rustyV8ReleaseTag": release_tag,
-    "localRustyV8Path": local_rusty_v8_path,
     "binaryPath": binary_path,
 }
 metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -1498,9 +1376,6 @@ for arg in "$@"; do
     --rusty-v8-release-tag=*)
       RUSTY_V8_RELEASE_TAG="${arg#*=}"
       ;;
-    --rusty-v8-local-path=*)
-      RUSTY_V8_LOCAL_PATH="${arg#*=}"
-      ;;
     --publish-github)
       PUBLISH_GITHUB="true"
       ;;
@@ -1669,7 +1544,6 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
 fi
 
 cargo_use_locked="true"
-resolution_fingerprint_file="${ARMV7_CACHE_DIR}/cargo-resolution-fingerprint"
 if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
   bash "${REPO_DIR}/scripts/apply_target_cargo_patches.sh" \
     "${RUST_WORKSPACE_DIR}/Cargo.toml" "${TARGET}"
@@ -1678,32 +1552,6 @@ fi
 cargo_args=(+"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host --target "${TARGET}")
 if [[ "${PROFILE}" == "release" ]]; then
   cargo_args+=(--release)
-fi
-if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
-  # Codex pins v8 = <resolved_v8_version>; prepare a matching patched source.
-  effective_rusty_v8_source_repo="$(ensure_rusty_v8_source_repo_for_version "${RUSTY_V8_LOCAL_PATH}" "${resolved_v8_version}")"
-  patched_v8_dir="${ARMV7_CACHE_DIR}/v8-${resolved_v8_version}-armv7-patched"
-  echo "Preparing patched v8 source from ${effective_rusty_v8_source_repo} (${resolved_v8_version})..."
-  prepare_patched_v8_source "${effective_rusty_v8_source_repo}" "${resolved_v8_version}" "${patched_v8_dir}"
-  cargo_args+=(
-    --config
-    "patch.crates-io.v8.path=\"${patched_v8_dir}\""
-  )
-  resolution_fingerprint="$({
-    printf '%s\n' "target=${TARGET}" "profile=${PROFILE}"
-    sha256sum "${RUST_WORKSPACE_DIR}/Cargo.toml" "${CARGO_LOCK_PATH}"
-    sha256sum "${patched_v8_dir}/Cargo.toml" "${patched_v8_dir}/.codex-armv7-v8-patch.meta"
-  } | sha256sum | awk '{print $1}')"
-  stored_resolution_fingerprint=""
-  [[ -f "${resolution_fingerprint_file}" ]] \
-    && read -r stored_resolution_fingerprint <"${resolution_fingerprint_file}"
-  if [[ "${resolution_fingerprint}" != "${stored_resolution_fingerprint}" ]]; then
-    cargo_use_locked="false"
-    echo "ARMv7 Cargo resolution inputs changed; refreshing the lockfile." >&2
-  else
-    cargo_use_locked="true"
-    echo "Using cached ARMv7 Cargo resolution." >&2
-  fi
 fi
 if [[ "${cargo_use_locked}" == "true" ]]; then
   cargo_args+=(--locked)
@@ -1739,21 +1587,6 @@ else
   status=${PIPESTATUS[0]}
 fi
 set -e
-if (( status != 0 )) && [[ "${TARGET}" == armv7-unknown-linux-* ]] \
-  && [[ "${cargo_use_locked}" == false ]]; then
-  metadata_args=(
-    +"${TOOLCHAIN}" metadata
-    --no-deps
-    --format-version=1
-    --locked
-    --config
-    "patch.crates-io.v8.path=\"${patched_v8_dir}\""
-  )
-  if env "${cargo_env[@]}" cargo "${metadata_args[@]}" >/dev/null 2>&1; then
-    printf '%s\n' "${resolution_fingerprint}" >"${resolution_fingerprint_file}"
-    echo "Cached ARMv7 Cargo resolution after dependency resolution succeeded." >&2
-  fi
-fi
 if (( status != 0 )); then
   if [[ "${BENCHMARK_LINKERS}" == "true" && -f "${LINKER_CAPTURE_DONE_FILE}" ]]; then
     echo "Captured final link command for benchmark; skipping artifact build."
@@ -1773,12 +1606,6 @@ if (( status != 0 )); then
     cargo_args=(+"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host --target "${TARGET}")
     if [[ "${PROFILE}" == "release" ]]; then
       cargo_args+=(--release)
-    fi
-    if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
-      cargo_args+=(
-        --config
-        "patch.crates-io.v8.path=\"${patched_v8_dir}\""
-      )
     fi
     set +e
     if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
