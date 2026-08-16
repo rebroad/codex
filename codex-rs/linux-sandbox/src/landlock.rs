@@ -185,6 +185,14 @@ fn install_network_seccomp_filter_on_current_thread(
         rules.insert(nr.into(), vec![]); // empty rule vec = unconditional match
     }
 
+    fn insert_syscall_rule(
+        rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
+        nr: impl Into<i64>,
+        rule: SeccompRule,
+    ) {
+        rules.insert(nr.into(), vec![rule]);
+    }
+
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
@@ -224,8 +232,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 libc::AF_UNIX as u64,
             )?])?;
 
-            rules.insert(libc::SYS_socket.into(), vec![unix_only_rule.clone()]);
-            rules.insert(libc::SYS_socketpair.into(), vec![unix_only_rule]);
+            insert_syscall_rule(&mut rules, libc::SYS_socket, unix_only_rule.clone());
+            insert_syscall_rule(&mut rules, libc::SYS_socketpair, unix_only_rule);
         }
         NetworkSeccompMode::IsolatedLocalIpc => {
             // Bubblewrap has already unshared the network namespace before
@@ -253,8 +261,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 libc::AF_UNIX as u64,
             )?])?;
 
-            rules.insert(libc::SYS_socket.into(), vec![deny_non_ip_socket]);
-            rules.insert(libc::SYS_socketpair.into(), vec![unix_only_rule]);
+            insert_syscall_rule(&mut rules, libc::SYS_socket, deny_non_ip_socket);
+            insert_syscall_rule(&mut rules, libc::SYS_socketpair, unix_only_rule);
         }
         NetworkSeccompMode::ProxyRouted => {
             // In proxy-routed mode we allow IP sockets in the isolated
@@ -283,8 +291,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 SeccompCmpOp::Ne,
                 libc::AF_UNIX as u64,
             )?])?;
-            rules.insert(libc::SYS_socket.into(), vec![deny_non_ip_socket]);
-            rules.insert(libc::SYS_socketpair.into(), vec![deny_non_unix_socketpair]);
+            insert_syscall_rule(&mut rules, libc::SYS_socket, deny_non_ip_socket);
+            insert_syscall_rule(&mut rules, libc::SYS_socketpair, deny_non_unix_socketpair);
         }
     }
 
