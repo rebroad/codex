@@ -496,10 +496,10 @@ fn sandbox_debug_log_path() -> PathBuf {
                 if path.is_absolute() {
                     path
                 } else {
-                    config_path
-                        .parent()
-                        .expect("config path has a parent")
-                        .join(path)
+                    config_path.parent().map_or_else(
+                        || PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH),
+                        |parent| parent.join(path),
+                    )
                 }
             })
             .unwrap_or_else(|| PathBuf::from(DEFAULT_SANDBOX_DEBUG_LOG_PATH))
