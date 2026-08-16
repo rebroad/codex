@@ -30,7 +30,7 @@ use codex_skills::install_system_skills;
 
 use crate::HostSkillsSnapshot;
 use crate::SkillLoadOutcome;
-use crate::host_roots::resolve_skill_roots;
+use crate::host_roots::resolve_skill_roots_with_home_dir;
 use crate::loader::HostSkillRoot;
 use crate::loader::HostSkillRootSnapshot;
 use crate::loader::MAX_CONCURRENT_ROOT_SCANS;
@@ -40,6 +40,7 @@ use crate::loader::load_and_merge_host_skill_roots_with_request_snapshots;
 #[derive(Debug, Clone)]
 pub struct HostSkillsLoadInput {
     cwd: AbsolutePathBuf,
+    home_dir: Option<AbsolutePathBuf>,
     effective_skill_roots: Vec<PluginSkillRoot>,
     config_layer_stack: ConfigLayerStack,
     plugin_skill_snapshots: Option<SkillRootSnapshots<PluginSkillRoot>>,
@@ -53,10 +54,17 @@ impl HostSkillsLoadInput {
     ) -> Self {
         Self {
             cwd,
+            home_dir: None,
             effective_skill_roots,
             config_layer_stack,
             plugin_skill_snapshots: None,
         }
+    }
+
+    /// Overrides the OS home directory used to discover user-level `.agents/skills` roots.
+    pub fn with_home_dir(mut self, home_dir: AbsolutePathBuf) -> Self {
+        self.home_dir = Some(home_dir);
+        self
     }
 
     /// Attaches plugin skill snapshots parsed during plugin loading, when available.
@@ -67,6 +75,12 @@ impl HostSkillsLoadInput {
         self.plugin_skill_snapshots = plugin_skill_snapshots;
         self
     }
+}
+
+fn home_dir_for_input(input: &HostSkillsLoadInput) -> Option<AbsolutePathBuf> {
+    input.home_dir.clone().or_else(|| {
+        dirs::home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
+    })
 }
 
 /// Owns host skill discovery, immutable snapshots, cache invalidation, and extra roots.
@@ -219,10 +233,12 @@ impl HostSkillsService {
         if bundled_skills_enabled {
             self.ensure_system_skills_installed();
         }
-        let mut roots = resolve_skill_roots(
+        let home_dir = home_dir_for_input(input);
+        let mut roots = resolve_skill_roots_with_home_dir(
             fs,
             &input.config_layer_stack,
             &input.cwd,
+            home_dir.as_ref(),
             input.effective_skill_roots.clone(),
             self.extra_roots(),
         )
@@ -253,10 +269,12 @@ impl HostSkillsService {
             return snapshot;
         }
 
-        let mut roots = resolve_skill_roots(
+        let home_dir = home_dir_for_input(input);
+        let mut roots = resolve_skill_roots_with_home_dir(
             fs.clone(),
             &input.config_layer_stack,
             &input.cwd,
+            home_dir.as_ref(),
             input.effective_skill_roots.clone(),
             self.extra_roots(),
         )
