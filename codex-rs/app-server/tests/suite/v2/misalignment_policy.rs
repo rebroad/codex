@@ -224,6 +224,7 @@ async fn assert_policy_violation_completes_turn_with_typed_terminal_error(
             will_retry: false,
             thread_id: thread.id.clone(),
             turn_id: turn.id.clone(),
+            request_id: None,
         }
     );
 
