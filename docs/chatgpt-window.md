@@ -37,5 +37,20 @@ attachments, reasoning effort, and tool calls. Tool calls are validated by the
 adapter but executed by Codex, so Codex approvals, sandboxing, MCP, and policy
 remain authoritative.
 
+The same profile also namespaces the local app-server daemon. The standard
+server and the ChatGPT Window server can therefore run at the same time without
+using a second `CODEX_HOME`:
+
+```bash
+codex app-server daemon start
+codex -p chatgpt-window app-server daemon start
+```
+
+The unprofiled server keeps the existing
+`$CODEX_HOME/app-server-control/app-server-control.sock` and daemon state. The
+profiled server uses a profile-specific socket and daemon-state directory under
+`$CODEX_HOME`. Proxy and TUI auto-connect operations select the same profile
+when invoked with `-p chatgpt-window`.
+
 The services must remain available and the Chrome extension must remain
 connected. The browser bridge permits one active request per conversation.
