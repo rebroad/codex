@@ -1,6 +1,7 @@
 use crate::ApplicationRequirementsToml;
 use codex_features::FeatureToml;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ModelProviderInfoOverrides;
 pub use codex_model_provider_info::ResidencyRequirement;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -1615,7 +1616,14 @@ impl ConfigRequirementsToml {
         apply_exact!(model_catalog_json);
         apply_exact!(model_provider);
         if let Some(providers) = &self.model_providers {
-            config.model_providers.extend(providers.clone());
+            config
+                .model_providers
+                .extend(providers.iter().map(|(id, provider)| {
+                    (
+                        id.clone(),
+                        ModelProviderInfoOverrides::from(provider.clone()),
+                    )
+                }));
         }
         apply_exact!(check_for_update_on_startup);
         apply_exact!(allow_login_shell);

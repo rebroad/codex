@@ -191,6 +191,24 @@ supports_websockets = true
 }
 
 #[test]
+fn full_model_provider_round_trips_through_overrides() {
+    let provider = ModelProviderInfo {
+        name: "Managed provider".into(),
+        model_catalog_url: Some("https://example.test/models.json".into()),
+        base_url: Some("https://example.test/v1".into()),
+        experimental_bearer_token: Some("secret".into()),
+        requires_openai_auth: true,
+        supports_websockets: true,
+        ..ModelProviderInfo::default()
+    };
+
+    assert_eq!(
+        ModelProviderInfoOverrides::from(provider.clone()).into_provider(),
+        provider
+    );
+}
+
+#[test]
 fn test_personal_access_token_uses_chatgpt_codex_base_url() {
     let api_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         .to_api_provider(Some(AuthMode::PersonalAccessToken))
@@ -473,6 +491,33 @@ fn test_merge_configured_model_providers_adds_custom_provider() {
 
     assert_eq!(
         merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_provider_overrides_inherits_openai_defaults() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        OPENAI_PROVIDER_ID.to_string(),
+        ModelProviderInfoOverrides {
+            stream_idle_timeout_ms: Some(1_000),
+            websocket_connect_timeout_ms: Some(10_000),
+            ..ModelProviderInfoOverrides::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    let expected_provider = expected
+        .get_mut(OPENAI_PROVIDER_ID)
+        .expect("OpenAI provider should be built in");
+    expected_provider.stream_idle_timeout_ms = Some(1_000);
+    expected_provider.websocket_connect_timeout_ms = Some(10_000);
+
+    assert_eq!(
+        merge_configured_model_provider_overrides(
             built_in_model_providers(/*openai_base_url*/ None),
             configured_model_providers,
         ),
