@@ -62,6 +62,7 @@ if [ -n "$profile_name" ]; then
     control_socket="$codex_home/app-server-control/$profile_name/app-server-control.sock"
     pid_file="$codex_home/app-server-daemon/$profile_name/app-server.pid"
     lock_dir="$codex_home/app-server-control/$profile_name/pairing-code.lock"
+    export CODEX_PROFILE="$profile_name"
 fi
 
 mkdir -p "$(dirname "$lock_dir")"
@@ -107,11 +108,7 @@ pairing_status=1
 attempt=1
 while [ "$attempt" -le 4 ]; do
     pairing_status=0
-    if [ -n "$profile_name" ]; then
-        pairing_json="$(timeout "$timeout_seconds" "$codex_bin" --profile "$profile_name" remote-control pair --json 2>&1)" || pairing_status=$?
-    else
-        pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
-    fi
+    pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
     [ "$pairing_status" -eq 0 ] && break
 
     case "$pairing_json" in
