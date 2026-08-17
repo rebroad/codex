@@ -122,22 +122,58 @@ impl AppServerSession {
                     })?
             }
             Err(TypedRequestError::Server { source, .. }) if is_active_writer_conflict(&source) => {
-                let take_over =
-                    crate::thread_takeover::offer(thread_id, config.codex_home.as_path())
+                let attached_response = if self.uses_embedded_app_server()
+                    && let Some(client) =
+                        crate::try_connect_default_local_app_server(config.codex_home.as_path())
+                            .await
+                {
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        "reattaching TUI to the default local app-server after writer conflict"
+                    );
+                    let original_client = std::mem::replace(&mut self.client, client);
+                    let request_id = self.next_request_id();
+                    match self
+                        .client
+                        .request_typed(ClientRequest::ThreadResume {
+                            request_id,
+                            params: params.clone(),
+                        })
                         .await
-                        .wrap_err("failed to take over the active session")?;
-                if !take_over {
-                    return Err(color_eyre::eyre::eyre!(
-                        "thread/resume cancelled because the session is already open elsewhere"
-                    ));
+                    {
+                        Ok(response) => Some(response),
+                        Err(_) => {
+                            self.client = original_client;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(response) = attached_response {
+                    response
+                } else {
+                    let take_over =
+                        crate::thread_takeover::offer(thread_id, config.codex_home.as_path())
+                            .await
+                            .wrap_err("failed to take over the active session")?;
+                    if !take_over {
+                        return Err(color_eyre::eyre::eyre!(
+                            "thread/resume cancelled because the session is already open elsewhere"
+                        ));
+                    }
+                    let request_id = self.next_request_id();
+                    self.client
+                        .request_typed(ClientRequest::ThreadResume { request_id, params })
+                        .await
+                        .map_err(|err| {
+                            bootstrap_request_error(
+                                "thread/resume failed during TUI bootstrap",
+                                err,
+                            )
+                        })?
                 }
-                let request_id = self.next_request_id();
-                self.client
-                    .request_typed(ClientRequest::ThreadResume { request_id, params })
-                    .await
-                    .map_err(|err| {
-                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-                    })?
             }
             Err(err) => {
                 return Err(bootstrap_request_error(
