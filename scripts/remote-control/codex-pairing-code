@@ -10,9 +10,10 @@ control_socket="$codex_home/app-server-control/app-server-control.sock"
 pid_file="$codex_home/app-server-daemon/app-server.pid"
 lock_dir="$codex_home/app-server-control/pairing-code.lock"
 start_option=""
+profile_name=""
 
 usage() {
-    printf '%s\n' 'Usage: codex-pairing-code [--debug-log]'
+    printf '%s\n' 'Usage: codex-pairing-code [-p|--profile PROFILE] [--debug-log]'
 }
 
 if [ -z "$codex_bin" ]; then
@@ -22,21 +23,46 @@ if [ -z "$codex_bin" ]; then
     }
 fi
 
-case "${1-}" in
-    "")
-        ;;
-    --debug-log)
-        start_option="--debug-log"
-        ;;
-    -h|--help)
-        usage
-        exit 0
-        ;;
-    *)
-        usage >&2
-        exit 2
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --debug-log)
+            start_option="--debug-log"
+            ;;
+        -p|--profile)
+            [ "$#" -ge 2 ] || {
+                usage >&2
+                exit 2
+            }
+            profile_name="$2"
+            shift
+            ;;
+        --profile=*)
+            profile_name="${1#--profile=}"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+case "$profile_name" in
+    ""|*[!A-Za-z0-9._-]*)
+        [ -z "$profile_name" ] || printf 'Codex Remote: invalid profile name: %s\n' "$profile_name" >&2
+        [ -z "$profile_name" ] || exit 2
         ;;
 esac
+
+if [ -n "$profile_name" ]; then
+    control_socket="$codex_home/app-server-control/$profile_name/app-server-control.sock"
+    pid_file="$codex_home/app-server-daemon/$profile_name/app-server.pid"
+    lock_dir="$codex_home/app-server-control/$profile_name/pairing-code.lock"
+fi
 
 mkdir -p "$(dirname "$lock_dir")"
 if ! mkdir "$lock_dir" 2>/dev/null; then
@@ -62,9 +88,17 @@ if [ ! -S "$control_socket" ] || ! daemon_is_running || [ -n "$start_option" ]; 
         exit 1
     fi
     if [ -n "$start_option" ]; then
-        "$remote_start" "$start_option"
+        if [ -n "$profile_name" ]; then
+            "$remote_start" --profile "$profile_name" "$start_option"
+        else
+            "$remote_start" "$start_option"
+        fi
     else
-        "$remote_start"
+        if [ -n "$profile_name" ]; then
+            "$remote_start" --profile "$profile_name"
+        else
+            "$remote_start"
+        fi
     fi
 fi
 
@@ -73,7 +107,11 @@ pairing_status=1
 attempt=1
 while [ "$attempt" -le 4 ]; do
     pairing_status=0
-    pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
+    if [ -n "$profile_name" ]; then
+        pairing_json="$(timeout "$timeout_seconds" "$codex_bin" --profile "$profile_name" remote-control pair --json 2>&1)" || pairing_status=$?
+    else
+        pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
+    fi
     [ "$pairing_status" -eq 0 ] && break
 
     case "$pairing_json" in
