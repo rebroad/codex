@@ -55,21 +55,42 @@ const OVERLOADED_ERROR_CODE: i64 = -32001;
 const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
 const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
 const APP_SERVER_STARTUP_LOCK_FILE_NAME: &str = "app-server-startup.lock";
+pub const APP_SERVER_PROFILE_ENV_VAR: &str = "CODEX_PROFILE";
+
+fn active_app_server_profile() -> Option<String> {
+    std::env::var(APP_SERVER_PROFILE_ENV_VAR)
+        .ok()
+        .filter(|profile| !profile.is_empty())
+}
 
 pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
-    AbsolutePathBuf::from_absolute_path(
-        codex_home
-            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
-            .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME),
-    )
+    app_server_control_socket_path_for_profile(codex_home, active_app_server_profile().as_deref())
+}
+
+pub fn app_server_control_socket_path_for_profile(
+    codex_home: &Path,
+    profile: Option<&str>,
+) -> std::io::Result<AbsolutePathBuf> {
+    let mut directory = codex_home.join(APP_SERVER_CONTROL_SOCKET_DIR_NAME);
+    if let Some(profile) = profile {
+        directory = directory.join(profile);
+    }
+    AbsolutePathBuf::from_absolute_path(directory.join(APP_SERVER_CONTROL_SOCKET_FILE_NAME))
 }
 
 pub fn app_server_startup_lock_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
-    AbsolutePathBuf::from_absolute_path(
-        codex_home
-            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
-            .join(APP_SERVER_STARTUP_LOCK_FILE_NAME),
-    )
+    app_server_startup_lock_path_for_profile(codex_home, active_app_server_profile().as_deref())
+}
+
+pub fn app_server_startup_lock_path_for_profile(
+    codex_home: &Path,
+    profile: Option<&str>,
+) -> std::io::Result<AbsolutePathBuf> {
+    let mut directory = codex_home.join(APP_SERVER_CONTROL_SOCKET_DIR_NAME);
+    if let Some(profile) = profile {
+        directory = directory.join(profile);
+    }
+    AbsolutePathBuf::from_absolute_path(directory.join(APP_SERVER_STARTUP_LOCK_FILE_NAME))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
