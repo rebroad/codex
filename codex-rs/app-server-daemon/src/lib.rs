@@ -16,6 +16,7 @@ pub use backend::BackendKind;
 use backend::BackendPaths;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_app_server_transport::APP_SERVER_PROFILE_ENV_VAR;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_utils_home_dir::find_codex_home;
 use managed_install::managed_codex_bin;
@@ -263,7 +264,12 @@ impl Daemon {
         let socket_path = app_server_control_socket_path(codex_home.as_path())?
             .as_path()
             .to_path_buf();
-        let state_dir = codex_home.as_path().join(STATE_DIR_NAME);
+        let mut state_dir = codex_home.as_path().join(STATE_DIR_NAME);
+        if let Ok(profile) = std::env::var(APP_SERVER_PROFILE_ENV_VAR) {
+            if !profile.is_empty() {
+                state_dir = state_dir.join(profile);
+            }
+        }
         Ok(Self {
             socket_path,
             pid_file: state_dir.join(PID_FILE_NAME),
