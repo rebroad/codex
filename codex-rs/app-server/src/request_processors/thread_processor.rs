@@ -1357,6 +1357,7 @@ impl ThreadRequestProcessor {
         if !dynamic_tools.is_empty() {
             validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
         }
+        let has_dynamic_tools = !dynamic_tools.is_empty();
         // Count callable functions rather than top-level namespace containers.
         let dynamic_tool_count: usize = dynamic_tools
             .iter()
@@ -1457,6 +1458,13 @@ impl ThreadRequestProcessor {
             session_configured.rollout_path.clone(),
         );
         thread.project_id = project_id.clone();
+
+        if has_dynamic_tools {
+            listener_task_context
+                .thread_state_manager
+                .set_dynamic_tool_connection(thread_id, request_id.connection_id)
+                .await;
+        }
 
         // Auto-attach a thread listener when starting a thread.
         log_listener_attach_result(
