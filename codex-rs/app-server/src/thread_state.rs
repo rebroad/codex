@@ -301,6 +301,7 @@ mod tests {
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
+    dynamic_tool_connection_id: Option<ConnectionId>,
     has_connections_watcher: watch::Sender<bool>,
 }
 
@@ -309,6 +310,7 @@ impl Default for ThreadEntry {
         Self {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
+            dynamic_tool_connection_id: None,
             has_connections_watcher: watch::channel(false).0,
         }
     }
@@ -406,6 +408,34 @@ impl ThreadStateManager {
             .get(&thread_id)
             .map(|thread_entry| thread_entry.connection_ids.iter().copied().collect())
             .unwrap_or_default()
+    }
+
+    pub(crate) async fn set_dynamic_tool_connection(
+        &self,
+        thread_id: ThreadId,
+        connection_id: ConnectionId,
+    ) {
+        let mut state = self.state.lock().await;
+        state
+            .threads
+            .entry(thread_id)
+            .or_default()
+            .dynamic_tool_connection_id = Some(connection_id);
+    }
+
+    pub(crate) async fn dynamic_tool_connection_ids(
+        &self,
+        thread_id: ThreadId,
+    ) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        let Some(thread_entry) = state.threads.get(&thread_id) else {
+            return Vec::new();
+        };
+        thread_entry
+            .dynamic_tool_connection_id
+            .filter(|connection_id| state.live_connections.contains_key(connection_id))
+            .into_iter()
+            .collect()
     }
 
     pub(crate) async fn thread_state(&self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
