@@ -1077,6 +1077,16 @@ async fn cli_main(
     interactive
         .shared
         .take_auto_review_config_overrides(&mut root_config_overrides);
+    if let Some(profile) = interactive.config_profile_v2.as_ref() {
+        // Keep the selected profile available to app-server path helpers and
+        // inherited daemon children for the lifetime of this CLI process.
+        unsafe {
+            std::env::set_var(
+                codex_app_server::APP_SERVER_PROFILE_ENV_VAR,
+                profile.to_string(),
+            )
+        };
+    }
     reject_root_strict_config_for_subcommand(root_strict_config, &subcommand)?;
     if let Some(subcommand) = subcommand.as_ref() {
         profile_v2_for_subcommand(&interactive, subcommand)?;
@@ -1278,10 +1288,12 @@ async fn cli_main(
                         },
                         ..Default::default()
                     };
+                    let loader_overrides =
+                        loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
                     codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        LoaderOverrides::default(),
+                        loader_overrides,
                         strict_config,
                         analytics_default_enabled,
                         transport,
@@ -1832,11 +1844,12 @@ fn profile_v2_for_subcommand<'a>(
         | Subcommand::Fork(_)
         | Subcommand::Mcp(_)
         | Subcommand::Sandbox(_)
+        | Subcommand::AppServer(_)
         | Subcommand::Debug(DebugCommand {
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex queue`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and app-server: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, `codex app-server`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -3043,6 +3056,19 @@ mod tests {
             profile_v2_for_args(&["codex", "--profile", "work", "sandbox"])
                 .expect("sandbox supports config profile")
                 .as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            profile_v2_for_args(&[
+                "codex",
+                "--profile",
+                "work",
+                "app-server",
+                "daemon",
+                "start"
+            ])
+            .expect("app-server supports config profile")
+            .as_deref(),
             Some("work")
         );
     }
