@@ -43,7 +43,7 @@ use crate::transport::RemoteControlStartConfig;
 use crate::transport::RemoteControlTrafficLogRedaction;
 use crate::transport::TransportEvent;
 use crate::transport::acquire_app_server_startup_lock;
-use crate::transport::app_server_startup_lock_path;
+use crate::transport::app_server_startup_lock_path_for_profile;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
@@ -147,9 +147,11 @@ pub use crate::code_mode_host::AppServerCodeModeHostArgs;
 pub use crate::code_mode_host::CodeModeHostTransport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
+pub use crate::transport::APP_SERVER_PROFILE_ENV_VAR;
 pub use crate::transport::AppServerTransport;
 pub use crate::transport::RemoteControlStartupMode;
 pub use crate::transport::app_server_control_socket_path;
+pub(crate) use crate::transport::app_server_control_socket_path_for_profile;
 pub use crate::transport::prepare_control_socket_path;
 pub use crate::transport::take_remote_control_disabled_env;
 
@@ -505,6 +507,10 @@ pub async fn run_main_with_transport_options(
         loader_overrides,
         test_user_config_file_from_env(),
     )?;
+    let app_server_profile = loader_overrides
+        .user_config_profile
+        .as_ref()
+        .map(ToString::to_string);
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -649,7 +655,8 @@ pub async fn run_main_with_transport_options(
         AppServerTransport::UnixSocket { .. } | AppServerTransport::Stdio
     );
     let unix_socket_startup_lock = if needs_default_control_socket {
-        let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
+        let startup_lock_path =
+            app_server_startup_lock_path_for_profile(&codex_home, app_server_profile.as_deref())?;
         let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
         if let AppServerTransport::UnixSocket { socket_path } = &transport {
             prepare_control_socket_path(socket_path.as_path()).await?;
@@ -788,7 +795,10 @@ pub async fn run_main_with_transport_options(
             )
             .await?;
             transport_accept_handles.push(handle);
-            let socket_path = app_server_control_socket_path(&codex_home)?;
+            let socket_path = app_server_control_socket_path_for_profile(
+                &codex_home,
+                app_server_profile.as_deref(),
+            )?;
             match start_control_socket_acceptor(
                 socket_path,
                 transport_event_tx.clone(),
