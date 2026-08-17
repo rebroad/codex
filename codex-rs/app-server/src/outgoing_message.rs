@@ -119,6 +119,7 @@ pub(crate) struct OutgoingMessageSender {
 pub(crate) struct ThreadScopedOutgoingMessageSender {
     outgoing: Arc<OutgoingMessageSender>,
     connection_ids: Arc<Vec<ConnectionId>>,
+    dynamic_tool_connection_ids: Arc<Vec<ConnectionId>>,
     thread_id: ThreadId,
 }
 
@@ -138,20 +139,29 @@ impl ThreadScopedOutgoingMessageSender {
         Self {
             outgoing,
             connection_ids: Arc::new(connection_ids),
+            dynamic_tool_connection_ids: Arc::new(Vec::new()),
             thread_id,
         }
+    }
+
+    pub(crate) fn with_dynamic_tool_connection_ids(
+        mut self,
+        connection_ids: Vec<ConnectionId>,
+    ) -> Self {
+        self.dynamic_tool_connection_ids = Arc::new(connection_ids);
+        self
     }
 
     pub(crate) async fn send_request(
         &self,
         payload: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
+        let connection_ids = match &payload {
+            ServerRequestPayload::DynamicToolCall(_) => self.dynamic_tool_connection_ids.as_slice(),
+            _ => self.connection_ids.as_slice(),
+        };
         self.outgoing
-            .send_request_to_connections(
-                Some(self.connection_ids.as_slice()),
-                payload,
-                Some(self.thread_id),
-            )
+            .send_request_to_connections(Some(connection_ids), payload, Some(self.thread_id))
             .await
     }
 
@@ -301,6 +311,14 @@ impl OutgoingMessageSender {
         request: ServerRequestPayload,
         thread_id: Option<ThreadId>,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
+        if connection_ids.is_some_and(<[codex_app_server_transport::ConnectionId]>::is_empty) {
+            let request_id = self.next_request_id();
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(Err(internal_error(
+                "no client is available to handle this app-server request",
+            )));
+            return (request_id, rx);
+        }
         let id = self.next_request_id();
         let outgoing_message_id = id.clone();
         let request = request.request_with_id(outgoing_message_id.clone());
@@ -1418,6 +1436,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dynamic_tool_requests_only_target_the_owning_connection() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let thread_id = ThreadId::new();
+        let scoped_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1), ConnectionId(2)],
+            thread_id,
+        )
+        .with_dynamic_tool_connection_ids(vec![ConnectionId(2)]);
+
+        scoped_outgoing
+            .send_request(ServerRequestPayload::DynamicToolCall(
+                DynamicToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-1".to_string(),
+                    namespace: None,
+                    tool: "tool".to_string(),
+                    arguments: json!({}),
+                },
+            ))
+            .await;
+
+        let Some(OutgoingEnvelope::ToConnection {
+            connection_id: ConnectionId(2),
+            message: OutgoingMessage::Request(ServerRequest::DynamicToolCall { .. }),
+            ..
+        }) = rx.recv().await
+        else {
+            panic!("dynamic tool request should target its owning connection");
+        };
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn pending_requests_for_thread_returns_thread_requests_in_request_id_order() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
         let outgoing = Arc::new(OutgoingMessageSender::new(
@@ -1429,7 +1486,8 @@ mod tests {
             outgoing.clone(),
             vec![ConnectionId(1)],
             thread_id,
-        );
+        )
+        .with_dynamic_tool_connection_ids(vec![ConnectionId(1)]);
 
         let (dynamic_tool_request_id, _dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(
@@ -1493,7 +1551,8 @@ mod tests {
             outgoing.clone(),
             vec![ConnectionId(1)],
             thread_id,
-        );
+        )
+        .with_dynamic_tool_connection_ids(vec![ConnectionId(1)]);
 
         let (_dynamic_tool_request_id, dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(
