@@ -61,14 +61,19 @@ esac
 
 if [ -n "$profile_name" ]; then
     pid_file="$codex_home/app-server-daemon/$profile_name/app-server.pid"
+    export CODEX_PROFILE="$profile_name"
 fi
 
-run_codex() {
+run_app_server() {
     if [ -n "$profile_name" ]; then
         timeout "$timeout_seconds" "$codex_bin" --profile "$profile_name" "$@"
     else
         timeout "$timeout_seconds" "$codex_bin" "$@"
     fi
+}
+
+run_remote_control() {
+    timeout "$timeout_seconds" "$codex_bin" "$@"
 }
 
 managed_daemon_pid() {
@@ -92,7 +97,7 @@ daemon_has_debug_log() {
 stop_managed_daemon() {
     stop_output=""
     stop_status=0
-    stop_output="$(run_codex app-server daemon stop --json 2>&1)" || stop_status=$?
+    stop_output="$(run_app_server app-server daemon stop --json 2>&1)" || stop_status=$?
     if [ "$stop_status" -ne 0 ]; then
         [ -z "$stop_output" ] || printf '%s\n' "$stop_output" >&2
         return "$stop_status"
@@ -135,7 +140,7 @@ ensure_managed_codex_install || exit 1
 
 start_output=""
 start_status=0
-start_output="$(run_codex remote-control start --json 2>&1)" || start_status=$?
+start_output="$(run_remote_control remote-control start --json 2>&1)" || start_status=$?
 
 if [ "$start_status" -eq 0 ]; then
     exit 0
@@ -145,10 +150,10 @@ case "$start_output" in
     *"connection is errored"*)
         # Stop through Codex so it removes the managed PID/socket state, then
         # let the daemon manager recreate exactly one app-server.
-        run_codex remote-control stop --json >/dev/null 2>&1 || true
+        run_remote_control remote-control stop --json >/dev/null 2>&1 || true
         restart_output=""
         restart_status=0
-        restart_output="$(run_codex remote-control start --json 2>&1)" || restart_status=$?
+        restart_output="$(run_remote_control remote-control start --json 2>&1)" || restart_status=$?
         if [ "$restart_status" -eq 0 ]; then
             exit 0
         fi
