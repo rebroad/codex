@@ -1140,6 +1140,7 @@ command = "print-token"
     let mut expected_provider = built_in_model_providers(/*openai_base_url*/ None)
         .remove("amazon-bedrock")
         .expect("Amazon Bedrock provider should be built in");
+    expected_provider.aws = None;
     expected_provider.base_url = Some("https://bedrock.example.com/v1".to_string());
     expected_provider.auth = Some(ModelProviderAuthInfo {
         command: "print-token".to_string(),
@@ -1161,7 +1162,7 @@ command = "print-token"
 }
 
 #[tokio::test]
-async fn load_config_rejects_unsupported_amazon_bedrock_overrides() {
+async fn load_config_rejects_invalid_amazon_bedrock_overrides() {
     let cfg = toml::from_str::<ConfigToml>(
         r#"
 model_provider = "amazon-bedrock"
@@ -1184,8 +1185,39 @@ supports_websockets = true
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock: provider aws cannot be combined with supports_websockets"
     ));
+}
+
+#[tokio::test]
+async fn load_config_applies_openai_builtin_overrides() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "openai"
+
+[model_providers.openai]
+stream_idle_timeout_ms = 1_000
+websocket_connect_timeout_ms = 10_000
+"#,
+    )
+    .expect("OpenAI provider overrides should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    let mut expected_provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove("openai")
+        .expect("OpenAI provider should be built in");
+    expected_provider.stream_idle_timeout_ms = Some(1_000);
+    expected_provider.websocket_connect_timeout_ms = Some(10_000);
+
+    assert_eq!(config.model_provider_id, "openai");
+    assert_eq!(config.model_provider, expected_provider);
 }
 
 #[test]
