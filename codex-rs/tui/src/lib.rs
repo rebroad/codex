@@ -433,9 +433,38 @@ async fn connect_remote_app_server(
     Ok(AppServerClient::Remote(app_server))
 }
 
+pub(crate) async fn try_connect_default_local_app_server(
+    codex_home: &Path,
+) -> Option<AppServerClient> {
+    let endpoint = maybe_probe_default_daemon_socket(codex_home).await?;
+    match connect_remote_app_server(RemoteAppServerEndpoint::UnixSocket {
+        socket_path: endpoint,
+    })
+    .await
+    {
+        Ok(client) => Some(client),
+        Err(err) => {
+            tracing::debug!(%err, "failed to attach to the default local app-server");
+            None
+        }
+    }
+}
+
 #[cfg(unix)]
 async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
     let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
+    match codex_app_server_client::prepare_control_socket_path(socket_path.as_path()).await {
+        Ok(()) => return None,
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {}
+        Err(err) => {
+            tracing::debug!(
+                %err,
+                socket_path = %socket_path.display(),
+                "skipping default app-server daemon socket"
+            );
+            return None;
+        }
+    }
     match tokio::time::timeout(
         AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT,
         tokio::net::UnixStream::connect(socket_path.as_path()),
