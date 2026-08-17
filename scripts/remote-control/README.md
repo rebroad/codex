@@ -38,6 +38,11 @@ the `codex` found on `PATH`. Existing managed installations are left alone.
 Use `codex-pairing-code --debug-log` when diagnosing daemon startup. This may
 replace an existing managed daemon so that remote-control logs are enabled.
 
+Use `codex-pairing-code -p PROFILE` (or `--profile PROFILE`) to pair through a
+named Codex profile. The profile gets its own app-server socket and daemon
+state under `CODEX_HOME`, so it can run alongside the default profile without
+requiring a separate `CODEX_HOME`.
+
 ## Traffic capture
 
 The app-server can capture remote-control WebSocket traffic as JSON Lines for
