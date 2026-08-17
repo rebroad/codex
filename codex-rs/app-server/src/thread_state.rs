@@ -327,6 +327,7 @@ struct ThreadStateManagerInner {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
+    pub(crate) can_handle_dynamic_tools: bool,
 }
 
 #[derive(Clone, Default)]
@@ -422,10 +423,24 @@ impl ThreadStateManager {
         let Some(thread_entry) = state.threads.get(&thread_id) else {
             return Vec::new();
         };
-        thread_entry
+        let explicit_owner = thread_entry
             .dynamic_tool_connection_id
             .filter(|connection_id| state.live_connections.contains_key(connection_id))
             .into_iter()
+            .collect::<Vec<_>>();
+        if !explicit_owner.is_empty() {
+            return explicit_owner;
+        }
+        thread_entry
+            .connection_ids
+            .iter()
+            .filter(|connection_id| {
+                state
+                    .live_connections
+                    .get(connection_id)
+                    .is_some_and(|capabilities| capabilities.can_handle_dynamic_tools)
+            })
+            .copied()
             .collect()
     }
 

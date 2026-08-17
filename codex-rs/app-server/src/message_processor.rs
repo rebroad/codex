@@ -732,12 +732,14 @@ impl MessageProcessor {
         &self,
         connection_id: ConnectionId,
         request_attestation: bool,
+        can_handle_dynamic_tools: bool,
     ) {
         self.thread_processor
             .connection_initialized(
                 connection_id,
                 ConnectionCapabilities {
                     request_attestation,
+                    can_handle_dynamic_tools,
                 },
             )
             .await;
@@ -854,6 +856,7 @@ impl MessageProcessor {
                         connection_id,
                         ConnectionCapabilities {
                             request_attestation: session.request_attestation(),
+                            can_handle_dynamic_tools: false,
                         },
                     )
                     .await;
