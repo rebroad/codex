@@ -1295,10 +1295,14 @@ async fn cli_main(
                         listen
                     };
                     let auth = auth.try_into_settings()?;
+                    let extension_host_remote_control = analytics_default_enabled
+                        && matches!(transport, codex_app_server::AppServerTransport::Stdio);
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
                         code_mode_host_transport: code_mode_host.into(),
-                        remote_control_startup_mode: match (remote_control, remote_control_disabled)
-                        {
+                        remote_control_startup_mode: match (
+                            remote_control || extension_host_remote_control,
+                            remote_control_disabled,
+                        ) {
                             (true, _) => {
                                 codex_app_server::RemoteControlStartupMode::EnabledEphemeral
                             }
