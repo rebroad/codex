@@ -43,7 +43,6 @@ use crate::transport::TransportEvent;
 use crate::transport::acquire_app_server_startup_lock;
 use crate::transport::app_server_startup_lock_path;
 use crate::transport::auth::policy_from_settings;
-use crate::transport::prepare_control_socket_path;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
@@ -143,6 +142,7 @@ pub use crate::transport::app_server_control_socket_path;
 pub use crate::transport::auth::AppServerWebsocketAuthArgs;
 pub use crate::transport::auth::AppServerWebsocketAuthSettings;
 pub use crate::transport::auth::WebsocketAuthCliMode;
+pub use crate::transport::prepare_control_socket_path;
 pub use crate::transport::take_remote_control_disabled_env;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
@@ -598,14 +598,19 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
-    let unix_socket_startup_lock = match &transport {
-        AppServerTransport::UnixSocket { socket_path } => {
-            let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
-            let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
+    let needs_default_control_socket = matches!(
+        &transport,
+        AppServerTransport::UnixSocket { .. } | AppServerTransport::Stdio
+    );
+    let unix_socket_startup_lock = if needs_default_control_socket {
+        let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
+        let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
+        if let AppServerTransport::UnixSocket { socket_path } = &transport {
             prepare_control_socket_path(socket_path.as_path()).await?;
-            Some(startup_lock)
         }
-        _ => None,
+        Some(startup_lock)
+    } else {
+        None
     };
     let state_db_init = match init_sqlite_state_db_with_fresh_start_on_corruption(&config).await {
         Ok(state_db_init) => state_db_init,
@@ -732,6 +737,20 @@ pub async fn run_main_with_transport_options(
                 stdio_client_name_tx,
             )
             .await?;
+            let socket_path = app_server_control_socket_path(&codex_home)?;
+            match start_control_socket_acceptor(
+                socket_path,
+                transport_event_tx.clone(),
+                transport_shutdown_token.clone(),
+            )
+            .await
+            {
+                Ok(accept_handle) => transport_accept_handles.push(accept_handle),
+                Err(err) if err.kind() == ErrorKind::AddrInUse => {
+                    warn!(%err, "default app-server control socket is already in use")
+                }
+                Err(err) => return Err(err),
+            }
         }
         AppServerTransport::UnixSocket { socket_path } => {
             let accept_handle = start_control_socket_acceptor(
