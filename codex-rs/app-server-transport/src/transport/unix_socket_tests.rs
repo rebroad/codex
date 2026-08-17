@@ -3,6 +3,8 @@ use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::acquire_app_server_startup_lock;
 use super::app_server_control_socket_path;
+use super::app_server_control_socket_path_for_profile;
+use super::app_server_startup_lock_path_for_profile;
 use super::start_control_socket_acceptor;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -21,6 +23,29 @@ use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Bytes;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 use tokio_util::sync::CancellationToken;
+
+#[test]
+fn profile_control_paths_are_namespaced_without_changing_default_path() {
+    let codex_home = Path::new("/home/test/.codex");
+    assert_eq!(
+        app_server_control_socket_path_for_profile(codex_home, None).expect("default socket path"),
+        absolute_path("/home/test/.codex/app-server-control/app-server-control.sock"),
+    );
+    assert_eq!(
+        app_server_control_socket_path_for_profile(codex_home, Some("chatgpt-window"))
+            .expect("profile socket path"),
+        absolute_path(
+            "/home/test/.codex/app-server-control/chatgpt-window/app-server-control.sock",
+        ),
+    );
+    assert_eq!(
+        app_server_startup_lock_path_for_profile(codex_home, Some("chatgpt-window"))
+            .expect("profile lock path"),
+        absolute_path(
+            "/home/test/.codex/app-server-control/chatgpt-window/app-server-startup.lock",
+        ),
+    );
+}
 
 #[test]
 fn listen_unix_socket_parses_as_unix_socket_transport() {

@@ -410,16 +410,37 @@ impl PidBackend {
     }
 
     #[cfg(unix)]
-    fn command_args(&self) -> Vec<&'static str> {
+    fn command_args(&self) -> Vec<String> {
+        let profile = std::env::var("CODEX_PROFILE")
+            .ok()
+            .filter(|value| !value.is_empty());
+        let mut args = Vec::new();
+        if let Some(profile) = profile {
+            args.extend(["--profile".to_string(), profile]);
+        }
         match self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
-            } => vec!["app-server", "--remote-control", "--listen", "unix://"],
+            } => args.extend([
+                "app-server".to_string(),
+                "--remote-control".to_string(),
+                "--listen".to_string(),
+                "unix://".to_string(),
+            ]),
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
-            } => vec!["app-server", "--listen", "unix://"],
-            PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
+            } => args.extend([
+                "app-server".to_string(),
+                "--listen".to_string(),
+                "unix://".to_string(),
+            ]),
+            PidCommandKind::UpdateLoop => args.extend([
+                "app-server".to_string(),
+                "daemon".to_string(),
+                "pid-update-loop".to_string(),
+            ]),
         }
+        args
     }
 
     #[cfg(unix)]
