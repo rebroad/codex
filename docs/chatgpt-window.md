@@ -5,10 +5,10 @@ ChatGPT tab in Chrome. It is supplied by the separate `chatgpt-window`
 project; Codex communicates with it through the standard Responses API and does
 not modify the normal OpenAI backend.
 
-Start the local adapter and ensure the Chrome bridge extension is connected:
+Install/start the local bridge and adapter once, then check them:
 
 ```bash
-chatgpt-window-responses
+chatgpt-window --setup
 curl --fail http://127.0.0.1:8767/health
 ```
 
@@ -22,7 +22,11 @@ wire_api = "responses"
 requires_openai_auth = false
 supports_websockets = false
 
-[profiles.chatgpt-window]
+```
+
+Create `$CODEX_HOME/chatgpt-window.config.toml` with:
+
+```toml
 model_provider = "chatgpt-window"
 model = "chatgpt-window"
 ```
@@ -33,5 +37,5 @@ attachments, reasoning effort, and tool calls. Tool calls are validated by the
 adapter but executed by Codex, so Codex approvals, sandboxing, MCP, and policy
 remain authoritative.
 
-The daemon must be started explicitly and the Chrome extension must remain
-available. The browser bridge permits one active request per conversation.
+The services must remain available and the Chrome extension must remain
+connected. The browser bridge permits one active request per conversation.
