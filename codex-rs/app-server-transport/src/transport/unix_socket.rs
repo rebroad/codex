@@ -225,7 +225,7 @@ async fn run_daemon_shutdown(
 }
 
 // Unix callers hold the physical socket's startup lock through bind and publication.
-async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
+pub async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
     #[cfg(windows)]
     let (socket_path, _directory_guard) = codex_uds::validate_private_socket_path(socket_path)?;
     #[cfg(windows)]
@@ -256,8 +256,8 @@ async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
     // A crashed daemon can leave a dangling rendezvous symlink. Only recognize
     // our own deterministic alias; never remove an arbitrary symlink target.
     #[cfg(unix)]
-    if std::fs::read_link(socket_path).ok().as_deref()
-        == Some(protected_socket_path(socket_path)?.as_path())
+    if let Ok(link_target) = std::fs::read_link(socket_path)
+        && link_target == protected_socket_path(socket_path)?
     {
         return tokio::fs::remove_file(socket_path).await;
     }

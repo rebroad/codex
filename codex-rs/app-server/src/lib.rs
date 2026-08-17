@@ -150,6 +150,7 @@ pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
 pub use crate::transport::RemoteControlStartupMode;
 pub use crate::transport::app_server_control_socket_path;
+pub use crate::transport::prepare_control_socket_path;
 pub use crate::transport::take_remote_control_disabled_env;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
@@ -643,13 +644,19 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
-    let unix_socket_startup_lock = match &transport {
-        AppServerTransport::UnixSocket { .. } => {
-            let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
-            let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
-            Some(startup_lock)
+    let needs_default_control_socket = matches!(
+        &transport,
+        AppServerTransport::UnixSocket { .. } | AppServerTransport::Stdio
+    );
+    let unix_socket_startup_lock = if needs_default_control_socket {
+        let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
+        let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
+        if let AppServerTransport::UnixSocket { socket_path } = &transport {
+            prepare_control_socket_path(socket_path.as_path()).await?;
         }
-        _ => None,
+        Some(startup_lock)
+    } else {
+        None
     };
     let state_db_init = match init_sqlite_state_db_with_fresh_start_on_corruption(&config).await {
         Ok(state_db_init) => state_db_init,
@@ -781,6 +788,21 @@ pub async fn run_main_with_transport_options(
             )
             .await?;
             transport_accept_handles.push(handle);
+            let socket_path = app_server_control_socket_path(&codex_home)?;
+            match start_control_socket_acceptor(
+                socket_path,
+                transport_event_tx.clone(),
+                transport_shutdown_token.clone(),
+                DaemonShutdownAccess::Disabled,
+            )
+            .await
+            {
+                Ok(accept_handle) => transport_accept_handles.push(accept_handle),
+                Err(err) if err.kind() == ErrorKind::AddrInUse => {
+                    warn!(%err, "default app-server control socket is already in use")
+                }
+                Err(err) => return Err(err),
+            }
         }
         AppServerTransport::UnixSocket { socket_path } => {
             let accept_handle = start_control_socket_acceptor(
@@ -1562,8 +1584,8 @@ mod tests {
     use super::ShutdownState;
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
-    use super::turn_admission::TurnAdmission;
     use super::remote_control_auth_file;
+    use super::turn_admission::TurnAdmission;
     #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
     #[cfg(debug_assertions)]
