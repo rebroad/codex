@@ -356,11 +356,15 @@ pub(super) async fn ensure_listener_task_running(
                     let subscribed_connection_ids = thread_state_manager
                         .subscribed_connection_ids(conversation_id)
                         .await;
+                    let dynamic_tool_connection_ids = thread_state_manager
+                        .dynamic_tool_connection_ids(conversation_id)
+                        .await;
                     let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                         outgoing_for_task.clone(),
                         subscribed_connection_ids,
                         conversation_id,
-                    );
+                    )
+                    .with_dynamic_tool_connection_ids(dynamic_tool_connection_ids);
 
                     apply_realtime_event_effects(
                         conversation.as_ref(),
