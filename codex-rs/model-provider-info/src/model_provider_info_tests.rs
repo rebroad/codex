@@ -405,6 +405,33 @@ fn test_merge_configured_model_providers_adds_custom_provider() {
 }
 
 #[test]
+fn test_merge_configured_model_provider_overrides_inherits_openai_defaults() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        OPENAI_PROVIDER_ID.to_string(),
+        ModelProviderInfoOverrides {
+            stream_idle_timeout_ms: Some(1_000),
+            websocket_connect_timeout_ms: Some(10_000),
+            ..ModelProviderInfoOverrides::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    let expected_provider = expected
+        .get_mut(OPENAI_PROVIDER_ID)
+        .expect("OpenAI provider should be built in");
+    expected_provider.stream_idle_timeout_ms = Some(1_000);
+    expected_provider.websocket_connect_timeout_ms = Some(10_000);
+
+    assert_eq!(
+        merge_configured_model_provider_overrides(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
 fn test_merge_configured_model_providers_applies_amazon_bedrock_aws_override() {
     let auth_refresh = AwsAuthRefreshConfig {
         command: "aws".to_string(),
