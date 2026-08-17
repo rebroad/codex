@@ -149,6 +149,106 @@ pub struct ModelProviderInfo {
     pub supports_standalone_web_search: bool,
 }
 
+/// Fields supplied for a provider in `config.toml`.
+///
+/// This intentionally keeps scalar fields optional so an entry for a built-in
+/// provider can inherit every setting that it does not explicitly override.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelProviderInfoOverrides {
+    pub name: Option<String>,
+    pub base_url: Option<String>,
+    pub env_key: Option<String>,
+    pub env_key_instructions: Option<String>,
+    pub experimental_bearer_token: Option<String>,
+    pub auth: Option<ModelProviderAuthInfo>,
+    pub aws: Option<ModelProviderAwsAuthInfo>,
+    pub wire_api: Option<WireApi>,
+    pub query_params: Option<HashMap<String, String>>,
+    pub http_headers: Option<HashMap<String, String>>,
+    pub env_http_headers: Option<HashMap<String, String>>,
+    pub request_max_retries: Option<u64>,
+    pub stream_max_retries: Option<u64>,
+    pub stream_idle_timeout_ms: Option<u64>,
+    pub websocket_connect_timeout_ms: Option<u64>,
+    pub requires_openai_auth: Option<bool>,
+    pub supports_websockets: Option<bool>,
+    pub supports_standalone_web_search: Option<bool>,
+}
+
+impl ModelProviderInfoOverrides {
+    pub fn apply_to(&self, provider: &mut ModelProviderInfo) {
+        if let Some(value) = &self.name {
+            provider.name.clone_from(value);
+        }
+        if let Some(value) = &self.base_url {
+            provider.base_url = Some(value.clone());
+        }
+        if let Some(value) = &self.env_key {
+            provider.env_key = Some(value.clone());
+        }
+        if let Some(value) = &self.env_key_instructions {
+            provider.env_key_instructions = Some(value.clone());
+        }
+        if let Some(value) = &self.experimental_bearer_token {
+            provider.experimental_bearer_token = Some(value.clone());
+        }
+        if let Some(value) = &self.auth {
+            provider.auth = Some(value.clone());
+            provider.aws = None;
+        }
+        if let Some(value) = &self.aws {
+            provider.aws = Some(value.clone());
+            provider.auth = None;
+        }
+        if let Some(value) = self.wire_api {
+            provider.wire_api = value;
+        }
+        if let Some(value) = &self.query_params {
+            provider.query_params = Some(value.clone());
+        }
+        if let Some(value) = &self.http_headers {
+            provider
+                .http_headers
+                .get_or_insert_default()
+                .extend(value.clone());
+        }
+        if let Some(value) = &self.env_http_headers {
+            provider
+                .env_http_headers
+                .get_or_insert_default()
+                .extend(value.clone());
+        }
+        if let Some(value) = self.request_max_retries {
+            provider.request_max_retries = Some(value);
+        }
+        if let Some(value) = self.stream_max_retries {
+            provider.stream_max_retries = Some(value);
+        }
+        if let Some(value) = self.stream_idle_timeout_ms {
+            provider.stream_idle_timeout_ms = Some(value);
+        }
+        if let Some(value) = self.websocket_connect_timeout_ms {
+            provider.websocket_connect_timeout_ms = Some(value);
+        }
+        if let Some(value) = self.requires_openai_auth {
+            provider.requires_openai_auth = value;
+        }
+        if let Some(value) = self.supports_websockets {
+            provider.supports_websockets = value;
+        }
+        if let Some(value) = self.supports_standalone_web_search {
+            provider.supports_standalone_web_search = value;
+        }
+    }
+
+    pub fn into_provider(self) -> ModelProviderInfo {
+        let mut provider = ModelProviderInfo::default();
+        self.apply_to(&mut provider);
+        provider
+    }
+}
+
 /// AWS SigV4 auth configuration for a model provider.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -566,6 +666,29 @@ other non-default provider fields are not supported"
             }
         } else {
             model_providers.entry(key).or_insert(provider);
+        }
+    }
+
+    Ok(model_providers)
+}
+
+/// Merge TOML provider overrides into the built-in provider catalog.
+pub fn merge_configured_model_provider_overrides(
+    mut model_providers: HashMap<String, ModelProviderInfo>,
+    configured_model_providers: HashMap<String, ModelProviderInfoOverrides>,
+) -> Result<HashMap<String, ModelProviderInfo>, String> {
+    for (key, overrides) in configured_model_providers {
+        if let Some(provider) = model_providers.get_mut(&key) {
+            overrides.apply_to(provider);
+            provider
+                .validate()
+                .map_err(|message| format!("model_providers.{key}: {message}"))?;
+        } else {
+            let provider = overrides.into_provider();
+            provider
+                .validate()
+                .map_err(|message| format!("model_providers.{key}: {message}"))?;
+            model_providers.insert(key, provider);
         }
     }
 
