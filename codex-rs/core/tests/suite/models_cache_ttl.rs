@@ -275,6 +275,7 @@ async fn matching_models_etag_renews_cache_after_half_its_lifetime() -> Result<(
 async fn uses_cache_when_version_matches() -> Result<()> {
     let server = MockServer::start().await;
     let cached_model = test_remote_model(VERSIONED_MODEL, /*priority*/ 1);
+    let provider_identity = format!("OpenAI|{}/v1|responses|Some(Chatgpt)", server.uri());
     let response = responses::mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
@@ -295,6 +296,7 @@ async fn uses_cache_when_version_matches() -> Result<()> {
                 fetched_at: Utc::now(),
                 etag: None,
                 client_version: Some(client_version_to_whole()),
+                provider_identity: Some(provider_identity),
                 models: vec![cached_model],
             })
             .expect("serialize cache");
@@ -360,6 +362,7 @@ async fn refreshes_when_cache_version_missing() -> Result<()> {
                 fetched_at: Utc::now(),
                 etag: None,
                 client_version: None,
+                provider_identity: None,
                 models: vec![cached_model],
             };
             let cache_path = home.join(CACHE_FILE);
@@ -411,6 +414,7 @@ async fn refreshes_when_cache_version_differs() -> Result<()> {
                 fetched_at: Utc::now(),
                 etag: None,
                 client_version: Some(format!("{client_version}-diff")),
+                provider_identity: None,
                 models: vec![cached_model],
             };
             let cache_path = home.join(CACHE_FILE);
@@ -476,6 +480,8 @@ struct ModelsCache {
     etag: Option<String>,
     #[serde(default)]
     client_version: Option<String>,
+    #[serde(default)]
+    provider_identity: Option<String>,
     models: Vec<ModelInfo>,
 }
 
