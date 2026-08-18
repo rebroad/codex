@@ -5799,8 +5799,7 @@ async fn bare_prompt_has_no_contextual_instructions_or_visible_tools() {
         .await;
     let prompt = super::turn::build_prompt(
         Vec::new(),
-        &step_context.tool_router,
-        &turn_context,
+        &step_context,
         BaseInstructions {
             text: String::new(),
             provenance: None,
