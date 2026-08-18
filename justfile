@@ -9,6 +9,7 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 rust_min_stack := "8388608"
 python := if os_family() == "windows" { "python" } else { "python3" }
 build_tree := (justfile_directory() + ".build") / "codex-rs"
+cargo_source_directory := justfile_directory() / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", cargo_working_directory / "target")
 rusty_v8_setup := "rusty_v8_version=\"$(sed -n '/^name = \"v8\"$/,/^version = /s/^version = \"\\([^\"]*\\)\"/\\1/p' Cargo.lock | head -n 1)\"; rusty_v8_target=\"$(rustc -vV | sed -n 's/^host: //p')\"; repo_root=\"$(cd \"$(pwd -P)/..\" && pwd -P)\"; build_root=\"${repo_root}\"; if test -d \"${repo_root}.build\"; then build_root=\"${repo_root}.build\"; fi; rusty_v8_dir=\"${build_root}/build/rusty-v8-artifacts/${rusty_v8_version}/${rusty_v8_target}\"; rusty_v8_archive=\"${rusty_v8_dir}/librusty_v8_ptrcomp_sandbox_release_${rusty_v8_target}.a.gz\"; rusty_v8_binding=\"${rusty_v8_dir}/src_binding_ptrcomp_sandbox_release_${rusty_v8_target}.rs\"; test -s \"${rusty_v8_archive}\" && test -s \"${rusty_v8_binding}\" || { echo \"Rusty V8 artifacts not found: ${rusty_v8_dir}\" >&2; exit 1; }; RUSTY_V8_ARCHIVE=\"${rusty_v8_archive}\" RUSTY_V8_SRC_BINDING_PATH=\"${rusty_v8_binding}\""
@@ -185,15 +186,15 @@ mcp-server-run *args:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cd "{{ cargo_working_directory }}" && cargo run -p codex-core --bin codex-write-config-schema
+    cd "{{ cargo_working_directory }}" && cargo run -p codex-core --bin codex-write-config-schema -- --out "{{ cargo_source_directory }}/core/config.schema.json"
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
-    cd "{{ cargo_working_directory }}" && cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- {args}
+    cd "{{ cargo_working_directory }}" && {{ python }} app-server-protocol/scripts/write_schema_fixtures.py --schema-root "{{ cargo_source_directory }}/app-server-protocol/schema" {args}
 
 [no-cd]
 write-hooks-schema:
-    cd "{{ cargo_working_directory }}" && cargo run --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures
+    cd "{{ cargo_working_directory }}" && cargo run --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures -- "{{ cargo_source_directory }}/hooks/schema"
 
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
