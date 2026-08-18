@@ -518,6 +518,12 @@ jobs:
       - uses: ./.github/actions/setup-rust-toolchain
         with:
           target: ${{ matrix.target }}
+      - if: matrix.target == 'armv7-unknown-linux-musleabihf'
+        name: Install Zig (ARMv7 musl)
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
       - name: Install Android NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
