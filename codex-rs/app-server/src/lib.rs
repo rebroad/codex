@@ -8,7 +8,7 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config::UnsupportedUntrustedApprovalPolicyError;
-use codex_core::resolve_installation_id;
+use codex_core::resolve_installation_id_at_path;
 use codex_login::AuthManager;
 #[cfg(debug_assertions)]
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -771,7 +771,15 @@ pub async fn run_main_with_transport_options(
             "remote control is disabled by managed requirements",
         ));
     }
-    let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let installation_id_path = match app_server_profile.as_deref() {
+        Some(profile) => config
+            .codex_home
+            .join("app-server-daemon")
+            .join(profile)
+            .join("installation_id"),
+        None => config.codex_home.join("installation_id"),
+    };
+    let installation_id = resolve_installation_id_at_path(installation_id_path).await?;
     let transport_shutdown_token = CancellationToken::new();
     // Remote enrollment must cancel before RPC drain without shutting down telemetry.
     let remote_control_shutdown_token = transport_shutdown_token.child_token();
@@ -783,6 +791,15 @@ pub async fn run_main_with_transport_options(
     let managed_daemon = matches!(&transport, AppServerTransport::UnixSocket { .. })
         && runtime_options.managed_daemon;
     let mut app_server_client_name_rx = None;
+    if !matches!(&transport, AppServerTransport::Stdio)
+        && let Some(profile) = app_server_profile.as_deref()
+    {
+        let (client_name_tx, client_name_rx) = oneshot::channel::<String>();
+        client_name_tx
+            .send(format!("codex-profile:{profile}"))
+            .map_err(|_| std::io::Error::other("failed to set app-server profile identity"))?;
+        app_server_client_name_rx = Some(client_name_rx);
+    }
 
     match &transport {
         AppServerTransport::Stdio => {
