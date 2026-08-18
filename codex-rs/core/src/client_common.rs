@@ -58,7 +58,10 @@ impl Prompt {
     pub(crate) fn without_scaffolding(mut self) -> Self {
         self.tools = Arc::default();
         self.parallel_tool_calls = false;
-        self.base_instructions = BaseInstructions::default();
+        self.base_instructions = BaseInstructions {
+            text: String::new(),
+            provenance: None,
+        };
         self
     }
 
