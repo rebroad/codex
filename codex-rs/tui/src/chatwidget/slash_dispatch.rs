@@ -243,6 +243,9 @@ impl ChatWidget {
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
+            SlashCommand::Wake => {
+                self.submit_wake_turn();
+            }
             SlashCommand::Fork => {
                 self.app_event_tx
                     .send(AppEvent::ForkCurrentSession { name: None });
@@ -572,6 +575,55 @@ impl ChatWidget {
                     },
                 );
             }
+        }
+    }
+
+    /// Start an internal continuation turn without adding a synthetic user message.
+    ///
+    /// An empty input is intentional: the app-server can start a turn from the
+    /// existing thread context, while providers such as the ChatGPT-window
+    /// adapter can translate it into a provider-specific continuation prompt.
+    fn submit_wake_turn(&mut self) {
+        if self.blocks_direct_input {
+            self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+            return;
+        }
+        let effective_mode = self.effective_collaboration_mode();
+        if effective_mode.model().trim().is_empty() {
+            self.add_error_message(
+                "Thread model is unavailable. Wait for the thread to finish syncing or choose a model before retrying.".to_string(),
+            );
+            return;
+        }
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            self.active_collaboration_mask
+                .as_ref()
+                .map(|_| effective_mode.clone())
+        } else {
+            None
+        };
+        let personality = self
+            .config
+            .personality
+            .filter(|_| self.config.features.enabled(Feature::Personality))
+            .filter(|_| self.current_model_supports_personality());
+        let op = AppCommand::user_turn(
+            Vec::new(),
+            self.config.cwd.to_path_buf(),
+            AskForApproval::from(self.config.permissions.approval_policy.value()),
+            self.config.permissions.active_permission_profile(),
+            effective_mode.model().to_string(),
+            effective_mode.reasoning_effort(),
+            /*summary*/ None,
+            self.service_tier_update_for_core(),
+            /*final_output_json_schema*/ None,
+            collaboration_mode,
+            personality,
+        );
+        if self.submit_op(op) {
+            self.input_queue.user_turn_pending_start = true;
+            self.set_status_header("Working".to_string());
+            self.request_redraw();
         }
     }
 
@@ -1162,6 +1214,7 @@ impl ChatWidget {
             | SlashCommand::Delete
             | SlashCommand::Clear
             | SlashCommand::Resume
+            | SlashCommand::Wake
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
