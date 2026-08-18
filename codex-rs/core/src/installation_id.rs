@@ -25,8 +25,17 @@ fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
 }
 
 pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<String> {
-    let path = codex_home.join(INSTALLATION_ID_FILENAME);
-    fs::create_dir_all(codex_home).await?;
+    resolve_installation_id_at_path(codex_home.join(INSTALLATION_ID_FILENAME)).await
+}
+
+pub async fn resolve_installation_id_at_path(path: AbsolutePathBuf) -> Result<String> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "installation ID path has no parent",
+        )
+    })?;
+    fs::create_dir_all(parent).await?;
     tokio::task::spawn_blocking(move || {
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
@@ -80,6 +89,7 @@ mod tests {
     use super::INSTALLATION_ID_FILENAME;
     use super::is_unsupported_file_lock_error;
     use super::resolve_installation_id;
+    use super::resolve_installation_id_at_path;
     use core_test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -170,6 +180,27 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(codex_home.path().join(INSTALLATION_ID_FILENAME))
                 .expect("read rewritten installation id"),
+            resolved
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_installation_id_at_path_supports_profile_storage() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let profile_path = codex_home
+            .path()
+            .join("app-server-daemon")
+            .join("chatgpt-window")
+            .join(INSTALLATION_ID_FILENAME)
+            .abs();
+
+        let resolved = resolve_installation_id_at_path(profile_path.clone())
+            .await
+            .expect("resolve profile installation id");
+
+        assert!(Uuid::parse_str(&resolved).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(profile_path).expect("read profile installation id"),
             resolved
         );
     }
