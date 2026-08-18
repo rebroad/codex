@@ -194,6 +194,23 @@ async fn slash_recap_requests_generation_for_current_thread() {
 }
 
 #[tokio::test]
+async fn slash_wake_starts_an_empty_turn_without_recording_user_input() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Wake);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert!(items.is_empty()),
+        other => panic!("expected empty wake user turn, got {other:?}"),
+    }
+    assert!(chat.input_queue.user_turn_pending_start);
+    assert!(
+        rx.try_recv().is_err(),
+        "wake must not append a user-message history event"
+    );
+}
+
+#[tokio::test]
 async fn queued_slash_compact_dispatches_after_active_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
