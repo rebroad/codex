@@ -1890,3 +1890,18 @@ jobs:
             --clobber \
             "${RUNNER_TEMP}/latest-alpha/install.sh" \
             "${RUNNER_TEMP}/latest-alpha/install.ps1"
+
+      - name: Refresh short installer bootstrap
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # reb.ai/codex/install.sh redirects to GitHub's latest-release
+          # download URL. Keep that bootstrap current so it can resolve
+          # CODEX_RELEASE=alpha to the rolling latest-alpha release.
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          gh release upload "${latest_tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            "${RUNNER_TEMP}/latest-alpha/install.sh" \
+            "${RUNNER_TEMP}/latest-alpha/install.ps1"
