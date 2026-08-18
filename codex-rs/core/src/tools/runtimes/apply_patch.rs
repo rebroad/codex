@@ -133,11 +133,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
-            AskForApproval::Never => false,
+            AskForApproval::Never => true,
             AskForApproval::Granular(granular_config) => granular_config.allows_sandbox_approval(),
             AskForApproval::OnRequest => true,
             AskForApproval::UnlessTrusted => true,
         }
+    }
+
+    fn should_bypass_approval(&self, _policy: AskForApproval, already_approved: bool) -> bool {
+        already_approved
     }
 
     // apply_patch approvals are decided upstream by assess_patch_safety.

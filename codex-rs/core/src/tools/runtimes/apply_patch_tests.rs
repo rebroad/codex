@@ -46,6 +46,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
     let runtime = ApplyPatchRuntime::new();
+    assert!(runtime.wants_no_sandbox_approval(AskForApproval::Never));
     assert!(runtime.wants_no_sandbox_approval(AskForApproval::OnRequest));
     assert!(
         !runtime.wants_no_sandbox_approval(AskForApproval::Granular(GranularApprovalConfig {
@@ -65,6 +66,14 @@ fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
             mcp_elicitations: true,
         }))
     );
+}
+
+#[test]
+fn never_policy_does_not_bypass_patch_escalation_approval() {
+    let runtime = ApplyPatchRuntime::new();
+
+    assert!(!runtime.should_bypass_approval(AskForApproval::Never, false));
+    assert!(runtime.should_bypass_approval(AskForApproval::Never, true));
 }
 
 #[tokio::test]
