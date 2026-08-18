@@ -35,6 +35,10 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 /// manager owns refresh policy, cache behavior, and catalog merging; it calls
 /// this endpoint only when it decides a remote refresh should happen.
 pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
+    /// Stable, non-secret identity for the provider endpoint.
+    fn provider_identity(&self) -> String {
+        "default".to_string()
+    }
     /// Returns whether this provider can authenticate command-scoped requests.
     fn has_command_auth(&self) -> bool;
 
@@ -183,6 +187,11 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
+    /// Return metadata from the catalog shipped with the client.
+    fn get_bundled_models(&self) -> &[ModelInfo] {
+        &[]
+    }
+
     /// Look up model metadata, applying remote overrides and config adjustments.
     fn get_model_info<'a>(
         &'a self,
@@ -192,7 +201,12 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         Box::pin(
             async move {
                 let remote_models = self.get_remote_models().await;
-                construct_model_info_from_candidates(model, &remote_models, config)
+                construct_model_info_from_candidates_with_fallback(
+                    model,
+                    &remote_models,
+                    self.get_bundled_models(),
+                    config,
+                )
             }
             .instrument(tracing::info_span!("get_model_info", model = model)),
         )
@@ -217,6 +231,7 @@ pub type SharedModelsManager = Arc<dyn ModelsManager>;
 #[derive(Debug)]
 pub struct OpenAiModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
+    bundled_models: Vec<ModelInfo>,
     etag: RwLock<Option<String>>,
     cache: Option<Arc<dyn ModelsCache>>,
     endpoint_client: SharedModelsEndpointClient,
@@ -273,9 +288,10 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        let remote_models = load_remote_models_from_file().unwrap_or_default();
+        let bundled_models = load_remote_models_from_file().unwrap_or_default();
         Self {
-            remote_models: RwLock::new(remote_models),
+            remote_models: RwLock::new(bundled_models.clone()),
+            bundled_models,
             etag: RwLock::new(None),
             cache,
             endpoint_client,
@@ -295,6 +311,10 @@ impl StaticModelsManager {
 }
 
 impl ModelsManager for OpenAiModelsManager {
+    fn get_bundled_models(&self) -> &[ModelInfo] {
+        &self.bundled_models
+    }
+
     fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,
@@ -425,6 +445,7 @@ impl OpenAiModelsManager {
                 fetched_at: Utc::now(),
                 etag,
                 client_version: Some(client_version),
+                provider_identity: Some(self.cache_provider_identity()),
                 models,
             };
             if let Err(err) = cache.store(&entry).await {
@@ -460,7 +481,7 @@ impl OpenAiModelsManager {
             return;
         }
 
-        let mut existing_models = load_remote_models_from_file().unwrap_or_default();
+        let mut existing_models = self.bundled_models.clone();
         for model in models {
             if let Some(existing_index) = existing_models
                 .iter()
@@ -504,6 +525,18 @@ impl OpenAiModelsManager {
             );
             return false;
         }
+        if cache_entry
+            .provider_identity
+            .as_deref()
+            .is_some_and(|provider_identity| provider_identity != self.cache_provider_identity())
+        {
+            info!(
+                expected_provider = %self.cache_provider_identity(),
+                cached_provider = ?cache_entry.provider_identity,
+                "models cache: provider identity mismatch"
+            );
+            return false;
+        }
         let models = cache_entry.models.clone();
         *self.etag.write().await = cache_entry.etag.clone();
         self.apply_remote_models(models.clone()).await;
@@ -513,6 +546,15 @@ impl OpenAiModelsManager {
             "models cache: cache entry applied"
         );
         true
+    }
+
+    fn cache_provider_identity(&self) -> String {
+        let auth_mode = self
+            .auth_manager
+            .as_ref()
+            .map(|auth_manager| format!("{:?}", auth_manager.auth_mode()))
+            .unwrap_or_else(|| "none".to_string());
+        format!("{}|{auth_mode}", self.endpoint_client.provider_identity())
     }
 }
 
@@ -656,6 +698,15 @@ pub(crate) fn construct_model_info_from_candidates(
     candidates: &[ModelInfo],
     config: &ModelsManagerConfig,
 ) -> ModelInfo {
+    construct_model_info_from_candidates_with_fallback(model, candidates, &[], config)
+}
+
+fn construct_model_info_from_candidates_with_fallback(
+    model: &str,
+    candidates: &[ModelInfo],
+    fallback_candidates: &[ModelInfo],
+    config: &ModelsManagerConfig,
+) -> ModelInfo {
     // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
     // retry for namespaced slugs like `custom/gpt-5.3-codex`.
     let remote = find_model_by_longest_prefix(model, candidates)
@@ -665,6 +716,14 @@ pub(crate) fn construct_model_info_from_candidates(
             slug: model.to_string(),
             used_fallback_model_metadata: false,
             ..remote
+        }
+    } else if let Some(bundled) = find_model_by_longest_prefix(model, fallback_candidates)
+        .or_else(|| find_model_by_namespaced_suffix(model, fallback_candidates))
+    {
+        ModelInfo {
+            slug: model.to_string(),
+            used_fallback_model_metadata: false,
+            ..bundled
         }
     } else {
         model_info::model_info_from_slug(model)
