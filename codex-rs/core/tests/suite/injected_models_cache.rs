@@ -213,6 +213,7 @@ async fn injected_cache_hit_drives_agent_model_selection() -> Result<()> {
             fetched_at: Utc::now(),
             etag: None,
             client_version: Some(codex_models_manager::client_version_to_whole()),
+            provider_identity: Some("default|Some(Chatgpt)".to_string()),
             models: vec![remote_model(model_slug)],
         }),
         load_error: false,
