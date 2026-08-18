@@ -1,9 +1,6 @@
 name: ARMv7 musl smoke
 
 on:
-  push:
-    branches:
-      - alpha
   workflow_dispatch:
 
 jobs:
