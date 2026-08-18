@@ -60,7 +60,7 @@ In the `codex-rs` folder where the Rust code lives:
     the new implementation so the invariants stay close to the code that owns them.
   - Avoid adding new standalone methods to `codex-rs/tui/src/chatwidget.rs` unless the change is
     trivial; prefer new modules/files and keep `chatwidget.rs` focused on orchestration.
-- When running Rust commands (e.g. `just fix` or `just test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
+- When running Rust commands (e.g. `just fix` or `just test`) send (or tee) output to a logfile, and be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
 
 Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
