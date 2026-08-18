@@ -216,6 +216,15 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         crate::models_identity::identity(&self.provider_info, auth.as_ref()).ok()
     }
 
+    fn provider_identity(&self) -> String {
+        format!(
+            "{}|{}|{}",
+            self.provider_info.name,
+            self.provider_info.base_url.as_deref().unwrap_or_default(),
+            self.provider_info.wire_api,
+        )
+    }
+
     fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
     }

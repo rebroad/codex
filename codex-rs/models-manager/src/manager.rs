@@ -43,6 +43,10 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
     /// Return `None` when identity is unavailable; cached catalog reuse is then disabled.
     fn identity(&self) -> Option<String>;
 
+    /// Stable, non-secret identity for the provider endpoint.
+    fn provider_identity(&self) -> String {
+        "default".to_string()
+    }
     /// Returns whether this provider can authenticate command-scoped requests.
     fn has_command_auth(&self) -> bool;
 
@@ -225,6 +229,11 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
+    /// Return metadata from the catalog shipped with the client.
+    fn get_bundled_models(&self) -> &[ModelInfo] {
+        &[]
+    }
+
     /// Look up model metadata, applying remote overrides and config adjustments.
     fn get_model_info<'a>(
         &'a self,
@@ -234,7 +243,12 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         Box::pin(
             async move {
                 let remote_models = self.get_remote_models().await;
-                construct_model_info_from_candidates(model, &remote_models, config)
+                construct_model_info_from_candidates_with_fallback(
+                    model,
+                    &remote_models,
+                    self.get_bundled_models(),
+                    config,
+                )
             }
             .instrument(tracing::info_span!("get_model_info", model = model)),
         )
@@ -259,6 +273,7 @@ pub type SharedModelsManager = Arc<dyn ModelsManager>;
 #[derive(Debug)]
 pub struct OpenAiModelsManager {
     remote_models: RwLock<ModelsCacheEntry>,
+    bundled_models: Vec<ModelInfo>,
     cache: Option<Arc<dyn ModelsCache>>,
     endpoint_client: SharedModelsEndpointClient,
     api_key_model_discovery_enabled: AtomicBool,
@@ -315,15 +330,17 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        let remote_models = load_remote_models_from_file().unwrap_or_default();
+        let bundled_models = load_remote_models_from_file().unwrap_or_default();
         Self {
             remote_models: RwLock::new(ModelsCacheEntry {
                 fetched_at: Utc::now(),
                 etag: None,
                 client_version: Some(crate::client_version_to_whole()),
                 identity: endpoint_client.identity(),
-                models: remote_models,
+                provider_identity: None,
+                models: bundled_models.clone(),
             }),
+            bundled_models,
             cache,
             api_key_model_discovery_enabled: AtomicBool::new(false),
             endpoint_client,
@@ -346,6 +363,10 @@ impl ModelsManager for OpenAiModelsManager {
     fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
         self.api_key_model_discovery_enabled
             .store(enabled, Ordering::SeqCst);
+    }
+
+    fn get_bundled_models(&self) -> &[ModelInfo] {
+        &self.bundled_models
     }
 
     fn raw_model_catalog(
@@ -537,6 +558,7 @@ impl OpenAiModelsManager {
             etag,
             client_version: Some(client_version),
             identity: Some(identity),
+            provider_identity: Some(self.cache_provider_identity()),
             models,
         };
         if let Some(cache) = self.cache.as_ref()
@@ -586,8 +608,8 @@ impl OpenAiModelsManager {
                         .is_some_and(AuthMode::has_chatgpt_account)
                 }));
         if !remote_only {
-            let mut models = load_remote_models_from_file().unwrap_or_default();
-            for model in entry.models {
+            let mut models = self.bundled_models.clone();
+            for model in entry.models.drain(..) {
                 if let Some(index) = models
                     .iter()
                     .position(|existing| existing.slug == model.slug)
@@ -640,7 +662,35 @@ impl OpenAiModelsManager {
             info!("models cache: provider or auth identity mismatch");
             return false;
         }
-        self.apply_remote_models(cache_entry).await
+        let provider_identity = self.cache_provider_identity();
+        if cache_entry.provider_identity.as_deref() != Some(provider_identity.as_str()) {
+            info!(
+                expected_provider = %provider_identity,
+                cached_provider = ?cache_entry.provider_identity,
+                "models cache: provider identity mismatch"
+            );
+            return false;
+        }
+        let model_count = cache_entry.models.len();
+        let etag = cache_entry.etag.clone();
+        if !self.apply_remote_models(cache_entry).await {
+            return false;
+        }
+        info!(
+            models_count = model_count,
+            etag = ?etag,
+            "models cache: cache entry applied"
+        );
+        true
+    }
+
+    fn cache_provider_identity(&self) -> String {
+        let auth_mode = self
+            .auth_manager
+            .as_ref()
+            .map(|auth_manager| format!("{:?}", auth_manager.auth_mode()))
+            .unwrap_or_else(|| "none".to_string());
+        format!("{}|{auth_mode}", self.endpoint_client.provider_identity())
     }
 }
 
@@ -784,6 +834,15 @@ pub(crate) fn construct_model_info_from_candidates(
     candidates: &[ModelInfo],
     config: &ModelsManagerConfig,
 ) -> ModelInfo {
+    construct_model_info_from_candidates_with_fallback(model, candidates, &[], config)
+}
+
+fn construct_model_info_from_candidates_with_fallback(
+    model: &str,
+    candidates: &[ModelInfo],
+    fallback_candidates: &[ModelInfo],
+    config: &ModelsManagerConfig,
+) -> ModelInfo {
     // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
     // retry for namespaced slugs like `custom/gpt-5.3-codex`.
     let remote = find_model_by_longest_prefix(model, candidates)
@@ -793,6 +852,14 @@ pub(crate) fn construct_model_info_from_candidates(
             slug: model.to_string(),
             used_fallback_model_metadata: false,
             ..remote
+        }
+    } else if let Some(bundled) = find_model_by_longest_prefix(model, fallback_candidates)
+        .or_else(|| find_model_by_namespaced_suffix(model, fallback_candidates))
+    {
+        ModelInfo {
+            slug: model.to_string(),
+            used_fallback_model_metadata: false,
+            ..bundled
         }
     } else {
         model_info::model_info_from_slug(model)

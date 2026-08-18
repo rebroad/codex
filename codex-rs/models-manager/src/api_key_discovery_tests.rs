@@ -17,6 +17,8 @@ async fn api_key_discovery_disabled_preserves_command_auth_discovery_and_merging
         etag: None,
         fetch_count: AtomicUsize::new(0),
         observed_proxy_policy: Mutex::new(None),
+        provider_identity: "test-provider".to_string(),
+        fail_next_fetch: AtomicBool::new(false),
     });
     let manager = OpenAiModelsManager::new_without_cache(
         endpoint.clone(),

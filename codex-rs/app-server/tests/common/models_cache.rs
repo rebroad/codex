@@ -2,6 +2,7 @@ use codex_core::test_support::all_model_presets;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
@@ -33,8 +34,18 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         model_messages: Some(ModelMessages {
             persistent_instructions: None,
             tools: None,
-            instructions_template: Some("base instructions".to_string()),
-            instructions_variables: None,
+            instructions_template: Some(if preset.supports_personality {
+                "base instructions {{ personality }}".to_string()
+            } else {
+                "base instructions".to_string()
+            }),
+            instructions_variables: preset.supports_personality.then(|| {
+                ModelInstructionsVariables {
+                    personality_default: Some(String::new()),
+                    personality_friendly: Some(String::new()),
+                    personality_pragmatic: Some(String::new()),
+                }
+            }),
             approvals: None,
             collaboration_modes: None,
             auto_review: None,
