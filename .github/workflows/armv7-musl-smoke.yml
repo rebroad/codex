@@ -1,0 +1,52 @@
+name: ARMv7 musl smoke
+
+on:
+  push:
+    branches:
+      - alpha
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust-toolchain
+        with:
+          target: armv7-unknown-linux-musleabihf
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - name: Configure Rusty V8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: armv7-unknown-linux-musleabihf
+      - name: Build and verify both ARMv7 binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=armv7-unknown-linux-musleabihf
+          env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
+            -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
+            -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
+            CODEX_ALLOW_SOURCE_BUILD=true \
+            bash scripts/build_armv7.sh \
+              --release --binary-only \
+              --no-deploy-remote --no-publish-github
+          release_dir="${GITHUB_WORKSPACE}/build/armv7-release/${target}/release"
+          for binary in codex codex-code-mode-host; do
+            test -x "${release_dir}/${binary}"
+            description="$(file -b "${release_dir}/${binary}")"
+            grep -Eq 'ARM|arm' <<<"${description}"
+            if [[ "${description}" != *"statically linked"* ]]; then
+              readelf -l "${release_dir}/${binary}" \
+                | grep -Fq 'Requesting program interpreter: /lib/ld-musl-armhf.so.1'
+            fi
+            file "${release_dir}/${binary}"
+          done
