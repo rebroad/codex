@@ -370,6 +370,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL \
+            --retry 8 --retry-all-errors --retry-delay 5 --retry-max-time 180 \
             "https://github.com/${CODEX_ZSH_RELEASE_REPO}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "${RUNNER_TEMP}/codex-zsh"
           bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
@@ -732,6 +733,7 @@ jobs:
           zsh_manifest="${RUNNER_TEMP}/codex-zsh-${TARGET}"
           mkdir -p "$signed_root"
           curl -fsSL \
+            --retry 8 --retry-all-errors --retry-delay 5 --retry-max-time 180 \
             "https://github.com/${CODEX_ZSH_RELEASE_REPO}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "$zsh_manifest"
           bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
