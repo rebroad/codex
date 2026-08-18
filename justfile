@@ -9,7 +9,8 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 rust_min_stack := "8388608"
 python := if os_family() == "windows" { "python" } else { "python3" }
 build_tree := (justfile_directory() + ".build") / "codex-rs"
-cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", if path_exists(build_tree) == "true" { build_tree / "target" } else { "target" })
+cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
+cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", cargo_working_directory / "target")
 rusty_v8_setup := "rusty_v8_version=\"$(sed -n '/^name = \"v8\"$/,/^version = /s/^version = \"\\([^\"]*\\)\"/\\1/p' Cargo.lock | head -n 1)\"; rusty_v8_target=\"$(rustc -vV | sed -n 's/^host: //p')\"; repo_root=\"$(cd \"$(pwd -P)/..\" && pwd -P)\"; build_root=\"${repo_root}\"; if test -d \"${repo_root}.build\"; then build_root=\"${repo_root}.build\"; fi; rusty_v8_dir=\"${build_root}/build/rusty-v8-artifacts/${rusty_v8_version}/${rusty_v8_target}\"; rusty_v8_archive=\"${rusty_v8_dir}/librusty_v8_ptrcomp_sandbox_release_${rusty_v8_target}.a.gz\"; rusty_v8_binding=\"${rusty_v8_dir}/src_binding_ptrcomp_sandbox_release_${rusty_v8_target}.rs\"; test -s \"${rusty_v8_archive}\" && test -s \"${rusty_v8_binding}\" || { echo \"Rusty V8 artifacts not found: ${rusty_v8_dir}\" >&2; exit 1; }; RUSTY_V8_ARCHIVE=\"${rusty_v8_archive}\" RUSTY_V8_SRC_BINDING_PATH=\"${rusty_v8_binding}\""
 
 # Display help
@@ -21,11 +22,11 @@ help:
 alias c := codex
 
 codex *args:
-    cargo run --bin codex -- {args}
+    cd "{{ cargo_working_directory }}" && cargo run --bin codex -- {args}
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec {args}
+    cd "{{ cargo_working_directory }}" && cargo run --bin codex -- exec {args}
 
 # Start `codex exec-server` and run codex-tui.
 [no-cd]
@@ -36,16 +37,16 @@ tui-with-exec-server *args:
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cargo run --bin codex-file-search -- {args}
+    cd "{{ cargo_working_directory }}" && cargo run --bin codex-file-search -- {args}
 
 # Run the standalone code-mode host from source.
 code-mode-host *args:
-    cargo run --bin codex-code-mode-host -- {args}
+    cd "{{ cargo_working_directory }}" && cargo run --bin codex-code-mode-host -- {args}
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
-    cargo build -p codex-cli
-    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {args}
+    cd "{{ cargo_working_directory }}" && cargo build -p codex-cli
+    cd "{{ cargo_working_directory }}" && cargo run -p codex-app-server-test-client -- --codex-bin "{{ cargo_target_dir }}/debug/codex" {args}
 
 # Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts.
 fmt:
@@ -56,15 +57,15 @@ fmt-check:
     @{{ python }} ../scripts/format.py --check
 
 fix *args:
-    cargo clippy --fix --tests --allow-dirty {args}
+    cd "{{ cargo_working_directory }}" && cargo clippy --fix --tests --allow-dirty {args}
 
 clippy *args:
-    cargo clippy --tests {args}
+    cd "{{ cargo_working_directory }}" && cargo clippy --tests {args}
 
 [unix]
 install:
     rustup show active-toolchain
-    cargo fetch
+    cd "{{ cargo_working_directory }}" && cargo fetch
 
 [windows]
 install:
@@ -76,7 +77,7 @@ install:
     }
     rustup show active-toolchain
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    cargo fetch
+    Set-Location "{{ cargo_working_directory }}"; cargo fetch
     exit $LASTEXITCODE
 
 # Run nextest with --no-fail-fast so all tests are run.
@@ -87,15 +88,15 @@ install:
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
-    @{{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-cli -p codex-code-mode-host
-    @CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-rmcp-client --bin test_stdio_server
-    @{{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} RUST_MIN_STACK={{ rust_min_stack }} NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+    @cd "{{ cargo_working_directory }}" && {{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-cli -p codex-code-mode-host
+    @cd "{{ cargo_working_directory }}" && CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-rmcp-client --bin test_stdio_server
+    @cd "{{ cargo_working_directory }}" && {{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} RUST_MIN_STACK={{ rust_min_stack }} NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
 
 [windows]
 test *args:
-    @$env:CARGO_TARGET_DIR = "{{ cargo_target_dir }}"; cargo build -p codex-cli -p codex-code-mode-host
-    @$env:CARGO_TARGET_DIR = "{{ cargo_target_dir }}"; cargo build -p codex-rmcp-client --bin test_stdio_server
-    @$env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
+    @Set-Location "{{ cargo_working_directory }}"; $env:CARGO_TARGET_DIR = "{{ cargo_target_dir }}"; cargo build -p codex-cli -p codex-code-mode-host
+    @Set-Location "{{ cargo_working_directory }}"; $env:CARGO_TARGET_DIR = "{{ cargo_target_dir }}"; cargo build -p codex-rmcp-client --bin test_stdio_server
+    @Set-Location "{{ cargo_working_directory }}"; $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
 
@@ -106,7 +107,7 @@ test-github-scripts:
 
 # Run explicit workspace benchmark targets.
 bench *args:
-    cargo bench --workspace --bench '*' {args}
+    cd "{{ cargo_working_directory }}" && cargo bench --workspace --bench '*' {args}
 
 # Run benchmark targets once to ensure they start successfully.
 bench-smoke:
@@ -180,19 +181,19 @@ build-for-release:
 
 # Run the MCP server
 mcp-server-run *args:
-    cargo run -p codex-mcp-server -- {args}
+    cd "{{ cargo_working_directory }}" && cargo run -p codex-mcp-server -- {args}
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo run -p codex-core --bin codex-write-config-schema
+    cd "{{ cargo_working_directory }}" && cargo run -p codex-core --bin codex-write-config-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
-    cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- {args}
+    cd "{{ cargo_working_directory }}" && cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- {args}
 
 [no-cd]
 write-hooks-schema:
-    cargo run --manifest-path {{ justfile_directory() }}/codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
+    cd "{{ cargo_working_directory }}" && cargo run --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures
 
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
@@ -211,8 +212,8 @@ argument-comment-lint-from-source *args:
 # Tail logs from the state SQLite database
 [unix]
 log *args:
-    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-cli --bin logs_client -- "$@"
+    cd "{{ cargo_working_directory }}" && if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-cli --bin logs_client -- "$@"
 
 [windows]
 log *args:
-    $forwarded_args = @($args | Select-Object -Skip 1); if ($forwarded_args.Count -gt 0 -and $forwarded_args[0] -eq "--") { $forwarded_args = @($forwarded_args | Select-Object -Skip 1) }; cargo run -p codex-cli --bin logs_client -- @forwarded_args
+    Set-Location "{{ cargo_working_directory }}"; $forwarded_args = @($args | Select-Object -Skip 1); if ($forwarded_args.Count -gt 0 -and $forwarded_args[0] -eq "--") { $forwarded_args = @($forwarded_args | Select-Object -Skip 1) }; cargo run -p codex-cli --bin logs_client -- @forwarded_args
