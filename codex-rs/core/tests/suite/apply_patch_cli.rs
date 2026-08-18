@@ -165,6 +165,31 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
     )
 }
 
+fn workspace_write_with_denied_root(denied_root: AbsolutePathBuf) -> PermissionProfile {
+    if cfg!(windows) {
+        return restrictive_workspace_write_profile();
+    }
+
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: denied_root },
+            access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
+        },
+    ]);
+    PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    )
+}
+
 #[cfg(unix)]
 fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> PermissionProfile {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
@@ -971,7 +996,7 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
     harness
         .submit_with_permission_profile(
             "attempt to escape workspace via apply_patch link",
-            workspace_write_with_read_only_root(outside_dir.clone()),
+            workspace_write_with_denied_root(outside_dir.clone()),
         )
         .await?;
 
