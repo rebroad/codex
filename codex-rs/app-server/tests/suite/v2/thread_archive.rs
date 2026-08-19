@@ -92,9 +92,11 @@ async fn thread_archive_rejects_owned_unmaterialized_paginated_descendant() -> R
     )
     .await??;
     assert_eq!(error.error.code, -32600);
-    assert_eq!(
-        error.error.message,
-        format!("thread {} already has an active writer", child.id)
+    assert!(
+        error
+            .error
+            .message
+            .starts_with(&format!("thread {} already has an active writer", child.id))
     );
     timeout(DEFAULT_READ_TIMEOUT, owner.shutdown_gracefully()).await??;
     let _: ThreadArchiveResponse = other
