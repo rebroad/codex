@@ -1,6 +1,7 @@
 In the `codex-rs` folder where the Rust code lives:
 
-- Escalated shell access may be needed for cargo (due to sccache)
+- Escalated shell access may be needed for cargo (due to sccache).
+- Never disable sccache for Rust commands: do not set `RUSTC_WRAPPER=` or otherwise unset the configured wrapper. Use the configured wrapper, or explicitly set `RUSTC_WRAPPER=/usr/bin/sccache`. If sccache fails, report the failure instead of bypassing it.
 - Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness. Ideally run it sending stdout and stderr to a file.
 - When making any changes, always try to keep as closely aligned to the `upstream` branch as possible.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
