@@ -6,8 +6,6 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use codex_protocol::ThreadId;
 use tracing::warn;
@@ -28,7 +26,6 @@ fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
 
 pub(super) struct WriterLockCoordinator {
     directory: PathBuf,
-    cleanup_attempted: AtomicBool,
 }
 
 pub(super) struct WriterLockGuard {
@@ -41,7 +38,6 @@ impl WriterLockCoordinator {
     pub(super) fn new(codex_home: &Path) -> Self {
         Self {
             directory: codex_home.join(WRITER_LOCK_DIR),
-            cleanup_attempted: AtomicBool::new(false),
         }
     }
 
@@ -50,9 +46,7 @@ impl WriterLockCoordinator {
         thread_id: ThreadId,
     ) -> ThreadStoreResult<WriterLockGuard> {
         let coordination_lock = self.lock_coordination()?;
-        if !self.cleanup_attempted.swap(true, Ordering::Relaxed)
-            && let Err(err) = self.remove_stale_thread_locks()
-        {
+        if let Err(err) = self.remove_stale_thread_locks() {
             warn!("failed to clean up stale thread writer locks: {err}");
         }
 
@@ -73,9 +67,14 @@ impl WriterLockCoordinator {
         match file.try_lock() {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(ThreadStoreError::Conflict {
-                    message: format!("thread {thread_id} already has an active writer"),
-                });
+                let owner = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|contents| parse_writer_pid(&contents));
+                let message = owner.map_or_else(
+                    || format!("thread {thread_id} already has an active writer"),
+                    |pid| format!("thread {thread_id} already has an active writer (PID {pid})"),
+                );
+                return Err(ThreadStoreError::Conflict { message });
             }
             Err(std::fs::TryLockError::Error(err)) if is_unsupported_file_lock_error(&err) => {
                 // Advisory locking is unavailable on some Termux filesystems.
@@ -194,6 +193,12 @@ impl WriterLockCoordinator {
         }
         Ok(())
     }
+}
+
+fn parse_writer_pid(contents: &str) -> Option<u32> {
+    contents
+        .lines()
+        .find_map(|line| line.strip_prefix("pid=")?.trim().parse().ok())
 }
 
 impl Drop for WriterLockGuard {
