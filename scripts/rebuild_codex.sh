@@ -172,6 +172,30 @@ show_github_run() {
   echo "Watch command: gh run watch ${run_id} --repo ${FORK_RELEASE_REPO} --exit-status" >&2
 }
 
+offer_cancel_superseded_runs() {
+  local active_runs answer
+  active_runs="$(gh run list --repo "${FORK_RELEASE_REPO}" \
+    --workflow rust-release.yml --limit 50 \
+    --json databaseId,headBranch,status,url \
+    | jq -r '.[] | select(.status != "completed") | [.databaseId, .headBranch, .url] | @tsv')"
+  [[ -n "${active_runs}" ]] || return 0
+
+  echo "Active rust-release runs that would be superseded:" >&2
+  while IFS=$'\t' read -r run_id run_branch run_url; do
+    printf '  %s  %s  %s\n' "${run_id}" "${run_branch}" "${run_url}" >&2
+  done <<<"${active_runs}"
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "Not cancelling active runs because this release is non-interactive." >&2
+    return 0
+  fi
+  read -r -p "Cancel these superseded runs before releasing? [y/N] " answer
+  if [[ "${answer}" =~ ^[Yy]$ ]]; then
+    while IFS=$'\t' read -r run_id _ _; do
+      gh run cancel "${run_id}" --repo "${FORK_RELEASE_REPO}"
+    done <<<"${active_runs}"
+  fi
+}
+
 start_github_release() {
   require_cmd gh
   require_cmd jq
@@ -200,6 +224,7 @@ start_github_release() {
     echo "Would create and push GitHub tag ${tag}" >&2
     return 0
   fi
+  offer_cancel_superseded_runs
   git -C "${SOURCE_REPO}" tag -a "${tag}" -m "Release ${VERSION}"
   git -C "${SOURCE_REPO}" push origin "${tag}"
   echo "Waiting for GitHub to create the workflow run..." >&2
@@ -942,15 +967,12 @@ validate_release_checkout() {
   [[ "${SCRIPT_REPO}" == "${SOURCE_REPO}" ]] \
     || die "--start-github-release must be run from the source checkout, not a build tree"
 
-  local branch dirty
+  local branch
   branch="$(git -C "${SOURCE_REPO}" symbolic-ref --quiet --short HEAD)" \
     || die "--start-github-release requires a checked-out stable or alpha branch"
   [[ "${branch}" == stable || "${branch}" == alpha ]] \
     || die "--start-github-release requires the stable or alpha branch (got ${branch})"
 
-  dirty="$(git -C "${SOURCE_REPO}" status --porcelain=v1 --untracked-files=all)"
-  [[ -z "${dirty}" ]] \
-    || die "--start-github-release requires a clean source checkout"
 }
 
 while (($#)); do
