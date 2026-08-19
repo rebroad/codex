@@ -174,7 +174,7 @@ jobs:
       - name: Set up Rust toolchain for Cargo smoke
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: "1.95.0"
+          target: "1.95.0"
 
       - name: Build Bazel V8 release pair
         env:
@@ -326,7 +326,7 @@ jobs:
       - name: Set up Codex Rust toolchain for Cargo smoke
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: "1.95.0"
+          target: "1.95.0"
           targets: ${{ matrix.target }}
 
       - name: Install rusty_v8 Rust toolchain
