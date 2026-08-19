@@ -75,7 +75,10 @@ esac
 libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
-libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+libcap_download_urls=(
+  "https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+  "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+)
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
 if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
   # Ubuntu does not ship an ARMv7 musl cross compiler. Use Zig's musl target
@@ -154,7 +157,22 @@ if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
   mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
   libcap_tarball="${libcap_root}/${libcap_tarball_name}"
 
-  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
+  downloaded=false
+  for libcap_download_url in "${libcap_download_urls[@]}"; do
+    if curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 \
+      --retry-max-time 180 --connect-timeout 20 --max-time 300 \
+      "${libcap_download_url}" -o "${libcap_tarball}.tmp"; then
+      mv "${libcap_tarball}.tmp" "${libcap_tarball}"
+      downloaded=true
+      break
+    fi
+    rm -f "${libcap_tarball}.tmp"
+    echo "libcap download failed from ${libcap_download_url}; trying the next mirror." >&2
+  done
+  [[ "${downloaded}" == true ]] || {
+    echo "Unable to download libcap ${libcap_version} from any configured mirror." >&2
+    exit 1
+  }
   echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"
