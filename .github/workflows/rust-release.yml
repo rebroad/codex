@@ -65,8 +65,34 @@ jobs:
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
-  build:
+  release-preflight:
+    name: Release packaging preflight
     needs: tag-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate Python runtime version normalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          codex_version="${GITHUB_REF_NAME#rust-v}"
+          if [[ "${codex_version}" =~ ^(.+)\.[0-9a-f]{10}\.[0-9]{12}$ ]]; then
+            codex_version="${BASH_REMATCH[1]}"
+          fi
+          python3 - "${codex_version}" <<'PY'
+          import sys
+
+          from sdk.python.release_version import normalize_codex_version
+
+          version = normalize_codex_version(sys.argv[1])
+          print(f"✅ Python runtime version normalizes to {version}")
+          PY
+
+  build:
+    needs: [tag-check, release-preflight]
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runner }}
     # Release builds can take a long time, so leave some headroom to avoid
