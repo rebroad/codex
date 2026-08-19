@@ -27,13 +27,18 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use codex_app_server::APP_SERVER_PROFILE_ENV_VAR;
+pub use codex_app_server::AppServerOwnerEndpoint;
+pub use codex_app_server::AppServerOwnerRecord;
 pub use codex_app_server::app_server_control_socket_path;
+pub use codex_app_server::app_server_owner_record_path_for_profile;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server::in_process::LogDbLayer;
 pub use codex_app_server::in_process::StateDbHandle;
 pub use codex_app_server::prepare_control_socket_path;
+pub use codex_app_server::read_app_server_owner;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
