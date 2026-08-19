@@ -34,6 +34,10 @@ fn writer_locks_reject_competing_owners_and_release_their_files() {
         Err(err) => err,
     };
     assert_eq!(err.kind(), ErrorKind::WouldBlock);
+    assert!(
+        err.to_string()
+            .contains(&format!("PID {}", std::process::id()))
+    );
     let other_owner = secondary
         .acquire(other_thread_id)
         .expect("other thread should acquire its own lock");
@@ -127,4 +131,28 @@ fn publication_skips_live_writers_and_keeps_coordination_locked() {
             .expect("stale lock is idle"),
     );
     assert!(writer.acquire(thread_id).is_ok());
+}
+
+#[test]
+fn later_acquisition_removes_locks_that_became_stale_after_startup() {
+    let home = TempDir::new().expect("temp dir");
+    let coordinator = Arc::new(WriterLockCoordinator::new(home.path()));
+
+    let first_owner = coordinator
+        .acquire(ThreadId::default())
+        .expect("acquire initial writer lock");
+    drop(first_owner);
+
+    let stale_thread_id = ThreadId::default();
+    let stale_path = home
+        .path()
+        .join(WRITER_LOCK_DIR)
+        .join(format!("{stale_thread_id}.lock"));
+    fs::write(&stale_path, "pid=999999\n").expect("write stale writer lock");
+
+    let second_owner = coordinator
+        .acquire(ThreadId::default())
+        .expect("acquire writer lock after later cleanup");
+    assert!(!stale_path.exists());
+    drop(second_owner);
 }
