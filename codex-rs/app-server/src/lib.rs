@@ -137,14 +137,20 @@ pub use crate::code_mode_host::CodeModeHostTransport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::APP_SERVER_PROFILE_ENV_VAR;
+pub use crate::transport::AppServerOwnerEndpoint;
+pub use crate::transport::AppServerOwnerGuard;
+pub use crate::transport::AppServerOwnerRecord;
 pub use crate::transport::AppServerTransport;
 pub use crate::transport::RemoteControlStartupMode;
 pub use crate::transport::app_server_control_socket_path;
 pub(crate) use crate::transport::app_server_control_socket_path_for_profile;
+pub use crate::transport::app_server_owner_record_path_for_profile;
 pub use crate::transport::auth::AppServerWebsocketAuthArgs;
 pub use crate::transport::auth::AppServerWebsocketAuthSettings;
 pub use crate::transport::auth::WebsocketAuthCliMode;
 pub use crate::transport::prepare_control_socket_path;
+pub use crate::transport::read_app_server_owner;
+pub use crate::transport::register_app_server_owner;
 pub use crate::transport::take_remote_control_disabled_env;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
@@ -736,6 +742,7 @@ pub async fn run_main_with_transport_options(
     let installation_id = resolve_installation_id_at_path(installation_id_path).await?;
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
+    let mut owner_endpoint_available = false;
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let graceful_signal_restart_enabled =
@@ -778,6 +785,7 @@ pub async fn run_main_with_transport_options(
                 }
                 Err(err) => return Err(err),
             }
+            owner_endpoint_available = transport_accept_handles.len() > 1;
         }
         AppServerTransport::UnixSocket { socket_path } => {
             let accept_handle = start_control_socket_acceptor(
@@ -787,6 +795,7 @@ pub async fn run_main_with_transport_options(
             )
             .await?;
             transport_accept_handles.push(accept_handle);
+            owner_endpoint_available = true;
         }
         AppServerTransport::WebSocket { bind_address } => {
             let accept_handle = start_websocket_acceptor(
@@ -797,9 +806,20 @@ pub async fn run_main_with_transport_options(
             )
             .await?;
             transport_accept_handles.push(accept_handle);
+            owner_endpoint_available = true;
         }
         AppServerTransport::Off => {}
     }
+    let _app_server_owner_guard = if owner_endpoint_available {
+        register_app_server_owner(
+            &codex_home,
+            app_server_profile.as_deref(),
+            &transport,
+            env!("CARGO_PKG_VERSION"),
+        )?
+    } else {
+        None
+    };
     drop(unix_socket_startup_lock);
 
     let auth_manager =
