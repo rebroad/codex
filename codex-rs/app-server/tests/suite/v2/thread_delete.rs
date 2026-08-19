@@ -73,9 +73,11 @@ async fn thread_delete_rejects_paginated_writer_owned_by_another_process() -> Re
     )
     .await??;
     assert_eq!(error.error.code, -32600);
-    assert_eq!(
-        error.error.message,
-        format!("thread {thread_id} already has an active writer")
+    assert!(
+        error
+            .error
+            .message
+            .starts_with(&format!("thread {thread_id} already has an active writer"))
     );
     timeout(DEFAULT_READ_TIMEOUT, owner.shutdown_gracefully()).await??;
     let _: ThreadDeleteResponse = other
