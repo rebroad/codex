@@ -71,6 +71,9 @@ LINKER_CAPTURE_ONLY="${CODEX_ARMV7_LINKER_CAPTURE_ONLY:-false}"
 LINKER_CAPTURE_LOG=""
 LINKER_CAPTURE_DONE_FILE=""
 LINKER_CAPTURE_SYSROOT_DIR=""
+MOLD_VERSION="${MOLD_VERSION:-2.37.1}"
+MOLD_BUNDLE_DIR=""
+MOLD_BUNDLE_URL="https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -140,6 +143,53 @@ require_cmd() {
   fi
 }
 
+prepare_optional_mold() {
+  local archive_path temporary_archive
+
+  if command -v mold >/dev/null 2>&1; then
+    return 0
+  fi
+
+  MOLD_BUNDLE_DIR="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux"
+  if [[ -x "${MOLD_BUNDLE_DIR}/bin/mold" && -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
+    PATH="${MOLD_BUNDLE_DIR}/bin:${PATH}"
+    export PATH
+    return 0
+  fi
+
+  if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+    echo "Mold is unavailable; falling back to lld." >&2
+    return 1
+  fi
+
+  archive_path="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
+  if [[ -f "${archive_path}" ]] && ! tar -tzf "${archive_path}" >/dev/null 2>&1; then
+    echo "Cached Mold archive is corrupt; removing it." >&2
+    rm -f "${archive_path}"
+  fi
+  if [[ ! -f "${archive_path}" ]]; then
+    echo "Fetching optional Mold ${MOLD_VERSION}..."
+    temporary_archive="${archive_path}.tmp.$$"
+    if ! curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 \
+      --retry-max-time 180 --output "${temporary_archive}" "${MOLD_BUNDLE_URL}" \
+      || ! tar -tzf "${temporary_archive}" >/dev/null 2>&1; then
+      rm -f "${temporary_archive}"
+      echo "Mold download failed; falling back to lld." >&2
+      return 1
+    fi
+    mv "${temporary_archive}" "${archive_path}"
+  fi
+
+  rm -rf "${MOLD_BUNDLE_DIR}"
+  if ! tar -xf "${archive_path}" -C "${ARMV7_CACHE_DIR}" \
+    || [[ ! -x "${MOLD_BUNDLE_DIR}/bin/mold" || ! -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
+    echo "Mold extraction failed; falling back to lld." >&2
+    return 1
+  fi
+  PATH="${MOLD_BUNDLE_DIR}/bin:${PATH}"
+  export PATH
+}
+
 detect_build_jobs() {
   local jobs=""
   if command -v getconf >/dev/null 2>&1; then
@@ -193,6 +243,10 @@ append_default_build_accel_env() {
 }
 
 select_preferred_linker() {
+  if can_use_mold_linker; then
+    echo "mold"
+    return 0
+  fi
   if can_use_lld_linker; then
     echo "lld"
     return 0
@@ -235,6 +289,27 @@ EOF
     return 0
   fi
 
+  rm -f "${probe_src}" "${probe_bin}"
+  return 1
+}
+
+can_use_mold_linker() {
+  local probe_src probe_bin cc_cmd
+
+  if ! command -v mold >/dev/null 2>&1; then
+    return 1
+  fi
+  cc_cmd="$(armv7_linker_command)"
+  if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
+    return 1
+  fi
+  probe_src="$(mktemp /var/tmp/codex-armv7-mold-probe-src.XXXXXX.c)"
+  probe_bin="$(mktemp /var/tmp/codex-armv7-mold-probe-bin.XXXXXX)"
+  printf '%s\n' 'int main(void) { return 0; }' >"${probe_src}"
+  if "${cc_cmd}" -fuse-ld=mold "${probe_src}" -o "${probe_bin}" >/dev/null 2>&1; then
+    rm -f "${probe_src}" "${probe_bin}"
+    return 0
+  fi
   rm -f "${probe_src}" "${probe_bin}"
   return 1
 }
@@ -1349,6 +1424,7 @@ if [[ "${TARGET}" == "armv7-unknown-linux-musleabihf" ]]; then
   fi
   authenticate_armv7_musl_sudo
   configure_armv7_musl_toolchain
+  prepare_optional_mold || true
 elif [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   if ! command -v arm-linux-gnueabihf-gcc >/dev/null 2>&1; then
     ensure_armv7_cross_packages
@@ -1358,6 +1434,7 @@ elif [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
     exit 1
   fi
   setup_armv7_pkg_config_env
+  prepare_optional_mold || true
   ensure_preferred_linker
   if [[ "${BENCHMARK_LINKERS}" == "true" || "${LINKER_CAPTURE_ONLY}" == "true" ]]; then
     if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
