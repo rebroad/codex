@@ -129,7 +129,7 @@ def merge_base(base: str, head: str, *, root: Path = ROOT) -> str:
 
 def changed_files(base: str, head: str, *, root: Path = ROOT) -> set[str]:
     # Three-dot diff gives PRs merge-base semantics while remaining equivalent
-    # to before/after for ordinary linear pushes to main.
+    # to before/after for ordinary linear pushes to stable.
     output = git_output(
         "diff",
         "--name-only",

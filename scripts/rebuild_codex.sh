@@ -870,6 +870,21 @@ run_preflight() {
   echo "Shell and required-tool preflight passed."
 }
 
+validate_release_checkout() {
+  [[ "${SCRIPT_REPO}" == "${SOURCE_REPO}" ]] \
+    || die "--start-github-release must be run from the source checkout, not a build tree"
+
+  local branch dirty
+  branch="$(git -C "${SOURCE_REPO}" symbolic-ref --quiet --short HEAD)" \
+    || die "--start-github-release requires a checked-out stable or alpha branch"
+  [[ "${branch}" == stable || "${branch}" == alpha ]] \
+    || die "--start-github-release requires the stable or alpha branch (got ${branch})"
+
+  dirty="$(git -C "${SOURCE_REPO}" status --porcelain=v1 --untracked-files=all)"
+  [[ -z "${dirty}" ]] \
+    || die "--start-github-release requires a clean source checkout"
+}
+
 while (($#)); do
   case "${1}" in
     --debug) MODE=debug; shift ;;
@@ -952,6 +967,9 @@ fi
 
 require_cmd git
 require_cmd python3
+if [[ "${PUBLISH}" == true ]]; then
+  validate_release_checkout
+fi
 VERSION="$(workspace_version)"
 [[ -n "${VERSION}" ]] || die "could not determine workspace version"
 if [[ "${PUBLISH}" == true ]]; then
