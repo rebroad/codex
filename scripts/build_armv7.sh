@@ -71,9 +71,6 @@ LINKER_CAPTURE_ONLY="${CODEX_ARMV7_LINKER_CAPTURE_ONLY:-false}"
 LINKER_CAPTURE_LOG=""
 LINKER_CAPTURE_DONE_FILE=""
 LINKER_CAPTURE_SYSROOT_DIR=""
-MOLD_VERSION="${MOLD_VERSION:-2.37.1}"
-MOLD_BUNDLE_DIR=""
-MOLD_BUNDLE_URL="https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -103,8 +100,8 @@ Options:
   --target=<triple>     Override target triple (default: armv7-unknown-linux-musleabihf)
   --jobs=N              Set Cargo build parallelism (default: all detected CPUs)
   --fast-release-build  Use local faster release overrides (thin LTO, codegen-units=16)
-  --benchmark-linkers   Benchmark final codex link with lld and mold
-  --benchmark-linkers=N Repeat each linker benchmark N times (default: 1)
+  --benchmark-linkers   Benchmark the final codex link with lld
+  --benchmark-linkers=N Repeat the lld benchmark N times (default: 1)
   --build-env=<mode>    Build environment mode:
                         host (default): use the host musl/Zig toolchain for ARMv7 musl
                         auto: use docker-buster only for explicit glibc ARMv7 builds
@@ -131,7 +128,7 @@ Options:
   --no-deploy-remote    Skip default deploy to pi3:~/bin
   --deploy-host=<host>  Remote SSH host for post-build deploy (default: pi3)
   --deploy-dir=<path>   Remote install dir for versioned binary + symlink (default: ~/bin)
-  --allow-gnu-ld        Allow falling back to GNU ld if mold/lld are unavailable
+  --allow-gnu-ld        Allow falling back to GNU ld if lld is unavailable
   -h, --help            Show this help
 EOF
 }
@@ -139,45 +136,6 @@ EOF
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
-    exit 1
-  fi
-}
-
-ensure_bundled_mold() {
-  local archive_path extract_parent temporary_archive
-
-  if [[ -x "${MOLD_BUNDLE_DIR}/bin/mold" && -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
-    return 0
-  fi
-
-  require_cmd curl
-  require_cmd tar
-  mkdir -p "${ARMV7_CACHE_DIR}"
-  archive_path="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
-  extract_parent="${ARMV7_CACHE_DIR}"
-
-  if [[ -f "${archive_path}" ]] && ! tar -tzf "${archive_path}" >/dev/null 2>&1; then
-    echo "Cached Mold archive is corrupt; removing it." >&2
-    rm -f "${archive_path}"
-  fi
-
-  if [[ ! -f "${archive_path}" ]]; then
-    echo "Fetching bundled mold ${MOLD_VERSION}..."
-    temporary_archive="${archive_path}.tmp.$$"
-    if ! curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 \
-      --retry-max-time 180 --output "${temporary_archive}" "${MOLD_BUNDLE_URL}" \
-      || ! tar -tzf "${temporary_archive}" >/dev/null 2>&1; then
-      rm -f "${temporary_archive}"
-      echo "Unable to download a valid Mold archive from ${MOLD_BUNDLE_URL}." >&2
-      exit 1
-    fi
-    mv "${temporary_archive}" "${archive_path}"
-  fi
-
-  rm -rf "${MOLD_BUNDLE_DIR}"
-  tar -xf "${archive_path}" -C "${extract_parent}"
-  if [[ ! -x "${MOLD_BUNDLE_DIR}/bin/mold" || ! -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
-    echo "Bundled mold extraction failed: ${MOLD_BUNDLE_DIR}/bin/mold missing." >&2
     exit 1
   fi
 }
@@ -211,7 +169,6 @@ array_has_env_key() {
 append_default_build_accel_env() {
   local -n cargo_env_ref="$1"
   local preferred_linker
-  local mold_mode
 
   preferred_linker="$(select_preferred_linker)"
   if [[ -z "${preferred_linker}" ]]; then
@@ -220,34 +177,14 @@ append_default_build_accel_env() {
 
   if ! array_has_env_key cargo_env_ref "RUSTFLAGS"; then
     local rustflags_value="${RUSTFLAGS:-}"
-    if [[ "${preferred_linker}" == "mold" ]]; then
-      mold_mode="$(detect_mold_link_mode)"
-      if [[ "${rustflags_value}" == *"-fuse-ld=mold"* || "${rustflags_value}" == *"-B${mold_mode#b-prefix:}"* ]]; then
-        return 0
-      fi
-    elif [[ "${rustflags_value}" == *"-fuse-ld=${preferred_linker}"* ]]; then
+    if [[ "${rustflags_value}" == *"-fuse-ld=${preferred_linker}"* ]]; then
       return 0
     fi
 
     if [[ -n "${rustflags_value}" ]]; then
       rustflags_value="${rustflags_value} "
     fi
-    if [[ "${preferred_linker}" == "mold" ]]; then
-      case "${mold_mode}" in
-        fuse-ld)
-          rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=mold"
-          ;;
-        b-prefix:*)
-          rustflags_value="${rustflags_value}-C link-arg=-B${mold_mode#b-prefix:}"
-          ;;
-        *)
-          echo "Unexpected mold link mode: ${mold_mode}" >&2
-          exit 1
-          ;;
-      esac
-    else
-      rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=${preferred_linker}"
-    fi
+    rustflags_value="${rustflags_value}-C link-arg=-fuse-ld=${preferred_linker}"
     if [[ "${preferred_linker}" == "lld" && -n "${BUILD_JOBS}" ]]; then
       rustflags_value="${rustflags_value} -C link-arg=-Wl,--threads=${BUILD_JOBS}"
     fi
@@ -256,10 +193,6 @@ append_default_build_accel_env() {
 }
 
 select_preferred_linker() {
-  if can_use_mold_linker; then
-    echo "mold"
-    return 0
-  fi
   if can_use_lld_linker; then
     echo "lld"
     return 0
@@ -277,16 +210,6 @@ armv7_linker_command() {
   else
     printf '%s\n' "${CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER:-arm-linux-gnueabihf-gcc}"
   fi
-}
-
-get_mold_root_dir() {
-  local mold_cmd mold_bin_dir
-  mold_cmd="$(command -v mold 2>/dev/null || true)"
-  if [[ -z "${mold_cmd}" ]]; then
-    return 1
-  fi
-  mold_bin_dir="$(cd -- "$(dirname -- "${mold_cmd}")" && pwd)"
-  cd -- "${mold_bin_dir}/.." && pwd
 }
 
 can_use_lld_linker() {
@@ -316,46 +239,6 @@ EOF
   return 1
 }
 
-can_use_mold_linker() {
-  detect_mold_link_mode >/dev/null 2>&1
-}
-
-detect_mold_link_mode() {
-  local probe_src probe_bin cc_cmd mold_root
-
-  if ! command -v mold >/dev/null 2>&1; then
-    return 1
-  fi
-
-  cc_cmd="$(armv7_linker_command)"
-  if ! command -v "${cc_cmd}" >/dev/null 2>&1; then
-    return 1
-  fi
-
-  probe_src="$(mktemp /var/tmp/codex-armv7-mold-probe-src.XXXXXX.c)"
-  probe_bin="$(mktemp /var/tmp/codex-armv7-mold-probe-bin.XXXXXX)"
-  cat > "${probe_src}" <<'EOF'
-int main(void) { return 0; }
-EOF
-
-  if "${cc_cmd}" -fuse-ld=mold "${probe_src}" -o "${probe_bin}" >/dev/null 2>&1; then
-    rm -f "${probe_src}" "${probe_bin}"
-    echo "fuse-ld"
-    return 0
-  fi
-
-  mold_root="$(get_mold_root_dir || true)"
-  if [[ -n "${mold_root}" && -x "${mold_root}/libexec/mold/ld" ]] \
-    && "${cc_cmd}" "-B${mold_root}/libexec/mold" "${probe_src}" -o "${probe_bin}" >/dev/null 2>&1; then
-    rm -f "${probe_src}" "${probe_bin}"
-    echo "b-prefix:${mold_root}/libexec/mold"
-    return 0
-  fi
-
-  rm -f "${probe_src}" "${probe_bin}"
-  return 1
-}
-
 ensure_preferred_linker() {
   local preferred_linker
 
@@ -377,8 +260,7 @@ ensure_preferred_linker() {
 
   cat >&2 <<'EOF'
 armv7 builds require a working non-GNU linker toolchain, but the current
-environment cannot complete a probe link with either -fuse-ld=mold or
--fuse-ld=lld.
+environment cannot complete a probe link with -fuse-ld=lld.
 
 Fix the linker setup and re-run, or use --allow-gnu-ld if you intentionally
 want to fall back to the slower GNU ld path.
@@ -494,11 +376,9 @@ run_linker_benchmark_variant() {
 
 benchmark_linkers() {
   local command_line
-  local -a base_cmd lld_cmd mold_cmd
+  local -a base_cmd lld_cmd
   local arg
   local have_lld="false"
-  local have_mold="false"
-  local mold_mode
 
   if [[ ! -s "${LINKER_CAPTURE_LOG}" ]]; then
     echo "Skipping linker benchmark; no captured link command at ${LINKER_CAPTURE_LOG}." >&2
@@ -530,7 +410,6 @@ benchmark_linkers() {
   done
 
   lld_cmd=("${base_cmd[0]}")
-  mold_cmd=("${base_cmd[0]}")
   for arg in "${base_cmd[@]:1}"; do
     case "${arg}" in
       -fuse-ld=*|-B*)
@@ -539,7 +418,6 @@ benchmark_linkers() {
         ;;
       *)
         lld_cmd+=("${arg}")
-        mold_cmd+=("${arg}")
         ;;
     esac
   done
@@ -552,23 +430,6 @@ benchmark_linkers() {
     fi
   fi
 
-  if can_use_mold_linker; then
-    have_mold="true"
-    mold_mode="$(detect_mold_link_mode)"
-    case "${mold_mode}" in
-      fuse-ld)
-        mold_cmd+=(-fuse-ld=mold)
-        ;;
-      b-prefix:*)
-        mold_cmd+=("-B${mold_mode#b-prefix:}")
-        ;;
-      *)
-        echo "Unexpected mold link mode during benchmark: ${mold_mode}" >&2
-        return 1
-        ;;
-    esac
-  fi
-
   echo "Benchmarking final link command from ${LINKER_CAPTURE_LOG}..."
   if [[ "${CODEX_ARMV7_IN_DOCKER:-}" == "1" ]]; then
     echo "Skipping linker benchmark inside Docker; outer host will replay the captured link command."
@@ -578,11 +439,6 @@ benchmark_linkers() {
     run_linker_benchmark_variant "lld" lld_cmd "${BENCHMARK_REPETITIONS}"
   else
     echo "Skipping lld benchmark; lld is unavailable in this environment." >&2
-  fi
-  if [[ "${have_mold}" == "true" ]]; then
-    run_linker_benchmark_variant "mold" mold_cmd "${BENCHMARK_REPETITIONS}"
-  else
-    echo "Skipping mold benchmark; mold is unavailable in this environment." >&2
   fi
 }
 
@@ -914,7 +770,6 @@ run_in_docker_buster() {
   local -a forwarded_args docker_cmd
   local container_image="${DOCKER_BUSTER_IMAGE}"
   local container_rusty_v8_path=""
-  local container_mold_path="/opt/codex-mold"
   local container_cargo_target_dir
   local container_uid container_gid
   local docker_cargo_home="${ARMV7_CACHE_DIR}/docker-cargo-home"
@@ -947,8 +802,6 @@ run_in_docker_buster() {
     )
     maybe_user_args=(--user "${container_uid}:${container_gid}")
   fi
-
-  ensure_bundled_mold
 
   forwarded_args=(
     "--${PROFILE}"
@@ -1018,7 +871,6 @@ run_in_docker_buster() {
     -e CARGO_TARGET_DIR="${container_cargo_target_dir}"
     "${maybe_cache_mount[@]}"
     -v "${REPO_DIR}:/work/codex"
-    -v "${MOLD_BUNDLE_DIR}:${container_mold_path}:ro"
     "${maybe_mount[@]}"
     -w /work/codex
     "${container_image}"
@@ -1033,7 +885,6 @@ run_in_docker_buster() {
         apt-get -o Acquire::Check-Valid-Until=false update -y; \
         apt-get install -y ca-certificates curl git python3 file pkg-config gcc g++ binutils binutils-arm-linux-gnueabihf gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf lld libssl-dev:armhf libcap-dev:armhf zlib1g-dev:armhf libbz2-dev:armhf; \
       fi; \
-      export PATH=\"${container_mold_path}/bin:\${PATH}\"; \
       cargo_home=\"\${CARGO_HOME:-/root/.cargo}\"; \
       if [[ ! -x \"\${cargo_home}/bin/rustup\" || ! -x \"\${cargo_home}/bin/cargo\" ]]; then curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain \"${TOOLCHAIN}\"; fi; \
       if [[ -f \"\${cargo_home}/env\" ]]; then \
@@ -1444,7 +1295,6 @@ mkdir -p "${ARMV7_CACHE_DIR}"
 LINKER_CAPTURE_LOG="${ARMV7_CACHE_DIR}/linker-invocations.log"
 LINKER_CAPTURE_DONE_FILE="${ARMV7_CACHE_DIR}/linker-capture.done"
 LINKER_CAPTURE_SYSROOT_DIR="${ARMV7_CACHE_DIR}/benchmark-sysroot"
-MOLD_BUNDLE_DIR="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux"
 
 if [[ -n "${BUILD_JOBS}" ]] && ! [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --jobs value: ${BUILD_JOBS} (must be a positive integer)." >&2
