@@ -519,7 +519,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-fork-npm:
-    needs: tag-check
+    needs: [tag-check, release-preflight]
     name: Build fork npm platform package - ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -1335,13 +1335,13 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    needs: tag-check
+    needs: [tag-check, release-preflight]
     uses: ./.github/workflows/rust-release-windows.yml
     secrets: inherit
 
   argument-comment-lint-release-assets:
     name: argument-comment-lint release assets
-    needs: tag-check
+    needs: [tag-check, release-preflight]
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
     with:
       publish: true
