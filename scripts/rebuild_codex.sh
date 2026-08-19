@@ -944,9 +944,9 @@ validate_release_checkout() {
 
   local branch dirty
   branch="$(git -C "${SOURCE_REPO}" symbolic-ref --quiet --short HEAD)" \
-    || die "--start-github-release requires a checked-out main or alpha branch"
-  [[ "${branch}" == main || "${branch}" == alpha ]] \
-    || die "--start-github-release requires the main or alpha branch (got ${branch})"
+    || die "--start-github-release requires a checked-out stable or alpha branch"
+  [[ "${branch}" == stable || "${branch}" == alpha ]] \
+    || die "--start-github-release requires the stable or alpha branch (got ${branch})"
 
   dirty="$(git -C "${SOURCE_REPO}" status --porcelain=v1 --untracked-files=all)"
   [[ -z "${dirty}" ]] \
