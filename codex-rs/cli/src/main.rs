@@ -1307,6 +1307,25 @@ async fn cli_main(
                     let auth = auth.try_into_settings()?;
                     let extension_host_remote_control = analytics_default_enabled
                         && matches!(transport, codex_app_server::AppServerTransport::Stdio);
+                    if extension_host_remote_control {
+                        let codex_home = find_codex_home()?;
+                        let socket_path =
+                            codex_app_server::app_server_control_socket_path(&codex_home)?;
+                        if let Err(err) =
+                            codex_app_server::prepare_control_socket_path(socket_path.as_path())
+                                .await
+                            && err.kind() == std::io::ErrorKind::AddrInUse
+                        {
+                            tracing::info!(
+                                socket_path = %socket_path.display(),
+                                "reusing the existing app-server for extension-host stdio"
+                            );
+                            codex_stdio_to_uds::run(socket_path.as_path())
+                                .await
+                                .map_err(std::io::Error::other)?;
+                            return Ok(());
+                        }
+                    }
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
                         code_mode_host_transport: code_mode_host.into(),
                         remote_control_startup_mode: match (

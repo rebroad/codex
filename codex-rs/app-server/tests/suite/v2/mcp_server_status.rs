@@ -1017,8 +1017,10 @@ async fn mcp_server_status_list_tools_and_auth_only_skips_slow_inventory_calls()
             thread_id: None,
         })
         .await?;
+    // The slow inventory methods below sleep for two seconds; leave enough
+    // scheduling margin while still proving this detail level avoids them.
     let response: ListMcpServerStatusResponse =
-        timeout(Duration::from_millis(500), mcp.read_response(request_id)).await??;
+        timeout(Duration::from_millis(1_500), mcp.read_response(request_id)).await??;
 
     assert_eq!(response.next_cursor, None);
     assert_eq!(response.data.len(), 1);
