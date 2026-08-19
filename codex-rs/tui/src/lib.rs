@@ -435,17 +435,94 @@ async fn connect_remote_app_server(
 
 pub(crate) async fn try_connect_default_local_app_server(
     codex_home: &Path,
-) -> Option<AppServerClient> {
-    let endpoint = maybe_probe_default_daemon_socket(codex_home).await?;
+    thread_id: ThreadId,
+) -> Result<AppServerClient, String> {
+    let owner_profile = std::env::var(codex_app_server_client::APP_SERVER_PROFILE_ENV_VAR)
+        .ok()
+        .filter(|profile| !profile.is_empty());
+    let writer_pid_path = codex_home
+        .join("thread-writer-locks")
+        .join(format!("{thread_id}.lock"));
+    let writer_pid = std::fs::read_to_string(&writer_pid_path)
+        .ok()
+        .and_then(|contents| {
+            contents
+                .lines()
+                .find_map(|line| line.strip_prefix("pid=")?.trim().parse::<u32>().ok())
+        });
+
+    if let Some(writer_pid) = writer_pid {
+        match codex_app_server_client::read_app_server_owner(codex_home, owner_profile.as_deref()) {
+            Ok(Some(owner)) if owner.pid == writer_pid => {
+                let endpoint = match owner.endpoint {
+                    codex_app_server_client::AppServerOwnerEndpoint::UnixSocket { socket_path } => {
+                        RemoteAppServerEndpoint::UnixSocket {
+                            socket_path: AbsolutePathBuf::from_absolute_path(Path::new(
+                                &socket_path,
+                            ))
+                            .map_err(|err| {
+                                format!("owner published an invalid Unix socket path: {err}")
+                            })?,
+                        }
+                    }
+                    codex_app_server_client::AppServerOwnerEndpoint::WebSocket {
+                        websocket_url,
+                    } => resolve_remote_addr(&websocket_url).map_err(|err| {
+                        format!("owner published an invalid WebSocket endpoint: {err}")
+                    })?,
+                };
+                tracing::info!(
+                    thread_id = %thread_id,
+                    owner_pid = writer_pid,
+                    "connecting TUI to the app-server that owns the active thread"
+                );
+                return connect_remote_app_server(endpoint)
+                    .await
+                    .map_err(|err| format!("the owning app-server could not be reached: {err:#}"));
+            }
+            Ok(Some(owner)) => {
+                tracing::debug!(
+                    owner_pid = owner.pid,
+                    writer_pid,
+                    "app-server owner record does not match the active thread writer"
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::debug!(%err, "failed to read the app-server owner record");
+            }
+        }
+    }
+
+    let endpoint = codex_app_server_client::app_server_control_socket_path(codex_home)
+        .map_err(|err| format!("could not resolve the default control socket: {err}"))?;
+    match codex_app_server_client::prepare_control_socket_path(endpoint.as_path()).await {
+        Ok(()) => {
+            return Err(format!(
+                "the default control socket is not active ({})",
+                endpoint.display()
+            ));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {}
+        Err(err) => {
+            return Err(format!(
+                "could not inspect the default control socket {}: {err}",
+                endpoint.display()
+            ));
+        }
+    }
+
     match connect_remote_app_server(RemoteAppServerEndpoint::UnixSocket {
         socket_path: endpoint,
     })
     .await
     {
-        Ok(client) => Some(client),
+        Ok(client) => Ok(client),
         Err(err) => {
             tracing::debug!(%err, "failed to attach to the default local app-server");
-            None
+            Err(format!(
+                "the default app-server could not be reached: {err:#}"
+            ))
         }
     }
 }
@@ -2450,6 +2527,19 @@ mod tests {
                 .await
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_app_server_attach_reports_missing_socket() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let error =
+            match try_connect_default_local_app_server(codex_home.path(), ThreadId::new()).await {
+                Ok(_) => panic!("missing app-server socket should not attach"),
+                Err(error) => error,
+            };
+
+        assert!(error.contains("default control socket is not active"));
         Ok(())
     }
 
