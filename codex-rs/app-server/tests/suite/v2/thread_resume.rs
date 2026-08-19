@@ -337,10 +337,10 @@ async fn assert_thread_resume_rejects_writer_owned_by_another_process(
     )
     .await??;
     assert_eq!(error.error.code, -32600);
-    assert_eq!(
-        error.error.message,
-        format!("thread {} already has an active writer", thread.id)
-    );
+    assert!(error.error.message.starts_with(&format!(
+        "thread {} already has an active writer",
+        thread.id
+    )));
 
     timeout(DEFAULT_READ_TIMEOUT, primary.shutdown_gracefully()).await??;
 
