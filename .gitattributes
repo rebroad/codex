@@ -1,2 +1,6 @@
 codex-rs/app-server-protocol/schema/** linguist-generated
 codex-rs/hooks/schema/generated/** linguist-generated
+
+# These compressed fixtures are regenerated from the merged protocol sources.
+# Keep the current side during rebases, then regenerate the canonical output.
+codex-rs/app-server-protocol/schema/precomputed/*.json.zst binary merge=codex-schema-fixture
