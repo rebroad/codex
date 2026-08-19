@@ -6,3 +6,4 @@ Extend `/ps` - and never send / commands to the model!
 poll counting does not include every backend request - fix
 codeburn watch reports the wrong model (when a model is changed mid-session)
 Make Ctrl+C exit the TUI, NOT abort the job (let Esc do that)
+Fix caching issue with codex-auto-review (too many cache misses!)
