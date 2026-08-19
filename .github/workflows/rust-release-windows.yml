@@ -177,15 +177,9 @@ jobs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: windows-2022
-    environment:
-      name: azure-artifact-signing
-      deployment: false
     timeout-minutes: 90
     permissions:
       contents: read
-      id-token: write
-    env:
-      AZURE_ARTIFACT_SIGNING_ENABLED: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID != '' && secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID != '' }}
     defaults:
       run:
         working-directory: codex-rs
@@ -230,19 +224,6 @@ jobs:
           for binary in ${WINDOWS_BINARIES}; do
             ls -lh "$CARGO_TARGET_DIR/${{ matrix.target }}/release/${binary}.exe"
           done
-
-      - name: Sign Windows binaries with Azure Trusted Signing
-        uses: ./.github/actions/windows-code-sign
-        with:
-          enabled: ${{ env.AZURE_ARTIFACT_SIGNING_ENABLED }}
-          target: ${{ matrix.target }}
-          binaries: ${{ env.WINDOWS_BINARIES }}
-          client-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
-          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
       - name: Stage artifacts
         shell: bash
