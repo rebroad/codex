@@ -13,7 +13,11 @@ fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::Unsupported
 }
 
-pub(crate) async fn offer(thread_id: codex_protocol::ThreadId, codex_home: &Path) -> Result<bool> {
+pub(crate) async fn offer(
+    thread_id: codex_protocol::ThreadId,
+    codex_home: &Path,
+    attach_failure: Option<&str>,
+) -> Result<bool> {
     let path = codex_home
         .join(WRITER_LOCK_DIR)
         .join(format!("{thread_id}.lock"));
@@ -42,6 +46,9 @@ pub(crate) async fn offer(thread_id: codex_protocol::ThreadId, codex_home: &Path
             stderr,
             "Session {thread_id} is open in another Codex process (PID {pid})."
         )?;
+        if let Some(reason) = attach_failure {
+            writeln!(stderr, "Could not reconnect to its app-server: {reason}")?;
+        }
         write!(
             stderr,
             "Terminate that process and take over this session? [y/N]: "
