@@ -144,7 +144,7 @@ require_cmd() {
 }
 
 ensure_bundled_mold() {
-  local archive_path extract_parent
+  local archive_path extract_parent temporary_archive
 
   if [[ -x "${MOLD_BUNDLE_DIR}/bin/mold" && -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
     return 0
@@ -156,9 +156,22 @@ ensure_bundled_mold() {
   archive_path="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
   extract_parent="${ARMV7_CACHE_DIR}"
 
+  if [[ -f "${archive_path}" ]] && ! tar -tzf "${archive_path}" >/dev/null 2>&1; then
+    echo "Cached Mold archive is corrupt; removing it." >&2
+    rm -f "${archive_path}"
+  fi
+
   if [[ ! -f "${archive_path}" ]]; then
     echo "Fetching bundled mold ${MOLD_VERSION}..."
-    curl -L --fail --output "${archive_path}" "${MOLD_BUNDLE_URL}"
+    temporary_archive="${archive_path}.tmp.$$"
+    if ! curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 \
+      --retry-max-time 180 --output "${temporary_archive}" "${MOLD_BUNDLE_URL}" \
+      || ! tar -tzf "${temporary_archive}" >/dev/null 2>&1; then
+      rm -f "${temporary_archive}"
+      echo "Unable to download a valid Mold archive from ${MOLD_BUNDLE_URL}." >&2
+      exit 1
+    fi
+    mv "${temporary_archive}" "${archive_path}"
   fi
 
   rm -rf "${MOLD_BUNDLE_DIR}"
