@@ -24,6 +24,7 @@ use tracing::warn;
 /// plenty for an interactive CLI.
 pub const CHANNEL_CAPACITY: usize = 128;
 
+mod owner;
 mod remote_control;
 mod stdio;
 mod unix_socket;
@@ -31,6 +32,12 @@ mod unix_socket;
 mod unix_socket_tests;
 mod websocket;
 
+pub use owner::AppServerOwnerEndpoint;
+pub use owner::AppServerOwnerGuard;
+pub use owner::AppServerOwnerRecord;
+pub use owner::app_server_owner_record_path_for_profile;
+pub use owner::read_app_server_owner;
+pub use owner::register_app_server_owner;
 pub use remote_control::REMOTE_CONTROL_DISABLED_ENV_VAR;
 pub use remote_control::RemoteControlDisabledByRequirements;
 pub use remote_control::RemoteControlEnableError;
