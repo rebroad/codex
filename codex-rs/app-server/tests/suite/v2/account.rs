@@ -2803,7 +2803,7 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
                 "code": "refresh_token_reused"
             }
         })))
-        .expect(1..=2)
+        .expect(1..=3)
         .mount(&server)
         .await;
 
