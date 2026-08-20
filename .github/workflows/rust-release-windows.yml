@@ -10,9 +10,9 @@ jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: windows-2022
-    # Windows release builds can exceed an hour, so keep the timeout aligned
-    # with the top-level release build headroom.
-    timeout-minutes: 90
+    # Windows ARM64 release builds can exceed 90 minutes; keep the primary
+    # artifact alive long enough to supply the win32-arm64 npm package.
+    timeout-minutes: ${{ matrix.target == 'aarch64-pc-windows-msvc' && matrix.bundle == 'primary' && 180 || 90 }}
     permissions:
       contents: read
     defaults:
