@@ -2469,6 +2469,7 @@ async fn missing_persisted_permission_profile_id_uses_configured_default() -> st
                     project_key.clone(),
                     ProjectConfig {
                         trust_level: Some(TrustLevel::Trusted),
+                        ..Default::default()
                     },
                 )])),
                 ..Default::default()
