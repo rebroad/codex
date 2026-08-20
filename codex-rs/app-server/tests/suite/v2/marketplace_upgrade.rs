@@ -187,11 +187,11 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
         }
     );
     assert_eq!(
-        std::fs::read_to_string(debug_root.as_path().join("marker.txt"))?,
+        std::fs::read_to_string(debug_root.as_path().join("marker.txt"))?.trim_end(),
         "debug new"
     );
     assert_eq!(
-        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?,
+        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?.trim_end(),
         "tools new"
     );
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
@@ -387,7 +387,7 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
         }
     );
     assert_eq!(
-        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?,
+        std::fs::read_to_string(tools_root.as_path().join("marker.txt"))?.trim_end(),
         "tools new"
     );
     assert!(
