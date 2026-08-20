@@ -368,11 +368,14 @@ jobs:
           BUNDLE: ${{ matrix.bundle }}
         run: |
           set -euo pipefail
+          # The unsigned fallback must not depend on the retired pinned zsh
+          # asset; the macOS runner supplies a compatible system zsh.
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target "$TARGET" \
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
-            --archive-dir "dist/${TARGET}"
+            --archive-dir "dist/${TARGET}" \
+            --zsh-bin /bin/zsh
 
       - if: ${{ runner.os == 'macOS' && vars.CODEX_MACOS_SIGNING_ENABLED != 'true' }}
         name: Upload unsigned macOS release artifacts
