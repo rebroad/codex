@@ -311,7 +311,7 @@ impl OutgoingMessageSender {
         request: ServerRequestPayload,
         thread_id: Option<ThreadId>,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        if connection_ids.is_some_and(|ids| ids.is_empty()) {
+        if connection_ids.is_some_and(<[codex_app_server_transport::ConnectionId]>::is_empty) {
             let request_id = self.next_request_id();
             let (tx, rx) = oneshot::channel();
             let _ = tx.send(Err(internal_error(
