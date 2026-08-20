@@ -165,6 +165,42 @@ class InstallShTest(unittest.TestCase):
             )
             self.assertTrue(os.access(host_path, os.X_OK))
 
+    def test_armv7_install_uses_current_platform_npm_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, metadata_json = create_current_platform_release(
+                root, "armv7-unknown-linux-musleabihf", "linux-armv7"
+            )
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                legacy_archive_path=archive_path,
+                force_platform="armv7",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(
+                (root / "codex-home/packages/standalone/current/bin/codex").is_file()
+            )
+
+    def test_android_install_uses_current_platform_npm_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, metadata_json = create_current_platform_release(
+                root, "aarch64-linux-android", "android-arm64"
+            )
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                legacy_archive_path=archive_path,
+                force_platform="android-arm64",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(
+                (root / "codex-home/packages/standalone/current/bin/codex").is_file()
+            )
+
     def test_install_does_not_modify_shell_startup_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -586,6 +622,7 @@ def run_installer_in(
     releases_checksum_path: Path | None = None,
     legacy_archive_path: Path | None = None,
     force_macos: bool = False,
+    force_platform: str | None = None,
     use_mirror: bool | None = False,
     releases_mode: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
@@ -688,16 +725,36 @@ def run_installer_in(
         encoding="utf-8",
     )
     fake_curl.chmod(0o755)
-    if force_macos:
+    if force_macos or force_platform is not None:
         fake_uname = bin_dir / "uname"
-        fake_uname.write_text(
-            "#!/bin/sh\n"
-            'case "$1" in\n'
-            "  -s) printf 'Darwin\\n' ;;\n"
-            "  -m) printf 'arm64\\n' ;;\n"
-            "esac\n",
-            encoding="utf-8",
-        )
+        if force_platform == "armv7":
+            uname_script = (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  -s) printf 'Linux\\n' ;;\n"
+                "  -m) printf 'armv7l\\n' ;;\n"
+                "esac\n"
+            )
+        elif force_platform == "android-arm64":
+            uname_script = (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  -s) printf 'Linux\\n' ;;\n"
+                "  -m) printf 'aarch64\\n' ;;\n"
+                "esac\n"
+            )
+            fake_getprop = bin_dir / "getprop"
+            fake_getprop.write_text("#!/bin/sh\nprintf '35\\n'\n", encoding="utf-8")
+            fake_getprop.chmod(0o755)
+        else:
+            uname_script = (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  -s) printf 'Darwin\\n' ;;\n"
+                "  -m) printf 'arm64\\n' ;;\n"
+                "esac\n"
+            )
+        fake_uname.write_text(uname_script, encoding="utf-8")
         fake_uname.chmod(0o755)
 
     home = root / "home"
@@ -814,6 +871,33 @@ def create_legacy_release(root: Path) -> tuple[Path, str]:
     archive_path = root / asset
     with tarfile.open(archive_path, "w:gz") as archive:
         archive.add(package_dir / "package", arcname="package")
+
+    archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    metadata_json = json.dumps(
+        {
+            "assets": [{"name": asset, "digest": f"sha256:{archive_digest}"}],
+            "tag_name": f"rust-v{VERSION}",
+        },
+        indent=2,
+    )
+    return archive_path, metadata_json
+
+
+def create_current_platform_release(
+    root: Path, target: str, npm_tag: str
+) -> tuple[Path, str]:
+    vendor_dir = root / "platform-package" / "package" / "vendor" / target / "bin"
+    vendor_dir.mkdir(parents=True)
+    write_executable(
+        vendor_dir / "codex",
+        f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
+    )
+    write_executable(vendor_dir / "codex-code-mode-host", "#!/bin/sh\nexit 0\n")
+
+    asset = f"codex-npm-{npm_tag}-{VERSION}.tgz"
+    archive_path = root / asset
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(root / "platform-package" / "package", arcname="package")
 
     archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
     metadata_json = json.dumps(
