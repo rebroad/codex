@@ -1482,7 +1482,8 @@ mod tests {
             outgoing.clone(),
             vec![ConnectionId(1)],
             thread_id,
-        );
+        )
+        .with_dynamic_tool_connection_ids(vec![ConnectionId(1)]);
 
         let (dynamic_tool_request_id, _dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(
@@ -1546,7 +1547,8 @@ mod tests {
             outgoing.clone(),
             vec![ConnectionId(1)],
             thread_id,
-        );
+        )
+        .with_dynamic_tool_connection_ids(vec![ConnectionId(1)]);
 
         let (_dynamic_tool_request_id, dynamic_tool_waiter) = thread_outgoing
             .send_request(ServerRequestPayload::DynamicToolCall(

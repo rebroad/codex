@@ -2750,7 +2750,8 @@ mod tests {
             outgoing,
             vec![ConnectionId(1)],
             conversation_id,
-        );
+        )
+        .with_dynamic_tool_connection_ids(vec![ConnectionId(1)]);
         let guardian_context = GuardianAssessmentTestContext {
             conversation_id,
             conversation: conversation.clone(),
