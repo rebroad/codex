@@ -97,7 +97,9 @@ daemon_has_debug_log() {
 stop_managed_daemon() {
     stop_output=""
     stop_status=0
-    stop_output="$(run_app_server app-server daemon stop --json 2>&1)" || stop_status=$?
+    # `remote-control stop` is supported by older Codex builds too. The
+    # app-server daemon subcommand did not accept --json in 0.147.x.
+    stop_output="$(run_remote_control remote-control stop --json 2>&1)" || stop_status=$?
     if [ "$stop_status" -ne 0 ]; then
         [ -z "$stop_output" ] || printf '%s\n' "$stop_output" >&2
         return "$stop_status"
