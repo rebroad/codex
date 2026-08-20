@@ -360,6 +360,71 @@ jobs:
           path: codex-rs/unsigned-dist/${{ matrix.target }}/*
           if-no-files-found: error
 
+      - if: ${{ runner.os == 'macOS' && vars.CODEX_MACOS_SIGNING_ENABLED != 'true' }}
+        name: Build unsigned macOS package archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle "$BUNDLE" \
+            --entrypoint-dir "target/${TARGET}/release" \
+            --archive-dir "dist/${TARGET}"
+
+      - if: ${{ runner.os == 'macOS' && vars.CODEX_MACOS_SIGNING_ENABLED != 'true' }}
+        name: Upload unsigned macOS release artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+      - if: ${{ runner.os == 'macOS' && matrix.bundle == 'primary' }}
+        name: Build unsigned macOS npm platform package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${VERSION#rust-v}"
+          case "$TARGET" in
+            x86_64-apple-darwin)
+              PLATFORM="darwin-x64"
+              ;;
+            aarch64-apple-darwin)
+              PLATFORM="darwin-arm64"
+              ;;
+            *)
+              echo "Unexpected macOS target: $TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+          vendor_dir="${RUNNER_TEMP}/codex-npm-vendor-${TARGET}"
+          mkdir -p "${vendor_dir}/${TARGET}/bin" "${GITHUB_WORKSPACE}/dist/npm-fork"
+          cp "target/${TARGET}/release/codex" "${vendor_dir}/${TARGET}/bin/codex"
+          cp "target/${TARGET}/release/codex-code-mode-host" \
+            "${vendor_dir}/${TARGET}/bin/codex-code-mode-host"
+
+          python3 "${GITHUB_WORKSPACE}/codex-cli/scripts/build_npm_package.py" \
+            --release-version "$VERSION" \
+            --package "codex-${PLATFORM}" \
+            --vendor-src "$vendor_dir" \
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${PLATFORM}-${VERSION}.tgz"
+
+      - if: ${{ runner.os == 'macOS' && matrix.bundle == 'primary' }}
+        name: Upload unsigned macOS npm platform package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: fork-npm-${{ matrix.target == 'x86_64-apple-darwin' && 'darwin-x64' || 'darwin-arm64' }}
+          path: dist/npm-fork/*.tgz
+          if-no-files-found: error
+
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
         uses: ./.github/actions/linux-code-sign
