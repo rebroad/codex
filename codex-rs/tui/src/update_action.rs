@@ -14,9 +14,9 @@ pub enum UpdateAction {
     BunGlobalLatest,
     /// Update via `pnpm add -g @reb.ai/codex@latest`.
     PnpmGlobalLatest,
-    /// Update a Homebrew-detected installation via the fork npm package.
+    /// Update a legacy Homebrew-detected installation via the fork npm package.
     BrewUpgrade,
-    /// Update a Homebrew-detected alpha installation via the fork installer.
+    /// Update a legacy Homebrew-detected alpha installation via the fork npm package.
     BrewUpgradeAlpha,
     /// Update via the fork standalone installer.
     StandaloneUnix,
@@ -50,13 +50,7 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@reb.ai/codex"]),
-            UpdateAction::BrewUpgrade => (
-                "sh",
-                &[
-                    "-c",
-                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
-                ],
-            ),
+            UpdateAction::BrewUpgrade => ("npm", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
                 &[
@@ -73,7 +67,8 @@ impl UpdateAction {
                     "$env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
                 ],
             ),
-            UpdateAction::BrewUpgradeAlpha | UpdateAction::StandaloneUnixAlpha => (
+            UpdateAction::BrewUpgradeAlpha => ("npm", &["install", "-g", "@reb.ai/codex@alpha"]),
+            UpdateAction::StandaloneUnixAlpha => (
                 "sh",
                 &[
                     "-c",
@@ -239,7 +234,7 @@ mod tests {
         );
         assert_eq!(
             UpdateAction::BrewUpgradeAlpha.command_args(),
-            UpdateAction::StandaloneUnixAlpha.command_args()
+            ("npm", &["install", "-g", "@reb.ai/codex@alpha"][..])
         );
         assert_eq!(
             UpdateAction::StandaloneWindowsAlpha.command_args(),
