@@ -69,7 +69,7 @@ Options:
   --package-local-npm      Build/reuse local @reb.ai/codex npm archives
   --publish-local-npm      Assemble, audit, and publish npm locally
   --start-github-release   Push a release tag and start GitHub CI; print URLs
-  --skip-build             With --start-github-release, reuse a completed CI build
+  --skip-build             With --start-github-release, package a completed CI build
   --package-npm            Alias for --package-local-npm
   --publish-npm            Alias for --publish-local-npm
   --publish                Alias for --start-github-release
@@ -154,7 +154,7 @@ find_reusable_github_run() {
   done < <(gh run list --repo "${FORK_RELEASE_REPO}" \
     --workflow rust-release.yml --status completed --limit 50 \
     --json databaseId,headBranch,event,conclusion \
-    | jq -r --arg tag "${tag}" '.[] | select(.event == "push" and .conclusion == "success" and .headBranch == $tag) | .databaseId')
+    | jq -r --arg tag "${tag}" '.[] | select(.event == "push" and .headBranch == $tag and .conclusion != "cancelled") | .databaseId')
   return 1
 }
 
@@ -209,15 +209,37 @@ start_github_release() {
   echo "GitHub Actions workflow: https://github.com/${FORK_RELEASE_REPO}/actions/workflows/rust-release.yml" >&2
   if [[ "${SKIP_BUILD}" == true ]]; then
     if [[ "${DRY_RUN}" == true ]]; then
-      echo "Would locate the latest successful rust-release run for ${tag}." >&2
+      echo "Would dispatch packaging-only release for the latest completed rust-release run for ${tag}." >&2
       return 0
     fi
     git -C "${SOURCE_REPO}" ls-remote --exit-code origin "refs/tags/${tag}" >/dev/null \
       || die "release tag ${tag} does not exist; --skip-build can only retry an existing tagged build"
     run_id="$(find_reusable_github_run "${tag}")" \
       || die "no successful rust-release run found for ${tag}"
-    run_url="https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}"
-    show_github_run "${run_id}" "${run_url}"
+    source_ref="$(git -C "${SOURCE_REPO}" symbolic-ref --short HEAD)"
+    gh workflow run rust-release.yml --repo "${FORK_RELEASE_REPO}" \
+      --ref "${source_ref}" \
+      -f "source_run_id=${run_id}" \
+      -f "source_tag=${tag}" \
+      -f "source_ref=${source_ref}"
+    echo "Started packaging-only release from source run ${run_id}." >&2
+    echo "Source run: https://github.com/${FORK_RELEASE_REPO}/actions/runs/${run_id}" >&2
+    echo "Waiting for packaging workflow to appear..." >&2
+    run_info=""
+    for _ in {1..30}; do
+      run_info="$(gh run list --repo "${FORK_RELEASE_REPO}" \
+        --workflow rust-release.yml --event workflow_dispatch --limit 20 \
+        --json databaseId,headBranch,url \
+        | jq -r --arg branch "${source_ref}" '[.[] | select(.headBranch == $branch)] | .[0] | [.databaseId, .url] | @tsv')"
+      read -r run_id run_url <<<"${run_info}"
+      [[ -n "${run_id}" ]] && break
+      sleep 2
+    done
+    if [[ -n "${run_id}" ]]; then
+      show_github_run "${run_id}" "${run_url}"
+    else
+      echo "Packaging workflow dispatched; open the Actions page above." >&2
+    fi
     return 0
   fi
   if [[ "${DRY_RUN}" == true ]]; then
