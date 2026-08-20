@@ -172,7 +172,9 @@ fn workspace_write_with_denied_root(denied_root: AbsolutePathBuf) -> PermissionP
 
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path: denied_root },
+            path: FileSystemPath::Path {
+                path: denied_root.into(),
+            },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
