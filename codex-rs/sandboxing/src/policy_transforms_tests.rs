@@ -1044,13 +1044,15 @@ fn effective_additional_write_permission_overrides_protected_codex_carveout() {
     let codex_dir = cwd.join(".codex");
     let base_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path: cwd.clone() },
+            path: FileSystemPath::Path {
+                path: cwd.clone().into(),
+            },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: codex_dir.clone(),
+                path: codex_dir.clone().into(),
             },
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
