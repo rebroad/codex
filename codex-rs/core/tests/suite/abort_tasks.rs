@@ -11,6 +11,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -47,6 +48,12 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
 
     let fixture = test_codex()
         .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .permissions
+                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, config.cwd.as_path())
+                .expect("test should allow full-access sandbox override");
+        })
         .build(&server)
         .await
         .unwrap();
@@ -234,6 +241,12 @@ async fn interrupt_tool_records_history_entries() {
 
     let fixture = test_codex()
         .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .permissions
+                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, config.cwd.as_path())
+                .expect("test should allow full-access sandbox override");
+        })
         .build(&server)
         .await
         .unwrap();
