@@ -29,11 +29,10 @@ control before a pairing code can be created.
 
 ## Configuration
 
-The helpers use `codex` from `PATH` by default. Override it with `CODEX_BIN`.
-They use `$HOME/.codex` by default and honor `CODEX_HOME`.
-When using a Codex binary that is not installed through the normal Codex
-installer, the helpers create the daemon’s expected managed-path symlink to
-the `codex` found on `PATH`. Existing managed installations are left alone.
+The helpers use `codex` from `PATH`. They use `$HOME/.codex` by default and
+honor `CODEX_HOME`. The daemon itself still requires its managed installation
+at `CODEX_HOME/packages/standalone/current/codex`; the helper does not create
+or modify that installation.
 
 Use `codex-pairing-code --debug-log` when diagnosing daemon startup. This may
 replace an existing managed daemon so that remote-control logs are enabled.
