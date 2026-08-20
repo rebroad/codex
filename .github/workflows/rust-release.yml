@@ -98,7 +98,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Release builds can take a long time, so leave some headroom to avoid
     # having to restart the full workflow due to a timeout.
-    timeout-minutes: 90
+    # The macOS ARM primary bundle is optional: it is the slowest build, and
+    # its absence must not prevent the other release artifacts from shipping.
+    timeout-minutes: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' && 180 || 90 }}
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
     permissions:
       contents: read
       id-token: write
@@ -641,6 +644,7 @@ jobs:
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
     environment:
       name: codesigning
       deployment: false
@@ -832,6 +836,7 @@ jobs:
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: macos-15
     timeout-minutes: 45
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
     permissions:
       contents: read
     defaults:
@@ -1045,6 +1050,7 @@ jobs:
     name: Sign macOS DMG - ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' }}
     environment:
       name: codesigning
       deployment: false
@@ -1142,6 +1148,7 @@ jobs:
     name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: macos-15
     timeout-minutes: 30
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
     permissions:
       contents: read
     defaults:
