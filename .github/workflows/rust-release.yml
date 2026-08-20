@@ -640,6 +640,10 @@ jobs:
 
   sign-macos-binaries:
     needs: build
+    # macOS packaging requires the optional Azure Key Vault signing setup.
+    # Enable it by setting the repository variable
+    # CODEX_MACOS_SIGNING_ENABLED=true once those credentials are configured.
+    if: ${{ vars.CODEX_MACOS_SIGNING_ENABLED == 'true' }}
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1367,7 +1371,7 @@ jobs:
         needs.tag-check.result == 'success' &&
         needs.build.result == 'success' &&
         needs.build-fork-npm.result == 'success' &&
-        needs.finalize-macos.result == 'success' &&
+        (needs.finalize-macos.result == 'success' || needs.finalize-macos.result == 'skipped') &&
         needs.build-windows.result == 'success' &&
         needs.argument-comment-lint-release-assets.result == 'success'
       }}
