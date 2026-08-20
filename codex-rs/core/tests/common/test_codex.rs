@@ -854,6 +854,27 @@ impl TestCodexBuilder {
         for mutator in mutators {
             mutator(&mut config);
         }
+
+        // Shell-based tests must not inherit startup hooks from the runner. Inject the
+        // startup inputs into each child shell instead of changing the test process environment.
+        let shell_startup_file = config
+            .codex_home
+            .as_path()
+            .join(".codex-test-shell-startup");
+        std::fs::write(&shell_startup_file, [])?;
+        let codex_home = config.codex_home.to_string_lossy().into_owned();
+        let shell_environment = &mut config.permissions.shell_environment_policy.r#set;
+        shell_environment
+            .entry("HOME".to_string())
+            .or_insert(codex_home);
+        let shell_startup_file = shell_startup_file.to_string_lossy().into_owned();
+        shell_environment
+            .entry("BASH_ENV".to_string())
+            .or_insert_with(|| shell_startup_file.clone());
+        shell_environment
+            .entry("ENV".to_string())
+            .or_insert_with(|| shell_startup_file.clone());
+
         ensure_test_model_catalog(&mut config)?;
 
         Ok((config, cwd))
