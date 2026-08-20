@@ -69,9 +69,11 @@ git ls-remote --exit-code --quiet "${PUBLISH_REMOTE}" \
 
 echo "Creating and pushing backup ${backup_branch}..."
 git branch "${backup_branch}" HEAD
+git branch -f alpha.old "${backup_branch}"
 git push "${PUBLISH_REMOTE}" "${backup_branch}"
 echo "Updating ${PUBLISH_REMOTE}/alpha.old..."
-git push --force-with-lease "${PUBLISH_REMOTE}" "HEAD:refs/heads/alpha.old"
+git push --force-with-lease "${PUBLISH_REMOTE}" \
+  "${backup_branch}:refs/heads/alpha.old"
 
 echo "Rebasing alpha onto ${UPSTREAM_ALPHA_BRANCH} (${upstream_alpha_version})..."
 sequence_editor="sed -i '1i update-ref ${fork_point_ref}'"
