@@ -1796,6 +1796,9 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+          # OIDC is preferred. NPM_TOKEN remains an optional bootstrap/fallback
+          # for packages whose trusted publisher has not been configured yet.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           prefix=""
@@ -1881,6 +1884,7 @@ jobs:
             esac
 
             publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            publish_cmd+=(--access public)
             if [[ -n "${tag}" ]]; then
               publish_cmd+=(--tag "${tag}")
             fi
@@ -2028,6 +2032,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: |
           set -euo pipefail
           if ! gh release view latest-alpha --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
@@ -2045,7 +2050,7 @@ jobs:
           fi
 
           mkdir -p "${RUNNER_TEMP}/latest-alpha"
-          gh release download "${GITHUB_REF_NAME}" \
+          gh release download "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern install.sh \
             --pattern install.ps1 \
