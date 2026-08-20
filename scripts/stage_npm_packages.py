@@ -250,6 +250,7 @@ def install_from_workflow_artifacts(
         artifacts_dir,
         vendor_dir,
         [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+        available_targets,
     )
 
 
@@ -415,9 +416,10 @@ def install_binary_components(
     artifacts_dir: Path,
     vendor_dir: Path,
     selected_components: Sequence[BinaryComponent],
+    targets: Sequence[str],
 ) -> None:
     for component in selected_components:
-        component_targets = list(BINARY_TARGETS)
+        component_targets = list(targets)
 
         print(
             f"Installing {component.binary_basename} binaries for targets: "
