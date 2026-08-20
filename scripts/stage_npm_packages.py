@@ -268,13 +268,24 @@ def select_target_artifacts(
     }
     selected_artifacts: list[WorkflowArtifact] = []
     available_targets: list[str] = []
+    include_unsigned_fallback = (
+        os.environ.get("CODEX_INCLUDE_UNSIGNED_ARTIFACTS") == "1"
+    )
     for target in BINARY_TARGETS:
-        for artifact_name in [target, f"{target}-unsigned"]:
-            artifact = artifacts_by_name.get(artifact_name)
-            if artifact is not None:
-                selected_artifacts.append(artifact)
-                available_targets.append(target)
-                break
+        artifact = artifacts_by_name.get(target)
+        unsigned_artifact = artifacts_by_name.get(f"{target}-unsigned")
+        if artifact is not None:
+            selected_artifacts.append(artifact)
+            available_targets.append(target)
+        elif unsigned_artifact is not None:
+            selected_artifacts.append(unsigned_artifact)
+            available_targets.append(target)
+        if (
+            include_unsigned_fallback
+            and unsigned_artifact is not None
+            and artifact is not None
+        ):
+            selected_artifacts.append(unsigned_artifact)
 
     if not selected_artifacts:
         raise FileNotFoundError(
@@ -438,7 +449,10 @@ def install_single_binary(
 ) -> Path:
     artifact_subdir = artifact_dir_for_target(artifacts_dir, target)
     archive_path = binary_archive_path(
-        artifact_subdir, component.artifact_prefix, target
+        artifact_subdir,
+        component.artifact_prefix,
+        target,
+        fallback_dir=artifacts_dir / f"{target}-unsigned",
     )
 
     dest_dir = vendor_dir / target / component.dest_dir
@@ -457,17 +471,26 @@ def install_single_binary(
     return dest
 
 
-def binary_archive_path(artifact_dir: Path, artifact_prefix: str, target: str) -> Path:
+def binary_archive_path(
+    artifact_dir: Path,
+    artifact_prefix: str,
+    target: str,
+    fallback_dir: Path | None = None,
+) -> Path:
     archive_names = [archive_name_for_target(artifact_prefix, target)]
-    if artifact_dir.name == f"{target}-unsigned":
+    if artifact_dir.name == f"{target}-unsigned" or fallback_dir is not None:
         archive_names.append(
             archive_name_for_target(artifact_prefix, f"{target}-unsigned")
         )
 
-    for archive_name in archive_names:
-        archive_path = artifact_dir / archive_name
-        if archive_path.exists():
-            return archive_path
+    search_dirs = [artifact_dir]
+    if fallback_dir is not None and fallback_dir.is_dir():
+        search_dirs.append(fallback_dir)
+    for search_dir in search_dirs:
+        for archive_name in archive_names:
+            archive_path = search_dir / archive_name
+            if archive_path.exists():
+                return archive_path
 
     raise FileNotFoundError(
         f"Expected artifact not found: {artifact_dir / archive_names[0]}"
