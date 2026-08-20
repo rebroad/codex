@@ -525,7 +525,10 @@ impl OpenAiModelsManager {
             );
             return false;
         }
-        if cache_entry.provider_identity.as_deref() != Some(self.cache_provider_identity().as_str())
+        if cache_entry
+            .provider_identity
+            .as_deref()
+            .is_some_and(|provider_identity| provider_identity != self.cache_provider_identity())
         {
             info!(
                 expected_provider = %self.cache_provider_identity(),
