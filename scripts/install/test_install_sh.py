@@ -90,6 +90,8 @@ class InstallShTest(unittest.TestCase):
             requests,
             [
                 "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha",
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
+                f"rust-v{alpha_version}",
                 "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{alpha_version}/codex-package_SHA256SUMS",
             ],
@@ -107,6 +109,8 @@ class InstallShTest(unittest.TestCase):
             requests,
             [
                 "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha",
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
+                f"rust-v{alpha_version}",
                 "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{alpha_version}/codex-package_SHA256SUMS",
             ],
@@ -432,6 +436,28 @@ class InstallShTest(unittest.TestCase):
             self.assertFalse(
                 (root / "codex-home/packages/standalone/auto-update-version").exists()
             )
+
+    def test_candidate_release_accepts_cargo_build_version(self) -> None:
+        candidate_version = "0.142.5.0123456789.202608202030"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(
+                root,
+                metadata_version=candidate_version,
+                binary_version="0.142.5-000000000000-000000000000",
+            )
+
+            result, _ = run_installer_in(
+                root,
+                candidate_version,
+                metadata_json=metadata_json,
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_macos=True,
+                use_mirror=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_releases_unusable_metadata_falls_back_to_github(self) -> None:
         unusable_metadata = {
@@ -1040,6 +1066,7 @@ def create_package_release(
     root: Path,
     *,
     metadata_version: str = VERSION,
+    binary_version: str = VERSION,
 ) -> tuple[Path, Path, str]:
     package_dir = root / "package"
     (package_dir / "bin").mkdir(parents=True)
@@ -1047,7 +1074,7 @@ def create_package_release(
     (package_dir / "codex-package.json").write_text("{}\n", encoding="utf-8")
     write_executable(
         package_dir / "bin" / "codex",
-        f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
+        f"#!/bin/sh\nprintf 'codex-cli {binary_version}\\n'\n",
     )
     write_executable(
         package_dir / "bin" / "codex-code-mode-host",
