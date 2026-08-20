@@ -374,6 +374,16 @@ resolve_release_from_github() {
   if [ "$normalized_version" = "latest" ] || [ "$normalized_version" = "latest-alpha" ]; then
     resolve_metadata_version
     resolved_version="$metadata_version"
+    # Channel alias releases contain only bootstrap assets. Once the alias
+    # resolves to an immutable version, select the real release's assets.
+    if [ "$normalized_version" = "latest-alpha" ]; then
+      metadata_url="$(release_metadata_url "$resolved_version")"
+      if ! release_json="$(download_text "$metadata_url")"; then
+        echo "Could not fetch GitHub release metadata for Codex $resolved_version." >&2
+        exit 1
+      fi
+      parse_downloaded_release_metadata "$resolved_version" "GitHub"
+    fi
   fi
 
   release_source="github"
@@ -980,7 +990,17 @@ release_dir_is_complete() {
   esac
 
   installed_version="$(version_from_binary "$release_dir/bin/codex" || version_from_binary "$release_dir/codex" || true)"
-  [ "$installed_version" = "$expected_version" ]
+  if [ "$installed_version" = "$expected_version" ]; then
+    return 0
+  fi
+
+  # Candidate release tags carry a commit and timestamp, while Cargo embeds
+  # the package version plus the build timestamp placeholder in the binary.
+  # Compare their stable package-version portions in that case.
+  expected_base="$(printf '%s\n' "$expected_version" | sed -E 's/\.[0-9a-f]{10}\.[0-9]{12}$//')"
+  installed_base="$(printf '%s\n' "$installed_version" | sed -E 's/-[0-9]{12}-[0-9]{12}$//')"
+  [ "$expected_base" != "$expected_version" ] &&
+    [ "$installed_base" = "$expected_base" ]
 }
 
 update_current_link() {
@@ -1138,7 +1158,7 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
     warn "Found incomplete existing release at $release_dir; reinstalling."
   fi
 
-  archive_path="$tmp_dir/$asset"
+  archive_download_path="$tmp_dir/$asset"
   checksum_path="$tmp_dir/$checksum_asset"
 
   step "Downloading Codex CLI"
@@ -1149,13 +1169,13 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   else
     expected_digest="$(release_asset_digest "$asset")"
   fi
-  download_file_with_fallback "$download_url" "$download_fallback_url" "$archive_path" "$expected_digest" "$asset"
+  download_file_with_fallback "$download_url" "$download_fallback_url" "$archive_download_path" "$expected_digest" "$asset"
 
   step "Installing standalone package to $release_dir"
   if [ "$install_layout" = "package" ]; then
-    install_package_release "$release_dir" "$archive_path"
+    install_package_release "$release_dir" "$archive_download_path"
   else
-    install_legacy_platform_npm_release "$release_dir" "$archive_path" "$vendor_target"
+    install_legacy_platform_npm_release "$release_dir" "$archive_download_path" "$vendor_target"
   fi
 fi
 if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target" "$install_layout"; then
