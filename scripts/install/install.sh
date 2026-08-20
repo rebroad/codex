@@ -897,18 +897,33 @@ install_legacy_platform_npm_release() {
   stage_release="$RELEASES_DIR/.staging.$(basename "$release_dir").$$"
   extract_dir="$tmp_dir/extract"
   vendor_root="$extract_dir/package/vendor/$target"
+  modern_platform_package=false
 
   mkdir -p "$RELEASES_DIR"
   rm -rf "$stage_release" "$extract_dir"
-  mkdir -p "$stage_release/codex-resources" "$extract_dir"
+  mkdir -p "$stage_release/bin" "$stage_release/codex-resources" "$extract_dir"
   tar -xzf "$archive_path" -C "$extract_dir"
 
-  cp "$vendor_root/codex/codex" "$stage_release/codex"
-  cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
-  chmod 0755 "$stage_release/codex" "$stage_release/codex-resources/rg"
-  if [ -f "$vendor_root/codex-resources/bwrap" ]; then
-    cp "$vendor_root/codex-resources/bwrap" "$stage_release/codex-resources/bwrap"
-    chmod 0755 "$stage_release/codex-resources/bwrap"
+  if [ -x "$vendor_root/bin/codex" ]; then
+    # Current fork platform packages contain the package-layout payload.
+    modern_platform_package=true
+    cp "$vendor_root/bin/codex" "$stage_release/bin/codex"
+    cp "$vendor_root/bin/codex-code-mode-host" \
+      "$stage_release/bin/codex-code-mode-host"
+    chmod 0755 "$stage_release/bin/codex" "$stage_release/bin/codex-code-mode-host"
+  else
+    # Retain compatibility with the older platform-package layout.
+    cp "$vendor_root/codex/codex" "$stage_release/codex"
+    cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
+    chmod 0755 "$stage_release/codex" "$stage_release/codex-resources/rg"
+    if [ -f "$vendor_root/codex-resources/bwrap" ]; then
+      cp "$vendor_root/codex-resources/bwrap" "$stage_release/codex-resources/bwrap"
+      chmod 0755 "$stage_release/codex-resources/bwrap"
+    fi
+  fi
+
+  if [ "$modern_platform_package" = true ]; then
+    ln -sf bin/codex "$stage_release/codex"
   fi
 
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
@@ -937,9 +952,18 @@ release_dir_is_complete() {
         return 1
       ;;
     legacy-platform-npm)
-      [ -x "$release_dir/codex" ] &&
-        [ -x "$release_dir/codex-resources/rg" ] ||
-        return 1
+      case "$expected_target" in
+        armv7-unknown-linux-musleabihf | aarch64-linux-android)
+          [ -x "$release_dir/bin/codex" ] &&
+            [ -x "$release_dir/bin/codex-code-mode-host" ] ||
+            return 1
+          ;;
+        *)
+          [ -x "$release_dir/codex" ] &&
+            [ -x "$release_dir/codex-resources/rg" ] ||
+            return 1
+          ;;
+      esac
       ;;
     *)
       return 1
@@ -948,7 +972,10 @@ release_dir_is_complete() {
 
   case "$layout:$expected_target" in
     package:*linux* | legacy-platform-npm:*linux*)
-      [ -x "$release_dir/codex-resources/bwrap" ] || return 1
+      case "$expected_target" in
+        armv7-unknown-linux-musleabihf | aarch64-linux-android) ;;
+        *) [ -x "$release_dir/codex-resources/bwrap" ] || return 1 ;;
+      esac
       ;;
   esac
 
@@ -1010,6 +1037,10 @@ case "$(uname -s)" in
     ;;
   Linux)
     os="linux"
+    if command -v getprop >/dev/null 2>&1 &&
+      [ -n "$(getprop ro.build.version.sdk 2>/dev/null || true)" ]; then
+      os="android"
+    fi
     ;;
   *)
     echo "install.sh supports macOS and Linux. Use install.ps1 on Windows." >&2
@@ -1023,6 +1054,9 @@ case "$(uname -m)" in
     ;;
   arm64 | aarch64)
     arch="aarch64"
+    ;;
+  armv7* | armv8l)
+    arch="armv7"
     ;;
   *)
     echo "Unsupported architecture: $(uname -m)" >&2
@@ -1046,11 +1080,23 @@ if [ "$os" = "darwin" ]; then
     vendor_target="x86_64-apple-darwin"
     platform_label="macOS (Intel)"
   fi
+elif [ "$os" = "android" ]; then
+  if [ "$arch" != "aarch64" ]; then
+    echo "Unsupported Android architecture: $(uname -m)" >&2
+    exit 1
+  fi
+  npm_tag="android-arm64"
+  vendor_target="aarch64-linux-android"
+  platform_label="Android (ARM64)"
 else
   if [ "$arch" = "aarch64" ]; then
     npm_tag="linux-arm64"
     vendor_target="aarch64-unknown-linux-musl"
     platform_label="Linux (ARM64)"
+  elif [ "$arch" = "armv7" ]; then
+    npm_tag="linux-armv7"
+    vendor_target="armv7-unknown-linux-musleabihf"
+    platform_label="Linux (ARMv7)"
   else
     npm_tag="linux-x64"
     vendor_target="x86_64-unknown-linux-musl"
