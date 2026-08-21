@@ -1,6 +1,6 @@
 # Remote-control helpers
 
-These wrappers start the managed Codex app-server and print the short-lived
+These wrappers start the Codex app-server and print the short-lived
 manual pairing code used by the ChatGPT/Codex mobile app's Remote connection.
 
 They work on Unix-like systems including Linux and Termux, and require a Codex
@@ -30,9 +30,8 @@ control before a pairing code can be created.
 ## Configuration
 
 The helpers use `codex` from `PATH`. They use `$HOME/.codex` by default and
-honor `CODEX_HOME`. The daemon itself still requires its managed installation
-at `CODEX_HOME/packages/standalone/current/codex`; the helper does not create
-or modify that installation.
+honor `CODEX_HOME`. The daemon uses the `codex` executable selected by the
+current command and keeps its lifecycle state under `CODEX_HOME`.
 
 Use `codex-pairing-code --debug-log` when diagnosing daemon startup. This may
 replace an existing managed daemon so that remote-control logs are enabled.

@@ -1,12 +1,11 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use anyhow::Result;
+use anyhow::anyhow;
+
 #[cfg(unix)]
 use anyhow::Context;
-#[cfg(unix)]
-use anyhow::Result;
-#[cfg(unix)]
-use anyhow::anyhow;
 #[cfg(unix)]
 use sha2::Digest;
 #[cfg(unix)]
@@ -16,29 +15,18 @@ use tokio::fs;
 #[cfg(unix)]
 use tokio::process::Command;
 
-pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
-    // On Android/Termux the binary is installed via npm, not the standalone
-    // installer. CODEX_SELF_EXE is set by the npm package launcher
-    // and points to the bundled ELF. The launcher keeps this path separate
-    // from its shell wrapper so hidden arg0 aliases retain their special
-    // argv[0]. The ELF has RUNPATH=$ORIGIN so libc++_shared.so resolves
-    // correctly when the daemon starts it directly (Patch #10b).
-    #[cfg(target_os = "android")]
-    if let Ok(self_exe) = std::env::var("CODEX_SELF_EXE") {
-        return PathBuf::from(self_exe);
-    }
-    codex_home
-        .join("packages")
-        .join("standalone")
-        .join("current")
-        .join(managed_codex_file_name())
+pub(crate) fn cargo_codex_bin() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("failed to resolve HOME for Cargo-installed Codex"))?;
+    Ok(home.join(".cargo").join("bin").join("codex"))
 }
 
 #[cfg(unix)]
 pub(crate) async fn resolved_managed_codex_bin(codex_bin: &Path) -> Result<PathBuf> {
     fs::canonicalize(codex_bin).await.with_context(|| {
         format!(
-            "failed to resolve managed Codex binary {}",
+            "failed to resolve Cargo-installed Codex binary {}",
             codex_bin.display()
         )
     })
@@ -92,10 +80,6 @@ pub(crate) fn executable_identity_from_bytes(bytes: &[u8]) -> ExecutableIdentity
     ExecutableIdentity {
         digest: Sha256::digest(bytes).into(),
     }
-}
-
-fn managed_codex_file_name() -> &'static str {
-    if cfg!(windows) { "codex.exe" } else { "codex" }
 }
 
 #[cfg(unix)]
