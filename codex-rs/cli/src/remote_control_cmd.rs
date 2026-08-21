@@ -79,16 +79,29 @@ pub(crate) async fn run(
                 command.json,
                 "Starting app-server daemon with remote control enabled...",
             )?;
-            let output = codex_app_server_daemon::ensure_remote_control_ready().await?;
+            let codex_bin = arg0_paths
+                .codex_self_exe
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("failed to resolve current Codex executable"))?;
+            let output = codex_app_server_daemon::ensure_remote_control_ready(codex_bin).await?;
             print_remote_control_start_output(&output, command.json)?;
         }
         Some(RemoteControlSubcommand::Stop) => {
             print_remote_control_progress(command.json, "Stopping remote control...")?;
-            let output = codex_app_server_daemon::run(AppServerLifecycleCommand::Stop).await?;
+            let codex_bin = arg0_paths
+                .codex_self_exe
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("failed to resolve current Codex executable"))?;
+            let output =
+                codex_app_server_daemon::run(codex_bin, AppServerLifecycleCommand::Stop).await?;
             print_remote_control_stop_output(&output, command.json)?;
         }
         Some(RemoteControlSubcommand::Pair) => {
-            let output = codex_app_server_daemon::start_remote_control_pairing().await?;
+            let codex_bin = arg0_paths
+                .codex_self_exe
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("failed to resolve current Codex executable"))?;
+            let output = codex_app_server_daemon::start_remote_control_pairing(codex_bin).await?;
             print_remote_control_pairing_output(&output, command.json)?;
         }
     }
