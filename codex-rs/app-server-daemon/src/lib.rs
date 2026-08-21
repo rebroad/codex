@@ -19,7 +19,7 @@ use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_transport::APP_SERVER_PROFILE_ENV_VAR;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_utils_home_dir::find_codex_home;
-use managed_install::managed_codex_bin;
+use managed_install::cargo_codex_bin;
 #[cfg(unix)]
 use managed_install::managed_codex_version;
 use serde::Serialize;
@@ -39,6 +39,7 @@ const STATE_DIR_NAME: &str = "app-server-daemon";
 pub enum LifecycleCommand {
     Start,
     Restart,
+    RestartIfIdle,
     Stop,
     Version,
 }
@@ -189,19 +190,21 @@ enum RestartDecision {
     Restart,
 }
 
-pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
+pub async fn run(codex_bin: &Path, command: LifecycleCommand) -> Result<LifecycleOutput> {
     ensure_supported_platform()?;
-    Daemon::from_environment()?.run(command).await
+    Daemon::from_environment(codex_bin)?.run(command).await
 }
 
-pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
+pub async fn bootstrap(codex_bin: &Path, options: BootstrapOptions) -> Result<BootstrapOutput> {
     ensure_supported_platform()?;
-    Daemon::from_environment()?.bootstrap(options).await
+    Daemon::from_environment(codex_bin)?
+        .bootstrap(options)
+        .await
 }
 
-pub async fn ensure_remote_control_ready() -> Result<RemoteControlReadyOutput> {
+pub async fn ensure_remote_control_ready(codex_bin: &Path) -> Result<RemoteControlReadyOutput> {
     ensure_supported_platform()?;
-    Daemon::from_environment()?
+    Daemon::from_environment(codex_bin)?
         .ensure_remote_control_ready()
         .await
 }
@@ -221,20 +224,27 @@ pub async fn enable_remote_control_on_socket(
 }
 
 /// Starts a manual pairing session through an already-running daemon app-server.
-pub async fn start_remote_control_pairing() -> Result<RemoteControlPairingStartResponse> {
+pub async fn start_remote_control_pairing(
+    codex_bin: &Path,
+) -> Result<RemoteControlPairingStartResponse> {
     ensure_supported_platform()?;
-    let daemon = Daemon::from_environment()?;
+    let daemon = Daemon::from_environment(codex_bin)?;
     remote_control_client::start_pairing(&daemon.socket_path).await
 }
 
-pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControlOutput> {
+pub async fn set_remote_control(
+    codex_bin: &Path,
+    mode: RemoteControlMode,
+) -> Result<RemoteControlOutput> {
     ensure_supported_platform()?;
-    Daemon::from_environment()?.set_remote_control(mode).await
+    Daemon::from_environment(codex_bin)?
+        .set_remote_control(mode)
+        .await
 }
 
 pub async fn run_pid_update_loop() -> Result<()> {
     ensure_supported_platform()?;
-    update_loop::run().await
+    update_loop::run(cargo_codex_bin()?).await
 }
 
 #[cfg(unix)]
@@ -259,7 +269,7 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn from_environment() -> Result<Self> {
+    fn from_environment(codex_bin: &Path) -> Result<Self> {
         let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
         let socket_path = app_server_control_socket_path(codex_home.as_path())?
             .as_path()
@@ -276,7 +286,7 @@ impl Daemon {
             update_pid_file: state_dir.join(UPDATE_PID_FILE_NAME),
             operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
             settings_file: state_dir.join(SETTINGS_FILE_NAME),
-            managed_codex_bin: managed_codex_bin(codex_home.as_path()),
+            managed_codex_bin: codex_bin.to_path_buf(),
         })
     }
 
@@ -290,6 +300,10 @@ impl Daemon {
                 let _operation_lock = self.acquire_operation_lock().await?;
                 self.restart().await
             }
+            LifecycleCommand::RestartIfIdle => {
+                let _operation_lock = self.acquire_operation_lock().await?;
+                self.restart_if_idle().await
+            }
             LifecycleCommand::Stop => {
                 let _operation_lock = self.acquire_operation_lock().await?;
                 self.stop().await
@@ -300,6 +314,9 @@ impl Daemon {
 
     async fn start(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
         if let Ok(info) = client::probe(&self.socket_path).await {
             return Ok(self
                 .output(
@@ -326,6 +343,7 @@ impl Daemon {
         self.ensure_managed_codex_bin()?;
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Started,
@@ -338,6 +356,9 @@ impl Daemon {
 
     async fn restart(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()
         {
@@ -353,6 +374,41 @@ impl Daemon {
 
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
+        Ok(self
+            .output(
+                LifecycleStatus::Restarted,
+                Some(BackendKind::Pid),
+                pid,
+                Some(info.app_server_version),
+            )
+            .await)
+    }
+
+    async fn restart_if_idle(&self) -> Result<LifecycleOutput> {
+        let settings = self.load_settings().await?;
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
+        if client::probe(&self.socket_path).await.is_ok()
+            && self.running_backend(&settings).await?.is_none()
+        {
+            return Err(anyhow!(
+                "app server is running but is not managed by codex app-server daemon"
+            ));
+        }
+
+        let Some(backend) = self.running_backend_instance(&settings).await? else {
+            return Ok(self
+                .output(LifecycleStatus::NotRunning, None, None, None)
+                .await);
+        };
+
+        self.ensure_managed_codex_bin()?;
+        backend.stop_gracefully().await?;
+        let pid = self.start_managed_backend(&settings).await?;
+        let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Restarted,
@@ -367,8 +423,8 @@ impl Daemon {
     pub(crate) async fn try_restart_if_running(
         &self,
         mode: RestartMode,
-        _updater_refresh_mode: UpdaterRefreshMode,
-        managed_codex_bin: &Path,
+        updater_refresh_mode: UpdaterRefreshMode,
+        codex_bin: &Path,
     ) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
         if !try_lock_file(&operation_lock)? {
@@ -377,18 +433,18 @@ impl Daemon {
         let settings = self.load_settings().await?;
         let outcome = if let Some(backend) = self.running_backend_instance(&settings).await? {
             let info = client::probe(&self.socket_path).await.ok();
-            let managed_version = if info.is_some() {
-                Some(managed_codex_version(managed_codex_bin).await?)
+            let current_version = if info.is_some() {
+                Some(managed_codex_version(codex_bin).await?)
             } else {
                 None
             };
-            match restart_decision(mode, info.as_ref(), managed_version.as_deref()) {
+            match restart_decision(mode, info.as_ref(), current_version.as_deref()) {
                 RestartDecision::NotReady => return Ok(RestartIfRunningOutcome::NotReady),
                 RestartDecision::AlreadyCurrent => RestartIfRunningOutcome::AlreadyCurrent,
                 RestartDecision::Restart => {
                     backend.stop().await?;
                     let _ = self
-                        .start_managed_backend_with_bin(&settings, managed_codex_bin)
+                        .start_managed_backend_with_bin(&settings, codex_bin)
                         .await?;
                     self.wait_until_ready().await?;
                     RestartIfRunningOutcome::Restarted
@@ -402,11 +458,17 @@ impl Daemon {
             RestartIfRunningOutcome::NotRunning
         };
 
+        if should_reexec_updater(updater_refresh_mode, outcome) {
+            update_loop::reexec_managed_updater(codex_bin)?;
+        }
+
         Ok(outcome)
     }
 
     async fn stop(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
+        let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
+        updater.stop().await?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
             return Ok(self
@@ -599,16 +661,16 @@ impl Daemon {
         }
         settings.save(&self.settings_file).await?;
 
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
+
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
         }
 
         let backend = backend::pid_backend(self.backend_paths(&settings));
         backend.start().await?;
-        let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
-        if updater.is_starting_or_running().await? {
-            updater.stop().await?;
-        }
 
         let info = self.wait_until_ready().await?;
         let managed_codex_version = self.managed_codex_version_best_effort().await;
@@ -651,10 +713,9 @@ impl Daemon {
     async fn start_managed_backend_with_bin(
         &self,
         settings: &DaemonSettings,
-        managed_codex_bin: &Path,
+        codex_bin: &Path,
     ) -> Result<Option<u32>> {
-        let backend =
-            backend::pid_backend(self.backend_paths_with_bin(settings, managed_codex_bin));
+        let backend = backend::pid_backend(self.backend_paths_with_bin(settings, codex_bin));
         backend.start().await
     }
 
@@ -669,11 +730,10 @@ impl Daemon {
 
         let managed_codex_path = self.managed_codex_bin.display();
         Err(anyhow!(
-            "managed Codex install not found at {managed_codex_path}\n\n\
-             This command requires the install managed by the Codex installer, because \
-             the daemon starts and updates app-server from that fixed path.\n\n\
-             Install it with:\n  npm install -g @reb.ai/codex\n\n\
-             Then rerun the command you just tried."
+            "Codex executable not found at {managed_codex_path}\n\n\
+             The daemon starts app-server using the Codex executable selected by \
+             the current command.\n\n\
+             Build or install Codex, then rerun the command you just tried."
         ))
     }
 
@@ -691,13 +751,9 @@ impl Daemon {
         self.backend_paths_with_bin(settings, &self.managed_codex_bin)
     }
 
-    fn backend_paths_with_bin(
-        &self,
-        settings: &DaemonSettings,
-        managed_codex_bin: &Path,
-    ) -> BackendPaths {
+    fn backend_paths_with_bin(&self, settings: &DaemonSettings, codex_bin: &Path) -> BackendPaths {
         BackendPaths {
-            codex_bin: managed_codex_bin.to_path_buf(),
+            codex_bin: codex_bin.to_path_buf(),
             pid_file: self.pid_file.clone(),
             update_pid_file: self.update_pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,
@@ -802,17 +858,26 @@ fn already_remote_control_status(mode: RemoteControlMode) -> RemoteControlStatus
 fn restart_decision(
     mode: RestartMode,
     info: Option<&client::ProbeInfo>,
-    managed_version: Option<&str>,
+    current_version: Option<&str>,
 ) -> RestartDecision {
-    match (mode, info, managed_version) {
+    match (mode, info, current_version) {
         (RestartMode::IfVersionChanged, None, _) => RestartDecision::NotReady,
-        (RestartMode::IfVersionChanged, Some(info), Some(managed_version))
-            if info.app_server_version == managed_version =>
+        (RestartMode::IfVersionChanged, Some(info), Some(current_version))
+            if info.app_server_version == current_version =>
         {
             RestartDecision::AlreadyCurrent
         }
         _ => RestartDecision::Restart,
     }
+}
+
+#[cfg(unix)]
+fn should_reexec_updater(
+    updater_refresh_mode: UpdaterRefreshMode,
+    outcome: RestartIfRunningOutcome,
+) -> bool {
+    updater_refresh_mode == UpdaterRefreshMode::ReexecIfManagedBinaryChanged
+        && outcome == RestartIfRunningOutcome::Restarted
 }
 
 #[cfg(unix)]
@@ -856,8 +921,11 @@ mod tests {
     use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
     use super::RestartDecision;
+    use super::RestartIfRunningOutcome;
     use super::RestartMode;
+    use super::UpdaterRefreshMode;
     use super::restart_decision;
+    use super::should_reexec_updater;
     use crate::client::ProbeInfo;
 
     #[test]
@@ -900,6 +968,22 @@ mod tests {
                 RestartDecision::Restart,
             ]
         );
+    }
+
+    #[test]
+    fn updater_reexecutes_only_after_a_restart() {
+        assert!(should_reexec_updater(
+            UpdaterRefreshMode::ReexecIfManagedBinaryChanged,
+            RestartIfRunningOutcome::Restarted,
+        ));
+        assert!(!should_reexec_updater(
+            UpdaterRefreshMode::ReexecIfManagedBinaryChanged,
+            RestartIfRunningOutcome::NotRunning,
+        ));
+        assert!(!should_reexec_updater(
+            UpdaterRefreshMode::None,
+            RestartIfRunningOutcome::Restarted,
+        ));
     }
 
     #[test]

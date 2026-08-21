@@ -820,13 +820,25 @@ PY
 }
 
 install_binary() {
-  local binary="${1}" version="${2}" short
+  local binary="${1}" version="${2}"
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   mkdir -p "${INSTALL_BIN_DIR}"
-  short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-  local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  refresh_build_provenance
+  local name="codex-${version}-${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  local previous_target=""
+  local previous_commit=""
+  local previous_size=""
+  if [[ -L "${INSTALL_BIN_DIR}/codex" ]]; then
+    previous_target="$(readlink "${INSTALL_BIN_DIR}/codex")"
+    if [[ "${previous_target}" =~ ^codex-.*-([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
+      previous_commit="${BASH_REMATCH[1]}"
+    fi
+    if [[ -f "${INSTALL_BIN_DIR}/${previous_target}" ]]; then
+      previous_size="$(wc -c <"${INSTALL_BIN_DIR}/${previous_target}")"
+    fi
+  fi
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
-  if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
+  if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${COMMIT_SHORT}"; then
     rm -f "${INSTALL_BIN_DIR}/${name}"
     return 1
   fi
@@ -834,6 +846,12 @@ install_binary() {
   cleanup_adjacent_same_size_binaries "${INSTALL_BIN_DIR}/${name}"
   echo "Installed ${INSTALL_BIN_DIR}/${name}"
   echo "Linked ${INSTALL_BIN_DIR}/codex"
+  local new_size
+  new_size="$(wc -c <"${INSTALL_BIN_DIR}/${name}")"
+  if [[ "${previous_commit}" != "${COMMIT_SHORT}" || "${previous_size}" != "${new_size}" ]]; then
+    echo "Requesting a graceful app-server restart after active turns finish."
+    "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle
+  fi
 }
 
 cleanup_adjacent_same_size_binaries() {

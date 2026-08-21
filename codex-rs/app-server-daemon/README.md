@@ -19,6 +19,7 @@ support Windows lifecycle management.
 ```sh
 codex app-server daemon start
 codex app-server daemon restart
+codex app-server daemon restart-if-idle
 codex app-server daemon enable-remote-control
 codex app-server daemon disable-remote-control
 codex app-server daemon stop
@@ -33,61 +34,60 @@ running app-server version when applicable.
 
 ## Bootstrap flow
 
-For a new remote machine:
+For a new remote machine, build or install Codex into Cargo's binary directory:
 
 ```sh
-npm install -g @reb.ai/codex
-$HOME/.codex/packages/standalone/current/codex app-server daemon bootstrap --remote-control
+$HOME/.cargo/bin/codex app-server daemon bootstrap --remote-control
 ```
 
-`bootstrap` requires the standalone managed install. It records the daemon
-settings under `CODEX_HOME/app-server-daemon/`, starts app-server as a
-pidfile-backed detached process.
+`bootstrap` records daemon settings under `CODEX_HOME/app-server-daemon/` and
+starts app-server as a pidfile-backed detached process. It does not fetch or
+watch for updates.
 
 ## Installation and update cases
 
-The daemon assumes Codex is installed through the npm package and always launches
-the managed binary under `CODEX_HOME`.
+The daemon launches the executable used by the current CLI command. The local
+build/release workflow explicitly requests a graceful restart after it updates
+the `codex` symlink under `$HOME/.cargo/bin`.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
-| The npm package has run, but only `start` is used | `start` uses `CODEX_HOME/packages/standalone/current/codex` | No | No. The managed path is used when starting or restarting, but no updater is installed. |
-| The npm package has run, then `bootstrap` is used | The pidfile backend uses `CODEX_HOME/packages/standalone/current/codex` | No. Updates require an explicit installer invocation. | No. Restart explicitly after updating the managed binary. |
-| Some other tool updates the managed binary path | The next fresh start or restart uses the updated file at that path | No. | No. Restart explicitly after updating the managed binary. |
+| `start` is used | The current CLI executable starts app-server | No | No. |
+| `bootstrap` is used | The current CLI executable starts app-server | No | No. |
+| A newer version is installed into Cargo bin | The build workflow requests `restart-if-idle` | Installation is performed by the local build/release workflow | Yes, after active turns finish. |
 
-### Standalone installs
+### Cargo-bin installs
 
-For installs created by the npm package:
+For installs created by the local build/release workflow:
 
-- lifecycle commands always use the standalone managed binary path
+- lifecycle commands use the executable from the current CLI invocation
 - `bootstrap` is supported
-- `bootstrap` does not fetch or execute remote scripts
-- updates are explicit through `@reb.ai/codex`
+- updates are installed as versioned binaries and selected by the `codex` symlink
 
 ### Out-of-band updates
 
-This daemon does not watch arbitrary executable files for replacement. If some
-other tool updates the managed binary path:
-
-- without `bootstrap`, a currently running app-server remains on the old
-  executable image until an explicit `restart`
-- with `bootstrap`, a currently running app-server still remains on the old
-  executable image until an explicit `restart`
+This daemon does not watch executable files for replacement. Tools that update
+the Cargo-bin `codex` symlink should request `restart-if-idle` explicitly.
 
 ## Lifecycle semantics
 
 `start` is idempotent and returns after app-server is ready to answer the normal
 JSON-RPC initialize handshake on the Unix control socket.
 
-`restart` stops any managed daemon and starts it again.
+`restart` stops any pid-managed daemon and starts it again using the current
+CLI executable.
+
+`restart-if-idle` sends the app-server's graceful shutdown signal and waits for
+active assistant turns to finish before starting the current CLI executable.
+It does not force-kill the app-server.
 
 `enable-remote-control` and `disable-remote-control` persist the launch setting
-for future starts. If a managed app-server is already running, they restart it
+for future starts. If a pid-managed app-server is already running, they restart it
 so the new setting takes effect immediately.
 
-Top-level `codex remote-control` bootstraps with `--remote-control` when the
-updater loop is not running. Otherwise it enables remote control and starts the
-daemon normally.
+Top-level `codex remote-control` bootstraps with `--remote-control` when needed;
+otherwise it enables remote control and starts the daemon using the current CLI
+executable.
 
 `stop` sends a graceful termination request first, then sends a second
 termination signal after the grace window if the process is still alive.
@@ -102,5 +102,4 @@ The daemon stores its local state under `CODEX_HOME/app-server-daemon/`:
 
 - `settings.json` for persisted launch settings
 - `app-server.pid` for the app-server process record
-- `app-server-updater.pid` for stopping stale updater loops from older builds
 - `daemon.lock` for daemon-wide lifecycle serialization
