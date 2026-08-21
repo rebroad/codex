@@ -40,7 +40,7 @@ const RESTART_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const UPDATE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[cfg(unix)]
-pub(crate) async fn run() -> Result<()> {
+pub(crate) async fn run(cargo_codex_bin: std::path::PathBuf) -> Result<()> {
     let mut terminate =
         signal(SignalKind::terminate()).context("failed to install updater shutdown handler")?;
     let running_updater_identity = current_updater_identity().await?;
@@ -48,7 +48,7 @@ pub(crate) async fn run() -> Result<()> {
         return Ok(());
     }
     loop {
-        match update_once(&running_updater_identity, &mut terminate).await {
+        match update_once(&running_updater_identity, &cargo_codex_bin, &mut terminate).await {
             Ok(UpdateLoopControl::Continue) | Err(_) => {}
             Ok(UpdateLoopControl::Stop) => return Ok(()),
         }
@@ -59,7 +59,7 @@ pub(crate) async fn run() -> Result<()> {
 }
 
 #[cfg(not(unix))]
-pub(crate) async fn run() -> Result<()> {
+pub(crate) async fn run(_cargo_codex_bin: std::path::PathBuf) -> Result<()> {
     bail!("pid-managed updater loop is unsupported on this platform")
 }
 
@@ -80,12 +80,13 @@ enum UpdateLoopControl {
 #[cfg(unix)]
 async fn update_once(
     running_updater_identity: &ExecutableIdentity,
+    cargo_codex_bin: &std::path::Path,
     terminate: &mut Signal,
 ) -> Result<UpdateLoopControl> {
     install_latest_standalone().await?;
 
-    let daemon = Daemon::from_environment()?;
-    let managed_codex_bin = resolved_managed_codex_bin(&daemon.managed_codex_bin).await?;
+    let daemon = Daemon::from_environment(cargo_codex_bin)?;
+    let managed_codex_bin = resolved_managed_codex_bin(cargo_codex_bin).await?;
     let managed_identity = executable_identity(&managed_codex_bin).await?;
     let (restart_mode, updater_refresh_mode) =
         update_modes_for_identities(running_updater_identity, &managed_identity);
