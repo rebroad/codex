@@ -33,9 +33,9 @@ fn changed_updater_forces_refresh_even_when_version_may_match() {
 
 #[tokio::test]
 async fn standalone_installer_is_intentionally_a_noop() {
-    // Termux packages update through the fork-owned release channel. The
-    // upstream standalone installer must never fetch or execute here.
+    // Cargo-bin builds update the versioned binary and codex symlink through
+    // the fork-owned build/release workflow.
     install_latest_standalone()
         .await
-        .expect("Termux standalone updater must fail closed as a no-op");
+        .expect("Cargo-bin updater must not fail when no update is available");
 }
