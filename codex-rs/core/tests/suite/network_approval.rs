@@ -1473,6 +1473,14 @@ async fn ambiguous_unattributed_network_request_is_not_assigned_to_active_calls(
     .await
     .context("ambiguous proxy request did not finish")??;
     assert!(response.starts_with("HTTP/1.1 403"));
+    #[cfg(target_os = "linux")]
+    let background_process_ids = test
+        .codex
+        .list_background_terminals()
+        .await
+        .into_iter()
+        .map(|terminal| terminal.process_id.parse::<libc::pid_t>())
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     assert!(
         tokio::time::timeout(
             Duration::from_secs(1),
@@ -1502,6 +1510,24 @@ async fn ambiguous_unattributed_network_request_is_not_assigned_to_active_calls(
     })
     .await
     .context("timed out waiting for background terminal cleanup")?;
+
+    #[cfg(target_os = "linux")]
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if background_process_ids.iter().all(|process_id| {
+                // PTY processes are session leaders, so their PID is also the
+                // process-group ID. Check the group to catch surviving sandbox
+                // descendants even if the leader itself has already exited.
+                let result = unsafe { libc::kill(-*process_id, 0) };
+                result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for background process reaping")?;
 
     Ok(())
 }
