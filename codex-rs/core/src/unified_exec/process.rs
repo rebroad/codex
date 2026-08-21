@@ -36,6 +36,7 @@ use super::head_tail_buffer::HeadTailBuffer;
 use super::process_state::ProcessState;
 
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
+const TERMINATION_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
     /// Returns file descriptors that must stay open across the child `exec()`.
     ///
@@ -238,6 +239,7 @@ impl UnifiedExecProcess {
     }
 
     pub(super) async fn terminate_confirmed(&self) -> Result<(), UnifiedExecError> {
+        let wait_for_local_exit = matches!(&self.process_handle, ProcessHandle::Local(_));
         match &self.process_handle {
             ProcessHandle::Local(process_handle) => process_handle.terminate(),
             ProcessHandle::ExecServer(process_handle) => {
@@ -246,6 +248,19 @@ impl UnifiedExecProcess {
                     .await
                     .map_err(|err| UnifiedExecError::process_failed(err.to_string()))?;
             }
+        }
+        if wait_for_local_exit {
+            tokio::time::timeout(TERMINATION_WAIT_TIMEOUT, async {
+                while !self.has_exited() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| {
+                UnifiedExecError::process_failed(
+                    "process did not exit after termination".to_string(),
+                )
+            })?;
         }
         self.signal_exit(self.exit_code());
         self.finish_termination();
