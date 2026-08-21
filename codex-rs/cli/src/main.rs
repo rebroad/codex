@@ -743,7 +743,7 @@ enum AppServerDaemonSubcommand {
     /// Print local CLI and running app-server versions as JSON.
     Version,
 
-    /// [internal] Run the detached pid-backed standalone updater loop.
+    /// [internal] Run the detached pid-backed Cargo-bin updater loop.
     #[clap(hide = true)]
     PidUpdateLoop,
 }
@@ -1357,34 +1357,58 @@ async fn cli_main(
                 }
                 Some(AppServerSubcommand::Daemon(daemon_cli)) => match daemon_cli.subcommand {
                     AppServerDaemonSubcommand::Start => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
+                        print_app_server_daemon_output(
+                            arg0_paths.codex_self_exe.as_deref(),
+                            AppServerLifecycleCommand::Start,
+                        )
+                        .await?;
                     }
                     AppServerDaemonSubcommand::Bootstrap(bootstrap_cli) => {
-                        let output =
-                            codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
+                        let output = codex_app_server_daemon::bootstrap(
+                            arg0_paths.codex_self_exe.as_deref().ok_or_else(|| {
+                                anyhow::anyhow!("failed to resolve current Codex executable")
+                            })?,
+                            AppServerBootstrapOptions {
                                 remote_control_enabled: bootstrap_cli.remote_control,
-                            })
-                            .await?;
+                            },
+                        )
+                        .await?;
                         println!("{}", serde_json::to_string(&output)?);
                     }
                     AppServerDaemonSubcommand::Restart => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                        print_app_server_daemon_output(
+                            arg0_paths.codex_self_exe.as_deref(),
+                            AppServerLifecycleCommand::Restart,
+                        )
+                        .await?;
                     }
                     AppServerDaemonSubcommand::EnableRemoteControl => {
-                        print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
-                            .await?;
+                        print_app_server_remote_control_output(
+                            arg0_paths.codex_self_exe.as_deref(),
+                            AppServerRemoteControlMode::Enabled,
+                        )
+                        .await?;
                     }
                     AppServerDaemonSubcommand::DisableRemoteControl => {
                         print_app_server_remote_control_output(
+                            arg0_paths.codex_self_exe.as_deref(),
                             AppServerRemoteControlMode::Disabled,
                         )
                         .await?;
                     }
                     AppServerDaemonSubcommand::Stop => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
+                        print_app_server_daemon_output(
+                            arg0_paths.codex_self_exe.as_deref(),
+                            AppServerLifecycleCommand::Stop,
+                        )
+                        .await?;
                     }
                     AppServerDaemonSubcommand::Version => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
+                        print_app_server_daemon_output(
+                            arg0_paths.codex_self_exe.as_deref(),
+                            AppServerLifecycleCommand::Version,
+                        )
+                        .await?;
                     }
                     AppServerDaemonSubcommand::PidUpdateLoop => {
                         codex_app_server_daemon::run_pid_update_loop().await?;
@@ -2562,16 +2586,24 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
     }
 }
 
-async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> anyhow::Result<()> {
-    let output = codex_app_server_daemon::run(command).await?;
+async fn print_app_server_daemon_output(
+    codex_bin: Option<&std::path::Path>,
+    command: AppServerLifecycleCommand,
+) -> anyhow::Result<()> {
+    let codex_bin =
+        codex_bin.ok_or_else(|| anyhow::anyhow!("failed to resolve current Codex executable"))?;
+    let output = codex_app_server_daemon::run(codex_bin, command).await?;
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }
 
 async fn print_app_server_remote_control_output(
+    codex_bin: Option<&std::path::Path>,
     mode: AppServerRemoteControlMode,
 ) -> anyhow::Result<()> {
-    let output = codex_app_server_daemon::set_remote_control(mode).await?;
+    let codex_bin =
+        codex_bin.ok_or_else(|| anyhow::anyhow!("failed to resolve current Codex executable"))?;
+    let output = codex_app_server_daemon::set_remote_control(codex_bin, mode).await?;
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }
@@ -2636,9 +2668,14 @@ async fn run_interactive_tui(
         cloud_config::load_config(&interactive.config_overrides, LoaderOverrides::default())
             .await
             .map_err(std::io::Error::other)?;
-        codex_app_server_daemon::run(AppServerLifecycleCommand::Start)
-            .await
-            .map_err(std::io::Error::other)?;
+        codex_app_server_daemon::run(
+            arg0_paths.codex_self_exe.as_deref().ok_or_else(|| {
+                std::io::Error::other("failed to resolve current Codex executable")
+            })?,
+            AppServerLifecycleCommand::Start,
+        )
+        .await
+        .map_err(std::io::Error::other)?;
     }
 
     let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env) {
