@@ -1667,7 +1667,7 @@ impl UnifiedExecProcessManager {
 
         for entry in entries {
             unregister_network_approval_for_entry(&entry).await;
-            entry.process.terminate();
+            let _ = entry.process.terminate_confirmed().await;
         }
     }
 
