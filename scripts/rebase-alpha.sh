@@ -60,6 +60,49 @@ if [[ "${fork_point_version}" == "${upstream_alpha_version}" ]] || \
   exit 0
 fi
 
+detach_worktree_for_branch() {
+  local target_ref="$1"
+  local worktree_path=""
+  local worktree_head=""
+  local worktree_branch=""
+
+  detach_if_target_worktree() {
+    [[ "${worktree_branch}" == "${target_ref}" ]] || return 0
+    [[ -n "${worktree_path}" && -n "${worktree_head}" ]] ||
+      die "incomplete worktree metadata for ${target_ref}"
+    [[ -z "$(git -C "${worktree_path}" status --porcelain)" ]] ||
+      die "worktree ${worktree_path} using ${target_ref} is not clean"
+
+    echo "Detaching ${target_ref} worktree ${worktree_path} at ${worktree_head}..."
+    git -C "${worktree_path}" switch --detach "${worktree_head}"
+  }
+
+  while IFS=' ' read -r key value; do
+    case "${key}" in
+      worktree)
+        worktree_path="${value}"
+        worktree_head=""
+        worktree_branch=""
+        ;;
+      HEAD)
+        worktree_head="${value}"
+        ;;
+      branch)
+        worktree_branch="${value}"
+        ;;
+      '')
+        detach_if_target_worktree
+        worktree_path=""
+        worktree_head=""
+        worktree_branch=""
+        ;;
+    esac
+  done < <(git worktree list --porcelain)
+  detach_if_target_worktree
+}
+
+detach_worktree_for_branch refs/heads/alpha.old
+
 backup_branch="alpha.old.$(date -u +%Y%m%d%H%M%S)"
 git show-ref --verify --quiet "refs/heads/${backup_branch}" && \
   die "backup branch already exists locally: ${backup_branch}"
