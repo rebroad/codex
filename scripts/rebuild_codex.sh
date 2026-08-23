@@ -270,7 +270,7 @@ sync_sources() {
   [[ "${SYNCED}" == true ]] && return
   if [[ "${NO_SYNC:-0}" == 1 ]]; then SYNCED=true; return; fi
   if command -v cpto >/dev/null 2>&1; then
-    cpto --no-lngit --nogit "${SOURCE_REPO}" "${BUILD_REPO}"
+    cpto "${SOURCE_REPO}" "${BUILD_REPO}"
   else
     echo "cpto not found; syncing source without deleting build artifacts" >&2
     tar --exclude='./.git' -cf - -C "${SOURCE_REPO}" . | tar -xf - -C "${BUILD_REPO}"
@@ -309,7 +309,7 @@ prepare_armv7_rusty_v8_source() {
           || die "temporary Rusty V8 source path already exists: ${staged_source_rust_toolchain}"
         mv "${source_rust_toolchain}" "${staged_source_rust_toolchain}"
       fi
-      if ! cpto --no-lngit --nogit "${source_repo}" "${build_repo}"; then
+      if ! cpto "${source_repo}" "${build_repo}"; then
         [[ ! -e "${source_rust_toolchain}" && -e "${staged_source_rust_toolchain}" ]] \
           && mv "${staged_source_rust_toolchain}" "${source_rust_toolchain}"
         [[ ! -e "${rust_toolchain}" && -e "${preserved_rust_toolchain}" ]] \
