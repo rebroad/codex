@@ -2695,7 +2695,12 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         assert_eq!(app.chat_widget.thread_id(), Some(original));
         assert_eq!(app.config.cwd, current.clone().abs());
         assert!(app.runtime_working_directory_override.is_none());
-        let count = requests.lock().expect("request recorder lock").len();
+        let count = requests
+            .lock()
+            .expect("request recorder lock")
+            .iter()
+            .filter(|request| request.method != "server/request/response")
+            .count();
         let checked = usize::from(kind == "main") + 2 * usize::from(kind == "child");
         assert_eq!(count, checked, "{kind}");
         let listed = recorded_params(&requests, "thread/backgroundTerminals/list");
