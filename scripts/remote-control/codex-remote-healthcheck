@@ -1,0 +1,155 @@
+#!/usr/bin/env sh
+set -eu
+
+# Verify the locally managed app-server without contacting the ChatGPT
+# backend. This is suitable for Termux:Boot's minimal PATH.
+home_dir="${HOME:?HOME must be set}"
+codex_home="${CODEX_HOME:-$home_dir/.codex}"
+codex_bin="${CODEX_BIN:-}"
+timeout_seconds="${CODEX_REMOTE_HEALTHCHECK_TIMEOUT:-10}"
+
+if [ -z "$codex_bin" ]; then
+    codex_bin=$(command -v codex) || {
+        printf '%s\n' 'Codex healthcheck: codex was not found on PATH.' >&2
+        exit 1
+    }
+fi
+[ -x "$codex_bin" ] || {
+    printf 'Codex healthcheck: Codex executable is not usable: %s\n' "$codex_bin" >&2
+    exit 1
+}
+
+printf 'Codex executable: %s\n' "$codex_bin"
+printf 'Codex version: %s\n' "$($codex_bin --version)"
+
+pid_file="$codex_home/app-server-daemon/app-server.pid"
+[ -r "$pid_file" ] || {
+    printf 'Codex healthcheck: daemon PID file is missing: %s\n' "$pid_file" >&2
+    exit 1
+}
+pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$pid_file")
+[ -n "$pid" ] || {
+    printf 'Codex healthcheck: could not read daemon PID from %s\n' "$pid_file" >&2
+    exit 1
+}
+kill -0 "$pid" 2>/dev/null || {
+    printf 'Codex healthcheck: daemon PID is not running: %s\n' "$pid" >&2
+    exit 1
+}
+
+daemon_exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+selected_exe=$(readlink -f "$codex_bin" 2>/dev/null || true)
+daemon_cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+case "$daemon_cmdline" in
+    *app-server*) ;;
+    *)
+        printf 'Codex healthcheck: PID %s is not an app-server: %s\n' "$pid" "$daemon_cmdline" >&2
+        exit 1
+        ;;
+esac
+[ -n "$daemon_exe" ] && [ -n "$selected_exe" ] || {
+    printf 'Codex healthcheck: could not resolve /proc/%s/exe\n' "$pid" >&2
+    exit 1
+}
+printf 'App-server PID: %s\n' "$pid"
+printf 'App-server executable: %s\n' "$daemon_exe"
+
+if [ "$daemon_exe" != "$selected_exe" ]; then
+    printf 'Codex healthcheck: daemon executable does not match selected Codex: %s\n' "$daemon_exe" >&2
+    exit 1
+fi
+
+socket_path="$codex_home/app-server-control/app-server-control.sock"
+[ -S "$socket_path" ] || {
+    printf 'Codex healthcheck: app-server control socket is missing: %s\n' "$socket_path" >&2
+    exit 1
+}
+
+# The control socket carries a WebSocket upgrade followed by WebSocket frames,
+# not newline-delimited JSON. Use only Python's standard library so this also
+# works on a minimal Termux install.
+python3 - "$socket_path" "$timeout_seconds" <<'PY'
+import base64
+import hashlib
+import json
+import socket
+import struct
+import sys
+
+path = sys.argv[1]
+timeout = float(sys.argv[2])
+key = base64.b64encode(b"codex-check-2026").decode()
+request = (
+    "GET /rpc HTTP/1.1\r\n"
+    "Host: localhost\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    f"Sec-WebSocket-Key: {key}\r\n"
+    "Sec-WebSocket-Version: 13\r\n\r\n"
+).encode()
+
+def recv_exact(sock, size):
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise RuntimeError("app-server closed the control socket")
+        data += chunk
+    return data
+
+def send_text(sock, text):
+    payload = text.encode()
+    mask = b"cdex"
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    length = len(payload)
+    if length < 126:
+        header = bytes((0x81, 0x80 | length))
+    elif length < 65536:
+        header = bytes((0x81, 0xfe)) + struct.pack("!H", length)
+    else:
+        header = bytes((0x81, 0xff)) + struct.pack("!Q", length)
+    sock.sendall(header + mask + masked)
+
+def recv_frame(sock):
+    first, second = recv_exact(sock, 2)
+    opcode = first & 0x0f
+    length = second & 0x7f
+    if length == 126:
+        length = struct.unpack("!H", recv_exact(sock, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", recv_exact(sock, 8))[0]
+    mask = recv_exact(sock, 4) if second & 0x80 else None
+    payload = recv_exact(sock, length)
+    if mask:
+        payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    return opcode, payload
+
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+    sock.settimeout(timeout)
+    sock.connect(path)
+    sock.sendall(request)
+    handshake = b""
+    while b"\r\n\r\n" not in handshake:
+        handshake += sock.recv(4096)
+    if not handshake.startswith(b"HTTP/1.1 101"):
+        raise RuntimeError(f"unexpected WebSocket handshake: {handshake.splitlines()[0]!r}")
+    expected = base64.b64encode(
+        hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+    ).decode().encode()
+    if (b"sec-websocket-accept: " + expected.lower()) not in handshake.lower():
+        raise RuntimeError("invalid WebSocket accept header")
+
+    send_text(sock, json.dumps({
+        "id": 1,
+        "method": "initialize",
+        "params": {"clientInfo": {"name": "codex-remote-healthcheck", "version": "1"}},
+    }))
+    while True:
+        opcode, payload = recv_frame(sock)
+        if opcode == 0x1 and json.loads(payload).get("id") == 1:
+            break
+        if opcode == 0x8:
+            raise RuntimeError("app-server closed before initialize response")
+    send_text(sock, json.dumps({"method": "initialized"}))
+PY
+printf '%s\n' 'App-server control plane: OK'
