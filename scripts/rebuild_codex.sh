@@ -662,12 +662,17 @@ cargo_build() {
   if [[ "${target_mode}" == native \
     && "$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" == aarch64-linux-android \
     && -x "$(command -v aarch64-linux-android-clang || true)" ]]; then
+    local android_builtins
+    android_builtins="$(aarch64-linux-android-clang -print-file-name=libclang_rt.builtins-aarch64-android.a)"
+    [[ -f "${android_builtins}" ]] \
+      || die "Android compiler builtins archive not found: ${android_builtins}"
     env_args+=(
       CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android-clang"
       CC_aarch64_linux_android="aarch64-linux-android-clang"
       CXX_aarch64_linux_android="aarch64-linux-android-clang++"
       AR_aarch64_linux_android="llvm-ar"
       RANLIB_aarch64_linux_android="llvm-ranlib"
+      CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${android_builtins}"
     )
     local protoc_path="$(command -v protoc || true)"
     [[ -n "${protoc_path}" ]] \
