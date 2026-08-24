@@ -13,6 +13,7 @@ From the repository root:
 ```sh
 install -Dm755 scripts/remote-control/codex-remote-start "$HOME/bin/codex-remote-start"
 install -Dm755 scripts/remote-control/codex-pairing-code "$HOME/bin/codex-pairing-code"
+install -Dm755 scripts/remote-control/codex-remote-healthcheck "$HOME/bin/codex-remote-healthcheck"
 ```
 
 Then run:
@@ -29,10 +30,26 @@ control before a pairing code can be created.
 
 ## Configuration
 
-The helpers use `codex` from `PATH`. They use `$HOME/.codex` by default and
-honor `CODEX_HOME`. The daemon itself still requires its managed installation
-at `CODEX_HOME/packages/standalone/current/codex`; the helper does not create
-or modify that installation.
+The helpers use `codex` from `PATH` (or `CODEX_BIN` when a service needs an
+exact CLI executable). They use `$HOME/.codex` by default and honor
+`CODEX_HOME`. The daemon runs its managed package under
+`CODEX_HOME/packages/app-server-daemon`; it does not necessarily run the same
+binary found on the helper's `PATH`.
+
+For a Termux operational install, keep the versioned binary and `codex` link
+in `$HOME/bin`. That directory is available to both interactive shells and
+Termux:Boot. `~/.cargo/bin` remains suitable for Rust development, but is not
+automatically on a minimal Termux:Boot PATH.
+
+After installing or replacing Codex, run:
+
+```sh
+codex-remote-healthcheck
+```
+
+The health check verifies the selected CLI, daemon PID, managed daemon
+executable, control socket, and a local JSON-RPC `initialize` request. It does
+not contact the ChatGPT backend or require Android confirmation.
 
 Use `codex-pairing-code --debug-log` when diagnosing daemon startup. This may
 replace an existing managed daemon so that remote-control logs are enabled.
