@@ -1,5 +1,8 @@
 use clap::Parser;
 
+#[cfg(target_os = "android")]
+mod android_tls_alignment;
+
 #[derive(Debug, Parser)]
 struct Cli {
     /// Transport endpoint: `stdio`, `stdio://`, `ws://IP:PORT`, or `grpc://IP:PORT`.
