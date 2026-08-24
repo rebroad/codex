@@ -52,6 +52,21 @@ of `@reb.ai/codex`. `rebuild_codex.sh` requests sudo only when it actually
 needs to install missing musl build tools; cached/reused artifact and Android
 runs do not prompt for sudo.
 
+For a Termux/Android operational install, use the existing user executable
+directory so both interactive shells and Termux:Boot resolve the same binary:
+
+```bash
+scripts/rebuild_codex.sh --release --install-dir "$HOME/bin"
+install -Dm755 scripts/remote-control/codex-remote-start "$HOME/bin/codex-remote-start"
+install -Dm755 scripts/remote-control/codex-pairing-code "$HOME/bin/codex-pairing-code"
+install -Dm755 scripts/remote-control/codex-remote-healthcheck "$HOME/bin/codex-remote-healthcheck"
+codex-remote-healthcheck
+```
+
+The rebuild script deliberately does not edit shell startup files. If a
+service uses a different executable, set `CODEX_BIN` explicitly and verify the
+running daemon with the health check.
+
 Outputs are:
 
 ```text
