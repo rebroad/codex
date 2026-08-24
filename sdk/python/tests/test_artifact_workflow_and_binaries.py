@@ -200,6 +200,20 @@ def test_root_format_driver_covers_all_formatter_groups(
         for group in (formatters[4], checks[4])
         for command in group.commands
     )
+    build_tree = script.formatter_build_tree()
+    expected_sdk_env = (
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "sdk-python-venv")),)
+        if build_tree is not None
+        else ()
+    )
+    expected_scripts_env = (
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "scripts-venv")),)
+        if build_tree is not None
+        else ()
+    )
+    assert formatters[3].commands[0].env == expected_sdk_env
+    assert formatters[3].commands[1].env == expected_sdk_env
+    assert formatters[4].commands[0].env == expected_scripts_env
     assert formatters[3].commands[0].args[-5:] == (
         "ruff",
         "check",
