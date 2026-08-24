@@ -15,6 +15,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
 
+#[cfg(target_os = "android")]
+mod android_tls_alignment;
+
 #[derive(Debug, Parser)]
 struct Cli {
     /// Transport endpoint: `stdio`, `stdio://`, or `grpc://IP:PORT`.
