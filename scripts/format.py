@@ -110,9 +110,8 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
     return FormatterGroup("Bazel/Starlark", (Command(tuple(buildifier_args)),))
 
 
-def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
-    # Each `--project` retains its local dependency and Ruff configuration context.
-    build_tree = next(
+def formatter_build_tree() -> Path | None:
+    return next(
         (
             candidate
             for suffix in (".build", ".make")
@@ -120,6 +119,11 @@ def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
         ),
         None,
     )
+
+
+def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
+    # Each `--project` retains its local dependency and Ruff configuration context.
+    build_tree = formatter_build_tree()
     sdk_env = (
         (("UV_PROJECT_ENVIRONMENT", str(build_tree / "sdk-python-venv")),)
         if build_tree is not None
@@ -170,10 +174,16 @@ def python_scripts_formatter_group(*, check: bool) -> FormatterGroup:
         "ruff",
         "format",
     ]
+    build_tree = formatter_build_tree()
+    scripts_env = (
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "scripts-venv")),)
+        if build_tree is not None
+        else ()
+    )
     if check:
         args.append("--check")
     args.append("scripts")
-    return FormatterGroup("Python scripts", (Command(tuple(args)),))
+    return FormatterGroup("Python scripts", (Command(tuple(args), env=scripts_env),))
 
 
 def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
@@ -224,7 +234,11 @@ def main() -> int:
     groups = formatter_groups(check=args.check)
 
     failures: list[str] = []
-    with ThreadPoolExecutor(max_workers=len(groups)) as executor:
+    try:
+        parallelism = max(1, int(os.environ.get("CODEX_FORMAT_PARALLELISM", "1")))
+    except ValueError:
+        parallelism = 1
+    with ThreadPoolExecutor(max_workers=min(parallelism, len(groups))) as executor:
         futures = [executor.submit(run_formatter_group, group) for group in groups]
         for future in as_completed(futures):
             result = future.result()
