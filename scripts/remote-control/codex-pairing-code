@@ -5,6 +5,8 @@ home_dir="${HOME:?HOME must be set}"
 codex_home="${CODEX_HOME:-$home_dir/.codex}"
 codex_bin="${CODEX_BIN:-}"
 timeout_seconds="${CODEX_REMOTE_PAIR_TIMEOUT:-20}"
+max_attempts="${CODEX_REMOTE_PAIR_ATTEMPTS:-10}"
+retry_delay="${CODEX_REMOTE_PAIR_RETRY_DELAY:-3}"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 control_socket="$codex_home/app-server-control/app-server-control.sock"
 lock_dir="$codex_home/app-server-control/pairing-code.lock"
@@ -101,7 +103,7 @@ pairing_json=""
 pairing_status=1
 attempt=1
 recovery_attempted=0
-while [ "$attempt" -le 4 ]; do
+while [ "$attempt" -le "$max_attempts" ]; do
     pairing_status=0
     pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
     [ "$pairing_status" -eq 0 ] && break
@@ -120,6 +122,9 @@ while [ "$attempt" -le 4 ]; do
                 fi
             fi
             break
+            ;;
+        *"token_expired"*|*"remote control server refresh failed"*|*"remote control server enrollment failed"*|*"pairing is unavailable until enrollment completes"*)
+            sleep "$retry_delay"
             ;;
         *)
             break
