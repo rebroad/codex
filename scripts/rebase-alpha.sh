@@ -30,10 +30,20 @@ git remote get-url "${PUBLISH_REMOTE}" >/dev/null || \
 echo "Fetching ${UPSTREAM_REMOTE}..."
 git fetch "${UPSTREAM_REMOTE}"
 
-git rev-parse --verify "${FORK_POINT_BRANCH}^{commit}" >/dev/null || \
-  die "fork point not found: ${FORK_POINT_BRANCH}"
+if ! git rev-parse --verify "${FORK_POINT_BRANCH}^{commit}" >/dev/null 2>&1; then
+  [[ "${FORK_POINT_BRANCH}" == "upstream" ]] || \
+    die "fork point not found: ${FORK_POINT_BRANCH}"
+fi
 git rev-parse --verify "${UPSTREAM_ALPHA_BRANCH}^{commit}" >/dev/null || \
   die "upstream alpha branch not found: ${UPSTREAM_ALPHA_BRANCH}"
+
+if ! git show-ref --verify --quiet "refs/heads/${FORK_POINT_BRANCH}"; then
+  [[ "${FORK_POINT_BRANCH}" == "upstream" ]] || \
+    die "fork point must be a local branch: ${FORK_POINT_BRANCH}"
+  initial_fork_point_commit="$(git merge-base alpha "${UPSTREAM_ALPHA_BRANCH}")" || \
+    die "could not determine the initial fork point"
+  git branch upstream "${initial_fork_point_commit}"
+fi
 
 fork_point_ref="$(git rev-parse --symbolic-full-name "${FORK_POINT_BRANCH}")"
 [[ "${fork_point_ref}" == refs/heads/* ]] || \
@@ -122,3 +132,4 @@ echo "Rebasing alpha onto ${UPSTREAM_ALPHA_BRANCH} (${upstream_alpha_version})..
 sequence_editor="sed -i '1i update-ref ${fork_point_ref}'"
 GIT_SEQUENCE_EDITOR="${sequence_editor}" git rebase --interactive --no-update-refs \
   --onto "${upstream_alpha_commit}" "${fork_point_commit}" alpha
+git branch -f "${FORK_POINT_BRANCH}" "${upstream_alpha_commit}"
