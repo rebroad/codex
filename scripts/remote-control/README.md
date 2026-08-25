@@ -54,7 +54,9 @@ the ChatGPT backend or require Android confirmation.
 Use `codex-pairing-code --debug-log` when diagnosing daemon startup. This may
 replace an existing managed daemon so that remote-control logs are enabled.
 The pairing helper reuses a live app-server, and automatically starts or
-recovers one when the recorded control socket is stale or unreachable.
+recovers one when the recorded control socket is stale or unreachable. It
+also waits briefly for the app-server to recover transient remote-control
+authentication or enrollment failures before giving up.
 
 Use `codex-pairing-code -p PROFILE` (or `--profile PROFILE`) to pair through a
 named Codex profile. The profile gets its own app-server socket and daemon
