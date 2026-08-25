@@ -949,7 +949,7 @@ async fn remote_control_handle_disable_keeps_current_enrollment() {
 }
 
 #[tokio::test]
-async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
+async fn remote_control_handle_reenrolls_after_expired_pairing_enrollment() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -967,6 +967,13 @@ async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
         .await
         .clone()
         .expect("current enrollment should exist");
+    remote_handle
+        .current_enrollment
+        .lock()
+        .await
+        .as_mut()
+        .expect("current enrollment should exist")
+        .expires_at = Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
     let remote_control_target = stale_enrollment.remote_control_target.clone();
     let refreshed_enrollment = RemoteControlEnrollment {
         remote_control_target: remote_control_target.clone(),
@@ -995,16 +1002,21 @@ async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
         });
     let server_refreshed_enrollment = refreshed_enrollment.clone();
     let server_task = tokio::spawn(async move {
-        let stale_pairing_request = accept_http_request(&listener).await;
+        let stale_refresh_request = accept_http_request(&listener).await;
         assert_eq!(
-            stale_pairing_request.request_line,
-            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+            stale_refresh_request.request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
         );
         assert_eq!(
-            stale_pairing_request.headers.get("authorization"),
-            Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
+            stale_refresh_request.headers.get("authorization"),
+            Some(&"Bearer Access Token".to_string())
         );
-        respond_with_status(stale_pairing_request.stream, "404 Not Found", "").await;
+        respond_with_status(
+            stale_refresh_request.stream,
+            "401 Unauthorized",
+            r#"{"code":"token_expired"}"#,
+        )
+        .await;
 
         let enroll_request = accept_http_request(&listener).await;
         assert_eq!(
