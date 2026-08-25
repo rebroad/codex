@@ -1030,6 +1030,16 @@ while (($#)); do
   esac
 done
 
+read_toolchain
+native_target_host() {
+  "${RUSTC_CMD[@]}" -vV | sed -n 's/^host: //p'
+}
+
+if [[ "${TARGET_MODE}" == android && "$(native_target_host)" == *-linux-android ]]; then
+  echo "Android Rust host detected; treating --target android as native." >&2
+  TARGET_MODE=native
+fi
+
 if [[ "${PUBLISH}" == true && ( "${PACKAGE_NPM}" == true || "${PUBLISH_NPM}" == true ) ]]; then
   die "GitHub release startup and local npm publication are separate operations"
 fi
@@ -1093,7 +1103,6 @@ if [[ "${PUBLISH}" == true ]]; then
   start_github_release
   exit 0
 fi
-read_toolchain
 if [[ -z "${PACKAGE_VERSION}" && "${PACKAGE_NPM}" == true ]]; then
   PACKAGE_VERSION="$(${SOURCE_REPO}/scripts/npm_candidate_version.sh)"
 else
