@@ -122,7 +122,7 @@ if [ "$start_status" -eq 0 ]; then
 fi
 
 case "$start_output" in
-    *"connection is errored"*)
+    *"connection is errored"*|*"failed to connect to "*|*"Connection refused"*|*"No such file or directory"*)
         # Stop through Codex so it removes the managed PID/socket state, then
         # let the daemon manager recreate exactly one app-server.
         run_remote_control remote-control stop --json >/dev/null 2>&1 || true
