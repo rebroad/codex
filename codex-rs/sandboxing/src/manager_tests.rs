@@ -650,3 +650,12 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
     );
     assert!(materialized_helper.exists());
 }
+#[cfg(target_os = "android")]
+#[test]
+fn android_uses_linux_sandbox_and_legacy_filesystem_backend() {
+    assert_eq!(
+        super::get_platform_sandbox(false),
+        Some(super::SandboxType::LinuxSeccomp)
+    );
+    assert!(super::uses_legacy_linux_filesystem_sandbox());
+}
