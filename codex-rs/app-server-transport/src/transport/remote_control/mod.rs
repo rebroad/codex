@@ -478,9 +478,10 @@ impl RemoteControlSession {
                 &mut enrollment,
             )
             .await;
-            if refresh_result
-                .as_ref()
-                .is_err_and(|err| err.kind() == io::ErrorKind::NotFound)
+            if auth.account_id == enrollment.account_id
+                && refresh_result.as_ref().is_err_and(|err| {
+                    err.kind() == io::ErrorKind::NotFound || is_expired_auth_error(err)
+                })
             {
                 enrollment = self
                     .load_or_enroll_pairing_server(
@@ -506,18 +507,42 @@ impl RemoteControlSession {
         {
             Err(err) if auth::is_auth_error(&err) => {
                 clear_pairing_server_token(&mut current_enrollment, &mut enrollment)?;
-                refresh_pairing_enrollment(
+                match refresh_pairing_enrollment(
                     &mut current_enrollment,
                     &self.auth_manager,
                     &mut auth,
                     &installation_id,
                     &mut enrollment,
                 )
-                .await?;
-                self.current_enrollment.check_retry_after()?;
-                enrollment
-                    .start_pairing(&auth.http_client_factory, pairing_request())
-                    .await
+                .await
+                {
+                    Ok(()) => {
+                        self.current_enrollment.check_retry_after()?;
+                        enrollment
+                            .start_pairing(&auth.http_client_factory, pairing_request())
+                            .await
+                    }
+                    Err(err)
+                        if auth.account_id == enrollment.account_id
+                            && is_expired_auth_error(&err) =>
+                    {
+                        enrollment = self
+                            .load_or_enroll_pairing_server(
+                                &mut current_enrollment,
+                                &mut auth,
+                                &installation_id,
+                                &status.server_name,
+                                app_server_client_name,
+                                RemoteControlEnrollmentSelection::ReplaceExisting,
+                            )
+                            .await?;
+                        self.current_enrollment.check_retry_after()?;
+                        enrollment
+                            .start_pairing(&auth.http_client_factory, pairing_request())
+                            .await
+                    }
+                    Err(err) => Err(err),
+                }
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 enrollment = self
@@ -963,6 +988,13 @@ fn pairing_unavailable_error() -> io::Error {
         io::ErrorKind::InvalidInput,
         "remote control pairing is unavailable until enrollment completes",
     )
+}
+
+fn is_expired_auth_error(err: &io::Error) -> bool {
+    let message = err.to_string();
+    err.kind() == io::ErrorKind::PermissionDenied
+        && (message.contains("token_expired")
+            || message.contains("Provided authentication token is expired"))
 }
 
 fn remote_control_status_with_connection_status(
