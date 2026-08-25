@@ -62,7 +62,7 @@ pub enum SandboxablePreference {
 pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
     if cfg!(target_os = "macos") {
         Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
         Some(SandboxType::LinuxSeccomp)
     } else if cfg!(target_os = "windows") {
         if windows_sandbox_enabled {
@@ -73,6 +73,12 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     } else {
         None
     }
+}
+
+// Returns whether this platform should use the in-process Linux filesystem
+// sandbox instead of the bubblewrap-backed pipeline.
+pub const fn uses_legacy_linux_filesystem_sandbox() -> bool {
+    cfg!(target_os = "android")
 }
 
 pub fn with_managed_mitm_ca_readable_root(
@@ -413,6 +419,8 @@ impl SandboxManager {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
+                let use_legacy_landlock =
+                    use_legacy_landlock || uses_legacy_linux_filesystem_sandbox();
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
                     &pending
