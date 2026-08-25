@@ -63,6 +63,24 @@ if [ -n "$profile_name" ]; then
     export CODEX_PROFILE="$profile_name"
 fi
 
+start_remote_server() {
+    start_status=0
+    remote_start="$script_dir/codex-remote-start"
+    if [ ! -x "$remote_start" ]; then
+        printf 'Codex Remote: companion script is not executable: %s\n' "$remote_start" >&2
+        return 1
+    fi
+    if [ -n "$profile_name" ]; then
+        start_output="$($remote_start --profile "$profile_name" "$@" 2>&1)" || start_status=$?
+    else
+        start_output="$($remote_start "$@" 2>&1)" || start_status=$?
+    fi
+    if [ "${start_status:-0}" -ne 0 ]; then
+        [ -z "$start_output" ] || printf '%s\n' "$start_output" >&2
+        return "${start_status:-1}"
+    fi
+}
+
 mkdir -p "$(dirname "$lock_dir")"
 if ! mkdir "$lock_dir" 2>/dev/null; then
     printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
@@ -71,29 +89,18 @@ fi
 trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT HUP INT TERM
 
 if [ ! -S "$control_socket" ] || [ -n "$start_option" ]; then
-    remote_start="$script_dir/codex-remote-start"
-    if [ ! -x "$remote_start" ]; then
-        printf 'Codex Remote: companion script is not executable: %s\n' "$remote_start" >&2
-        exit 1
-    fi
+    start_status=0
     if [ -n "$start_option" ]; then
-        if [ -n "$profile_name" ]; then
-            "$remote_start" --profile "$profile_name" "$start_option"
-        else
-            "$remote_start" "$start_option"
-        fi
+        start_remote_server "$start_option" || exit $?
     else
-        if [ -n "$profile_name" ]; then
-            "$remote_start" --profile "$profile_name"
-        else
-            "$remote_start"
-        fi
+        start_remote_server || exit $?
     fi
 fi
 
 pairing_json=""
 pairing_status=1
 attempt=1
+recovery_attempted=0
 while [ "$attempt" -le 4 ]; do
     pairing_status=0
     pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
@@ -102,6 +109,17 @@ while [ "$attempt" -le 4 ]; do
     case "$pairing_json" in
         *"timed out waiting for remoteControl/pairing/start response"*|*"deadline has elapsed"*)
             sleep 2
+            ;;
+        *"failed to connect to "*|*"Connection refused"*|*"No such file or directory"*)
+            if [ "$recovery_attempted" -eq 0 ]; then
+                recovery_attempted=1
+                start_status=0
+                if start_remote_server; then
+                    attempt=$((attempt + 1))
+                    continue
+                fi
+            fi
+            break
             ;;
         *)
             break
