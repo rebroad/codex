@@ -27,6 +27,12 @@ const REMOTE_CONTROL_SERVER_TOKEN_REFRESH_BACKOFF_MAX_SECS: u64 = 36;
 
 pub(super) const REMOTE_CONTROL_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RemoteControlServerTokenRefreshMode {
+    Automatic,
+    Manual,
+}
+
 #[derive(Debug)]
 struct RemoteControlServerRequestError {
     message: String,
@@ -122,13 +128,18 @@ pub(super) async fn refresh_remote_control_server(
     auth: &RemoteControlConnectionAuth,
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
+    mode: RemoteControlServerTokenRefreshMode,
 ) -> io::Result<()> {
     let now = OffsetDateTime::now_utc();
     let refresh_requirement = enrollment.server_token_refresh_requirement_at(now);
-    if refresh_requirement == RemoteControlServerTokenRefreshRequirement::NotNeeded {
+    if refresh_requirement == RemoteControlServerTokenRefreshRequirement::NotNeeded
+        && (mode == RemoteControlServerTokenRefreshMode::Automatic
+            || enrollment.next_refresh_at.is_none())
+    {
         return Ok(());
     }
-    if refresh_requirement == RemoteControlServerTokenRefreshRequirement::Required
+    if mode == RemoteControlServerTokenRefreshMode::Automatic
+        && refresh_requirement == RemoteControlServerTokenRefreshRequirement::Required
         && let Some(next_refresh_at) = enrollment.next_refresh_at
         && next_refresh_at > now
     {
@@ -164,9 +175,36 @@ pub(super) async fn refresh_remote_control_server(
             let now = OffsetDateTime::now_utc();
             let refresh_is_required = enrollment.server_token_refresh_requirement_at(now)
                 == RemoteControlServerTokenRefreshRequirement::Required;
-            let (refresh_delay, next_refresh_at) = refresh_deferral(refresh_error.retry_at, now);
-            enrollment.next_refresh_at = Some(next_refresh_at);
             if refresh_is_required {
+                if mode == RemoteControlServerTokenRefreshMode::Automatic {
+                    let (refresh_delay, next_refresh_at) =
+                        refresh_deferral(refresh_error.retry_at, now);
+                    enrollment.next_refresh_at = Some(next_refresh_at);
+                    warn!(
+                        refresh_url,
+                        server_id = %enrollment.server_id,
+                        environment_id = %enrollment.environment_id,
+                        error = %err,
+                        ?refresh_delay,
+                        %next_refresh_at,
+                        "required remote control server token refresh failed; deferring next attempt"
+                    );
+                } else {
+                    enrollment.next_refresh_at = None;
+                    warn!(
+                        refresh_url,
+                        server_id = %enrollment.server_id,
+                        environment_id = %enrollment.environment_id,
+                        error = %err,
+                        "manual remote control server token refresh failed; retry remains available"
+                    );
+                }
+                return Err(err);
+            }
+            if mode == RemoteControlServerTokenRefreshMode::Automatic {
+                let (refresh_delay, next_refresh_at) =
+                    refresh_deferral(refresh_error.retry_at, now);
+                enrollment.next_refresh_at = Some(next_refresh_at);
                 warn!(
                     refresh_url,
                     server_id = %enrollment.server_id,
@@ -174,19 +212,18 @@ pub(super) async fn refresh_remote_control_server(
                     error = %err,
                     ?refresh_delay,
                     %next_refresh_at,
-                    "required remote control server token refresh failed; deferring next attempt"
+                    "proactive remote control server token refresh failed; continuing with valid token"
                 );
-                return Err(err);
+            } else {
+                enrollment.next_refresh_at = None;
+                warn!(
+                    refresh_url,
+                    server_id = %enrollment.server_id,
+                    environment_id = %enrollment.environment_id,
+                    error = %err,
+                    "manual proactive remote control server token refresh failed; continuing with valid token"
+                );
             }
-            warn!(
-                refresh_url,
-                server_id = %enrollment.server_id,
-                environment_id = %enrollment.environment_id,
-                error = %err,
-                ?refresh_delay,
-                %next_refresh_at,
-                "proactive remote control server token refresh failed; continuing with valid token"
-            );
             return Ok(());
         }
     };

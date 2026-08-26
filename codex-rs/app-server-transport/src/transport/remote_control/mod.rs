@@ -17,6 +17,7 @@ use self::desired_state::acquire_persistence_lock;
 use self::enroll::RemoteControlEnrollment;
 use self::enroll::load_persisted_remote_control_enrollment;
 use self::enroll::update_persisted_remote_control_enrollment;
+use self::server_api::RemoteControlServerTokenRefreshMode;
 use self::server_api::enroll_remote_control_server;
 use self::server_api::refresh_remote_control_server;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
@@ -424,13 +425,14 @@ impl RemoteControlHandle {
                 RemoteControlEnrollmentSelection::ReuseOrCreate,
             )
             .await?;
-        if enrollment.should_refresh_server_token() {
+        if enrollment.should_refresh_server_token() || enrollment.next_refresh_at.is_some() {
             let refresh_result = refresh_pairing_enrollment(
                 &mut current_enrollment,
                 &self.auth_manager,
                 &mut auth,
                 &installation_id,
                 &mut enrollment,
+                RemoteControlServerTokenRefreshMode::Manual,
             )
             .await;
             if auth.account_id == enrollment.account_id
@@ -464,6 +466,7 @@ impl RemoteControlHandle {
                     &mut auth,
                     &installation_id,
                     &mut enrollment,
+                    RemoteControlServerTokenRefreshMode::Manual,
                 )
                 .await
                 {
@@ -671,13 +674,14 @@ impl RemoteControlHandle {
         let status = self.status();
         let installation_id = status.installation_id;
         let server_name = status.server_name;
-        if enrollment.should_refresh_server_token() {
+        if enrollment.should_refresh_server_token() || enrollment.next_refresh_at.is_some() {
             let refresh_result = refresh_pairing_enrollment(
                 &mut current_enrollment,
                 &self.auth_manager,
                 &mut auth,
                 &installation_id,
                 &mut enrollment,
+                RemoteControlServerTokenRefreshMode::Manual,
             )
             .await;
             if refresh_result
@@ -710,6 +714,7 @@ impl RemoteControlHandle {
                         &mut auth,
                         &installation_id,
                         &mut enrollment,
+                        RemoteControlServerTokenRefreshMode::Manual,
                     )
                     .await?;
                     enrollment.pairing_status(pairing_status_request()).await
@@ -858,8 +863,10 @@ async fn refresh_pairing_enrollment(
     auth: &mut auth::RemoteControlConnectionAuth,
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
+    mode: RemoteControlServerTokenRefreshMode,
 ) -> io::Result<()> {
-    let mut refresh_result = refresh_remote_control_server(auth, installation_id, enrollment).await;
+    let mut refresh_result =
+        refresh_remote_control_server(auth, installation_id, enrollment, mode).await;
     if refresh_result
         .as_ref()
         .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
@@ -871,7 +878,8 @@ async fn refresh_pairing_enrollment(
                 Ok(recovered_auth) if recovered_auth.account_id == enrollment.account_id => {
                     *auth = recovered_auth;
                     refresh_result =
-                        refresh_remote_control_server(auth, installation_id, enrollment).await;
+                        refresh_remote_control_server(auth, installation_id, enrollment, mode)
+                            .await;
                 }
                 Ok(_) | Err(_) => {
                     enrollment.clear_server_token();

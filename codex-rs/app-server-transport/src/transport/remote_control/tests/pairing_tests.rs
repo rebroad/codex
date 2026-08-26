@@ -295,17 +295,17 @@ async fn proactive_refresh_rate_limit_uses_valid_token_for_pairing() {
     server_task.await.expect("server task should finish");
 
     assert_eq!(response, pairing_response("env_test"));
-    assert!(
+    assert_eq!(
         remote_handle
             .current_enrollment
             .snapshot()
-            .and_then(|enrollment| enrollment.next_refresh_at)
-            .is_some()
+            .and_then(|enrollment| enrollment.next_refresh_at),
+        None
     );
 }
 
 #[tokio::test]
-async fn required_refresh_deadline_blocks_pairing_without_request() {
+async fn manual_pairing_refresh_does_not_preserve_refresh_deadline() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -345,25 +345,14 @@ async fn required_refresh_deadline_blocks_pairing_without_request() {
         .await
         .expect_err("required refresh failure should block pairing");
     let listener = server_task.await.expect("server task should finish");
-    let next_refresh_at = remote_handle
-        .current_enrollment
-        .snapshot()
-        .and_then(|enrollment| enrollment.next_refresh_at)
-        .expect("required pairing refresh should preserve the retry deadline");
-    let deferred_err = remote_handle
-        .start_pairing(
-            RemoteControlPairingStartParams::default(),
-            /*app_server_client_name*/ None,
-        )
-        .await
-        .expect_err("required refresh deadline should block pairing");
 
     assert!(refresh_err.to_string().contains("HTTP 502 Bad Gateway"));
-    assert_eq!(deferred_err.kind(), io::ErrorKind::WouldBlock);
-    assert!(
-        deferred_err
-            .to_string()
-            .contains(&next_refresh_at.to_string())
+    assert_eq!(
+        remote_handle
+            .current_enrollment
+            .snapshot()
+            .and_then(|enrollment| enrollment.next_refresh_at),
+        None
     );
     timeout(Duration::from_millis(100), listener.accept())
         .await
@@ -626,18 +615,18 @@ async fn remote_control_handle_refreshes_after_pairing_auth_failure() {
 }
 
 #[tokio::test]
-async fn pairing_auth_failure_preserves_refresh_deadline() {
+async fn pairing_auth_failure_retries_refresh_without_deadline() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
     let remote_control_url = remote_control_url_for_listener(&listener);
     let server_task = tokio::spawn(async move {
-        let pairing_request = accept_http_request(&listener).await;
+        let refresh_request = accept_http_request(&listener).await;
         assert_eq!(
-            pairing_request.request_line,
-            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+            refresh_request.request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
         );
-        respond_with_status(pairing_request.stream, "401 Unauthorized", "").await;
+        respond_with_status(refresh_request.stream, "502 Bad Gateway", "").await;
     });
     let remote_handle = remote_control_handle_with_current_enrollment(
         &remote_control_url,
@@ -651,25 +640,29 @@ async fn pairing_auth_failure_preserves_refresh_deadline() {
         .as_mut()
         .expect("current enrollment should exist")
         .next_refresh_at = Some(next_refresh_at);
-    let mut expected_enrollment = remote_handle
+    remote_handle
         .current_enrollment
-        .snapshot()
-        .expect("current enrollment should exist");
-    expected_enrollment.clear_server_token();
-
+        .lock()
+        .await
+        .as_mut()
+        .expect("current enrollment should exist")
+        .expires_at = Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
     let err = remote_handle
         .start_pairing(
             RemoteControlPairingStartParams::default(),
             /*app_server_client_name*/ None,
         )
         .await
-        .expect_err("refresh deadline should throttle recovery after token rejection");
+        .expect_err("manual refresh should be attempted despite the existing deadline");
     server_task.await.expect("server task should finish");
 
-    assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+    assert!(err.to_string().contains("HTTP 502 Bad Gateway"));
     assert_eq!(
-        remote_handle.current_enrollment.snapshot(),
-        Some(expected_enrollment)
+        remote_handle
+            .current_enrollment
+            .snapshot()
+            .and_then(|enrollment| enrollment.next_refresh_at),
+        None
     );
 }
 
@@ -752,7 +745,7 @@ async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
 }
 
 #[tokio::test]
-async fn pairing_publishes_refresh_deferral_after_auth_recovery() {
+async fn manual_refresh_remains_retryable_after_auth_recovery() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -777,6 +770,18 @@ async fn pairing_publishes_refresh_deferral_after_auth_recovery() {
             "upstream unavailable",
         )
         .await;
+
+        let retried_refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            retried_refresh_request.headers.get("authorization"),
+            Some(&"Bearer fresh-token".to_string())
+        );
+        respond_with_status(
+            retried_refresh_request.stream,
+            "502 Bad Gateway",
+            "upstream unavailable",
+        )
+        .await;
     });
     let codex_home = TempDir::new().expect("temp dir should create");
     let auth_manager = auth_manager_with_replacement(&codex_home, "account_id").await;
@@ -790,7 +795,6 @@ async fn pairing_publishes_refresh_deferral_after_auth_recovery() {
         .expect("current enrollment should exist")
         .expires_at = Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
 
-    let refresh_started_at = OffsetDateTime::now_utc();
     let refresh_err = remote_handle
         .start_pairing(
             RemoteControlPairingStartParams::default(),
@@ -798,27 +802,23 @@ async fn pairing_publishes_refresh_deferral_after_auth_recovery() {
         )
         .await
         .expect_err("required refresh should remain strict after auth recovery");
-    let refresh_completed_at = OffsetDateTime::now_utc();
-    let deferred_err = remote_handle
+    let retry_err = remote_handle
         .start_pairing(
             RemoteControlPairingStartParams::default(),
             /*app_server_client_name*/ None,
         )
         .await
-        .expect_err("published deadline should throttle the next pairing refresh");
+        .expect_err("manual pairing should retry the refresh immediately");
     server_task.await.expect("server task should finish");
 
     assert!(refresh_err.to_string().contains("HTTP 502 Bad Gateway"));
-    assert_eq!(deferred_err.kind(), io::ErrorKind::WouldBlock);
-    let next_refresh_at = remote_handle
-        .current_enrollment
-        .snapshot()
-        .and_then(|enrollment| enrollment.next_refresh_at)
-        .expect("required refresh failure should publish its retry deadline");
-    assert!(
-        (refresh_started_at + time::Duration::seconds(120)
-            ..=refresh_completed_at + time::Duration::seconds(120))
-            .contains(&next_refresh_at)
+    assert!(retry_err.to_string().contains("HTTP 502 Bad Gateway"));
+    assert_eq!(
+        remote_handle
+            .current_enrollment
+            .snapshot()
+            .and_then(|enrollment| enrollment.next_refresh_at),
+        None
     );
 }
 
