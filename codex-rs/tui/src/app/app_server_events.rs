@@ -103,6 +103,10 @@ impl App {
                     .await;
                 self.repaint_agents_overview();
             }
+            AppServerEvent::Reconnected => {
+                self.reattach_tracked_threads_after_reconnect(app_server_client)
+                    .await;
+            }
             AppServerEvent::Disconnected { message } => {
                 if self.begin_reconnect() {
                     return;
