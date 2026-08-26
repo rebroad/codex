@@ -53,6 +53,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -490,6 +491,16 @@ impl RemoteControlWebsocket {
             .send_replace(app_server_client_name.clone());
         loop {
             let status = self.status_publisher.status();
+            let connection_cycle_started_at = Instant::now();
+            if let Some(capture) = &self.traffic_capture {
+                capture.record_event(
+                    "connection_cycle_started",
+                    serde_json::json!({
+                        "reconnectAttempt": self.reconnect_attempt.saturating_add(1),
+                        "status": format!("{:?}", status.status),
+                    }),
+                );
+            }
             info!(
                 remote_control_url = %self.remote_control_url,
                 installation_id = %self.installation_id,
@@ -530,6 +541,16 @@ impl RemoteControlWebsocket {
                 .run_connection(websocket_connection, shutdown_token)
                 .await;
             let status = self.status_publisher.status();
+            if let Some(capture) = &self.traffic_capture {
+                capture.record_event(
+                    "connection_cycle_ended",
+                    serde_json::json!({
+                        "elapsedMs": connection_cycle_started_at.elapsed().as_millis(),
+                        "reason": format!("{connection_end_reason:?}"),
+                        "status": format!("{:?}", status.status),
+                    }),
+                );
+            }
             info!(
                 remote_control_url = %self.remote_control_url,
                 installation_id = %self.installation_id,
@@ -715,6 +736,7 @@ impl RemoteControlWebsocket {
                 app_server_client_name = ?app_server_client_name,
                 "connecting to app-server remote control websocket"
             );
+            let connect_started_at = Instant::now();
             let connect_options = RemoteControlConnectOptions {
                 installation_id: &self.installation_id,
                 server_name: &self.server_name,
@@ -761,6 +783,15 @@ impl RemoteControlWebsocket {
                     self.status_publisher
                         .publish_status(RemoteControlConnectionStatus::Connected);
                     let enrollment = self.current_enrollment.snapshot();
+                    if let Some(capture) = &self.traffic_capture {
+                        capture.record_event(
+                            "websocket_connected",
+                            serde_json::json!({
+                                "elapsedMs": connect_started_at.elapsed().as_millis(),
+                                "subscribeCursorPresent": subscribe_cursor.is_some(),
+                            }),
+                        );
+                    }
                     info!(
                         websocket_url = %remote_control_target.websocket_url,
                         installation_id = %self.installation_id,
@@ -774,6 +805,16 @@ impl RemoteControlWebsocket {
                     return ConnectOutcome::Connected(Box::new(websocket_connection));
                 }
                 Err(err) => {
+                    if let Some(capture) = &self.traffic_capture {
+                        capture.record_event(
+                            "websocket_connect_failed",
+                            serde_json::json!({
+                                "elapsedMs": connect_started_at.elapsed().as_millis(),
+                                "error": err.to_string(),
+                                "errorKind": format!("{:?}", err.kind()),
+                            }),
+                        );
+                    }
                     if !self.desired_state_rx.borrow().is_enabled() {
                         return ConnectOutcome::Disabled;
                     }
@@ -943,6 +984,7 @@ impl RemoteControlWebsocket {
         shutdown_token: CancellationToken,
         traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
     ) {
+        let worker_started_at = Instant::now();
         let capture_for_flush = traffic_capture.clone();
         let result = Self::run_server_writer_inner(
             state,
@@ -955,6 +997,13 @@ impl RemoteControlWebsocket {
         )
         .await;
         if let Some(capture) = capture_for_flush {
+            capture.record_event(
+                "websocket_writer_stopped",
+                serde_json::json!({
+                    "elapsedMs": worker_started_at.elapsed().as_millis(),
+                    "error": result.as_ref().err().map(ToString::to_string),
+                }),
+            );
             capture.flush();
         }
         if let Err(err) = result {
@@ -1139,6 +1188,7 @@ impl RemoteControlWebsocket {
         shutdown_token: CancellationToken,
         traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
     ) {
+        let worker_started_at = Instant::now();
         let capture_for_flush = traffic_capture.clone();
         let result = Self::run_websocket_reader_inner(
             client_tracker,
@@ -1150,6 +1200,13 @@ impl RemoteControlWebsocket {
         )
         .await;
         if let Some(capture) = capture_for_flush {
+            capture.record_event(
+                "websocket_reader_stopped",
+                serde_json::json!({
+                    "elapsedMs": worker_started_at.elapsed().as_millis(),
+                    "error": result.as_ref().err().map(ToString::to_string),
+                }),
+            );
             capture.flush();
         }
         if let Err(err) = result {
