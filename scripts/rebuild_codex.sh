@@ -533,6 +533,15 @@ configure_rusty_v8_artifacts() {
   fi
   cache_dir="${BUILD_REPO}/build/rusty-v8-artifacts/${crate_version}/${target}"
   mkdir -p "${cache_dir}"
+  local cache_checksum="${cache_dir}/rusty_v8_${profile}_${target}.sha256"
+  if [[ -s "${cache_dir}/${archive}" && -s "${cache_dir}/${binding}" \
+    && -s "${cache_checksum}" ]] \
+    && (cd "${cache_dir}" && sha256sum -c "${cache_checksum}" >/dev/null); then
+    RUSTY_V8_ARCHIVE_PATH="${cache_dir}/${archive}"
+    RUSTY_V8_BINDING_PATH="${cache_dir}/${binding}"
+    echo "Using cached Rusty V8 artifacts from ${cache_dir} for ${target}." >&2
+    return 0
+  fi
 
   if [[ -n "${local_repo}" && -f "${local_repo}/${archive}" && -f "${local_repo}/${binding}" ]]; then
     RUSTY_V8_ARCHIVE_PATH="${local_repo}/${archive}"
@@ -706,20 +715,23 @@ cargo_build() {
   env_args+=(
     CARGO_TARGET_DIR="${target_dir}"
     RUSTUP_DISABLE_SELF_UPDATE=1
-    CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+    # Keep Cargo's compile input stable across rebuilds. The installed binary
+    # receives the wall-clock suffix later via patch_timestamp.
+    CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}-000000000000"
   )
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
   if [[ "${target_mode}" == native \
     && "$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" == aarch64-linux-android \
     && -x "$(command -v aarch64-linux-android-clang || true)" ]]; then
-    local android_builtins
-    android_builtins="$(aarch64-linux-android-clang -print-file-name=libclang_rt.builtins-aarch64-android.a)"
+    local android_clang android_builtins
+    android_clang="$(command -v aarch64-linux-android-clang)"
+    android_builtins="$("${android_clang}" -print-file-name=libclang_rt.builtins-aarch64-android.a)"
     [[ -f "${android_builtins}" ]] \
       || die "Android compiler builtins archive not found: ${android_builtins}"
     env_args+=(
-      CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android-clang"
-      CC_aarch64_linux_android="aarch64-linux-android-clang"
-      CXX_aarch64_linux_android="aarch64-linux-android-clang++"
+      CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${android_clang}"
+      CC_aarch64_linux_android="${android_clang}"
+      CXX_aarch64_linux_android="${android_clang}++"
       AR_aarch64_linux_android="llvm-ar"
       RANLIB_aarch64_linux_android="llvm-ranlib"
       CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${android_builtins}"
