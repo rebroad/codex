@@ -30,6 +30,7 @@ use crate::transport::remote_control::enroll::preview_remote_control_response_bo
 use crate::transport::remote_control::enroll::update_persisted_remote_control_enrollment;
 use crate::transport::remote_control::host_device::REMOTE_CONTROL_HOST_DEVICE_KIND_HEADER;
 use crate::transport::remote_control::host_device::host_device_kind;
+use crate::transport::remote_control::server_api::RemoteControlServerTokenRefreshMode;
 use crate::transport::remote_control::server_api::enroll_remote_control_server;
 use crate::transport::remote_control::server_api::refresh_remote_control_server;
 use axum::http::HeaderValue;
@@ -1606,8 +1607,13 @@ async fn prepare_remote_control_enrollment(
         let enrollment_ref = enrollment.as_mut().ok_or_else(|| {
             io::Error::other("missing remote control enrollment before server refresh")
         })?;
-        match refresh_remote_control_server(&auth, connect_options.installation_id, enrollment_ref)
-            .await
+        match refresh_remote_control_server(
+            &auth,
+            connect_options.installation_id,
+            enrollment_ref,
+            RemoteControlServerTokenRefreshMode::Automatic,
+        )
+        .await
         {
             Ok(()) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {
