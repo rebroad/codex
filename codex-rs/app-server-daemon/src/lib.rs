@@ -335,6 +335,7 @@ impl Daemon {
         self.ensure_managed_codex_bin()?;
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Started,
@@ -362,6 +363,7 @@ impl Daemon {
 
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Restarted,
@@ -400,6 +402,7 @@ impl Daemon {
                         .start_managed_backend_with_bin(&settings, codex_bin)
                         .await?;
                     self.wait_until_ready().await?;
+                    self.wait_until_remote_control_ready(&settings).await?;
                     RestartIfRunningOutcome::Restarted
                 }
             }
@@ -472,6 +475,27 @@ impl Daemon {
                 }
             }
         }
+    }
+
+    async fn wait_until_remote_control_ready(&self, settings: &DaemonSettings) -> Result<()> {
+        if !settings.remote_control_enabled {
+            return Ok(());
+        }
+
+        let status = remote_control_client::enable_remote_control_with_connect_retry(
+            &self.socket_path,
+            START_TIMEOUT,
+            START_POLL_INTERVAL,
+        )
+        .await?;
+        if status.status != RemoteControlConnectionStatus::Connected || status.timed_out {
+            return Err(anyhow!(
+                "remote control did not become connected after app-server restart (status: {:?}, timed_out: {})",
+                status.status,
+                status.timed_out
+            ));
+        }
+        Ok(())
     }
 
     async fn app_server_not_ready_context(&self) -> String {
@@ -620,6 +644,7 @@ impl Daemon {
         }
 
         let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         let managed_codex_version = self.managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,

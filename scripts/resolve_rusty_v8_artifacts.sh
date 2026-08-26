@@ -48,24 +48,7 @@ done
 [[ -n "${OUTPUT_DIR}" ]] || { echo "--output-dir is required" >&2; exit 1; }
 
 if [[ -z "${V8_VERSION}" ]]; then
-  V8_VERSION="$(python3 - "${WORKSPACE_DIR}/Cargo.lock" <<'PY'
-import sys
-import tomllib
-
-with open(sys.argv[1], "rb") as lockfile:
-    versions = sorted(
-        {
-            package["version"]
-            for package in tomllib.load(lockfile)["package"]
-            if package["name"] == "v8"
-        }
-    )
-
-if len(versions) != 1:
-    raise SystemExit(f"Expected exactly one resolved v8 version, found: {versions}")
-print(versions[0])
-PY
-  )"
+  V8_VERSION="$(python3 "${SCRIPT_DIR}/rusty_v8_version.py" "${WORKSPACE_DIR}/Cargo.lock")"
 fi
 [[ -n "${V8_VERSION}" ]] || { echo "Unable to determine the pinned v8 version" >&2; exit 1; }
 
