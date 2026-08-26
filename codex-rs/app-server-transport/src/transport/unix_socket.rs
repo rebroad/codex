@@ -1,7 +1,18 @@
+#[cfg(not(target_os = "android"))]
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+#[cfg(target_os = "android")]
+use std::os::unix::net::UnixListener as StdUnixListener;
+#[cfg(target_os = "android")]
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
+#[cfg(target_os = "android")]
+use std::path::PathBuf;
+#[cfg(target_os = "android")]
+use std::thread;
+#[cfg(target_os = "android")]
+use std::time::Duration as StdDuration;
 
 use super::TransportEvent;
 use crate::transport::websocket::run_websocket_connection;
@@ -132,11 +143,12 @@ pub async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
 }
 
 pub struct AppServerStartupLock {
+    #[cfg(not(target_os = "android"))]
     _file: std::fs::File,
-}
-
-fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::Unsupported
+    #[cfg(target_os = "android")]
+    _socket: StdUnixListener,
+    #[cfg(target_os = "android")]
+    socket_path: PathBuf,
 }
 
 pub async fn acquire_app_server_startup_lock(
@@ -146,21 +158,53 @@ pub async fn acquire_app_server_startup_lock(
         codex_uds::prepare_private_socket_directory(parent).await?;
     }
     tokio::task::spawn_blocking(move || {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(startup_lock_path.as_path())?;
-        if let Err(err) = file.lock()
-            && !is_unsupported_file_lock_error(&err)
+        #[cfg(target_os = "android")]
         {
-            return Err(err);
+            let socket_path = startup_lock_path.to_path_buf().with_extension("lock.sock");
+            loop {
+                match StdUnixListener::bind(&socket_path) {
+                    Ok(socket) => {
+                        return Ok(AppServerStartupLock {
+                            _socket: socket,
+                            socket_path,
+                        });
+                    }
+                    Err(err) if err.kind() == ErrorKind::AddrInUse => {
+                        match StdUnixStream::connect(&socket_path) {
+                            Ok(_) => thread::sleep(StdDuration::from_millis(25)),
+                            Err(err) if err.kind() == ErrorKind::ConnectionRefused => {
+                                std::fs::remove_file(&socket_path)?;
+                            }
+                            Err(err) if err.kind() == ErrorKind::NotFound => {}
+                            Err(err) => return Err(err),
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
         }
-        Ok(AppServerStartupLock { _file: file })
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(startup_lock_path.as_path())?;
+            file.lock()?;
+            Ok(AppServerStartupLock { _file: file })
+        }
     })
     .await
     .map_err(|err| std::io::Error::other(format!("startup lock task failed: {err}")))?
+}
+
+#[cfg(target_os = "android")]
+impl Drop for AppServerStartupLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
 }
 
 #[cfg(unix)]
