@@ -3,9 +3,7 @@ use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 #[cfg(target_os = "android")]
-use std::os::unix::net::UnixListener as StdUnixListener;
-#[cfg(target_os = "android")]
-use std::os::unix::net::UnixStream as StdUnixStream;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 #[cfg(target_os = "android")]
 use std::path::PathBuf;
@@ -146,7 +144,7 @@ pub struct AppServerStartupLock {
     #[cfg(not(target_os = "android"))]
     _file: std::fs::File,
     #[cfg(target_os = "android")]
-    _socket: StdUnixListener,
+    owner_token: String,
     #[cfg(target_os = "android")]
     socket_path: PathBuf,
 }
@@ -160,23 +158,31 @@ pub async fn acquire_app_server_startup_lock(
     tokio::task::spawn_blocking(move || {
         #[cfg(target_os = "android")]
         {
-            let socket_path = startup_lock_path.to_path_buf().with_extension("lock.sock");
+            let socket_path = startup_lock_path.to_path_buf().with_extension("lock.owner");
+            let owner_token = process_lock_owner_token()?;
             loop {
-                match StdUnixListener::bind(&socket_path) {
-                    Ok(socket) => {
+                match symlink(&owner_token, &socket_path) {
+                    Ok(()) => {
                         return Ok(AppServerStartupLock {
-                            _socket: socket,
+                            owner_token,
                             socket_path,
                         });
                     }
-                    Err(err) if err.kind() == ErrorKind::AddrInUse => {
-                        match StdUnixStream::connect(&socket_path) {
-                            Ok(_) => thread::sleep(StdDuration::from_millis(25)),
-                            Err(err) if err.kind() == ErrorKind::ConnectionRefused => {
-                                std::fs::remove_file(&socket_path)?;
-                            }
-                            Err(err) if err.kind() == ErrorKind::NotFound => {}
+                    Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                        let existing_owner = match std::fs::read_link(&socket_path) {
+                            Ok(owner) => owner,
+                            Err(err) if err.kind() == ErrorKind::NotFound => continue,
                             Err(err) => return Err(err),
+                        };
+                        if process_lock_owner_is_alive(existing_owner.to_str().unwrap_or_default())
+                        {
+                            thread::sleep(StdDuration::from_millis(25));
+                        } else {
+                            match std::fs::remove_file(&socket_path) {
+                                Ok(()) => {}
+                                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                                Err(err) => return Err(err),
+                            }
                         }
                     }
                     Err(err) => return Err(err),
@@ -203,8 +209,43 @@ pub async fn acquire_app_server_startup_lock(
 #[cfg(target_os = "android")]
 impl Drop for AppServerStartupLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.socket_path);
+        if std::fs::read_link(&self.socket_path)
+            .ok()
+            .and_then(|owner| owner.into_string().ok())
+            .as_deref()
+            == Some(self.owner_token.as_str())
+        {
+            let _ = std::fs::remove_file(&self.socket_path);
+        }
     }
+}
+
+#[cfg(target_os = "android")]
+fn process_lock_owner_token() -> IoResult<String> {
+    let pid = std::process::id();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let start_time = process_start_time_from_stat(&stat)
+        .ok_or_else(|| std::io::Error::other(format!("malformed /proc/{pid}/stat")))?;
+    Ok(format!("{pid}:{start_time}"))
+}
+
+#[cfg(target_os = "android")]
+fn process_lock_owner_is_alive(owner: &str) -> bool {
+    let Some((pid, expected_start_time)) = owner.split_once(':') else {
+        return false;
+    };
+    let Ok(pid) = pid.parse::<u32>() else {
+        return false;
+    };
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    process_start_time_from_stat(&stat) == Some(expected_start_time)
+}
+
+#[cfg(target_os = "android")]
+fn process_start_time_from_stat(stat: &str) -> Option<&str> {
+    stat.rsplit_once(')')?.1.split_whitespace().nth(19)
 }
 
 #[cfg(unix)]
