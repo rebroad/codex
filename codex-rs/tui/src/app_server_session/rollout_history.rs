@@ -13,14 +13,33 @@ use super::thread_resume_params_from_config;
 use crate::legacy_core::config::Config;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use uuid::Uuid;
 
 impl AppServerSession {
+    pub(crate) async fn reattach_thread(&self, thread_id: ThreadId) -> Result<()> {
+        let request_id = RequestId::String(format!("reconnect-thread-{}", Uuid::new_v4()));
+        let _: ThreadResumeResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadResume {
+                request_id,
+                params: ThreadResumeParams {
+                    thread_id: thread_id.to_string(),
+                    ..ThreadResumeParams::default()
+                },
+            })
+            .await
+            .map_err(|err| bootstrap_request_error("thread/resume failed after reconnect", err))?;
+        Ok(())
+    }
+
     /// Captures the server's startup migration policy before workspace config can change.
     ///
     /// Sessions without a recorded startup config conservatively assume migration is enabled.

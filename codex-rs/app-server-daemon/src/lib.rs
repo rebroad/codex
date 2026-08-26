@@ -447,6 +447,7 @@ impl Daemon {
                         .start_managed_backend_with_bin(&settings, codex_bin)
                         .await?;
                     self.wait_until_ready().await?;
+                    self.wait_until_remote_control_ready(&settings).await?;
                     RestartIfRunningOutcome::Restarted
                 }
             }
@@ -525,6 +526,29 @@ impl Daemon {
                 }
             }
         }
+    }
+
+    async fn wait_until_remote_control_ready(&self, settings: &DaemonSettings) -> Result<()> {
+        if !settings.remote_control_enabled {
+            return Ok(());
+        }
+
+        let status = remote_control_client::enable_remote_control_with_connect_retry(
+            &self.socket_path,
+            START_TIMEOUT,
+            START_POLL_INTERVAL,
+        )
+        .await?;
+        if status.status != RemoteControlConnectionStatus::Connected || status.timed_out {
+            let mut context = format!(
+                "remote control did not become connected after app-server restart (status: {:?}, timed_out: {})",
+                status.status, status.timed_out
+            );
+            self.append_daemon_app_server_context(&mut context).await;
+            backend::append_stderr_log_tail_context(&self.pid_file, &mut context).await;
+            return Err(anyhow!(context));
+        }
+        Ok(())
     }
 
     async fn app_server_not_ready_context(&self) -> String {
@@ -673,6 +697,7 @@ impl Daemon {
         backend.start().await?;
 
         let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         let managed_codex_version = self.managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
