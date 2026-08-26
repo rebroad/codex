@@ -211,7 +211,7 @@ impl Drop for AppServerStartupLock {
     fn drop(&mut self) {
         if std::fs::read_link(&self.socket_path)
             .ok()
-            .and_then(|owner| owner.into_string().ok())
+            .and_then(|owner| owner.into_os_string().into_string().ok())
             .as_deref()
             == Some(self.owner_token.as_str())
         {
