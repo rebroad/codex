@@ -63,8 +63,28 @@ impl RemoteControlTrafficCapture {
             "direction": direction,
             "frame": frame,
         });
+        self.record_json(&mut record);
+    }
+
+    pub(crate) fn record_event(&self, event: &str, details: Value) {
+        let mut record = serde_json::json!({
+            "timestampMs": SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            "direction": "lifecycle",
+            "event": event,
+            "details": details,
+        });
+        self.record_json(&mut record);
+    }
+
+    fn record_json(&self, record: &mut Value) {
         if let Some(frame) = record.get_mut("frame") {
             redact_value(frame, self.redaction);
+        }
+        if let Some(details) = record.get_mut("details") {
+            redact_value(details, self.redaction);
         }
         let mut writer = match self.writer.lock() {
             Ok(writer) => writer,
@@ -73,7 +93,7 @@ impl RemoteControlTrafficCapture {
                 return;
             }
         };
-        if serde_json::to_writer(&mut writer.writer, &record).is_err()
+        if serde_json::to_writer(&mut writer.writer, record).is_err()
             || writer.writer.write_all(b"\n").is_err()
         {
             warn!("failed to write remote-control traffic capture");
