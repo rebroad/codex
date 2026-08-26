@@ -12,6 +12,7 @@ cargo_source_directory := justfile_directory() / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", cargo_working_directory / "target")
 rusty_v8_setup := "rusty_v8_target=\"$(rustc -vV | sed -n 's/^host: //p')\"; repo_root=\"$(cd \"$(pwd -P)/..\" && pwd -P)\"; rusty_v8_version=\"$(python3 \"${repo_root}/scripts/rusty_v8_version.py\" \"${repo_root}/codex-rs/Cargo.lock\")\"; build_root=\"${repo_root}\"; if test -d \"${repo_root}.build\"; then build_root=\"${repo_root}.build\"; fi; rusty_v8_dir=\"${build_root}/build/rusty-v8-artifacts/${rusty_v8_version}/${rusty_v8_target}\"; rusty_v8_archive=\"${rusty_v8_dir}/librusty_v8_ptrcomp_sandbox_release_${rusty_v8_target}.a.gz\"; rusty_v8_binding=\"${rusty_v8_dir}/src_binding_ptrcomp_sandbox_release_${rusty_v8_target}.rs\"; test -s \"${rusty_v8_archive}\" && test -s \"${rusty_v8_binding}\" || { echo \"Rusty V8 artifacts not found: ${rusty_v8_dir}\" >&2; exit 1; }; RUSTY_V8_ARCHIVE=\"${rusty_v8_archive}\" RUSTY_V8_SRC_BINDING_PATH=\"${rusty_v8_binding}\""
+android_cargo_setup := "rustc_host=\"$(rustc -vV | sed -n 's/^host: //p')\"; if test \"${rustc_host}\" = aarch64-linux-android && android_clang=\"$(command -v aarch64-linux-android-clang || true)\" && test -x \"${android_clang}\"; then android_builtins=\"$(${android_clang} -print-file-name=libclang_rt.builtins-aarch64-android.a)\"; test -s \"${android_builtins}\" || { echo \"Android compiler builtins archive not found\" >&2; exit 1; }; export CARGO_BUILD_JOBS=\"${CARGO_BUILD_JOBS:-1}\" CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=\"${android_clang}\" CC_aarch64_linux_android=\"${android_clang}\" CXX_aarch64_linux_android=\"${android_clang}++\" AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=\"-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\\$ORIGIN -Clink-arg=${android_builtins}\"; fi;"
 
 # Display help
 help:
@@ -90,9 +91,9 @@ install:
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
-    @cd "{{ cargo_working_directory }}" && {{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-cli -p codex-code-mode-host
-    @cd "{{ cargo_working_directory }}" && CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-rmcp-client --bin test_stdio_server
-    @cd "{{ cargo_working_directory }}" && {{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} RUST_MIN_STACK={{ rust_min_stack }} NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+    @cd "{{ cargo_working_directory }}" && {{ android_cargo_setup }} {{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-cli -p codex-code-mode-host
+    @cd "{{ cargo_working_directory }}" && {{ android_cargo_setup }} {{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }} cargo build -p codex-rmcp-client --bin test_stdio_server
+    @cd "{{ cargo_working_directory }}" && {{ android_cargo_setup }} {{ rusty_v8_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }}; RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n 's/^host: //p')" != aarch64-linux-android; then NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"; else echo "cargo-nextest is unavailable on Android; using cargo test" >&2; cargo test "$@"; fi
 
 [windows]
 test *args:
