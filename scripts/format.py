@@ -4,6 +4,7 @@
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -99,10 +100,17 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
             buildifier_files.append(path.as_posix())
     buildifier_files.sort()
 
-    # Invoke DotSlash explicitly because Windows does not honor shebangs.
+    buildifier_runner = shutil.which("dotslash")
+    if buildifier_runner is not None:
+        buildifier_command = [buildifier_runner, str(REPO_ROOT / "tools" / "buildifier")]
+    else:
+        buildifier_runner = shutil.which("buildifier")
+        buildifier_command = [buildifier_runner or "dotslash"]
+        if buildifier_runner is None:
+            buildifier_command.append(str(REPO_ROOT / "tools" / "buildifier"))
+
     buildifier_args = [
-        "dotslash",
-        str(REPO_ROOT / "tools" / "buildifier"),
+        *buildifier_command,
         "-mode=check" if check else "-mode=fix",
         "-lint=off",
         *buildifier_files,
