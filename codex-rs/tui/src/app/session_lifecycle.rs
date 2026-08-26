@@ -432,6 +432,23 @@ impl App {
         Ok(live_attached)
     }
 
+    pub(super) async fn reattach_tracked_threads_after_reconnect(
+        &mut self,
+        app_server: &AppServerSession,
+    ) {
+        let thread_ids: Vec<_> = self.thread_event_channels.keys().copied().collect();
+        for thread_id in thread_ids {
+            if let Err(err) = app_server.reattach_thread(thread_id).await {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to reattach tracked thread after app-server reconnect"
+                );
+            }
+        }
+        self.refresh_agents_overview_threads(app_server);
+    }
+
     /// Replaces the chat widget and re-seeds the new widget's collab metadata from the navigation
     /// cache.
     ///

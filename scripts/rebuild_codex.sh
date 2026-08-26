@@ -442,7 +442,7 @@ configure_rusty_v8_artifacts() {
       ;;
   esac
 
-  local crate_version="${V8_CRATE_VERSION:-$(sed -n '/^name = "v8"$/,/^version = /s/^version = "\([^"]*\)"/\1/p' "${SOURCE_REPO}/codex-rs/Cargo.lock" | head -n 1)}"
+  local crate_version="${V8_CRATE_VERSION:-$(python3 "${SOURCE_REPO}/scripts/rusty_v8_version.py" "${SOURCE_REPO}/codex-rs/Cargo.lock")}"
   [[ -n "${crate_version}" ]] || die "could not determine the pinned v8 crate version"
   local default_profile="ptrcomp_sandbox_release"
   local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
@@ -472,7 +472,10 @@ configure_rusty_v8_artifacts() {
     local cached_archive cached_binding
     cached_archive="$(sed -n 's/^static lib URL: //p' "${output}" | tail -n 1)"
     cached_binding="$(sed -n 's/^cargo:rustc-env=RUSTY_V8_SRC_BINDING_PATH=//p' "${output}" | tail -n 1)"
-    if [[ "$(basename "${cached_archive}")" == "${archive}" \
+    local expected_cache_suffix="/rusty-v8-artifacts/${crate_version}/${target}"
+    if [[ "${cached_archive}" == *"${expected_cache_suffix}/${archive}" \
+      && "${cached_binding}" == *"${expected_cache_suffix}/${binding}" \
+      && "$(basename "${cached_archive}")" == "${archive}" \
       && "$(basename "${cached_binding}")" == "${binding}" \
       && -s "${cached_archive}" && -s "${cached_binding}" ]]; then
       RUSTY_V8_ARCHIVE_PATH="${cached_archive}"
@@ -488,7 +491,7 @@ configure_rusty_v8_artifacts() {
   elif [[ "${target_mode}" == native && -d "${BUILD_REPO}/build/rusty-v8-artifacts/native" && -z "${RUSTY_V8_REPO_DIR:-}" ]]; then
     local_repo="${BUILD_REPO}/build/rusty-v8-artifacts/native"
   fi
-  cache_dir="${BUILD_REPO}/build/rusty-v8-artifacts/${VERSION}/${target}"
+  cache_dir="${BUILD_REPO}/build/rusty-v8-artifacts/${crate_version}/${target}"
   mkdir -p "${cache_dir}"
 
   if [[ -n "${local_repo}" && -f "${local_repo}/${archive}" && -f "${local_repo}/${binding}" ]]; then
