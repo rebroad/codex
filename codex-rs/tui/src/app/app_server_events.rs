@@ -74,6 +74,10 @@ impl App {
                 self.handle_server_request_event(app_server_client, *request)
                     .await;
             }
+            AppServerEvent::Reconnected => {
+                self.reattach_tracked_threads_after_reconnect(app_server_client)
+                    .await;
+            }
             AppServerEvent::Disconnected { message } => {
                 tracing::warn!("app-server event stream disconnected: {message}");
                 self.chat_widget.add_error_message(message.clone());
