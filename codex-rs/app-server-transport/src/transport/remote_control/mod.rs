@@ -20,6 +20,7 @@ use self::desired_state::RemoteControlDesiredState;
 use self::enroll::RemoteControlEnrollment;
 use self::enroll::load_persisted_remote_control_enrollment;
 use self::persistence::RemoteControlPersistence;
+use self::server_api::RemoteControlServerTokenRefreshMode;
 use self::server_api::enroll_remote_control_server;
 use self::server_api::refresh_remote_control_server;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
@@ -146,6 +147,8 @@ struct RemoteControlEnrollmentState {
     enrollment: StdMutex<Option<RemoteControlEnrollment>>,
     // Keep an observed server deadline across enrollment replacement and enable transitions.
     retry_at: StdMutex<Option<time::OffsetDateTime>>,
+    // A failed refresh may be bypassed by a manual pairing action, but not by a websocket.
+    refresh_retry_at: StdMutex<Option<time::OffsetDateTime>>,
     lock: Semaphore,
 }
 
@@ -154,6 +157,7 @@ impl RemoteControlEnrollmentState {
         Self {
             enrollment: StdMutex::new(enrollment),
             retry_at: StdMutex::new(None),
+            refresh_retry_at: StdMutex::new(None),
             lock: Semaphore::new(1),
         }
     }
@@ -165,13 +169,38 @@ impl RemoteControlEnrollmentState {
         Ok(lease)
     }
 
+    async fn lock_for_manual_request(&self) -> io::Result<RemoteControlEnrollmentLease<'_>> {
+        self.check_manual_retry_after()?;
+        let lease = self.lock().await;
+        self.check_manual_retry_after()?;
+        Ok(lease)
+    }
+
     // Check immediately before admitting network work. Requests admitted before
     // an overload response publishes its deadline may finish concurrently.
     fn check_retry_after(&self) -> io::Result<()> {
+        let retry_at = (*self
+            .retry_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+        .max(
+            *self
+                .refresh_retry_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        Self::check_retry_at(retry_at)
+    }
+
+    fn check_manual_retry_after(&self) -> io::Result<()> {
         let retry_at = *self
             .retry_at
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::check_retry_at(retry_at)
+    }
+
+    fn check_retry_at(retry_at: Option<time::OffsetDateTime>) -> io::Result<()> {
         if let Some(retry_at) = retry_at
             && retry_at > time::OffsetDateTime::now_utc()
         {
@@ -191,6 +220,25 @@ impl RemoteControlEnrollmentState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *current_retry_at = Some(current_retry_at.map_or(retry_at, |at| at.max(retry_at)));
+        }
+        result
+    }
+
+    fn record_refresh_retry_after<T>(
+        &self,
+        result: io::Result<T>,
+        refresh_retry_at: Option<time::OffsetDateTime>,
+    ) -> io::Result<T> {
+        let mut current_retry_at = self
+            .refresh_retry_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match refresh_retry_at {
+            Some(retry_at) => {
+                *current_retry_at = Some(current_retry_at.map_or(retry_at, |at| at.max(retry_at)));
+            }
+            None if result.is_ok() => *current_retry_at = None,
+            None => {}
         }
         result
     }
@@ -451,7 +499,7 @@ impl RemoteControlSession {
         if !self.desired_state_tx.borrow().is_enabled() {
             return Err(Self::pairing_disabled_error());
         }
-        let mut current_enrollment = self.current_enrollment.lock_for_request().await?;
+        let mut current_enrollment = self.current_enrollment.lock_for_manual_request().await?;
         let mut auth = load_remote_control_auth(&self.auth_manager)
             .await
             .map_err(|_| pairing_unavailable_error())?;
@@ -469,13 +517,14 @@ impl RemoteControlSession {
                 RemoteControlEnrollmentSelection::ReuseOrCreate,
             )
             .await?;
-        if enrollment.should_refresh_server_token() {
+        if enrollment.should_refresh_server_token() || enrollment.next_refresh_at.is_some() {
             let refresh_result = refresh_pairing_enrollment(
                 &mut current_enrollment,
                 &self.auth_manager,
                 &mut auth,
                 &installation_id,
                 &mut enrollment,
+                RemoteControlServerTokenRefreshMode::Manual,
             )
             .await;
             if auth.account_id == enrollment.account_id
@@ -500,7 +549,7 @@ impl RemoteControlSession {
         let pairing_request = || protocol::StartRemoteControlPairingRequest {
             manual_code: params.manual_code,
         };
-        self.current_enrollment.check_retry_after()?;
+        self.current_enrollment.check_manual_retry_after()?;
         let pairing_response = match enrollment
             .start_pairing(&auth.http_client_factory, pairing_request())
             .await
@@ -513,11 +562,12 @@ impl RemoteControlSession {
                     &mut auth,
                     &installation_id,
                     &mut enrollment,
+                    RemoteControlServerTokenRefreshMode::Manual,
                 )
                 .await
                 {
                     Ok(()) => {
-                        self.current_enrollment.check_retry_after()?;
+                        self.current_enrollment.check_manual_retry_after()?;
                         enrollment
                             .start_pairing(&auth.http_client_factory, pairing_request())
                             .await
@@ -536,7 +586,7 @@ impl RemoteControlSession {
                                 RemoteControlEnrollmentSelection::ReplaceExisting,
                             )
                             .await?;
-                        self.current_enrollment.check_retry_after()?;
+                        self.current_enrollment.check_manual_retry_after()?;
                         enrollment
                             .start_pairing(&auth.http_client_factory, pairing_request())
                             .await
@@ -555,7 +605,7 @@ impl RemoteControlSession {
                         RemoteControlEnrollmentSelection::ReplaceExisting,
                     )
                     .await?;
-                self.current_enrollment.check_retry_after()?;
+                self.current_enrollment.check_manual_retry_after()?;
                 enrollment
                     .start_pairing(&auth.http_client_factory, pairing_request())
                     .await
@@ -680,7 +730,7 @@ impl RemoteControlSession {
             RemoteControlEnrollmentSelection::ReplaceExisting => {}
         }
 
-        self.current_enrollment.check_retry_after()?;
+        self.current_enrollment.check_manual_retry_after()?;
         // Reused enrollments must still reach durable persistence during shutdown.
         let enrollment = tokio::select! {
             biased;
@@ -724,7 +774,7 @@ impl RemoteControlSession {
         if !self.desired_state_tx.borrow().is_enabled() {
             return Err(Self::pairing_disabled_error());
         }
-        let mut current_enrollment = self.current_enrollment.lock_for_request().await?;
+        let mut current_enrollment = self.current_enrollment.lock_for_manual_request().await?;
         let mut auth = load_remote_control_auth(&self.auth_manager)
             .await
             .map_err(|_| pairing_unavailable_error())?;
@@ -738,13 +788,14 @@ impl RemoteControlSession {
         let status = self.status();
         let installation_id = status.installation_id;
         let server_name = status.server_name;
-        if enrollment.should_refresh_server_token() {
+        if enrollment.should_refresh_server_token() || enrollment.next_refresh_at.is_some() {
             let refresh_result = refresh_pairing_enrollment(
                 &mut current_enrollment,
                 &self.auth_manager,
                 &mut auth,
                 &installation_id,
                 &mut enrollment,
+                RemoteControlServerTokenRefreshMode::Manual,
             )
             .await;
             if refresh_result
@@ -767,7 +818,7 @@ impl RemoteControlSession {
         let status_code = remote_control_pairing_status_code(&params)?;
         let pairing_status_request =
             || protocol::RemoteControlPairingStatusRequest::from(status_code.clone());
-        self.current_enrollment.check_retry_after()?;
+        self.current_enrollment.check_manual_retry_after()?;
         let pairing_status_response = match enrollment
             .pairing_status(&auth.http_client_factory, pairing_status_request())
             .await
@@ -780,9 +831,10 @@ impl RemoteControlSession {
                     &mut auth,
                     &installation_id,
                     &mut enrollment,
+                    RemoteControlServerTokenRefreshMode::Manual,
                 )
                 .await?;
-                self.current_enrollment.check_retry_after()?;
+                self.current_enrollment.check_manual_retry_after()?;
                 enrollment
                     .pairing_status(&auth.http_client_factory, pairing_status_request())
                     .await
@@ -907,7 +959,7 @@ async fn enroll_pairing_server(
         }
         Err(err) => return Err(err),
     }
-    current_enrollment.check_retry_after()?;
+    current_enrollment.check_manual_retry_after()?;
     enroll_remote_control_server(remote_control_target, auth, installation_id, server_name).await
 }
 
@@ -938,9 +990,22 @@ async fn refresh_pairing_enrollment(
     auth: &mut auth::RemoteControlConnectionAuth,
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
+    mode: RemoteControlServerTokenRefreshMode,
 ) -> io::Result<()> {
-    current_enrollment.state.check_retry_after()?;
-    let mut refresh_result = refresh_remote_control_server(auth, installation_id, enrollment).await;
+    if mode == RemoteControlServerTokenRefreshMode::Automatic {
+        current_enrollment.state.check_retry_after()?;
+    } else {
+        current_enrollment.state.check_manual_retry_after()?;
+    }
+    let mut refresh_retry_at = None;
+    let mut refresh_result = refresh_remote_control_server(auth, installation_id, enrollment, mode)
+        .await
+        .map(|retry_at| {
+            refresh_retry_at = retry_at;
+        });
+    if let Err(err) = &refresh_result {
+        refresh_retry_at = server_api::remote_control_retry_at(err);
+    }
     if refresh_result.as_ref().is_err_and(auth::is_auth_error) {
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
@@ -948,9 +1013,20 @@ async fn refresh_pairing_enrollment(
             match load_remote_control_auth(auth_manager).await {
                 Ok(recovered_auth) if recovered_auth.account_id == enrollment.account_id => {
                     *auth = recovered_auth;
-                    current_enrollment.state.check_retry_after()?;
+                    if mode == RemoteControlServerTokenRefreshMode::Automatic {
+                        current_enrollment.state.check_retry_after()?;
+                    } else {
+                        current_enrollment.state.check_manual_retry_after()?;
+                    }
                     refresh_result =
-                        refresh_remote_control_server(auth, installation_id, enrollment).await;
+                        refresh_remote_control_server(auth, installation_id, enrollment, mode)
+                            .await
+                            .map(|retry_at| {
+                                refresh_retry_at = retry_at;
+                            });
+                    if let Err(err) = &refresh_result {
+                        refresh_retry_at = server_api::remote_control_retry_at(err);
+                    }
                 }
                 Ok(_) | Err(_) => {
                     enrollment.clear_server_token();
@@ -967,7 +1043,9 @@ async fn refresh_pairing_enrollment(
     if !replace_current_enrollment(current_enrollment, enrollment) {
         Err(pairing_unavailable_error())
     } else {
-        current_enrollment.state.record_retry_after(refresh_result)
+        current_enrollment
+            .state
+            .record_refresh_retry_after(refresh_result, refresh_retry_at)
     }
 }
 

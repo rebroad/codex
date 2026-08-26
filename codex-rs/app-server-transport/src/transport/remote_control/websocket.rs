@@ -32,6 +32,7 @@ use crate::transport::remote_control::enroll::preview_remote_control_response_bo
 use crate::transport::remote_control::host_device::REMOTE_CONTROL_HOST_DEVICE_KIND_HEADER;
 use crate::transport::remote_control::host_device::host_device_kind;
 use crate::transport::remote_control::server_api::RemoteControlServerRequestError;
+use crate::transport::remote_control::server_api::RemoteControlServerTokenRefreshMode;
 use crate::transport::remote_control::server_api::enroll_remote_control_server;
 use crate::transport::remote_control::server_api::refresh_remote_control_server;
 use crate::transport::remote_control::server_api::remote_control_retry_delay;
@@ -1435,7 +1436,22 @@ pub(super) async fn connect_remote_control_websocket(
             status_publisher,
         )
         .await;
-        let auth = current_enrollment.record_retry_after(auth_result)?;
+        let auth = match auth_result {
+            Ok(auth) => current_enrollment.record_refresh_retry_after(Ok(auth), None)?,
+            Err(err) => {
+                let refresh_retry_at = lease
+                    .as_ref()
+                    .and_then(|enrollment| enrollment.next_refresh_at)
+                    .filter(|retry_at| {
+                        super::server_api::remote_control_retry_at(&err) == Some(*retry_at)
+                    });
+                if let Some(retry_at) = refresh_retry_at {
+                    current_enrollment.record_refresh_retry_after(Err(err), Some(retry_at))?
+                } else {
+                    current_enrollment.record_retry_after(Err(err))?
+                }
+            }
+        };
         let enrollment = lease.as_ref().cloned().ok_or_else(|| {
             io::Error::other("missing remote control enrollment after enrollment step")
         })?;
@@ -1668,10 +1684,15 @@ async fn prepare_remote_control_enrollment(
         let enrollment_ref = enrollment.as_mut().ok_or_else(|| {
             io::Error::other("missing remote control enrollment before server refresh")
         })?;
-        match refresh_remote_control_server(&auth, connect_options.installation_id, enrollment_ref)
-            .await
+        match refresh_remote_control_server(
+            &auth,
+            connect_options.installation_id,
+            enrollment_ref,
+            RemoteControlServerTokenRefreshMode::Automatic,
+        )
+        .await
         {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 info!(
                     "remote control server refresh returned HTTP 404; replacing stale enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
