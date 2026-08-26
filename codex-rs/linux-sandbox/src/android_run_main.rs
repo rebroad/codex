@@ -1,5 +1,4 @@
 use clap::Parser;
-use codex_protocol::error::Result;
 use codex_protocol::models::PermissionProfile;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -68,7 +67,10 @@ pub fn run_main() -> ! {
     if let Err(error) = apply_permission_profile_to_current_thread(
         &permission_profile,
         &sandbox_policy_cwd,
-        true,
+        // Android kernels used by Termux do not expose Landlock. Keep the
+        // network seccomp restrictions, but do not fail the executor when
+        // the optional filesystem backend reports NotEnforced.
+        false,
         allow_network_for_proxy,
         false,
         LocalIpcPolicy::Disabled,
