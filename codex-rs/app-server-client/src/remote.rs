@@ -12,9 +12,11 @@ higher-level session logic.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::pin::Pin;
 use std::time::Duration;
 
 use crate::AppServerEvent;
@@ -64,6 +66,8 @@ use url::Url;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_APP_SERVER_MAX_WEBSOCKET_MESSAGE_SIZE: usize = 128 << 20;
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 // Tungstenite still needs an HTTP request URI for the WebSocket handshake;
 // the bytes travel over the Unix socket, not TCP.
 const UDS_WEBSOCKET_HANDSHAKE_URL: &str = "ws://localhost/rpc";
@@ -162,6 +166,12 @@ pub struct RemoteAppServerRequestHandle {
     command_tx: mpsc::Sender<RemoteClientCommand>,
 }
 
+type Reconnect<S> = Box<
+    dyn Fn() -> Pin<Box<dyn Future<Output = IoResult<(String, WebSocketStream<S>)>> + Send>>
+        + Send
+        + Sync,
+>;
+
 impl RemoteAppServerClient {
     pub async fn connect(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
@@ -172,14 +182,51 @@ impl RemoteAppServerClient {
                 auth_token,
             } => {
                 let (endpoint, stream) =
-                    connect_websocket_endpoint(websocket_url, auth_token).await?;
-                Self::connect_with_stream(channel_capacity, endpoint, stream, initialize_params)
-                    .await
+                    connect_websocket_endpoint(websocket_url.clone(), auth_token.clone()).await?;
+                let reconnect = Box::new(move || {
+                    let websocket_url = websocket_url.clone();
+                    let auth_token = auth_token.clone();
+                    Box::pin(connect_websocket_endpoint(websocket_url, auth_token))
+                        as Pin<
+                            Box<
+                                dyn Future<
+                                        Output = IoResult<(
+                                            String,
+                                            WebSocketStream<MaybeTlsStream<TcpStream>>,
+                                        )>,
+                                    > + Send,
+                            >,
+                        >
+                });
+                Self::connect_with_stream(
+                    channel_capacity,
+                    endpoint,
+                    stream,
+                    initialize_params,
+                    reconnect,
+                )
+                .await
             }
             RemoteAppServerEndpoint::UnixSocket { socket_path } => {
-                let (endpoint, stream) = connect_unix_socket_endpoint(socket_path).await?;
-                Self::connect_with_stream(channel_capacity, endpoint, stream, initialize_params)
-                    .await
+                let (endpoint, stream) = connect_unix_socket_endpoint(socket_path.clone()).await?;
+                let reconnect = Box::new(move || {
+                    let socket_path = socket_path.clone();
+                    Box::pin(connect_unix_socket_endpoint(socket_path))
+                        as Pin<
+                            Box<
+                                dyn Future<Output = IoResult<(String, WebSocketStream<UnixStream>)>>
+                                    + Send,
+                            >,
+                        >
+                });
+                Self::connect_with_stream(
+                    channel_capacity,
+                    endpoint,
+                    stream,
+                    initialize_params,
+                    reconnect,
+                )
+                .await
             }
         }
     }
@@ -197,6 +244,7 @@ impl RemoteAppServerClient {
         endpoint: String,
         stream: WebSocketStream<S>,
         initialize_params: InitializeParams,
+        reconnect: Reconnect<S>,
     ) -> IoResult<Self>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -205,7 +253,7 @@ impl RemoteAppServerClient {
         let (pending_events, server_version, codex_home) = initialize_remote_connection(
             &mut stream,
             &endpoint,
-            initialize_params,
+            initialize_params.clone(),
             INITIALIZE_TIMEOUT,
         )
         .await?;
@@ -215,262 +263,309 @@ impl RemoteAppServerClient {
         let worker_handle = tokio::spawn(async move {
             let mut pending_requests =
                 HashMap::<RequestId, oneshot::Sender<IoResult<RequestResult>>>::new();
-            let mut worker_exit_error: Option<(ErrorKind, String)> = None;
-            loop {
-                tokio::select! {
-                    command = command_rx.recv() => {
-                        let Some(command) = command else {
-                            let _ = stream.close(None).await;
-                            break;
-                        };
-                        match command {
-                            RemoteClientCommand::Request { request, response_tx } => {
-                                let request_id = request.id.clone();
-                                if pending_requests.contains_key(&request_id) {
-                                    let _ = response_tx.send(Err(IoError::new(
-                                        ErrorKind::InvalidInput,
-                                        format!("duplicate remote app-server request id `{request_id}`"),
-                                    )));
-                                    continue;
-                                }
-                                pending_requests.insert(request_id.clone(), response_tx);
-                                if let Err(err) = write_jsonrpc_message(
-                                    &mut stream,
-                                    JSONRPCMessage::Request(*request),
-                                    &endpoint,
-                                )
-                                .await
-                                {
-                                    let err_message = err.to_string();
-                                    let message = format!(
-                                        "remote app server at `{endpoint}` write failed: {err_message}"
-                                    );
-                                    if let Some(response_tx) = pending_requests.remove(&request_id) {
-                                        let _ = response_tx.send(Err(err));
-                                    }
-                                    let _ = deliver_event(
-                                        &event_tx,
-                                        AppServerEvent::Disconnected {
-                                            message: message.clone(),
-                                        },
-                                    );
-                                    worker_exit_error = Some((ErrorKind::BrokenPipe, message));
-                                    break;
-                                }
-                            }
-                            RemoteClientCommand::Notify { notification, response_tx } => {
-                                let result = write_jsonrpc_message(
-                                    &mut stream,
-                                    JSONRPCMessage::Notification(
-                                        jsonrpc_notification_from_client_notification(notification),
-                                    ),
-                                    &endpoint,
-                                )
-                                .await;
-                                let _ = response_tx.send(result);
-                            }
-                            RemoteClientCommand::ResolveServerRequest {
-                                request_id,
-                                result,
-                                response_tx,
-                            } => {
-                                let result = write_jsonrpc_message(
-                                    &mut stream,
-                                    JSONRPCMessage::Response(JSONRPCResponse {
-                                        id: request_id,
-                                        result,
-                                    }),
-                                    &endpoint,
-                                )
-                                .await;
-                                let _ = response_tx.send(result);
-                            }
-                            RemoteClientCommand::RejectServerRequest {
-                                request_id,
-                                error,
-                                response_tx,
-                            } => {
-                                let result = write_jsonrpc_message(
-                                    &mut stream,
-                                    JSONRPCMessage::Error(JSONRPCError {
-                                        error,
-                                        id: request_id,
-                                    }),
-                                    &endpoint,
-                                )
-                                .await;
-                                let _ = response_tx.send(result);
-                            }
-                            RemoteClientCommand::Shutdown { response_tx } => {
-                                let close_result = stream.close(None).await.or_else(|err| {
-                                    if websocket_close_error_is_already_closed(&err) {
-                                        Ok(())
-                                    } else {
-                                        Err(IoError::other(format!(
-                                            "failed to close websocket app server `{endpoint}`: {err}"
-                                        )))
-                                    }
-                                });
-                                let _ = response_tx.send(close_result);
+            let mut stream = stream;
+            let mut endpoint = endpoint;
+            let mut reconnect_attempt = 0u32;
+            'worker: loop {
+                let mut worker_exit_error: Option<(ErrorKind, String)> = None;
+                let mut should_reconnect = true;
+                loop {
+                    tokio::select! {
+                        command = command_rx.recv() => {
+                            let Some(command) = command else {
+                                let _ = stream.close(None).await;
+                                should_reconnect = false;
                                 break;
-                            }
-                        }
-                    }
-                    message = stream.next() => {
-                        match message {
-                            Some(Ok(Message::Text(text))) => {
-                                match serde_json::from_str::<JSONRPCMessage>(&text) {
-                                    Ok(JSONRPCMessage::Response(response)) => {
-                                        if let Some(response_tx) = pending_requests.remove(&response.id) {
-                                            let _ = response_tx.send(Ok(Ok(response.result)));
-                                        }
+                            };
+                            match command {
+                                RemoteClientCommand::Request { request, response_tx } => {
+                                    let request_id = request.id.clone();
+                                    if pending_requests.contains_key(&request_id) {
+                                        let _ = response_tx.send(Err(IoError::new(
+                                            ErrorKind::InvalidInput,
+                                            format!("duplicate remote app-server request id `{request_id}`"),
+                                        )));
+                                        continue;
                                     }
-                                    Ok(JSONRPCMessage::Error(error)) => {
-                                        if let Some(response_tx) = pending_requests.remove(&error.id) {
-                                            let _ = response_tx.send(Ok(Err(error.error)));
-                                        }
-                                    }
-                                    Ok(JSONRPCMessage::Notification(notification)) => {
-                                        if let Some(event) =
-                                            app_server_event_from_notification(notification)
-                                            && let Err(err) = deliver_event(
-                                                &event_tx,
-                                                event,
-                                            )
-                                            {
-                                                warn!(%err, "failed to deliver remote app-server event");
-                                                break;
-                                            }
-                                    }
-                                    Ok(JSONRPCMessage::Request(request)) => {
-                                        let request_id = request.id.clone();
-                                        let method = request.method.clone();
-                                        match ServerRequest::try_from(request) {
-                                            Ok(request) => {
-                                                if let Err(err) = deliver_event(
-                                                    &event_tx,
-                                                    AppServerEvent::ServerRequest(Box::new(request)),
-                                                )
-                                                {
-                                                    warn!(%err, "failed to deliver remote app-server server request");
-                                                    break;
-                                                }
-                                            }
-                                            Err(err) => {
-                                                warn!(%err, method, "rejecting unknown remote app-server request");
-                                                if let Err(reject_err) = write_jsonrpc_message(
-                                                    &mut stream,
-                                                    JSONRPCMessage::Error(JSONRPCError {
-                                                        error: JSONRPCErrorError {
-                                                            code: -32601,
-                                                            message: format!(
-                                                                "unsupported remote app-server request `{method}`"
-                                                            ),
-                                                            data: None,
-                                                        },
-                                                        id: request_id,
-                                                    }),
-                                                    &endpoint,
-                                                )
-                                                .await
-                                                {
-                                                    let err_message = reject_err.to_string();
-                                                    let message = format!(
-                                                        "remote app server at `{endpoint}` write failed: {err_message}"
-                                                    );
-                                                    let _ = deliver_event(
-                                                        &event_tx,
-                                                        AppServerEvent::Disconnected {
-                                                            message: message.clone(),
-                                                        },
-                                                    );
-                                                    worker_exit_error =
-                                                        Some((ErrorKind::BrokenPipe, message));
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(err) => {
+                                    pending_requests.insert(request_id.clone(), response_tx);
+                                    if let Err(err) = write_jsonrpc_message(
+                                        &mut stream,
+                                        JSONRPCMessage::Request(*request),
+                                        &endpoint,
+                                    )
+                                    .await
+                                    {
+                                        let err_message = err.to_string();
                                         let message = format!(
-                                            "remote app server at `{endpoint}` sent invalid JSON-RPC: {err}"
+                                            "remote app server at `{endpoint}` write failed: {err_message}"
                                         );
-                                        let _ = deliver_event(
-                                            &event_tx,
-                                            AppServerEvent::Disconnected {
-                                                message: message.clone(),
-                                            },
-                                        );
-                                        worker_exit_error =
-                                            Some((ErrorKind::InvalidData, message));
+                                        if let Some(response_tx) = pending_requests.remove(&request_id) {
+                                            let _ = response_tx.send(Err(err));
+                                        }
+                                        worker_exit_error = Some((ErrorKind::BrokenPipe, message));
                                         break;
                                     }
                                 }
+                                RemoteClientCommand::Notify { notification, response_tx } => {
+                                    let result = write_jsonrpc_message(
+                                        &mut stream,
+                                        JSONRPCMessage::Notification(
+                                            jsonrpc_notification_from_client_notification(notification),
+                                        ),
+                                        &endpoint,
+                                    )
+                                    .await;
+                                    if let Err(err) = result {
+                                        let message = format!(
+                                            "remote app server at `{endpoint}` notification write failed: {err}"
+                                        );
+                                        let _ = response_tx.send(Err(IoError::new(
+                                            ErrorKind::BrokenPipe,
+                                            message.clone(),
+                                        )));
+                                        worker_exit_error = Some((ErrorKind::BrokenPipe, message));
+                                        break;
+                                    }
+                                    let _ = response_tx.send(Ok(()));
+                                }
+                                RemoteClientCommand::ResolveServerRequest {
+                                    request_id,
+                                    result,
+                                    response_tx,
+                                } => {
+                                    let result = write_jsonrpc_message(
+                                        &mut stream,
+                                        JSONRPCMessage::Response(JSONRPCResponse {
+                                            id: request_id,
+                                            result,
+                                        }),
+                                        &endpoint,
+                                    )
+                                    .await;
+                                    if let Err(err) = result {
+                                        let message = format!(
+                                            "remote app server at `{endpoint}` server-request response write failed: {err}"
+                                        );
+                                        let _ = response_tx.send(Err(IoError::new(
+                                            ErrorKind::BrokenPipe,
+                                            message.clone(),
+                                        )));
+                                        worker_exit_error = Some((ErrorKind::BrokenPipe, message));
+                                        break;
+                                    }
+                                    let _ = response_tx.send(Ok(()));
+                                }
+                                RemoteClientCommand::RejectServerRequest {
+                                    request_id,
+                                    error,
+                                    response_tx,
+                                } => {
+                                    let result = write_jsonrpc_message(
+                                        &mut stream,
+                                        JSONRPCMessage::Error(JSONRPCError {
+                                            error,
+                                            id: request_id,
+                                        }),
+                                        &endpoint,
+                                    )
+                                    .await;
+                                    if let Err(err) = result {
+                                        let message = format!(
+                                            "remote app server at `{endpoint}` server-request rejection write failed: {err}"
+                                        );
+                                        let _ = response_tx.send(Err(IoError::new(
+                                            ErrorKind::BrokenPipe,
+                                            message.clone(),
+                                        )));
+                                        worker_exit_error = Some((ErrorKind::BrokenPipe, message));
+                                        break;
+                                    }
+                                    let _ = response_tx.send(Ok(()));
+                                }
+                                RemoteClientCommand::Shutdown { response_tx } => {
+                                    let close_result = stream.close(None).await.or_else(|err| {
+                                        if websocket_close_error_is_already_closed(&err) {
+                                            Ok(())
+                                        } else {
+                                            Err(IoError::other(format!(
+                                                "failed to close websocket app server `{endpoint}`: {err}"
+                                            )))
+                                        }
+                                    });
+                                    let _ = response_tx.send(close_result);
+                                    should_reconnect = false;
+                                    break;
+                                }
                             }
-                            Some(Ok(Message::Close(frame))) => {
-                                let reason = frame
-                                    .as_ref()
-                                    .map(|frame| frame.reason.to_string())
-                                    .filter(|reason| !reason.is_empty())
-                                    .unwrap_or_else(|| "connection closed".to_string());
-                                let message = format!(
-                                    "remote app server at `{endpoint}` disconnected: {reason}"
-                                );
-                                let _ = deliver_event(
-                                    &event_tx,
-                                    AppServerEvent::Disconnected {
-                                        message: message.clone(),
-                                    },
-                                );
-                                worker_exit_error = Some((
-                                    ErrorKind::ConnectionAborted,
-                                    message,
-                                ));
-                                break;
-                            }
-                            Some(Ok(Message::Binary(_)))
-                            | Some(Ok(Message::Ping(_)))
-                            | Some(Ok(Message::Pong(_)))
-                            | Some(Ok(Message::Frame(_))) => {}
-                            Some(Err(err)) => {
-                                let message = format!(
-                                    "remote app server at `{endpoint}` transport failed: {err}"
-                                );
-                                let _ = deliver_event(
-                                    &event_tx,
-                                    AppServerEvent::Disconnected {
-                                        message: message.clone(),
-                                    },
-                                );
-                                worker_exit_error = Some((ErrorKind::InvalidData, message));
-                                break;
-                            }
-                            None => {
-                                let message = format!(
-                                    "remote app server at `{endpoint}` closed the connection"
-                                );
-                                let _ = deliver_event(
-                                    &event_tx,
-                                    AppServerEvent::Disconnected {
-                                        message: message.clone(),
-                                    },
-                                );
-                                worker_exit_error = Some((ErrorKind::UnexpectedEof, message));
-                                break;
+                        }
+                        message = stream.next() => {
+                            match message {
+                                Some(Ok(Message::Text(text))) => {
+                                    match serde_json::from_str::<JSONRPCMessage>(&text) {
+                                        Ok(JSONRPCMessage::Response(response)) => {
+                                            if let Some(response_tx) = pending_requests.remove(&response.id) {
+                                                let _ = response_tx.send(Ok(Ok(response.result)));
+                                            }
+                                        }
+                                        Ok(JSONRPCMessage::Error(error)) => {
+                                            if let Some(response_tx) = pending_requests.remove(&error.id) {
+                                                let _ = response_tx.send(Ok(Err(error.error)));
+                                            }
+                                        }
+                                        Ok(JSONRPCMessage::Notification(notification)) => {
+                                            if let Some(event) =
+                                                app_server_event_from_notification(notification)
+                                                && let Err(err) = deliver_event(
+                                                    &event_tx,
+                                                    event,
+                                            )
+                                            {
+                                                warn!(%err, "failed to deliver remote app-server event");
+                                                should_reconnect = false;
+                                                break;
+                                                }
+                                        }
+                                        Ok(JSONRPCMessage::Request(request)) => {
+                                            let request_id = request.id.clone();
+                                            let method = request.method.clone();
+                                            match ServerRequest::try_from(request) {
+                                                Ok(request) => {
+                                                    if let Err(err) = deliver_event(
+                                                        &event_tx,
+                                                        AppServerEvent::ServerRequest(Box::new(request)),
+                                                )
+                                                {
+                                                    warn!(%err, "failed to deliver remote app-server server request");
+                                                    should_reconnect = false;
+                                                    break;
+                                                    }
+                                                }
+                                                Err(err) => {
+                                                    warn!(%err, method, "rejecting unknown remote app-server request");
+                                                    if let Err(reject_err) = write_jsonrpc_message(
+                                                        &mut stream,
+                                                        JSONRPCMessage::Error(JSONRPCError {
+                                                            error: JSONRPCErrorError {
+                                                                code: -32601,
+                                                                message: format!(
+                                                                    "unsupported remote app-server request `{method}`"
+                                                                ),
+                                                                data: None,
+                                                            },
+                                                            id: request_id,
+                                                        }),
+                                                        &endpoint,
+                                                    )
+                                                    .await
+                                                    {
+                                                        let err_message = reject_err.to_string();
+                                                        let message = format!(
+                                                            "remote app server at `{endpoint}` write failed: {err_message}"
+                                                        );
+                                                        worker_exit_error =
+                                                            Some((ErrorKind::BrokenPipe, message));
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            let message = format!(
+                                                "remote app server at `{endpoint}` sent invalid JSON-RPC: {err}"
+                                            );
+                                            worker_exit_error =
+                                                Some((ErrorKind::InvalidData, message));
+                                            break;
+                                        }
+                                    }
+                                }
+                                Some(Ok(Message::Close(frame))) => {
+                                    let reason = frame
+                                        .as_ref()
+                                        .map(|frame| frame.reason.to_string())
+                                        .filter(|reason| !reason.is_empty())
+                                        .unwrap_or_else(|| "connection closed".to_string());
+                                    let message = format!(
+                                        "remote app server at `{endpoint}` disconnected: {reason}"
+                                    );
+                                    worker_exit_error = Some((
+                                        ErrorKind::ConnectionAborted,
+                                        message,
+                                    ));
+                                    break;
+                                }
+                                Some(Ok(Message::Binary(_)))
+                                | Some(Ok(Message::Ping(_)))
+                                | Some(Ok(Message::Pong(_)))
+                                | Some(Ok(Message::Frame(_))) => {}
+                                Some(Err(err)) => {
+                                    let message = format!(
+                                        "remote app server at `{endpoint}` transport failed: {err}"
+                                    );
+                                    worker_exit_error = Some((ErrorKind::InvalidData, message));
+                                    break;
+                                }
+                                None => {
+                                    let message = format!(
+                                        "remote app server at `{endpoint}` closed the connection"
+                                    );
+                                    worker_exit_error = Some((ErrorKind::UnexpectedEof, message));
+                                    break;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            let (err_kind, err_message) = worker_exit_error.unwrap_or_else(|| {
-                (
-                    ErrorKind::BrokenPipe,
-                    "remote app-server worker channel is closed".to_string(),
-                )
-            });
-            for (_, response_tx) in pending_requests {
-                let _ = response_tx.send(Err(IoError::new(err_kind, err_message.clone())));
+                let (err_kind, err_message) = worker_exit_error.unwrap_or_else(|| {
+                    (
+                        ErrorKind::BrokenPipe,
+                        "remote app-server worker channel is closed".to_string(),
+                    )
+                });
+                for (_, response_tx) in pending_requests.drain() {
+                    let _ = response_tx.send(Err(IoError::new(err_kind, err_message.clone())));
+                }
+
+                if !should_reconnect {
+                    break 'worker;
+                }
+
+                tokio::time::sleep(reconnect_delay(reconnect_attempt)).await;
+                match reconnect().await {
+                    Ok((new_endpoint, mut new_stream)) => {
+                        match initialize_remote_connection(
+                            &mut new_stream,
+                            &new_endpoint,
+                            initialize_params.clone(),
+                            INITIALIZE_TIMEOUT,
+                        )
+                        .await
+                        {
+                            Ok((pending_events, _server_version, _codex_home)) => {
+                                if deliver_event(&event_tx, AppServerEvent::Reconnected).is_err() {
+                                    break 'worker;
+                                }
+                                for event in pending_events {
+                                    if deliver_event(&event_tx, event).is_err() {
+                                        break 'worker;
+                                    }
+                                }
+                                stream = new_stream;
+                                endpoint = new_endpoint;
+                                reconnect_attempt = 0;
+                            }
+                            Err(err) => {
+                                warn!(%err, "remote app-server reconnect initialize failed");
+                                reconnect_attempt = reconnect_attempt.saturating_add(1);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!(%err, "remote app-server reconnect failed");
+                        reconnect_attempt = reconnect_attempt.saturating_add(1);
+                    }
+                }
             }
         });
 
@@ -677,6 +772,14 @@ impl RemoteAppServerRequestHandle {
             source,
         })
     }
+}
+
+fn reconnect_delay(attempt: u32) -> Duration {
+    let multiplier = 1u32.checked_shl(attempt.min(5)).unwrap_or(u32::MAX);
+    RECONNECT_INITIAL_DELAY
+        .checked_mul(multiplier)
+        .unwrap_or(RECONNECT_MAX_DELAY)
+        .min(RECONNECT_MAX_DELAY)
 }
 
 async fn connect_websocket_endpoint(

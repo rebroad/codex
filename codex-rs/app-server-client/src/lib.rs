@@ -104,6 +104,7 @@ pub enum AppServerEvent {
     Lagged { skipped: usize },
     ServerNotification(Box<ServerNotification>),
     ServerRequest(Box<ServerRequest>),
+    Reconnected,
     Disconnected { message: String },
 }
 
@@ -1876,21 +1877,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_disconnect_surfaces_as_event() {
-        let websocket_url = start_test_remote_server(|mut websocket| async move {
+    async fn remote_disconnect_reconnects_without_disconnected_event() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener address");
+        let (reconnected_tx, reconnected_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("first connection should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("first websocket upgrade should succeed");
             expect_remote_initialize(&mut websocket).await;
             websocket.close(None).await.expect("close should succeed");
-        })
-        .await;
+
+            let (stream, _) = listener.accept().await.expect("reconnect should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("reconnect websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            reconnected_tx
+                .send(())
+                .expect("reconnect observer should still be waiting");
+            let _ = websocket.next().await;
+        });
+        let websocket_url = format!("ws://{addr}");
         let mut client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
             .await
             .expect("remote client should connect");
 
-        let event = client
-            .next_event()
+        timeout(Duration::from_secs(3), reconnected_rx)
             .await
-            .expect("disconnect event should arrive");
-        assert!(matches!(event, AppServerEvent::Disconnected { .. }));
+            .expect("client should reconnect")
+            .expect("reconnect observer should complete");
+        assert!(
+            timeout(Duration::from_millis(100), client.next_event())
+                .await
+                .is_err()
+        );
+        client.shutdown().await.expect("shutdown should complete");
     }
 
     #[test]
