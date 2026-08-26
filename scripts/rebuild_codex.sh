@@ -51,6 +51,11 @@ RUSTC_CMD=(rustc)
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 SUDO_AUTHENTICATED="false"
 
+# Keep the native OpenSSL cache implementation shared with the Just recipes.
+# The script is deliberately sourced from the source checkout before cpto
+# synchronizes it into the build tree.
+source "${SOURCE_REPO}/scripts/openssl_artifacts.sh"
+
 usage() {
   cat <<'EOF'
 Usage: scripts/rebuild_codex.sh [options]
@@ -420,6 +425,41 @@ verify_rusty_v8_artifacts() {
   fi
 }
 
+configure_openssl_artifacts() {
+  local target_mode="${1}" target version cache_dir
+  case "${target_mode}" in
+    native) target="$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" ;;
+    musl) target="x86_64-unknown-linux-musl" ;;
+    armv7) target="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}" ;;
+    android) target="aarch64-linux-android" ;;
+    *) return 1 ;;
+  esac
+  version="$(openssl_version_from_lock "${BUILD_WORKSPACE}/Cargo.lock")"
+  [[ -n "${version}" ]] || return 1
+  cache_dir="$(openssl_cache_dir "${BUILD_REPO}" "${target}" "${version}")"
+  if openssl_cache_is_valid "${cache_dir}"; then
+    OPENSSL_DIR_PATH="${cache_dir}"
+    echo "Using cached OpenSSL ${version} for ${target}." >&2
+    return 0
+  fi
+  return 1
+}
+
+cache_openssl_artifacts() {
+  local target_mode="${1}" target version host
+  case "${target_mode}" in
+    native) target="$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" ;;
+    musl) target="x86_64-unknown-linux-musl" ;;
+    armv7) target="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}" ;;
+    android) target="aarch64-linux-android" ;;
+    *) return 0 ;;
+  esac
+  version="$(openssl_version_from_lock "${BUILD_WORKSPACE}/Cargo.lock")"
+  host="$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')"
+  openssl_cache_from_target "$(cargo_target_dir "${MODE}" "${target_mode}")" \
+    "${BUILD_REPO}" "${target}" "${version}" "${host}" || true
+}
+
 configure_rusty_v8_artifacts() {
   local target_mode="${1}" target archive binding local_repo cache_dir release_tag
   local -a resolver_args
@@ -656,6 +696,13 @@ cargo_build() {
       -u CMAKE_ARGS
     )
   fi
+  if configure_openssl_artifacts "${target_mode}"; then
+    env_args+=(
+      OPENSSL_DIR="${OPENSSL_DIR_PATH}"
+      OPENSSL_NO_VENDOR=1
+      OPENSSL_STATIC=1
+    )
+  fi
   env_args+=(
     CARGO_TARGET_DIR="${target_dir}"
     RUSTUP_DISABLE_SELF_UPDATE=1
@@ -794,6 +841,7 @@ cargo_build() {
       fi
     fi
   fi
+  cache_openssl_artifacts "${target_mode}"
   if [[ -n "${target}" ]]; then
     echo "${target_dir}/${target}/${mode}/codex"
   else
