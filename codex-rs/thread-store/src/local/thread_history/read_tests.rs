@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -118,6 +119,62 @@ async fn list_turns_pages_projected_rows_and_applies_item_views() {
         .await
         .expect("backwards turns page");
     assert_eq!(turn_ids(&backwards_page), vec!["turn-3", "turn-2"]);
+}
+
+#[tokio::test]
+async fn paginated_read_catches_up_a_stale_projection() {
+    let (home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let rollout_path = rollout_path(home.path(), thread_id);
+
+    store
+        .list_turns(turn_params(
+            thread_id,
+            /*cursor*/ None,
+            /*page_size*/ 10,
+            SortDirection::Asc,
+            StoredTurnItemsView::NotLoaded,
+        ))
+        .await
+        .expect("initial turns page");
+
+    let line = RolloutLine {
+        timestamp: "2026-07-16T00:00:01.000Z".to_string(),
+        ordinal: Some(1),
+        item: RolloutItem::EventMsg(EventMsg::ShutdownComplete),
+    };
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(rollout_path)
+        .expect("open rollout for append");
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&line).expect("serialize rollout line")
+    )
+    .expect("append rollout line");
+
+    let page = store
+        .list_turns(turn_params(
+            thread_id,
+            /*cursor*/ None,
+            /*page_size*/ 10,
+            SortDirection::Asc,
+            StoredTurnItemsView::NotLoaded,
+        ))
+        .await
+        .expect("caught-up turns page");
+    assert!(page.turns.is_empty());
+
+    let pool = history_db(&store).await;
+    let projection_state = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT next_rollout_byte_offset, next_rollout_ordinal \
+         FROM thread_history_projection_state WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .fetch_one(pool)
+    .await
+    .expect("projection state");
+    assert_eq!(projection_state.1, 2);
 }
 
 #[tokio::test]

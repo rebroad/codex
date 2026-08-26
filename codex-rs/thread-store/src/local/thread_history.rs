@@ -5,6 +5,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::MessagePhase;
 
 use super::LocalThreadStore;
+use super::rollout_lineage::RolloutLineage;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
@@ -18,6 +19,27 @@ pub(super) use read::list_turns;
 pub(super) use search::search_thread_occurrences;
 pub(super) use turn_lookup::find_source_turn;
 pub(super) use turn_lookup::find_visible_turn;
+
+/// Reconciles the queryable history view with the durable rollout before a paginated read.
+///
+/// Rollout JSONL is the source of truth. The SQLite projection is intentionally rebuildable, so
+/// a failed live projection must not leave subsequent reads permanently behind.
+pub(super) async fn resolve_and_materialize_rollout_lineage(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<RolloutLineage> {
+    let _writer_guard = store.live_writer_locks.lock(thread_id).await;
+    let lineage = store.resolve_rollout_lineage(thread_id).await?;
+    for segment in lineage.segments() {
+        super::thread_history_materialization::materialize_to_sqlite(
+            store,
+            segment.rollout_id,
+            segment.rollout_path.as_path(),
+        )
+        .await?;
+    }
+    Ok(lineage)
+}
 
 /// A valid complete rollout line with its absolute byte span in durable JSONL.
 ///
