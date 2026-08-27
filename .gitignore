@@ -16,7 +16,7 @@ build/
 build/rusty-v8-artifacts/
 codex-rs/target/
 codex-rs/target.*/
-codex-rs/target-*/
+codex-rs/target-*
 out/
 storybook-static/
 
