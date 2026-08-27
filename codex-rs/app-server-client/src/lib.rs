@@ -141,6 +141,17 @@ pub enum TypedRequestError {
     },
 }
 
+impl TypedRequestError {
+    /// Returns the JSON-RPC method that produced this request error.
+    pub fn method(&self) -> &str {
+        match self {
+            Self::Transport { method, .. }
+            | Self::Server { method, .. }
+            | Self::Deserialize { method, .. } => method,
+        }
+    }
+}
+
 impl fmt::Display for TypedRequestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
