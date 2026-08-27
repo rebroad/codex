@@ -475,7 +475,9 @@ impl App {
             } else {
                 interrupt_result
             };
-            if let Err(error) = interrupt_result {
+            if let Err(error) = interrupt_result
+                && !active_turn_interrupt_missing(&error)
+            {
                 tracing::warn!(%error, "failed to interrupt side conversation");
             }
             if let Err(error) = request_handle
