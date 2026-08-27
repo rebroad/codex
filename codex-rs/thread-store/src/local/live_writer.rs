@@ -86,6 +86,11 @@ pub(super) async fn resume_thread(
                 })?
         }
     };
+    super::rollout_duplicate_repair::repair_duplicate_ordinals(
+        params.thread_id,
+        rollout_path.as_path(),
+    )
+    .await?;
     let cwd = params
         .metadata
         .cwd
