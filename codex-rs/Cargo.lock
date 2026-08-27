@@ -414,7 +414,6 @@ dependencies = [
  "serde_json",
  "shlex",
  "tempfile",
- "toml 0.9.11+spec-1.1.0",
  "tokio",
  "tokio-util",
  "url",
@@ -2130,7 +2129,6 @@ dependencies = [
  "anyhow",
  "codex-app-server-protocol",
  "codex-app-server-transport",
- "codex-http-client",
  "codex-uds",
  "codex-utils-home-dir",
  "futures",
@@ -3525,6 +3523,7 @@ dependencies = [
  "tempfile",
  "test-case",
  "tokio",
+ "toml 0.9.11+spec-1.1.0",
  "url",
 ]
 
@@ -4414,6 +4413,7 @@ dependencies = [
  "clap",
  "codex-ansi-escape",
  "codex-app-server-client",
+ "codex-app-server-daemon",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-cloud-config",
