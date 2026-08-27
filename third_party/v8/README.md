@@ -63,6 +63,11 @@ with these raw asset names:
 - `librusty_v8_release_<target>.a.gz`
 - `src_binding_release_<target>.rs`
 
+The ARMv7 compatibility release uses the same `lib`-prefixed static archive
+naming as the other Unix targets.
+ARMv7 uses this non-sandboxed profile because V8's pointer compression and
+sandbox require 64-bit targets.
+
 During the sandbox rollout, sandbox-enabled assets are published alongside those
 current assets on the same tag, with the Rust crate's sandbox feature suffix in
 their raw names:
