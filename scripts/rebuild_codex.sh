@@ -670,9 +670,10 @@ cargo_build() {
   env_args+=(
     CARGO_TARGET_DIR="${target_dir}"
     RUSTUP_DISABLE_SELF_UPDATE=1
-    # Keep Cargo's compile input stable across rebuilds. The installed binary
-    # receives the wall-clock suffix later via patch_timestamp.
-    CODEX_BUILD_TIMESTAMP="${COMMIT_SHORT}-000000000000"
+    # Keep Cargo's compile input stable across commits and rebuilds. The
+    # installed binary receives the real commit and wall-clock suffix later
+    # via patch_timestamp.
+    CODEX_BUILD_TIMESTAMP="0000000000-000000000000"
   )
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
   if [[ "${target_mode}" == native \
