@@ -64,7 +64,9 @@ def fetch_codex_v8_artifacts(
             if target == "aarch64-linux-android" or target.startswith("armv7-")
             else "openai/codex"
         )
-    release_url = f"https://github.com/{release_repo}/releases/download/rusty-v8-v{version}"
+    release_url = (
+        f"https://github.com/{release_repo}/releases/download/rusty-v8-v{version}"
+    )
     cache_dir = (cache_root or default_cache_root()) / f"rusty-v8-{version}-{target}"
 
     if spec.is_windows:
