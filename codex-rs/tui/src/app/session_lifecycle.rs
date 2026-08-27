@@ -438,12 +438,30 @@ impl App {
     ) {
         let thread_ids: Vec<_> = self.thread_event_channels.keys().copied().collect();
         for thread_id in thread_ids {
-            if let Err(err) = app_server.reattach_thread(thread_id).await {
-                tracing::warn!(
-                    thread_id = %thread_id,
-                    error = %err,
-                    "failed to reattach tracked thread after app-server reconnect"
-                );
+            match app_server.reattach_thread(thread_id).await {
+                Ok(response) => {
+                    let active_turn_id = response
+                        .thread
+                        .turns
+                        .iter()
+                        .rev()
+                        .find(|turn| matches!(turn.status, TurnStatus::InProgress))
+                        .map(|turn| turn.id.clone());
+                    if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                        channel.store.lock().await.set_turns(response.thread.turns);
+                    }
+                    if self.current_displayed_thread_id() == Some(thread_id) {
+                        self.chat_widget
+                            .reconcile_turn_running_state(active_turn_id.as_deref());
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        error = %err,
+                        "failed to reattach tracked thread after app-server reconnect"
+                    );
+                }
             }
         }
         self.refresh_agents_overview_threads(app_server);
