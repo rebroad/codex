@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd -- "${SCRIPT_DIR}/../codex-rs" && pwd)"
 TARGET=""
 OUTPUT_DIR=""
+CARGO_BUILD_DIR=""
+LOCAL_REPO=""
 RELEASE_REPO="auto"
 RELEASE_TAG=""
 PROFILE=""
@@ -19,6 +21,8 @@ Downloads and verifies the Rusty V8 archive and generated binding for a target.
 Options:
   --target=TRIPLE       Rust target triple (required)
   --output-dir=DIR      Cache/output directory (required)
+  --cargo-build-dir=DIR Existing Cargo build directory to inspect
+  --local-repo=DIR      Local Rusty V8 artifact directory to inspect
   --release-repo=REPO   GitHub repository or auto (default: auto)
   --release-tag=TAG     Rusty V8 release tag (default: rusty-v8-v<VERSION>)
   --profile=PROFILE     Rusty V8 profile (default: release for ARMv7,
@@ -33,6 +37,8 @@ for arg in "$@"; do
   case "${arg}" in
     --target=*) TARGET="${arg#*=}" ;;
     --output-dir=*) OUTPUT_DIR="${arg#*=}" ;;
+    --cargo-build-dir=*) CARGO_BUILD_DIR="${arg#*=}" ;;
+    --local-repo=*) LOCAL_REPO="${arg#*=}" ;;
     --release-repo=*) RELEASE_REPO="${arg#*=}" ;;
     --release-tag=*) RELEASE_TAG="${arg#*=}" ;;
     --profile=*) PROFILE="${arg#*=}" ;;
@@ -67,6 +73,17 @@ if [[ -z "${PROFILE}" ]]; then
   esac
 fi
 
+if [[ -n "${RUSTY_V8_ARCHIVE:-}" || -n "${RUSTY_V8_SRC_BINDING_PATH:-}" ]]; then
+  [[ -s "${RUSTY_V8_ARCHIVE:-}" && -s "${RUSTY_V8_SRC_BINDING_PATH:-}" ]] || {
+    echo "RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH must point to existing files" >&2
+    exit 1
+  }
+  printf 'RUSTY_V8_ARCHIVE=%q\n' "${RUSTY_V8_ARCHIVE}"
+  printf 'RUSTY_V8_SRC_BINDING_PATH=%q\n' "${RUSTY_V8_SRC_BINDING_PATH}"
+  printf 'RUSTY_V8_RELEASE_REPO=%q\n' "${RELEASE_REPO}"
+  exit 0
+fi
+
 if [[ "${V8_TARGET}" == *-pc-windows-msvc ]]; then
   ARCHIVE_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.lib.gz"
 else
@@ -74,6 +91,43 @@ else
 fi
 BINDING_NAME="src_binding_${PROFILE}_${V8_TARGET}.rs"
 CHECKSUMS_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.sha256"
+ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
+BINDING_PATH="${OUTPUT_DIR}/${BINDING_NAME}"
+CHECKSUMS_PATH="${OUTPUT_DIR}/${CHECKSUMS_NAME}"
+
+mkdir -p "${OUTPUT_DIR}"
+
+if [[ -n "${CARGO_BUILD_DIR}" ]]; then
+  for output in "${CARGO_BUILD_DIR}"/build/v8-*/output; do
+    [[ -f "${output}" ]] || continue
+    cached_archive="$(sed -n 's/^static lib URL: //p' "${output}" | tail -n 1)"
+    cached_binding="$(sed -n 's/^cargo:rustc-env=RUSTY_V8_SRC_BINDING_PATH=//p' "${output}" | tail -n 1)"
+    if [[ "${cached_archive}" == *"/rusty-v8-artifacts/${V8_VERSION}/${TARGET}/${ARCHIVE_NAME}" \
+      && "${cached_binding}" == *"/rusty-v8-artifacts/${V8_VERSION}/${TARGET}/${BINDING_NAME}" \
+      && -s "${cached_archive}" && -s "${cached_binding}" ]]; then
+      printf 'RUSTY_V8_ARCHIVE=%q\n' "${cached_archive}"
+      printf 'RUSTY_V8_SRC_BINDING_PATH=%q\n' "${cached_binding}"
+      printf 'RUSTY_V8_RELEASE_REPO=%q\n' "${RELEASE_REPO}"
+      exit 0
+    fi
+  done
+fi
+
+if [[ -n "${LOCAL_REPO}" && -s "${LOCAL_REPO}/${ARCHIVE_NAME}" \
+  && -s "${LOCAL_REPO}/${BINDING_NAME}" ]]; then
+  printf 'RUSTY_V8_ARCHIVE=%q\n' "${LOCAL_REPO}/${ARCHIVE_NAME}"
+  printf 'RUSTY_V8_SRC_BINDING_PATH=%q\n' "${LOCAL_REPO}/${BINDING_NAME}"
+  printf 'RUSTY_V8_RELEASE_REPO=%q\n' "${RELEASE_REPO}"
+  exit 0
+fi
+
+if [[ -s "${ARCHIVE_PATH}" && -s "${BINDING_PATH}" && -s "${CHECKSUMS_PATH}" ]] \
+  && (cd "${OUTPUT_DIR}" && sha256sum -c "${CHECKSUMS_NAME}" >/dev/null 2>&1); then
+  printf 'RUSTY_V8_ARCHIVE=%q\n' "${ARCHIVE_PATH}"
+  printf 'RUSTY_V8_SRC_BINDING_PATH=%q\n' "${BINDING_PATH}"
+  printf 'RUSTY_V8_RELEASE_REPO=%q\n' "${RELEASE_REPO}"
+  exit 0
+fi
 
 release_has_assets() {
   local tag="$1" metadata
@@ -109,11 +163,6 @@ else
 fi
 
 BASE_URL="https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}"
-ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
-BINDING_PATH="${OUTPUT_DIR}/${BINDING_NAME}"
-CHECKSUMS_PATH="${OUTPUT_DIR}/${CHECKSUMS_NAME}"
-
-mkdir -p "${OUTPUT_DIR}"
 download_release_asset() {
   local name="$1"
   local path="$2"
