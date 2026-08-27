@@ -543,24 +543,16 @@ read_toolchain() {
 }
 
 cargo_target_dir() {
-  local mode="${1}" target_mode="${2}"
+  local mode="${1}" target_mode="${2}" purpose="${CODEX_CARGO_PURPOSE:-build}"
   local shared_env_script="${BUILD_REPO}/scripts/codex_cargo_env.sh"
-  if [[ -x "${shared_env_script}" ]]; then
-    bash "${shared_env_script}" \
-      --source-repo "${SOURCE_REPO}" \
-      --build-repo "${BUILD_REPO}" \
-      --mode "${mode}" \
-      --target-mode "${target_mode}" \
-      --print-target
-    return
-  fi
-  case "${target_mode}" in
-    native) echo "${BUILD_WORKSPACE}/target" ;;
-    musl) echo "${BUILD_REPO}/build/musl-${mode}" ;;
-    armv7) echo "${BUILD_REPO}/build/armv7-${mode}" ;;
-    android) echo "${BUILD_REPO}/build/android-${mode}" ;;
-    *) die "unknown target mode: ${target_mode}" ;;
-  esac
+  [[ -x "${shared_env_script}" ]] || die "shared Cargo environment helper not found: ${shared_env_script}"
+  bash "${shared_env_script}" \
+    --source-repo "${SOURCE_REPO}" \
+    --build-repo "${BUILD_REPO}" \
+    --mode "${mode}" \
+    --target-mode "${target_mode}" \
+    --purpose "${purpose}" \
+    --print-target
 }
 
 prepare_target_dir() {
@@ -615,7 +607,7 @@ configure_musl_build_tools() {
 }
 
 cargo_build() {
-  local mode="${1}" target_mode="${2}" profile_args=() target triple target_dir
+  local mode="${1}" target_mode="${2}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
   target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
@@ -627,6 +619,7 @@ cargo_build() {
       --build-repo "${BUILD_REPO}" \
       --mode "${mode}" \
       --target-mode native \
+      --purpose "${purpose}" \
       --emit)"
     target_dir="${CARGO_TARGET_DIR}"
   fi
