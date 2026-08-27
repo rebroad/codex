@@ -56,10 +56,15 @@ def fetch_codex_v8_artifacts(
     cache_root: Path | None = None,
 ) -> RustyV8ArtifactPair:
     version = version or resolved_v8_crate_version()
-    release_url = (
-        f"https://github.com/openai/codex/releases/download/rusty-v8-v{version}"
-    )
     target = spec.target
+    release_repo = os.environ.get("RUSTY_V8_RELEASE_REPO")
+    if release_repo is None:
+        release_repo = (
+            "rebroad/rusty_v8"
+            if target == "aarch64-linux-android" or target.startswith("armv7-")
+            else "openai/codex"
+        )
+    release_url = f"https://github.com/{release_repo}/releases/download/rusty-v8-v{version}"
     cache_dir = (cache_root or default_cache_root()) / f"rusty-v8-{version}-{target}"
 
     if spec.is_windows:
