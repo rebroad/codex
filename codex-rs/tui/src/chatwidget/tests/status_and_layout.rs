@@ -2028,6 +2028,22 @@ async fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[tokio::test]
+async fn reconnect_snapshot_reconciles_task_running_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.reconcile_turn_running_state(Some("active-turn"));
+    assert!(chat.turn_lifecycle.agent_turn_running);
+    assert_eq!(
+        chat.turn_lifecycle.last_turn_id.as_deref(),
+        Some("active-turn")
+    );
+
+    chat.reconcile_turn_running_state(None);
+    assert!(!chat.turn_lifecycle.agent_turn_running);
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn single_line_final_answer_hides_working_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
