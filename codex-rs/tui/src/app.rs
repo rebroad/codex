@@ -701,6 +701,13 @@ fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
     )
 }
 
+fn active_turn_interrupt_missing(error: &TypedRequestError) -> bool {
+    let TypedRequestError::Server { method, source } = error else {
+        return false;
+    };
+    method == "turn/interrupt" && source.message == "no active turn to interrupt"
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,

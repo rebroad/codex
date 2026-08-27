@@ -611,6 +611,12 @@ impl App {
                         match result {
                             Ok(_) => break,
                             Err(error) => {
+                                if active_turn_interrupt_missing(&error) {
+                                    let mut store = thread_event_store.lock().await;
+                                    store.clear_active_turn_id();
+                                    store.pending_interrupt_turn_id = None;
+                                    break;
+                                }
                                 if attempt == 0
                                     && let Some(actual_turn_id) = active_turn_interrupt_race(&error)
                                     && actual_turn_id != turn_id
