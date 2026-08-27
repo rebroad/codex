@@ -11,6 +11,7 @@ mod pending_thread_metadata;
 mod projects;
 mod read_thread;
 mod revert_thread;
+mod rollout_duplicate_repair;
 mod rollout_migration;
 // This lands before the reader PRs that consume the shared lineage resolver.
 #[allow(dead_code)]
