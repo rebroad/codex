@@ -115,10 +115,14 @@ RUSTY_V8_ENV="$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" \
   --cargo-build-dir="${BUILD_REPO}/codex-rs/target" 2>/dev/null)"
 eval "${RUSTY_V8_ENV}"
 RUSTY_V8_IDENTITY="$(sha256sum "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}" | awk '{print $1}' | tr '\n' ':')"
+LOCK_GRAPH_FINGERPRINT="$(python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
+  --manifest "${BUILD_REPO}/codex-rs/Cargo.toml" \
+  --source-lock "${LOCK_FILE}" --fingerprint)"
 
 FINGERPRINT_INPUT="$(printf '%s\n' \
   "mode=${MODE}" "target_mode=${TARGET_MODE}" "target=${TARGET}" \
   "host=${HOST_TARGET}" "rustc=${RUSTC_VERSION}" \
+  "lockfile=${LOCK_GRAPH_FINGERPRINT}" \
   "linker=${LINKER_VALUE}" "rustflags=${RUSTFLAGS_VALUE}" \
   "openssl=${OPENSSL_VERSION}:${OPENSSL_IDENTITY}" \
   "rusty_v8=${RUSTY_V8_VERSION}:${RUSTY_V8_IDENTITY}" \

@@ -63,6 +63,20 @@ def normalize(lock_text: str, versions: dict[str, str]) -> str:
     return normalized_lock
 
 
+def graph_fingerprint(lock_text: str, versions: dict[str, str]) -> str:
+    canonical = normalize(lock_text, versions)
+
+    def remove_workspace_version(match: re.Match[str]) -> str:
+        block = match.group(0)
+        name_match = PACKAGE_NAME.search(block)
+        if name_match and name_match.group(1) in versions:
+            block = PACKAGE_VERSION.sub('version = "<workspace>"', block, count=1)
+        return block
+
+    canonical = PACKAGE_BLOCK.sub(remove_workspace_version, canonical)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
@@ -73,9 +87,8 @@ def main() -> int:
 
     versions = workspace_versions(args.manifest)
     source_text = args.source_lock.read_text()
-    canonical_source = normalize(source_text, versions)
     if args.fingerprint:
-        print(hashlib.sha256(canonical_source.encode()).hexdigest())
+        print(graph_fingerprint(source_text, versions))
         return 0
 
     if args.build_lock is None:
