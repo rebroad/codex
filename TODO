@@ -10,3 +10,4 @@ Make Ctrl+C exit the TUI, NOT abort the job (let Esc do that)
 Fix caching issue with codex-auto-review (too many cache misses!)
 Add a progress report/bar for `codex resume` given how slow it can be!
 Add ability to clear/delete a queued steer in the TUI (delete key?)
+Fix `just fmt` failing when the sandbox cannot download the pinned `ruff`/`maturin` packages from PyPI.
