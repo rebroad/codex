@@ -2214,6 +2214,9 @@ async fn slash_export_opens_destination_picker() {
     complete_turn_with_message(&mut chat, "turn-1", /*message*/ None);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
+    #[cfg(target_os = "android")]
+    assert_chatwidget_snapshot!("slash_export_destination_picker_android", popup);
+    #[cfg(not(target_os = "android"))]
     assert_chatwidget_snapshot!("slash_export_destination_picker", popup);
     chat.show_transcript_export_file_prompt();
     let popup = render_bottom_popup(&chat, /*width*/ 100);
