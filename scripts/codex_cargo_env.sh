@@ -5,6 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: codex_cargo_env.sh --source-repo DIR --build-repo DIR
   --mode debug|release --target-mode native|musl|armv7|android
+  [--purpose NAME]
   [--emit|--print-target]
 EOF
 }
@@ -13,6 +14,7 @@ SOURCE_REPO=''
 BUILD_REPO=''
 MODE=debug
 TARGET_MODE=native
+PURPOSE="${CODEX_CARGO_PURPOSE:-default}"
 OUTPUT=emit
 
 while [[ $# -gt 0 ]]; do
@@ -21,6 +23,7 @@ while [[ $# -gt 0 ]]; do
     --build-repo) BUILD_REPO="${2:?missing build repository}"; shift 2 ;;
     --mode) MODE="${2:?missing build mode}"; shift 2 ;;
     --target-mode) TARGET_MODE="${2:?missing target mode}"; shift 2 ;;
+    --purpose) PURPOSE="${2:?missing target purpose}"; shift 2 ;;
     --emit) OUTPUT=emit; shift ;;
     --print-target) OUTPUT=target; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -31,6 +34,7 @@ done
 [[ -d "${SOURCE_REPO}/codex-rs" ]] || { echo "source repository not found: ${SOURCE_REPO}" >&2; exit 1; }
 [[ -d "${BUILD_REPO}/codex-rs" ]] || { echo "build repository not found: ${BUILD_REPO}" >&2; exit 1; }
 [[ "${MODE}" == debug || "${MODE}" == release ]] || { echo "invalid mode: ${MODE}" >&2; exit 2; }
+[[ "${PURPOSE}" =~ ^[[:alnum:]_.-]+$ ]] || { echo "invalid target purpose: ${PURPOSE}" >&2; exit 2; }
 
 source_lock_fingerprint() {
   python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
@@ -78,12 +82,13 @@ RUSTC_BIN="${RUSTC:-rustc}"
 HOST_TARGET="$(${RUSTC_BIN} -vV | sed -n 's/^host: //p')"
 SCCACHE_BIN="$(command -v sccache || true)"
 case "${TARGET_MODE}" in
-  native) TARGET="${HOST_TARGET}"; BASE_TARGET_DIR="${BUILD_REPO}/codex-rs/target" ;;
+  native) TARGET="${HOST_TARGET}"; TARGET_ROOT="${BUILD_REPO}/codex-rs/target" ;;
   musl) TARGET=x86_64-unknown-linux-musl; BASE_TARGET_DIR="${BUILD_REPO}/build/musl-${MODE}" ;;
   armv7) TARGET="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"; BASE_TARGET_DIR="${BUILD_REPO}/build/armv7-${MODE}" ;;
   android) TARGET=aarch64-linux-android; BASE_TARGET_DIR="${BUILD_REPO}/build/android-${MODE}" ;;
   *) echo "invalid target mode: ${TARGET_MODE}" >&2; exit 2 ;;
 esac
+TARGET_ROOT="${TARGET_ROOT:-${BASE_TARGET_DIR}}"
 
 LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
 RUSTC_VERSION="$(${RUSTC_BIN} -vV)"
@@ -128,14 +133,25 @@ FINGERPRINT_INPUT="$(printf '%s\n' \
   "rusty_v8=${RUSTY_V8_VERSION}:${RUSTY_V8_IDENTITY}" \
   'CODEX_BUILD_TIMESTAMP=0000000000-000000000000')"
 FINGERPRINT="$(printf '%s' "${FINGERPRINT_INPUT}" | sha256sum | awk '{print substr($1, 1, 16)}')"
-MARKER="${BASE_TARGET_DIR}/.codex-cargo-fingerprint"
-TARGET_DIR="${BASE_TARGET_DIR}"
-if [[ -e "${BASE_TARGET_DIR}" && -f "${MARKER}" ]] \
-  && ! grep -Fxq "${FINGERPRINT}" "${MARKER}"; then
-  TARGET_DIR="${BASE_TARGET_DIR}.${FINGERPRINT}"
+TARGET_DIR="${TARGET_ROOT}.${FINGERPRINT}"
+MARKER="${TARGET_DIR}/.codex-cargo-fingerprint"
+if [[ -e "${TARGET_DIR}" ]]; then
+  if [[ ! -f "${MARKER}" ]] || ! grep -Fxq "${FINGERPRINT}" "${MARKER}"; then
+    echo "target directory exists with an incompatible fingerprint: ${TARGET_DIR}" >&2
+    exit 1
+  fi
 fi
 mkdir -p "${TARGET_DIR}"
 printf '%s\n' "${FINGERPRINT}" >"${TARGET_DIR}/.codex-cargo-fingerprint"
+
+TARGET_LINK="${BUILD_REPO}/codex-rs/target-${PURPOSE}"
+if [[ -e "${TARGET_LINK}" && ! -L "${TARGET_LINK}" ]]; then
+  echo "target purpose link is not a symbolic link: ${TARGET_LINK}" >&2
+  exit 1
+fi
+TEMP_LINK="${TARGET_LINK}.tmp.$$"
+ln -s "${TARGET_DIR}" "${TEMP_LINK}"
+mv -f "${TEMP_LINK}" "${TARGET_LINK}"
 
 if [[ "${OUTPUT}" == target ]]; then
   printf '%s\n' "${TARGET_DIR}"

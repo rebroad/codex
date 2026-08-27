@@ -13,7 +13,7 @@ build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
-cargo_setup := "eval \"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --emit)\";"
+cargo_setup := "eval \"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\";"
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
 
 # Display help
@@ -63,7 +63,7 @@ fmt-check:
     @{{ python }} ../scripts/format.py --check
 
 fix *args:
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo clippy --fix --tests --allow-dirty --locked "$@"
+    cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-fix; {{ cargo_setup }} cargo clippy --fix --tests --allow-dirty --locked "$@"
 
 clippy *args:
     cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo clippy --tests --locked "$@"
@@ -93,8 +93,8 @@ install:
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
-    @cd "{{ cargo_working_directory }}" && {{ cargo_setup }} if bash ../scripts/test_requires_prebuilt_binaries.sh "$@"; then cargo build --locked -p codex-cli -p codex-code-mode-host && cargo build --locked -p codex-rmcp-client --bin test_stdio_server; fi
-    @cd "{{ cargo_working_directory }}" && {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n 's/^host: //p')" != aarch64-linux-android; then NEXTEST_PROFILE=local cargo nextest run --locked --no-fail-fast "$@"; else echo "cargo-nextest is unavailable on Android; using cargo test" >&2; cargo test --locked "$@"; fi
+    @cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test; {{ cargo_setup }} if bash ../scripts/test_requires_prebuilt_binaries.sh "$@"; then cargo build --locked -p codex-cli -p codex-code-mode-host && cargo build --locked -p codex-rmcp-client --bin test_stdio_server; fi
+    @cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test; {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n 's/^host: //p')" != aarch64-linux-android; then NEXTEST_PROFILE=local cargo nextest run --locked --no-fail-fast "$@"; else echo "cargo-nextest is unavailable on Android; using cargo test" >&2; cargo test --locked "$@"; fi
 
 [windows]
 test *args:
