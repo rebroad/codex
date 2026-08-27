@@ -85,6 +85,8 @@ impl App {
                 self.agents_overview.pending_usage = None;
                 self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
+                self.chat_widget
+                    .clear_guardian_review_status_after_transport_gap();
                 self.refresh_agents_overview_threads(app_server_client);
             }
             AppServerEvent::ServerNotification(notification) => {
@@ -104,6 +106,8 @@ impl App {
                 self.repaint_agents_overview();
             }
             AppServerEvent::Reconnected => {
+                self.chat_widget
+                    .clear_guardian_review_status_after_transport_gap();
                 self.reattach_tracked_threads_after_reconnect(app_server_client)
                     .await;
             }

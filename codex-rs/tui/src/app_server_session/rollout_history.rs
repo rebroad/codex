@@ -113,9 +113,12 @@ impl AppServerSession {
         ))
     }
 
-    pub(crate) async fn reattach_thread(&self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn reattach_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadResumeResponse> {
         let request_id = RequestId::String(format!("reconnect-thread-{}", Uuid::new_v4()));
-        let _: ThreadResumeResponse = self
+        let response: ThreadResumeResponse = self
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
@@ -126,7 +129,7 @@ impl AppServerSession {
             })
             .await
             .map_err(|err| bootstrap_request_error("thread/resume failed after reconnect", err))?;
-        Ok(())
+        Ok(response)
     }
 
     pub(crate) fn with_local_codex_home(mut self, codex_home: &AbsolutePathBuf) -> Self {
