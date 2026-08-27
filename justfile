@@ -7,12 +7,13 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
-build_repo := if path_exists((justfile_directory() + ".build") / "codex-rs") == "true" { justfile_directory() + ".build" } else { justfile_directory() + ".make" }
+source_repo := if path_exists(justfile_directory() / ".git" / "HEAD") == "true" { justfile_directory() } else { justfile_directory() / ".." / "codex" }
+build_repo := if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" }
 build_tree := build_repo / "codex-rs"
-cargo_source_directory := justfile_directory() / "codex-rs"
+cargo_source_directory := source_repo / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
-cargo_setup := "eval \"$(bash \"" + cargo_env_script + "\" --source-repo \"" + justfile_directory() + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --emit)\";"
+cargo_setup := "eval \"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --emit)\";"
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
 
 # Display help
@@ -51,7 +52,7 @@ assemble-codex-package *args:
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
     cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo build --locked -p codex-cli
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-app-server-test-client -- --codex-bin "$(bash "{{ cargo_env_script }}" --source-repo "{{ justfile_directory() }}" --build-repo "{{ build_repo }}" --mode debug --target-mode native --print-target)/debug/codex" "$@"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-app-server-test-client -- --codex-bin "$(bash "{{ cargo_env_script }}" --source-repo "{{ source_repo }}" --build-repo "{{ build_repo }}" --mode debug --target-mode native --print-target)/debug/codex" "$@"
 
 # Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts.
 fmt:

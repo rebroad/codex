@@ -33,25 +33,37 @@ done
 [[ "${MODE}" == debug || "${MODE}" == release ]] || { echo "invalid mode: ${MODE}" >&2; exit 2; }
 
 source_lock_fingerprint() {
-  sed '/^version = /d' "${SOURCE_REPO}/codex-rs/Cargo.lock" | sha256sum | awk '{print $1}'
+  python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
+    --manifest "${BUILD_REPO}/codex-rs/Cargo.toml" \
+    --source-lock "${SOURCE_REPO}/codex-rs/Cargo.lock" \
+    --fingerprint
 }
 
 ensure_build_lockfile() {
-  local source_fingerprint marker stored_fingerprint
+  local source_fingerprint marker stored_fingerprint build_lock
   marker="${BUILD_REPO}/build/.cargo-source-lock-fingerprint"
+  build_lock="${BUILD_REPO}/codex-rs/Cargo.lock"
   source_fingerprint="$(source_lock_fingerprint)"
   stored_fingerprint=''
   [[ -f "${marker}" ]] && read -r stored_fingerprint <"${marker}"
-  if [[ -f "${BUILD_REPO}/codex-rs/Cargo.lock" ]] \
+  if [[ -f "${build_lock}" ]] \
     && [[ "${source_fingerprint}" == "${stored_fingerprint}" ]] \
+    && python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
+      --manifest "${BUILD_REPO}/codex-rs/Cargo.toml" \
+      --source-lock "${SOURCE_REPO}/codex-rs/Cargo.lock" \
+      --build-lock "${build_lock}" \
     && cargo metadata --locked --offline --no-deps \
       --manifest-path "${BUILD_REPO}/codex-rs/Cargo.toml" >/dev/null 2>&1; then
     return
   fi
 
   mkdir -p "$(dirname "${marker}")"
-  cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${BUILD_REPO}/codex-rs/Cargo.lock"
-  echo "Synchronizing the build-tree Cargo.lock from the source lockfile." >&2
+  cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${build_lock}"
+  python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
+    --manifest "${BUILD_REPO}/codex-rs/Cargo.toml" \
+    --source-lock "${SOURCE_REPO}/codex-rs/Cargo.lock" \
+    --build-lock "${build_lock}"
+  echo "Synchronizing workspace package versions in the build-tree Cargo.lock." >&2
   if ! cargo metadata --locked --offline --no-deps \
     --manifest-path "${BUILD_REPO}/codex-rs/Cargo.toml" >/dev/null 2>&1; then
     echo "The source Cargo.lock is not valid for this workspace." >&2
