@@ -698,8 +698,7 @@ impl App {
                     let handled = is_user_turn
                         && (matches!(
                             err.downcast_ref::<TypedRequestError>(),
-                            Some(TypedRequestError::Server { method, .. })
-                                if method == "turn/start"
+                            Some(error) if error.method() == "turn/start"
                         ) || unsupported_permissions)
                         && self
                             .chat_widget
