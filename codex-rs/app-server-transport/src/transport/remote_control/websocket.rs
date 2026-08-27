@@ -883,6 +883,7 @@ impl RemoteControlWebsocket {
         shutdown_token: CancellationToken,
     ) -> ConnectionEndReason {
         let (websocket_writer, websocket_reader) = websocket_connection.split();
+        let (websocket_control_tx, websocket_control_rx) = mpsc::unbounded_channel();
         let mut join_set = tokio::task::JoinSet::new();
 
         join_set.spawn(Self::run_server_writer(
@@ -890,6 +891,7 @@ impl RemoteControlWebsocket {
             self.server_event_rx.clone(),
             self.used_rx.clone(),
             websocket_writer,
+            websocket_control_rx,
             REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL,
             shutdown_token.clone(),
             self.traffic_capture.clone(),
@@ -898,6 +900,7 @@ impl RemoteControlWebsocket {
             self.client_tracker.clone(),
             self.state.clone(),
             websocket_reader,
+            websocket_control_tx,
             REMOTE_CONTROL_WEBSOCKET_PONG_TIMEOUT,
             shutdown_token.clone(),
             self.traffic_capture.clone(),
@@ -956,6 +959,7 @@ impl RemoteControlWebsocket {
             WebSocketStream<MaybeTlsStream<TcpStream>>,
             tungstenite::Message,
         >,
+        websocket_control_rx: mpsc::UnboundedReceiver<Vec<u8>>,
         ping_interval: std::time::Duration,
         shutdown_token: CancellationToken,
         traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
@@ -967,6 +971,7 @@ impl RemoteControlWebsocket {
             server_event_rx,
             used_rx,
             websocket_writer,
+            websocket_control_rx,
             ping_interval,
             shutdown_token,
             traffic_capture,
@@ -1001,6 +1006,7 @@ impl RemoteControlWebsocket {
             WebSocketStream<MaybeTlsStream<TcpStream>>,
             tungstenite::Message,
         >,
+        mut websocket_control_rx: mpsc::UnboundedReceiver<Vec<u8>>,
         ping_interval: std::time::Duration,
         shutdown_token: CancellationToken,
         traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
@@ -1027,6 +1033,18 @@ impl RemoteControlWebsocket {
             };
             tokio::select! {
                 _ = shutdown_token.cancelled() => return Ok(()),
+                control_message = websocket_control_rx.recv() => {
+                    let Some(payload) = control_message else {
+                        return Err(io::Error::new(
+                            ErrorKind::UnexpectedEof,
+                            "websocket control channel closed",
+                        ));
+                    };
+                    websocket_writer
+                        .send(tungstenite::Message::Pong(payload.into()))
+                        .await
+                        .map_err(io::Error::other)?;
+                }
                 send_result = websocket_writer.send(tungstenite::Message::Text(payload.into())) => {
                     if let Err(err) = send_result {
                         return Err(io::Error::other(err));
@@ -1051,6 +1069,19 @@ impl RemoteControlWebsocket {
             let outbound_has_capacity = *used_rx.borrow() < super::CHANNEL_CAPACITY;
             let queued_server_envelope = tokio::select! {
                 _ = shutdown_token.cancelled() => return Ok(()),
+                control_message = websocket_control_rx.recv() => {
+                    let Some(payload) = control_message else {
+                        return Err(io::Error::new(
+                            ErrorKind::UnexpectedEof,
+                            "websocket control channel closed",
+                        ));
+                    };
+                    websocket_writer
+                        .send(tungstenite::Message::Pong(payload.into()))
+                        .await
+                        .map_err(io::Error::other)?;
+                    continue;
+                }
                 _ = ping_interval.tick() => {
                     tokio::select! {
                         _ = shutdown_token.cancelled() => return Ok(()),
@@ -1156,6 +1187,7 @@ impl RemoteControlWebsocket {
         client_tracker: Arc<Mutex<ClientTracker>>,
         state: Arc<Mutex<WebsocketState>>,
         websocket_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        websocket_control_tx: mpsc::UnboundedSender<Vec<u8>>,
         pong_timeout: std::time::Duration,
         shutdown_token: CancellationToken,
         traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
@@ -1166,6 +1198,7 @@ impl RemoteControlWebsocket {
             client_tracker,
             state,
             websocket_reader,
+            websocket_control_tx,
             pong_timeout,
             shutdown_token,
             traffic_capture,
@@ -1196,6 +1229,7 @@ impl RemoteControlWebsocket {
         client_tracker: Arc<Mutex<ClientTracker>>,
         state: Arc<Mutex<WebsocketState>>,
         mut websocket_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        websocket_control_tx: mpsc::UnboundedSender<Vec<u8>>,
         pong_timeout: std::time::Duration,
         shutdown_token: CancellationToken,
         traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
@@ -1282,7 +1316,13 @@ impl RemoteControlWebsocket {
                         .reset(tokio::time::Instant::now() + pong_timeout);
                     continue;
                 }
-                Ok(tungstenite::Message::Ping(_)) | Ok(tungstenite::Message::Frame(_)) => continue,
+                Ok(tungstenite::Message::Ping(payload)) => {
+                    websocket_control_tx.send(payload.to_vec()).map_err(|_| {
+                        io::Error::new(ErrorKind::UnexpectedEof, "websocket control channel closed")
+                    })?;
+                    continue;
+                }
+                Ok(tungstenite::Message::Frame(_)) => continue,
                 Ok(tungstenite::Message::Binary(_)) => {
                     warn!("dropping unsupported binary remote-control websocket message");
                     continue;
@@ -2795,12 +2835,14 @@ mod tests {
         }));
         let (_server_event_tx, server_event_rx) = mpsc::channel(super::super::CHANNEL_CAPACITY);
         let server_event_rx = Arc::new(Mutex::new(server_event_rx));
+        let (websocket_control_tx, websocket_control_rx) = mpsc::unbounded_channel();
         let shutdown_token = CancellationToken::new();
         let writer_task = tokio::spawn(RemoteControlWebsocket::run_server_writer_inner(
             state,
             server_event_rx,
             used_rx,
             websocket_writer,
+            websocket_control_rx,
             Duration::from_millis(20),
             shutdown_token.clone(),
             None,
@@ -2812,6 +2854,19 @@ mod tests {
             .expect("server websocket should stay open")
             .expect("ping frame should read");
         assert!(matches!(message, tungstenite::Message::Ping(_)));
+
+        websocket_control_tx
+            .send(b"pong-payload".to_vec())
+            .expect("websocket control message should queue");
+        let message = timeout(Duration::from_secs(5), server_stream.next())
+            .await
+            .expect("pong frame should arrive in time")
+            .expect("server websocket should stay open")
+            .expect("pong frame should read");
+        assert_eq!(
+            message,
+            tungstenite::Message::Pong(b"pong-payload".to_vec().into())
+        );
 
         shutdown_token.cancel();
         writer_task
@@ -2845,12 +2900,14 @@ mod tests {
         }));
         let (server_event_tx, server_event_rx) = mpsc::channel(super::super::CHANNEL_CAPACITY);
         let server_event_rx = Arc::new(Mutex::new(server_event_rx));
+        let (_websocket_control_tx, websocket_control_rx) = mpsc::unbounded_channel();
         let shutdown_token = CancellationToken::new();
         let writer_task = tokio::spawn(RemoteControlWebsocket::run_server_writer_inner(
             state,
             server_event_rx,
             used_rx,
             websocket_writer,
+            websocket_control_rx,
             Duration::from_secs(60),
             shutdown_token.clone(),
             None,
@@ -2926,6 +2983,7 @@ mod tests {
         let (server_event_tx, _server_event_rx) = mpsc::channel(super::super::CHANNEL_CAPACITY);
         let (transport_event_tx, _transport_event_rx) =
             mpsc::channel(super::super::CHANNEL_CAPACITY);
+        let (websocket_control_tx, _websocket_control_rx) = mpsc::unbounded_channel();
         let shutdown_token = CancellationToken::new();
         let client_tracker = Arc::new(Mutex::new(ClientTracker::new(
             server_event_tx,
@@ -2939,6 +2997,7 @@ mod tests {
                 client_tracker,
                 state,
                 websocket_reader,
+                websocket_control_tx,
                 Duration::from_millis(100),
                 shutdown_token,
                 None,
@@ -2950,6 +3009,57 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::TimedOut);
         assert_eq!(err.to_string(), "remote control websocket pong timeout");
+    }
+
+    #[tokio::test]
+    async fn run_websocket_reader_inner_forwards_ping_frames_to_writer() {
+        let (client_stream, mut server_stream) = connected_websocket_pair().await;
+        let (_websocket_writer, websocket_reader) = client_stream.split();
+        let (outbound_buffer, _used_rx) = BoundedOutboundBuffer::new();
+        let state = Arc::new(Mutex::new(WebsocketState {
+            outbound_buffer,
+            subscribe_cursor: None,
+            next_seq_id_by_stream: HashMap::new(),
+            last_completed_client_chunk_seq_id_by_stream: HashMap::new(),
+            client_segment_reassembler: ClientSegmentReassembler::default(),
+        }));
+        let (server_event_tx, _server_event_rx) = mpsc::channel(super::super::CHANNEL_CAPACITY);
+        let (transport_event_tx, _transport_event_rx) =
+            mpsc::channel(super::super::CHANNEL_CAPACITY);
+        let client_tracker = Arc::new(Mutex::new(ClientTracker::new(
+            server_event_tx,
+            transport_event_tx,
+            &CancellationToken::new(),
+        )));
+        let (websocket_control_tx, mut websocket_control_rx) = mpsc::unbounded_channel();
+        let shutdown_token = CancellationToken::new();
+        let reader_task = tokio::spawn(RemoteControlWebsocket::run_websocket_reader_inner(
+            client_tracker,
+            state,
+            websocket_reader,
+            websocket_control_tx,
+            Duration::from_secs(5),
+            shutdown_token.clone(),
+            None,
+        ));
+
+        server_stream
+            .send(tungstenite::Message::Ping(b"ping-payload".to_vec().into()))
+            .await
+            .expect("ping frame should send");
+        assert_eq!(
+            timeout(Duration::from_secs(5), websocket_control_rx.recv())
+                .await
+                .expect("control message should arrive in time")
+                .expect("control channel should stay open"),
+            b"ping-payload"
+        );
+
+        shutdown_token.cancel();
+        reader_task
+            .await
+            .expect("reader task should join")
+            .expect("reader should stop cleanly");
     }
 
     #[test]

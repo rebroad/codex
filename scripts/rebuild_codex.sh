@@ -544,6 +544,16 @@ read_toolchain() {
 
 cargo_target_dir() {
   local mode="${1}" target_mode="${2}"
+  local shared_env_script="${BUILD_REPO}/scripts/codex_cargo_env.sh"
+  if [[ -x "${shared_env_script}" ]]; then
+    bash "${shared_env_script}" \
+      --source-repo "${SOURCE_REPO}" \
+      --build-repo "${BUILD_REPO}" \
+      --mode "${mode}" \
+      --target-mode "${target_mode}" \
+      --print-target
+    return
+  fi
   case "${target_mode}" in
     native) echo "${BUILD_WORKSPACE}/target" ;;
     musl) echo "${BUILD_REPO}/build/musl-${mode}" ;;
@@ -559,12 +569,6 @@ prepare_target_dir() {
   marker="${target_dir}/.codex-target"
   printf -v expected 'target_mode=%s\ntriple=%s\nhost=%s\n' "${target_mode}" "${triple}" "${host}"
 
-  if [[ -e "${target_dir}" ]]; then
-    if [[ ! -f "${marker}" ]] || ! cmp -s <(printf '%s' "${expected}") "${marker}"; then
-      echo "Clearing legacy or incompatible Cargo target directory: ${target_dir}" >&2
-      rm -rf "${target_dir}"
-    fi
-  fi
   mkdir -p "${target_dir}"
   printf '%s' "${expected}" >"${marker}"
 }
@@ -615,6 +619,17 @@ cargo_build() {
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
   target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
+
+  local shared_env_script="${BUILD_REPO}/scripts/codex_cargo_env.sh"
+  if [[ "${target_mode}" == native && -x "${shared_env_script}" ]]; then
+    eval "$(bash "${shared_env_script}" \
+      --source-repo "${SOURCE_REPO}" \
+      --build-repo "${BUILD_REPO}" \
+      --mode "${mode}" \
+      --target-mode native \
+      --emit)"
+    target_dir="${CARGO_TARGET_DIR}"
+  fi
 
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_builder="${BUILD_REPO}/scripts/build_armv7.sh"

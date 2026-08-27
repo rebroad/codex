@@ -7,17 +7,13 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
-build_tree := (justfile_directory() + ".build") / "codex-rs"
+build_repo := if path_exists((justfile_directory() + ".build") / "codex-rs") == "true" { justfile_directory() + ".build" } else { justfile_directory() + ".make" }
+build_tree := build_repo / "codex-rs"
 cargo_source_directory := justfile_directory() / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
-cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", cargo_working_directory / "target")
-rusty_v8_setup := "repo_root=\"$(cd \"$(pwd -P)/..\" && pwd -P)\"; rusty_v8_target=\"$(rustc -vV | sed -n 's/^host: //p')\"; rusty_v8_version=\"$(python3 \"${repo_root}/scripts/rusty_v8_version.py\" \"${repo_root}/codex-rs/Cargo.lock\")\"; rusty_v8_dir=\"${repo_root}/build/rusty-v8-artifacts/${rusty_v8_version}/${rusty_v8_target}\"; eval \"$(bash \"${repo_root}/scripts/resolve_rusty_v8_artifacts.sh\" --target=\"${rusty_v8_target}\" --output-dir=\"${rusty_v8_dir}\" --cargo-build-dir=\"${repo_root}/codex-rs/target\" 2>/dev/null)\"; export RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH;"
-android_cargo_setup := "rustc_host=\"$(rustc -vV | sed -n 's/^host: //p')\"; if test \"${rustc_host}\" = aarch64-linux-android && android_clang=\"$(command -v aarch64-linux-android-clang || true)\" && test -x \"${android_clang}\"; then android_builtins=\"$(${android_clang} -print-file-name=libclang_rt.builtins-aarch64-android.a)\"; test -s \"${android_builtins}\" || { echo \"Android compiler builtins archive not found\" >&2; exit 1; }; export CARGO_BUILD_JOBS=\"${CARGO_BUILD_JOBS:-1}\" CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=\"${android_clang}\" CC_aarch64_linux_android=\"${android_clang}\" CXX_aarch64_linux_android=\"${android_clang}++\" AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=\"-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\\$ORIGIN -Clink-arg=${android_builtins}\"; fi;"
-openssl_setup := "repo_root=\"$(cd \"$(pwd -P)/..\" && pwd -P)\"; openssl_script=\"${repo_root}/scripts/openssl_artifacts.sh\"; openssl_target=\"$(rustc -vV | sed -n 's/^host: //p')\"; openssl_version=\"$(bash \"${openssl_script}\" version \"${repo_root}/codex-rs/Cargo.lock\")\"; openssl_env=\"$(bash \"${openssl_script}\" env \"${repo_root}\" \"${openssl_target}\" \"${openssl_version}\" 2>/dev/null || true)\"; if test -n \"${openssl_env}\"; then eval \"${openssl_env}\"; export OPENSSL_DIR OPENSSL_NO_VENDOR OPENSSL_STATIC; echo \"Using cached OpenSSL ${openssl_version} for ${openssl_target}.\" >&2; fi;"
-openssl_cache := "repo_root=\"$(cd \"$(pwd -P)/..\" && pwd -P)\"; openssl_script=\"${repo_root}/scripts/openssl_artifacts.sh\"; openssl_target=\"$(rustc -vV | sed -n 's/^host: //p')\"; openssl_version=\"$(bash \"${openssl_script}\" version \"${repo_root}/codex-rs/Cargo.lock\")\"; bash \"${openssl_script}\" cache \"${repo_root}/codex-rs/target\" \"${repo_root}\" \"${openssl_target}\" \"${openssl_version}\" \"${openssl_target}\" || true;"
-codex_env_parity := "unset CC CXX AR RANLIB CFLAGS CXXFLAGS TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_ALL_STATIC PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS; RUSTUP_DISABLE_SELF_UPDATE=1; export RUSTUP_DISABLE_SELF_UPDATE;"
-android_protoc_setup := "rustc_host=\"$(rustc -vV | sed -n 's/^host: //p')\"; if test \"${rustc_host}\" = aarch64-linux-android; then protoc_path=\"$(command -v protoc || true)\"; test -n \"${protoc_path}\" || { echo \"protobuf compiler is required on Android; install it with: pkg install protobuf\" >&2; exit 1; }; export PROTOC=\"${protoc_path}\"; fi;"
-codex_build_setup := "CODEX_BUILD_TIMESTAMP=\"0000000000-000000000000\"; export CODEX_BUILD_TIMESTAMP;"
+cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
+cargo_setup := "eval \"$(bash \"" + cargo_env_script + "\" --source-repo \"" + justfile_directory() + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --emit)\";"
+cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
 
 # Display help
 help:
@@ -26,11 +22,11 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cd "{{ cargo_working_directory }}" && cargo run --bin codex -- {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --bin codex -- "$@"
 
 # `codex exec`
 exec *args:
-    cd "{{ cargo_working_directory }}" && cargo run --bin codex -- exec {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --bin codex -- exec "$@"
 
 # Start `codex exec-server` and run codex-tui.
 [no-cd]
@@ -41,11 +37,11 @@ tui-with-exec-server *args:
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cd "{{ cargo_working_directory }}" && cargo run --bin codex-file-search -- {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --bin codex-file-search -- "$@"
 
 # Run the standalone code-mode host from source.
 code-mode-host *args:
-    cd "{{ cargo_working_directory }}" && cargo run --bin codex-code-mode-host -- {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --bin codex-code-mode-host -- "$@"
 
 # Assemble a local Codex package.
 [no-cd]
@@ -54,8 +50,8 @@ assemble-codex-package *args:
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
-    cd "{{ cargo_working_directory }}" && cargo build -p codex-cli
-    cd "{{ cargo_working_directory }}" && cargo run -p codex-app-server-test-client -- --codex-bin "{{ cargo_target_dir }}/debug/codex" {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo build --locked -p codex-cli
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-app-server-test-client -- --codex-bin "$(bash "{{ cargo_env_script }}" --source-repo "{{ justfile_directory() }}" --build-repo "{{ build_repo }}" --mode debug --target-mode native --print-target)/debug/codex" "$@"
 
 # Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts.
 fmt:
@@ -66,15 +62,15 @@ fmt-check:
     @{{ python }} ../scripts/format.py --check
 
 fix *args:
-    cd "{{ cargo_working_directory }}" && cargo clippy --fix --tests --allow-dirty {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo clippy --fix --tests --allow-dirty --locked "$@"
 
 clippy *args:
-    cd "{{ cargo_working_directory }}" && cargo clippy --tests {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo clippy --tests --locked "$@"
 
 [unix]
 install:
     rustup show active-toolchain
-    cd "{{ cargo_working_directory }}" && cargo fetch
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo fetch --locked
 
 [windows]
 install:
@@ -86,7 +82,7 @@ install:
     }
     rustup show active-toolchain
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    Set-Location "{{ cargo_working_directory }}"; cargo fetch
+    Set-Location "{{ cargo_working_directory }}"; $env:CODEX_BUILD_TIMESTAMP = "0000000000-000000000000"; cargo fetch --locked
     exit $LASTEXITCODE
 
 # Run nextest with --no-fail-fast so all tests are run.
@@ -96,9 +92,8 @@ install:
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
-    @cd "{{ cargo_working_directory }}" && {{ codex_env_parity }} {{ android_cargo_setup }} {{ android_protoc_setup }} {{ rusty_v8_setup }} {{ openssl_setup }} {{ codex_build_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }}; if bash ../scripts/test_requires_prebuilt_binaries.sh "$@"; then cargo build --locked -p codex-cli -p codex-code-mode-host && cargo build --locked -p codex-rmcp-client --bin test_stdio_server; fi
-    @cd "{{ cargo_working_directory }}" && {{ codex_env_parity }} {{ android_cargo_setup }} {{ android_protoc_setup }} {{ rusty_v8_setup }} {{ openssl_setup }} {{ codex_build_setup }} CARGO_TARGET_DIR={{ cargo_target_dir }}; RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n 's/^host: //p')" != aarch64-linux-android; then NEXTEST_PROFILE=local cargo nextest run --locked --no-fail-fast "$@"; else echo "cargo-nextest is unavailable on Android; using cargo test" >&2; cargo test --locked "$@"; fi
-    @cd "{{ cargo_working_directory }}" && {{ openssl_cache }}
+    @cd "{{ cargo_working_directory }}" && {{ cargo_setup }} if bash ../scripts/test_requires_prebuilt_binaries.sh "$@"; then cargo build --locked -p codex-cli -p codex-code-mode-host && cargo build --locked -p codex-rmcp-client --bin test_stdio_server; fi
+    @cd "{{ cargo_working_directory }}" && {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n 's/^host: //p')" != aarch64-linux-android; then NEXTEST_PROFILE=local cargo nextest run --locked --no-fail-fast "$@"; else echo "cargo-nextest is unavailable on Android; using cargo test" >&2; cargo test --locked "$@"; fi
 
 [windows]
 test *args:
@@ -114,7 +109,7 @@ test-github-scripts:
 
 # Run explicit workspace benchmark targets.
 bench *args:
-    cd "{{ cargo_working_directory }}" && cargo bench --workspace --bench '*' {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo bench --locked --workspace --bench '*' "$@"
 
 # Run benchmark targets once to ensure they start successfully.
 bench-smoke:
@@ -186,11 +181,11 @@ build-for-release:
 
 # Run the MCP server
 mcp-server-run *args:
-    cd "{{ cargo_working_directory }}" && cargo run -p codex-mcp-server -- {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-mcp-server -- "$@"
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cd "{{ cargo_working_directory }}" && cargo run -p codex-core --bin codex-write-config-schema -- --out "{{ cargo_source_directory }}/core/config.schema.json"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-core --bin codex-write-config-schema -- --out "{{ cargo_source_directory }}/core/config.schema.json"
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
@@ -198,7 +193,7 @@ write-app-server-schema *args:
 
 [no-cd]
 write-hooks-schema:
-    cd "{{ cargo_working_directory }}" && cargo run --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures -- "{{ cargo_source_directory }}/hooks/schema"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures -- "{{ cargo_source_directory }}/hooks/schema"
 
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
@@ -217,8 +212,8 @@ argument-comment-lint-from-source *args:
 # Tail logs from the state SQLite database
 [unix]
 log *args:
-    cd "{{ cargo_working_directory }}" && if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-cli --bin logs_client -- "$@"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }}; if [ "${1:-}" = "--" ]; then shift; fi; cargo run --locked -p codex-cli --bin logs_client -- "$@"
 
 [windows]
 log *args:
-    Set-Location "{{ cargo_working_directory }}"; $forwarded_args = @($args | Select-Object -Skip 1); if ($forwarded_args.Count -gt 0 -and $forwarded_args[0] -eq "--") { $forwarded_args = @($forwarded_args | Select-Object -Skip 1) }; cargo run -p codex-cli --bin logs_client -- @forwarded_args
+    Set-Location "{{ cargo_working_directory }}"; $env:CODEX_BUILD_TIMESTAMP = "0000000000-000000000000"; $forwarded_args = @($args | Select-Object -Skip 1); if ($forwarded_args.Count -gt 0 -and $forwarded_args[0] -eq "--") { $forwarded_args = @($forwarded_args | Select-Object -Skip 1) }; cargo run --locked -p codex-cli --bin logs_client -- @forwarded_args
