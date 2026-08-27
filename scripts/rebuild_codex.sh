@@ -482,23 +482,10 @@ configure_rusty_v8_artifacts() {
       ;;
   esac
 
-  local crate_version="${V8_CRATE_VERSION:-$(python3 "${SOURCE_REPO}/scripts/rusty_v8_version.py" "${SOURCE_REPO}/codex-rs/Cargo.lock")}"
+  local crate_version="${V8_CRATE_VERSION:-$(python3 "${SOURCE_REPO}/scripts/rusty_v8_version.py" "${SOURCE_REPO}/codex-rs/Cargo.lock")}";
   [[ -n "${crate_version}" ]] || die "could not determine the pinned v8 crate version"
   local default_profile="ptrcomp_sandbox_release"
   local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
-  archive="librusty_v8_${profile}_${target}.a.gz"
-  binding="src_binding_${profile}_${target}.rs"
-
-  if [[ -n "${RUSTY_V8_ARCHIVE:-}" || -n "${RUSTY_V8_SRC_BINDING_PATH:-}" ]]; then
-    [[ -s "${RUSTY_V8_ARCHIVE:-}" && -s "${RUSTY_V8_SRC_BINDING_PATH:-}" ]] \
-      || die "RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH must point to existing files"
-    RUSTY_V8_ARCHIVE_PATH="${RUSTY_V8_ARCHIVE}"
-    RUSTY_V8_BINDING_PATH="${RUSTY_V8_SRC_BINDING_PATH}"
-    verify_rusty_v8_artifacts "${target_mode}"
-    echo "Using Rusty V8 artifacts from the environment for ${target}." >&2
-    return 0
-  fi
-
   local target_dir build_profile build_root
   target_dir="$(cargo_target_dir "${MODE}" "${target_mode}")"
   build_profile="${MODE}"
@@ -507,24 +494,6 @@ configure_rusty_v8_artifacts() {
   if [[ "${target_mode}" != native ]]; then
     build_root="${target_dir}/${target}/${build_profile}"
   fi
-  for output in "${build_root}"/build/v8-*/output; do
-    [[ -f "${output}" ]] || continue
-    local cached_archive cached_binding
-    cached_archive="$(sed -n 's/^static lib URL: //p' "${output}" | tail -n 1)"
-    cached_binding="$(sed -n 's/^cargo:rustc-env=RUSTY_V8_SRC_BINDING_PATH=//p' "${output}" | tail -n 1)"
-    local expected_cache_suffix="/rusty-v8-artifacts/${crate_version}/${target}"
-    if [[ "${cached_archive}" == *"${expected_cache_suffix}/${archive}" \
-      && "${cached_binding}" == *"${expected_cache_suffix}/${binding}" \
-      && "$(basename "${cached_archive}")" == "${archive}" \
-      && "$(basename "${cached_binding}")" == "${binding}" \
-      && -s "${cached_archive}" && -s "${cached_binding}" ]]; then
-      RUSTY_V8_ARCHIVE_PATH="${cached_archive}"
-      RUSTY_V8_BINDING_PATH="${cached_binding}"
-      echo "Using Rusty V8 artifacts recorded by Cargo for ${target}." >&2
-      return 0
-    fi
-  done
-
   local_repo=""
   if [[ "${target_mode}" == armv7 || "${target_mode}" == android || "${target_mode}" == musl ]]; then
     local_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
@@ -533,39 +502,25 @@ configure_rusty_v8_artifacts() {
   fi
   cache_dir="${BUILD_REPO}/build/rusty-v8-artifacts/${crate_version}/${target}"
   mkdir -p "${cache_dir}"
-  local cache_checksum="${cache_dir}/rusty_v8_${profile}_${target}.sha256"
-  if [[ -s "${cache_dir}/${archive}" && -s "${cache_dir}/${binding}" \
-    && -s "${cache_checksum}" ]] \
-    && (cd "${cache_dir}" && sha256sum -c "${cache_checksum}" >/dev/null); then
-    RUSTY_V8_ARCHIVE_PATH="${cache_dir}/${archive}"
-    RUSTY_V8_BINDING_PATH="${cache_dir}/${binding}"
-    echo "Using cached Rusty V8 artifacts from ${cache_dir} for ${target}." >&2
-    return 0
+  release_tag="${RUSTY_V8_RELEASE_TAG:-rusty-v8-v${crate_version}}"
+  resolver_args=(
+    "--target=${target}"
+    "--output-dir=${cache_dir}"
+    "--cargo-build-dir=${build_root}"
+    "--local-repo=${local_repo}"
+    "--release-repo=${RUSTY_V8_RELEASE_REPO:-auto}"
+    "--release-tag=${release_tag}"
+    "--profile=${profile}"
+    "--v8-version=${crate_version}"
+  )
+  local resolved_artifacts
+  if ! resolved_artifacts="$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}")"; then
+    echo "Rusty V8 artifact resolution failed for ${target}." >&2
+    return 1
   fi
-
-  if [[ -n "${local_repo}" && -f "${local_repo}/${archive}" && -f "${local_repo}/${binding}" ]]; then
-    RUSTY_V8_ARCHIVE_PATH="${local_repo}/${archive}"
-    RUSTY_V8_BINDING_PATH="${local_repo}/${binding}"
-    echo "Using local Rusty V8 artifacts from ${local_repo} for ${target}." >&2
-  else
-    release_tag="${RUSTY_V8_RELEASE_TAG:-rusty-v8-v${crate_version}}"
-    resolver_args=(
-      "--target=${target}"
-      "--output-dir=${cache_dir}"
-      "--release-repo=${RUSTY_V8_RELEASE_REPO:-auto}"
-      "--release-tag=${release_tag}"
-      "--profile=${profile}"
-      "--v8-version=${crate_version}"
-    )
-    local resolved_artifacts
-    if ! resolved_artifacts="$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}")"; then
-      echo "Rusty V8 artifact resolution failed for ${target}." >&2
-      return 1
-    fi
-    eval "${resolved_artifacts}"
-    RUSTY_V8_ARCHIVE_PATH="${RUSTY_V8_ARCHIVE}"
-    RUSTY_V8_BINDING_PATH="${RUSTY_V8_SRC_BINDING_PATH}"
-  fi
+  eval "${resolved_artifacts}"
+  RUSTY_V8_ARCHIVE_PATH="${RUSTY_V8_ARCHIVE}"
+  RUSTY_V8_BINDING_PATH="${RUSTY_V8_SRC_BINDING_PATH}"
 
   [[ -s "${RUSTY_V8_ARCHIVE_PATH}" && -s "${RUSTY_V8_BINDING_PATH}" ]] || return 1
   verify_rusty_v8_artifacts "${target_mode}"
