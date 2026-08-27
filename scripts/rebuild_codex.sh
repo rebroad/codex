@@ -880,9 +880,12 @@ directory = sys.argv[1]
 current_path = os.path.abspath(sys.argv[2])
 filename_pattern = re.compile(r"^codex-.*-[0-9a-f]{10,12}[-+][0-9]{12}$")
 fuser = shutil.which("fuser")
-if fuser is None:
-    print("Skipping adjacent binary cleanup: fuser is unavailable.", file=sys.stderr)
-    raise SystemExit
+try:
+    with open("/proc/net/unix", "rb"):
+        pass
+except OSError:
+    print("Skipping adjacent binary usage checks: /proc/net/unix is not readable.", file=sys.stderr)
+    fuser = None
 
 files = []
 for entry in os.scandir(directory):
@@ -904,10 +907,11 @@ while start < len(files):
     for _, _, path in files[start : end - 1]:
         if os.path.abspath(path) == current_path:
             continue
-        usage = subprocess.run([fuser, "-s", path], check=False).returncode
-        if usage != 1:
-            print(f"Keeping adjacent binary in use or uncheckable: {path}", file=sys.stderr)
-            continue
+        if fuser is not None:
+            usage = subprocess.run([fuser, "-s", path], check=False).returncode
+            if usage != 1:
+                print(f"Keeping adjacent binary in use or uncheckable: {path}", file=sys.stderr)
+                continue
         try:
             os.unlink(path)
         except OSError as error:
