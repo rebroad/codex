@@ -39,6 +39,20 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
+    /// Reconciles the local turn indicator with the server snapshot after a transport restart.
+    pub(crate) fn reconcile_turn_running_state(&mut self, active_turn_id: Option<&str>) {
+        match active_turn_id {
+            Some(turn_id) if !self.turn_lifecycle.agent_turn_running => {
+                self.turn_lifecycle.last_turn_id = Some(turn_id.to_string());
+                self.on_task_started();
+            }
+            None if self.turn_lifecycle.agent_turn_running => {
+                self.on_task_complete(None, None, /*from_replay*/ true);
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn collect_runtime_metrics_delta(&mut self) {
         if let Some(delta) = self.session_telemetry.runtime_metrics_summary() {
             self.apply_runtime_metrics_delta(delta);
