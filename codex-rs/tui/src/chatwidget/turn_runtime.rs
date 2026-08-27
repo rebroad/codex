@@ -26,6 +26,10 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn clear_guardian_review_status_after_transport_gap(&mut self) {
+        self.clear_guardian_review_status();
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -37,6 +41,20 @@ impl ChatWidget {
                 || self.mcp_startup_status.is_some(),
         );
         self.refresh_status_surfaces();
+    }
+
+    /// Reconciles the local turn indicator with the server snapshot after a transport restart.
+    pub(crate) fn reconcile_turn_running_state(&mut self, active_turn_id: Option<&str>) {
+        match active_turn_id {
+            Some(turn_id) if !self.turn_lifecycle.agent_turn_running => {
+                self.turn_lifecycle.last_turn_id = Some(turn_id.to_string());
+                self.on_task_started();
+            }
+            None if self.turn_lifecycle.agent_turn_running => {
+                self.on_task_complete(None, None, /*from_replay*/ true);
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn collect_runtime_metrics_delta(&mut self) {
