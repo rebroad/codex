@@ -102,7 +102,10 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
 
     buildifier_runner = shutil.which("dotslash")
     if buildifier_runner is not None:
-        buildifier_command = [buildifier_runner, str(REPO_ROOT / "tools" / "buildifier")]
+        buildifier_command = [
+            buildifier_runner,
+            str(REPO_ROOT / "tools" / "buildifier"),
+        ]
     else:
         buildifier_runner = shutil.which("buildifier")
         buildifier_command = [buildifier_runner or "dotslash"]
@@ -129,6 +132,18 @@ def formatter_build_tree() -> Path | None:
     )
 
 
+def ruff_command(project: str, dependency_group: str | None = None) -> list[str]:
+    """Use a native Ruff when available, otherwise run the locked uv project."""
+    if ruff := shutil.which("ruff"):
+        return [ruff]
+
+    command = ["uv", "run", "--frozen", "--project", project]
+    if dependency_group is not None:
+        command.extend(["--only-group", dependency_group])
+    command.append("ruff")
+    return command
+
+
 def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
     # Each `--project` retains its local dependency and Ruff configuration context.
     build_tree = formatter_build_tree()
@@ -137,34 +152,25 @@ def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
         if build_tree is not None
         else ()
     )
-    uv_run_args = [
-        "uv",
-        "run",
-        "--frozen",
-        "--project",
-        "sdk/python",
-        "--only-group",
-        "format",
-    ]
+    ruff_run_args = ruff_command("sdk/python", "format")
     format_args = [
-        *uv_run_args,
-        "ruff",
+        *ruff_run_args,
         "format",
     ]
     if check:
         format_args.append("--check")
         # `ruff check --diff` reports lint-driven rewrites without changing files.
         # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
-        lint_args = ["ruff", "check", "--diff"]
+        lint_args = ["check", "--diff"]
     else:
         # Ruff's lint fixer and formatter are separate passes: the first applies
         # fixable lint rewrites, while the second formats source layout.
-        lint_args = ["ruff", "check", "--fix", "--fix-only"]
+        lint_args = ["check", "--fix", "--fix-only"]
 
     return FormatterGroup(
         "Python SDK",
         (
-            Command((*uv_run_args, *lint_args, "sdk/python"), env=sdk_env),
+            Command((*ruff_run_args, *lint_args, "sdk/python"), env=sdk_env),
             Command((*format_args, "sdk/python"), env=sdk_env),
         ),
     )
@@ -173,15 +179,7 @@ def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
 def python_scripts_formatter_group(*, check: bool) -> FormatterGroup:
     # The SDK and internal scripts intentionally use separate project roots so
     # uv and Ruff retain each project's configuration context.
-    args = [
-        "uv",
-        "run",
-        "--frozen",
-        "--project",
-        "scripts",
-        "ruff",
-        "format",
-    ]
+    args = [*ruff_command("scripts"), "format"]
     build_tree = formatter_build_tree()
     scripts_env = (
         (("UV_PROJECT_ENVIRONMENT", str(build_tree / "scripts-venv")),)
