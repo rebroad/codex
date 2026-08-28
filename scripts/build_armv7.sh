@@ -71,9 +71,14 @@ LINKER_CAPTURE_ONLY="${CODEX_ARMV7_LINKER_CAPTURE_ONLY:-false}"
 LINKER_CAPTURE_LOG=""
 LINKER_CAPTURE_DONE_FILE=""
 LINKER_CAPTURE_SYSROOT_DIR=""
-MOLD_VERSION="${MOLD_VERSION:-2.37.1}"
+MOLD_VERSION="${MOLD_VERSION:-2.42.0}"
+case "$(uname -m)" in
+  aarch64|arm64) MOLD_HOST_ARCH=aarch64 ;;
+  x86_64|amd64) MOLD_HOST_ARCH=x86_64 ;;
+  *) MOLD_HOST_ARCH='' ;;
+esac
 MOLD_BUNDLE_DIR=""
-MOLD_BUNDLE_URL="https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
+MOLD_BUNDLE_URL="https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-${MOLD_HOST_ARCH}-linux.tar.gz"
 
 terminate_child_processes() {
   pkill -TERM -P "$$" >/dev/null 2>&1 || true
@@ -150,7 +155,12 @@ prepare_optional_mold() {
     return 0
   fi
 
-  MOLD_BUNDLE_DIR="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux"
+  [[ -n "${MOLD_HOST_ARCH}" ]] || {
+    echo "Mold has no supported host bundle for $(uname -m); falling back to lld." >&2
+    return 1
+  }
+
+  MOLD_BUNDLE_DIR="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-${MOLD_HOST_ARCH}-linux"
   if [[ -x "${MOLD_BUNDLE_DIR}/bin/mold" && -x "${MOLD_BUNDLE_DIR}/bin/ld.mold" ]]; then
     PATH="${MOLD_BUNDLE_DIR}/bin:${PATH}"
     export PATH
@@ -162,7 +172,7 @@ prepare_optional_mold() {
     return 1
   fi
 
-  archive_path="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
+  archive_path="${ARMV7_CACHE_DIR}/mold-${MOLD_VERSION}-${MOLD_HOST_ARCH}-linux.tar.gz"
   if [[ -f "${archive_path}" ]] && ! tar -tzf "${archive_path}" >/dev/null 2>&1; then
     echo "Cached Mold archive is corrupt; removing it." >&2
     rm -f "${archive_path}"
