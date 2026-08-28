@@ -2558,7 +2558,11 @@ impl Session {
             });
         };
 
-        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+        let approvals_reviewer = self.current_approvals_reviewer().await;
+        if crate::guardian::routes_approval_policy_to_guardian(
+            turn_context.approval_policy(),
+            approvals_reviewer,
+        ) {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
                 active.as_ref().map(|active| Arc::clone(&active.turn_state))
