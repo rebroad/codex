@@ -404,7 +404,7 @@ fn catalog_approval_messages_select_reviewer_variant() {
         (
             AskForApproval::OnRequest,
             ApprovalsReviewer::AutoReview,
-            "auto-review catalog approvals",
+            "user catalog approvals",
         ),
         (
             AskForApproval::Never,
@@ -529,8 +529,16 @@ fn empty_catalog_non_on_request_approval_messages_suppress_legacy_approval_text(
 }
 
 #[test]
-fn auto_review_approvals_append_auto_review_specific_guidance() {
-    let text = approval_text(
+fn reviewer_does_not_change_approval_instructions() {
+    let user_text = approval_text(
+        AskForApproval::OnRequest,
+        ApprovalsReviewer::User,
+        /*approval_messages*/ None,
+        &Policy::empty(),
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    );
+    let auto_review_text = approval_text(
         AskForApproval::OnRequest,
         ApprovalsReviewer::AutoReview,
         /*approval_messages*/ None,
@@ -539,14 +547,21 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
         /*request_permissions_tool_enabled*/ false,
     );
 
-    assert!(text.contains("`approvals_reviewer` is `auto_review`"));
-    assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
-    assert!(text.contains("materially safer alternative"));
+    assert_eq!(user_text, auto_review_text);
+    assert!(user_text.contains("materially safer alternative"));
 }
 
 #[test]
-fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_never() {
-    let text = approval_text(
+fn reviewer_does_not_change_non_request_approval_instructions() {
+    let user_text = approval_text(
+        AskForApproval::Never,
+        ApprovalsReviewer::User,
+        /*approval_messages*/ None,
+        &Policy::empty(),
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    );
+    let auto_review_text = approval_text(
         AskForApproval::Never,
         ApprovalsReviewer::AutoReview,
         /*approval_messages*/ None,
@@ -555,8 +570,8 @@ fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_nev
         /*request_permissions_tool_enabled*/ false,
     );
 
-    assert!(!text.contains("`approvals_reviewer` is `auto_review`"));
-    assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
+    assert_eq!(user_text, auto_review_text);
+    assert!(!user_text.contains("materially safer alternative"));
 }
 
 fn granular_categories_section(title: &str, categories: &[&str]) -> String {

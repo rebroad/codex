@@ -15,6 +15,7 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
+use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::apply_patch::ApplyPatchApprovalKey;
 use crate::tools::runtimes::unified_exec::UnifiedExecApprovalKey;
@@ -571,10 +572,8 @@ impl Session {
         {
             ApprovalReviewer::for_policy(*approval_policy, *reviewer)
         } else {
-            ApprovalReviewer::for_policy(
-                ctx.review_context.approval_policy,
-                ctx.review_context.approvals_reviewer,
-            )
+            let reviewer = self.current_approvals_reviewer().await;
+            ApprovalReviewer::for_policy(ctx.review_context.turn().approval_policy(), reviewer)
         };
 
         let decision = match reviewer {

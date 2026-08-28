@@ -2651,7 +2651,6 @@ impl Session {
     ) -> Option<RequestPermissionsResponse> {
         let turn_context = &step_context.turn;
         let approval_policy = step_context.settings.approval_policy();
-        let approvals_reviewer = step_context.settings.approvals_reviewer();
         match approval_policy {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2688,8 +2687,8 @@ impl Session {
             });
         };
 
-        if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
-        {
+        let approvals_reviewer = self.current_approvals_reviewer().await;
+        if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer) {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
                 active.as_ref().map(|active| Arc::clone(&active.turn_state))

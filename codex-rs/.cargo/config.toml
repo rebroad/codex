@@ -12,11 +12,11 @@ rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
 
 [target.aarch64-linux-android]
 ar = "llvm-ar"
-linker = "aarch64-linux-android29-clang"
+linker = "aarch64-linux-android-clang"
 rustflags = ["-C", "link-arg=-lc++_shared", "-C", "link-arg=-Wl,-rpath,$ORIGIN"]
 
 [env]
 AR_aarch64_linux_android = "llvm-ar"
-CC_aarch64_linux_android = "aarch64-linux-android29-clang"
-CXX_aarch64_linux_android = "aarch64-linux-android29-clang++"
+CC_aarch64_linux_android = "aarch64-linux-android-clang"
+CXX_aarch64_linux_android = "aarch64-linux-android-clang++"
 RANLIB_aarch64_linux_android = "llvm-ranlib"
