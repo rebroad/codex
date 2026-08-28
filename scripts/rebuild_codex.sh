@@ -52,7 +52,7 @@ FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 SUDO_AUTHENTICATED="false"
 
 # Rebuild jobs have their own purpose link so its timestamp identifies the
-# last rebuild invocation, even when Cargo reuses the same fingerprinted target.
+# last rebuild invocation, even when Cargo reuses the same shared target.
 export CODEX_CARGO_PURPOSE="${CODEX_CARGO_PURPOSE:-rebuild}"
 
 # Keep the native OpenSSL cache implementation shared with the Just recipes.
@@ -559,16 +559,6 @@ cargo_target_dir() {
     --print-target
 }
 
-prepare_target_dir() {
-  local target_dir="${1}" target_mode="${2}" triple="${3}" host marker expected
-  host="$("${RUSTC_CMD[@]}" -vV | sed -n 's/^host: //p')"
-  marker="${target_dir}/.codex-target"
-  printf -v expected 'target_mode=%s\ntriple=%s\nhost=%s\n' "${target_mode}" "${triple}" "${host}"
-
-  mkdir -p "${target_dir}"
-  printf '%s' "${expected}" >"${marker}"
-}
-
 target_triple() {
   case "${1}" in
     native) echo "" ;;
@@ -617,12 +607,12 @@ cargo_build() {
   target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
 
   local shared_env_script="${BUILD_REPO}/scripts/codex_cargo_env.sh"
-  if [[ "${target_mode}" == native && -x "${shared_env_script}" ]]; then
+  if [[ -x "${shared_env_script}" ]]; then
     eval "$(bash "${shared_env_script}" \
       --source-repo "${SOURCE_REPO}" \
       --build-repo "${BUILD_REPO}" \
       --mode "${mode}" \
-      --target-mode native \
+      --target-mode "${target_mode}" \
       --purpose "${purpose}" \
       --emit)"
     target_dir="${CARGO_TARGET_DIR}"
@@ -641,7 +631,6 @@ cargo_build() {
     return 0
   fi
 
-  prepare_target_dir "${target_dir}" "${target_mode}" "${triple}"
   if [[ -n "${triple}" ]]; then
     target="${triple}"
     ensure_target "${triple}"
@@ -688,27 +677,6 @@ cargo_build() {
     CODEX_BUILD_TIMESTAMP="0000000000-000000000000"
   )
   [[ -n "${CARGO_BUILD_JOBS:-}" ]] && env_args+=(CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}")
-  if [[ "${target_mode}" == native \
-    && "$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')" == aarch64-linux-android \
-    && -x "$(command -v aarch64-linux-android-clang || true)" ]]; then
-    local android_clang android_builtins
-    android_clang="$(command -v aarch64-linux-android-clang)"
-    android_builtins="$("${android_clang}" -print-file-name=libclang_rt.builtins-aarch64-android.a)"
-    [[ -f "${android_builtins}" ]] \
-      || die "Android compiler builtins archive not found: ${android_builtins}"
-    env_args+=(
-      CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${android_clang}"
-      CC_aarch64_linux_android="${android_clang}"
-      CXX_aarch64_linux_android="${android_clang}++"
-      AR_aarch64_linux_android="llvm-ar"
-      RANLIB_aarch64_linux_android="llvm-ranlib"
-      CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS}"
-    )
-    local protoc_path="$(command -v protoc || true)"
-    [[ -n "${protoc_path}" ]] \
-      || die "protobuf compiler is required on Android; install it with: pkg install protobuf"
-    env_args+=(PROTOC="${protoc_path}")
-  fi
   if [[ "${target_mode}" == native ]]; then
     configure_rusty_v8_artifacts "${target_mode}" || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
     env_args+=(
