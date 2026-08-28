@@ -94,14 +94,57 @@ LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
 RUSTC_VERSION="$(${RUSTC_BIN} -vV)"
 LINKER_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER:-}"
 RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
+FINGERPRINT_RUSTFLAGS_VALUE="${RUSTFLAGS_VALUE}"
+MOLD_BIN="$(command -v mold || true)"
+LINKER_IDENTITY=unavailable
 
-if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
+if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
   [[ -x "${ANDROID_CLANG}" ]] || { echo "Android linker not found" >&2; exit 1; }
   ANDROID_BUILTINS="$(${ANDROID_CLANG} -print-file-name=libclang_rt.builtins-aarch64-android.a)"
   [[ -s "${ANDROID_BUILTINS}" ]] || { echo "Android compiler builtins archive not found" >&2; exit 1; }
   LINKER_VALUE="${ANDROID_CLANG}"
-  RUSTFLAGS_VALUE="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${ANDROID_BUILTINS}"
+  FINGERPRINT_RUSTFLAGS_VALUE="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${ANDROID_BUILTINS}"
+  RUSTFLAGS_VALUE="-Clink-arg=${ANDROID_BUILTINS}"
+fi
+
+if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  if [[ -n "${MOLD_BIN}" ]]; then
+    mold_identity="$("${MOLD_BIN}" --version | head -n 1):$(sha256sum "${MOLD_BIN}" | awk '{print $1}')"
+    mold_probe_dir="${TMPDIR:-${RUNNER_TEMP:-/var/tmp}}/codex-mold-probe"
+    mkdir -p "${mold_probe_dir}"
+    mold_probe_src="${mold_probe_dir}/probe.c"
+    mold_probe_bin="${mold_probe_dir}/probe"
+    printf '%s\n' 'int main(void) { return 0; }' >"${mold_probe_src}"
+    if "${ANDROID_CLANG}" -fuse-ld=mold "${mold_probe_src}" -o "${mold_probe_bin}" >/dev/null 2>&1; then
+      RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=mold"
+      FINGERPRINT_RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=mold"
+      LINKER_IDENTITY="mold:${mold_identity}"
+    fi
+    rm -f "${mold_probe_src}" "${mold_probe_bin}"
+  fi
+  if [[ "${LINKER_IDENTITY}" == unavailable ]]; then
+    lld_bin="$(command -v ld.lld || true)"
+    [[ -n "${lld_bin}" ]] || { echo "Neither Mold nor LLD is available for Android linking" >&2; exit 1; }
+    lld_identity="$("${lld_bin}" --version | head -n 1):$(sha256sum "${lld_bin}" | awk '{print $1}')"
+    mold_probe_dir="${TMPDIR:-${RUNNER_TEMP:-/var/tmp}}/codex-lld-probe"
+    mkdir -p "${mold_probe_dir}"
+    mold_probe_src="${mold_probe_dir}/probe.c"
+    mold_probe_bin="${mold_probe_dir}/probe"
+    printf '%s\n' 'int main(void) { return 0; }' >"${mold_probe_src}"
+    if ! "${ANDROID_CLANG}" -fuse-ld=lld "${mold_probe_src}" -o "${mold_probe_bin}" >/dev/null 2>&1; then
+      rm -f "${mold_probe_src}" "${mold_probe_bin}"
+      echo "Neither Mold nor LLD can link the native Android target" >&2
+      exit 1
+    fi
+    rm -f "${mold_probe_src}" "${mold_probe_bin}"
+    RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=lld"
+    FINGERPRINT_RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=lld"
+    LINKER_IDENTITY="lld:${lld_identity}"
+  fi
+fi
+if [[ "${LINKER_IDENTITY}" == unavailable && -n "${LINKER_VALUE}" && -x "${LINKER_VALUE}" ]]; then
+  LINKER_IDENTITY="driver:${LINKER_VALUE}:$(sha256sum "${LINKER_VALUE}" | awk '{print $1}')"
 fi
 
 OPENSSL_VERSION="$(bash "${SOURCE_REPO}/scripts/openssl_artifacts.sh" version "${LOCK_FILE}")"
@@ -128,7 +171,7 @@ FINGERPRINT_INPUT="$(printf '%s\n' \
   "mode=${MODE}" "target_mode=${TARGET_MODE}" "target=${TARGET}" \
   "host=${HOST_TARGET}" "rustc=${RUSTC_VERSION}" \
   "lockfile=${LOCK_GRAPH_FINGERPRINT}" \
-  "linker=${LINKER_VALUE}" "rustflags=${RUSTFLAGS_VALUE}" \
+  "linker=${LINKER_VALUE}" "linker_identity=${LINKER_IDENTITY}" "rustflags=${FINGERPRINT_RUSTFLAGS_VALUE}" \
   "openssl=${OPENSSL_VERSION}:${OPENSSL_IDENTITY}" \
   "rusty_v8=${RUSTY_V8_VERSION}:${RUSTY_V8_IDENTITY}" \
   'CODEX_BUILD_TIMESTAMP=0000000000-000000000000')"
@@ -149,9 +192,7 @@ if [[ -e "${TARGET_LINK}" && ! -L "${TARGET_LINK}" ]]; then
   echo "target purpose link is not a symbolic link: ${TARGET_LINK}" >&2
   exit 1
 fi
-TEMP_LINK="${TARGET_LINK}.tmp.$$"
-ln -s "${TARGET_DIR}" "${TEMP_LINK}"
-mv -f "${TEMP_LINK}" "${TARGET_LINK}"
+ln -sfn "${TARGET_DIR}" "${TARGET_LINK}"
 
 if [[ "${OUTPUT}" == target ]]; then
   printf '%s\n' "${TARGET_DIR}"
@@ -168,7 +209,7 @@ if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
   printf 'export OPENSSL_DIR=%q OPENSSL_NO_VENDOR=1 OPENSSL_STATIC=1\n' "${OPENSSL_DIR_VALUE}"
 fi
 printf 'export RUSTY_V8_ARCHIVE=%q RUSTY_V8_SRC_BINDING_PATH=%q\n' "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}"
-if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
+if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
     "${ANDROID_CLANG}" "${ANDROID_CLANG}" "${ANDROID_CLANG}++" "${RUSTFLAGS_VALUE}" "$(command -v protoc)"
 fi
