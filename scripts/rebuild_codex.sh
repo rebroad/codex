@@ -51,6 +51,10 @@ RUSTC_CMD=(rustc)
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 SUDO_AUTHENTICATED="false"
 
+# Rebuild jobs have their own purpose link so its timestamp identifies the
+# last rebuild invocation, even when Cargo reuses the same fingerprinted target.
+export CODEX_CARGO_PURPOSE="${CODEX_CARGO_PURPOSE:-rebuild}"
+
 # Keep the native OpenSSL cache implementation shared with the Just recipes.
 # The script is deliberately sourced from the source checkout before cpto
 # synchronizes it into the build tree.
@@ -698,7 +702,7 @@ cargo_build() {
       CXX_aarch64_linux_android="${android_clang}++"
       AR_aarch64_linux_android="llvm-ar"
       RANLIB_aarch64_linux_android="llvm-ranlib"
-      CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${android_builtins}"
+      CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS}"
     )
     local protoc_path="$(command -v protoc || true)"
     [[ -n "${protoc_path}" ]] \
@@ -969,7 +973,6 @@ build_android() {
   export AR_aarch64_linux_android="${llvm}/bin/llvm-ar"
   export RANLIB_aarch64_linux_android="${llvm}/bin/llvm-ranlib"
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${llvm}/bin/aarch64-linux-android29-clang"
-  export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}"
   # Source builds need Rusty V8's bundled NDK metadata; prebuilt artifact
   # builds do not, and their checkout may intentionally omit this source-only
   # directory.
