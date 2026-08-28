@@ -104,6 +104,7 @@ fi
 LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
 RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
 MOLD_BIN="$(command -v mold || true)"
+DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-0}"
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
@@ -143,6 +144,10 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
     rm -f "${mold_probe_src}" "${mold_probe_bin}"
     RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=lld"
   fi
+fi
+
+if [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
+  RUSTFLAGS_VALUE+=" -D warnings"
 fi
 
 OPENSSL_VERSION="$(bash "${SOURCE_REPO}/scripts/openssl_artifacts.sh" version "${LOCK_FILE}")"
@@ -206,4 +211,6 @@ fi
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
     "${ANDROID_CLANG}" "${ANDROID_CLANG}" "${ANDROID_CLANG}++" "${RUSTFLAGS_VALUE}" "$(command -v protoc)"
+elif [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
+  printf 'export RUSTFLAGS=\"${RUSTFLAGS:-} -D warnings\"\n'
 fi
