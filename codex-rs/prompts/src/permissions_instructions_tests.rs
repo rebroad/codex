@@ -534,8 +534,16 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
 }
 
 #[test]
-fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_never() {
-    let text = approval_text(
+fn reviewer_does_not_change_non_request_approval_instructions() {
+    let user_text = approval_text(
+        AskForApproval::Never,
+        ApprovalsReviewer::User,
+        ResolvedApprovalMessages::new(/*messages*/ None),
+        &[],
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    );
+    let auto_review_text = approval_text(
         AskForApproval::Never,
         ApprovalsReviewer::AutoReview,
         ResolvedApprovalMessages::new(/*messages*/ None),
@@ -544,8 +552,8 @@ fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_nev
         /*request_permissions_tool_enabled*/ false,
     );
 
-    assert!(!text.contains("`approvals_reviewer` is `auto_review`"));
-    assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
+    assert_eq!(user_text, auto_review_text);
+    assert!(!user_text.contains("materially safer alternative"));
 }
 
 const ALL_APPROVALS_ENABLED: GranularApprovalConfig = GranularApprovalConfig {

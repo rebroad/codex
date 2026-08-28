@@ -428,6 +428,22 @@ impl ApprovalAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApprovalReviewer {
+    Guardian,
+    User,
+}
+
+impl ApprovalReviewer {
+    fn for_policy(approval_policy: AskForApproval, reviewer: ApprovalsReviewer) -> Self {
+        if crate::guardian::routes_approval_policy_to_guardian(approval_policy, reviewer) {
+            Self::Guardian
+        } else {
+            Self::User
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ApprovalResolutionSource {
     Hook,
     Guardian,
@@ -556,16 +572,42 @@ impl Session {
         action: ApprovalAction,
         ctx: &ApprovalContext,
     ) -> ApprovalResolution {
-        if let Some(decision) = self.request_guardian_approval(action.clone(), ctx).await {
-            ApprovalResolution {
-                decision,
-                source: ApprovalResolutionSource::Guardian,
-            }
+        let reviewer = if ctx.strict_auto_review {
+            ApprovalReviewer::Guardian
+        } else if let ApprovalAction::McpToolCall {
+            approval_policy,
+            reviewer,
+            ..
+        } = &action
+        {
+            ApprovalReviewer::for_policy(*approval_policy, *reviewer)
         } else {
-            ApprovalResolution {
+            let reviewer = self
+                .current_approvals_reviewer(
+                    ctx.review_context.turn(),
+                    ctx.review_context.approvals_reviewer,
+                )
+                .await;
+            ApprovalReviewer::for_policy(ctx.review_context.approval_policy, reviewer)
+        };
+
+        match reviewer {
+            ApprovalReviewer::Guardian => {
+                match self.request_guardian_approval(action.clone(), ctx).await {
+                    Some(decision) => ApprovalResolution {
+                        decision,
+                        source: ApprovalResolutionSource::Guardian,
+                    },
+                    None => ApprovalResolution {
+                        decision: self.request_user_approval(&action, ctx).await,
+                        source: ApprovalResolutionSource::User,
+                    },
+                }
+            }
+            ApprovalReviewer::User => ApprovalResolution {
                 decision: self.request_user_approval(&action, ctx).await,
                 source: ApprovalResolutionSource::User,
-            }
+            },
         }
     }
 

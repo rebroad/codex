@@ -2992,6 +2992,10 @@ impl Session {
         let requested_permissions = args.permissions;
         let sandbox_context = environment.sandbox_context(/*additional_permissions*/ None);
         let context = sandbox_context.policy_context();
+        let approvals_reviewer = self
+            .current_approvals_reviewer(turn_context, step_context.settings.approvals_reviewer())
+            .await;
+        if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
         {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;

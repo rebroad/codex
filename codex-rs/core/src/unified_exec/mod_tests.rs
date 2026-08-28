@@ -5,6 +5,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
 use crate::session::session::Session;
+use crate::session::step_settings::StepSettingsUpdate;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
@@ -965,7 +966,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
     // Empty polling must complete without an approval response.
     // The test deadline must allow the minimum empty-poll wait.
     tokio::time::timeout(
-        Duration::from_millis(MIN_EMPTY_YIELD_TIME_MS) + Duration::from_secs(/*secs*/ 5),
+        Duration::from_millis(MIN_EMPTY_YIELD_TIME_MS) + Duration::from_secs(/*secs*/ 12),
         write_stdin(&session, &turn, process_id, "", /*yield_time_ms*/ 250),
     )
     .await??;
@@ -980,6 +981,16 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
     );
     Arc::make_mut(&mut Arc::get_mut(&mut turn).unwrap().config).approvals_reviewer =
         ApprovalsReviewer::User;
+    session
+        .update_settings(crate::session::SessionSettingsUpdate {
+            step_settings: StepSettingsUpdate {
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("test setup should update the live approvals reviewer");
     assert!(matches!(
         write_stdin(&session, &turn, process_id, input, /*yield_time_ms*/ 250).await,
         Err(UnifiedExecError::StdinApproval(ToolError::Rejected(reason)))

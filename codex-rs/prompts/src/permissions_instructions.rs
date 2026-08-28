@@ -34,6 +34,8 @@ const GRANULAR_PROMPTED_CATEGORIES: &str =
     "These approval categories may still prompt the user when needed:";
 const GRANULAR_REJECTED_CATEGORIES: &str =
     "These approval categories are automatically rejected instead of prompting the user:";
+const APPROVAL_DENIAL_GUIDANCE: &str = "If an approval request is rejected, proceed only with a materially safer alternative, or inform the user of the risk and ask for approval.";
+const NETWORK_ACCESS_PLACEHOLDER: &str = "{{ network_access }}";
 
 static DANGER_FULL_ACCESS: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(DANGER_FULL_ACCESS_TEMPLATE.trim_end())
@@ -267,7 +269,12 @@ fn approval_text(
     if approvals_reviewer == ApprovalsReviewer::AutoReview {
         format!("{text}\n\n{AUTO_REVIEW_SUFFIX}")
     } else {
-        text
+        match approval_policy {
+            AskForApproval::OnRequest | AskForApproval::UnlessTrusted => {
+                format!("{text}\n\n{APPROVAL_DENIAL_GUIDANCE}")
+            }
+            AskForApproval::Never | AskForApproval::Granular(_) => text,
+        }
     }
 }
 
@@ -283,7 +290,7 @@ fn sandbox_text(
     };
     let network_access = network_access.to_string();
     match selected {
-        ResolvedMessage::Catalog(text) => text.replace("{{ network_access }}", &network_access),
+        ResolvedMessage::Catalog(text) => text.replace(NETWORK_ACCESS_PLACEHOLDER, &network_access),
         ResolvedMessage::Bundled(_) => template
             .render([("network_access", network_access.as_str())])
             .unwrap_or_else(|err| panic!("sandbox template must render: {err}")),
