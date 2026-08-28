@@ -359,7 +359,7 @@ refresh_build_lockfile() {
   if [[ "${PACKAGE_NPM}" == true && "${#PACKAGE_TARGETS[@]}" -gt 0 ]]; then
     lock_target_mode="${PACKAGE_TARGETS[0]}"
   fi
-  target_dir="$(cargo_target_dir "${MODE}" "${lock_target_mode}")"
+  target_dir="$(target_dir_for "${MODE}" "${lock_target_mode}")"
   local source_fingerprint stored_fingerprint=""
   local armv7_lock_cache="${target_dir}/cache/cargo-resolution-lock"
   source_fingerprint="$(sed '/^version = /d' "${source_lock}" | sha256sum | awk '{print $1}')"
@@ -460,7 +460,7 @@ cache_openssl_artifacts() {
   esac
   version="$(openssl_version_from_lock "${BUILD_WORKSPACE}/Cargo.lock")"
   host="$(${RUSTC_CMD[@]} -vV | sed -n 's/^host: //p')"
-  openssl_cache_from_target "$(cargo_target_dir "${MODE}" "${target_mode}")" \
+  openssl_cache_from_target "$(target_dir_for "${MODE}" "${target_mode}")" \
     "${BUILD_REPO}" "${target}" "${version}" "${host}" || true
 }
 
@@ -491,7 +491,7 @@ configure_rusty_v8_artifacts() {
   local default_profile="ptrcomp_sandbox_release"
   local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
   local target_dir build_profile build_root
-  target_dir="$(cargo_target_dir "${MODE}" "${target_mode}")"
+  target_dir="$(target_dir_for "${MODE}" "${target_mode}")"
   build_profile="${MODE}"
   [[ "${build_profile}" == release ]] || build_profile="debug"
   build_root="${target_dir}/${build_profile}"
@@ -546,7 +546,7 @@ read_toolchain() {
   fi
 }
 
-cargo_target_dir() {
+target_dir_for() {
   local mode="${1}" target_mode="${2}" purpose="${CODEX_CARGO_PURPOSE:-build}"
   local shared_env_script="${BUILD_REPO}/scripts/codex_cargo_env.sh"
   [[ -x "${shared_env_script}" ]] || die "shared Cargo environment helper not found: ${shared_env_script}"
@@ -604,19 +604,19 @@ cargo_build() {
   local mode="${1}" target_mode="${2}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir
   [[ "${mode}" == release ]] && profile_args+=(--release)
   triple="$(target_triple "${target_mode}")"
-  target_dir="$(cargo_target_dir "${mode}" "${target_mode}")"
 
   local shared_env_script="${BUILD_REPO}/scripts/codex_cargo_env.sh"
-  if [[ -x "${shared_env_script}" ]]; then
-    eval "$(bash "${shared_env_script}" \
-      --source-repo "${SOURCE_REPO}" \
-      --build-repo "${BUILD_REPO}" \
-      --mode "${mode}" \
-      --target-mode "${target_mode}" \
-      --purpose "${purpose}" \
-      --emit)"
-    target_dir="${CARGO_TARGET_DIR}"
-  fi
+  [[ -x "${shared_env_script}" ]] || die "shared Cargo environment helper not found: ${shared_env_script}"
+  local cargo_env_output
+  cargo_env_output="$(bash "${shared_env_script}" \
+    --source-repo "${SOURCE_REPO}" \
+    --build-repo "${BUILD_REPO}" \
+    --mode "${mode}" \
+    --target-mode "${target_mode}" \
+    --purpose "${purpose}" \
+    --emit)" || return $?
+  eval "${cargo_env_output}" || return $?
+  target_dir="${CARGO_TARGET_DIR}"
 
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_builder="${BUILD_REPO}/scripts/build_armv7.sh"
