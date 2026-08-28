@@ -588,6 +588,13 @@ impl ChatWidget {
             self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
             return;
         }
+        if self.is_user_turn_pending_or_running() {
+            self.add_error_message(
+                "A turn is already in progress; wait for it to finish before using /wake."
+                    .to_string(),
+            );
+            return;
+        }
         let effective_mode = self.effective_collaboration_mode();
         if effective_mode.model().trim().is_empty() {
             self.add_error_message(
