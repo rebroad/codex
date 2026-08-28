@@ -5,7 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: codex_cargo_env.sh --source-repo DIR --build-repo DIR
   --mode debug|release --target-mode native|musl|armv7|android
-  [--purpose NAME]
+  [--purpose NAME] [--invalidate]
   [--emit|--print-target]
 EOF
 }
@@ -16,6 +16,7 @@ MODE=debug
 TARGET_MODE=native
 PURPOSE="${CODEX_CARGO_PURPOSE:-default}"
 OUTPUT=emit
+INVALIDATE_TARGET=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,12 +25,17 @@ while [[ $# -gt 0 ]]; do
     --mode) MODE="${2:?missing build mode}"; shift 2 ;;
     --target-mode) TARGET_MODE="${2:?missing target mode}"; shift 2 ;;
     --purpose) PURPOSE="${2:?missing target purpose}"; shift 2 ;;
+    --invalidate) INVALIDATE_TARGET=true; shift ;;
     --emit) OUTPUT=emit; shift ;;
     --print-target) OUTPUT=target; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+if [[ "${CODEX_INVALIDATE_TARGET:-}" == 1 ]]; then
+  INVALIDATE_TARGET=true
+fi
 
 [[ -d "${SOURCE_REPO}/codex-rs" ]] || { echo "source repository not found: ${SOURCE_REPO}" >&2; exit 1; }
 [[ -d "${BUILD_REPO}/codex-rs" ]] || { echo "build repository not found: ${BUILD_REPO}" >&2; exit 1; }
@@ -85,10 +91,27 @@ case "${TARGET_MODE}" in
   native) TARGET="${HOST_TARGET}"; TARGET_ROOT="${BUILD_REPO}/codex-rs/target" ;;
   musl) TARGET=x86_64-unknown-linux-musl; BASE_TARGET_DIR="${BUILD_REPO}/build/musl-${MODE}" ;;
   armv7) TARGET="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"; BASE_TARGET_DIR="${BUILD_REPO}/build/armv7-${MODE}" ;;
-  android) TARGET=aarch64-linux-android; BASE_TARGET_DIR="${BUILD_REPO}/build/android-${MODE}" ;;
+  android)
+    TARGET=aarch64-linux-android
+    if [[ "${HOST_TARGET}" == "${TARGET}" ]]; then
+      TARGET_ROOT="${BUILD_REPO}/codex-rs/target"
+    else
+      BASE_TARGET_DIR="${BUILD_REPO}/build/android-${MODE}"
+    fi
+    ;;
   *) echo "invalid target mode: ${TARGET_MODE}" >&2; exit 2 ;;
 esac
 TARGET_ROOT="${TARGET_ROOT:-${BASE_TARGET_DIR}}"
+RECIPE_TARGET_MODE="${TARGET_MODE}"
+if [[ "${TARGET_MODE}" == android && "${HOST_TARGET}" == "${TARGET}" ]]; then
+  RECIPE_TARGET_MODE=native
+fi
+
+# All Cargo writers for a platform/profile share this lock.  The lock is
+# emitted into the caller's shell below, so it remains held for the whole
+# Cargo invocation rather than only while this helper is running.
+TARGET_LOCK_FILE="${TARGET_ROOT}.lock"
+mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 
 LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
 RUSTC_VERSION="$(${RUSTC_BIN} -vV)"
@@ -158,17 +181,25 @@ fi
 
 RUSTY_V8_VERSION="$(python3 "${SOURCE_REPO}/scripts/rusty_v8_version.py" "${LOCK_FILE}")"
 RUSTY_V8_DIR="${BUILD_REPO}/build/rusty-v8-artifacts/${RUSTY_V8_VERSION}/${TARGET}"
-RUSTY_V8_ENV="$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" \
+RUSTY_V8_ARCHIVE=''
+RUSTY_V8_SRC_BINDING_PATH=''
+if RUSTY_V8_ENV="$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" \
   --target="${TARGET}" --output-dir="${RUSTY_V8_DIR}" \
-  --cargo-build-dir="${BUILD_REPO}/codex-rs/target" 2>/dev/null)"
-eval "${RUSTY_V8_ENV}"
-RUSTY_V8_IDENTITY="$(sha256sum "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}" | awk '{print $1}' | tr '\n' ':')"
+  --cargo-build-dir="${TARGET_ROOT}" 2>/dev/null)"; then
+  eval "${RUSTY_V8_ENV}"
+  RUSTY_V8_IDENTITY="$(sha256sum "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}" | awk '{print $1}' | tr '\n' ':')"
+elif [[ "${TARGET_MODE}" == native ]]; then
+  echo "Rusty V8 artifacts are unavailable for the native target" >&2
+  exit 1
+else
+  RUSTY_V8_IDENTITY=from-source
+fi
 LOCK_GRAPH_FINGERPRINT="$(python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
   --manifest "${BUILD_REPO}/codex-rs/Cargo.toml" \
   --source-lock "${LOCK_FILE}" --fingerprint)"
 
 FINGERPRINT_INPUT="$(printf '%s\n' \
-  "mode=${MODE}" "target_mode=${TARGET_MODE}" "target=${TARGET}" \
+  "mode=${MODE}" "target_mode=${RECIPE_TARGET_MODE}" "target=${TARGET}" \
   "host=${HOST_TARGET}" "rustc=${RUSTC_VERSION}" \
   "lockfile=${LOCK_GRAPH_FINGERPRINT}" \
   "linker=${LINKER_VALUE}" "linker_identity=${LINKER_IDENTITY}" "rustflags=${FINGERPRINT_RUSTFLAGS_VALUE}" \
@@ -176,16 +207,36 @@ FINGERPRINT_INPUT="$(printf '%s\n' \
   "rusty_v8=${RUSTY_V8_VERSION}:${RUSTY_V8_IDENTITY}" \
   'CODEX_BUILD_TIMESTAMP=0000000000-000000000000')"
 FINGERPRINT="$(printf '%s' "${FINGERPRINT_INPUT}" | sha256sum | awk '{print substr($1, 1, 16)}')"
-TARGET_DIR="${TARGET_ROOT}.${FINGERPRINT}"
-MARKER="${TARGET_DIR}/.codex-cargo-fingerprint"
-if [[ -e "${TARGET_DIR}" ]]; then
-  if [[ ! -f "${MARKER}" ]] || ! grep -Fxq "${FINGERPRINT}" "${MARKER}"; then
-    echo "target directory exists with an incompatible fingerprint: ${TARGET_DIR}" >&2
+TARGET_DIR="${TARGET_ROOT}"
+MARKER="${TARGET_DIR}/.codex-cargo-recipe"
+
+if [[ -e "${TARGET_DIR}" && ! -d "${TARGET_DIR}" ]]; then
+  echo "Cargo target path is not a directory: ${TARGET_DIR}" >&2
+  exit 1
+fi
+
+if [[ -d "${TARGET_DIR}" ]]; then
+  if [[ ! -f "${MARKER}" ]]; then
+    has_contents=false
+    [[ -n "$(find "${TARGET_DIR}" -mindepth 1 -maxdepth 1 -print -quit)" ]] && has_contents=true
+    if [[ "${has_contents}" == true && "${INVALIDATE_TARGET}" != true ]]; then
+      echo "shared Cargo target has no recipe marker: ${TARGET_DIR}" >&2
+      echo "move it aside or rerun with CODEX_INVALIDATE_TARGET=1" >&2
+      exit 1
+    fi
+  elif ! grep -Fxq "${FINGERPRINT}" "${MARKER}" && [[ "${INVALIDATE_TARGET}" != true ]]; then
+    echo "shared Cargo target has an incompatible recipe: ${TARGET_DIR}" >&2
+    echo "rerun with CODEX_INVALIDATE_TARGET=1 to invalidate this exact target" >&2
     exit 1
   fi
 fi
+
+if [[ "${INVALIDATE_TARGET}" == true && -d "${TARGET_DIR}" ]]; then
+  echo "Invalidating shared Cargo target: ${TARGET_DIR}" >&2
+  find "${TARGET_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+fi
 mkdir -p "${TARGET_DIR}"
-printf '%s\n' "${FINGERPRINT}" >"${TARGET_DIR}/.codex-cargo-fingerprint"
+printf '%s\n' "${FINGERPRINT}" >"${MARKER}"
 
 TARGET_LINK="${BUILD_REPO}/codex-rs/target-${PURPOSE}"
 if [[ -e "${TARGET_LINK}" && ! -L "${TARGET_LINK}" ]]; then
@@ -201,6 +252,11 @@ fi
 
 printf '%s\n' 'unset CC CXX AR RANLIB CFLAGS CXXFLAGS TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_ALL_STATIC PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS'
 printf 'export RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_TARGET_DIR=%q CODEX_BUILD_TIMESTAMP=0000000000-000000000000 CODEX_BUILD_FINGERPRINT=%q\n' "${TARGET_DIR}" "${FINGERPRINT}"
+if command -v flock >/dev/null 2>&1; then
+  printf 'exec 9>>%q\nflock -x 9\n' "${TARGET_LOCK_FILE}"
+else
+  echo "warning: flock unavailable; Cargo target writes will not be serialized" >&2
+fi
 if [[ -n "${SCCACHE_BIN}" ]]; then
   printf 'export RUSTC_WRAPPER=%q SCCACHE_DIR=%q\n' "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}"
 fi
@@ -208,7 +264,9 @@ fi
 if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
   printf 'export OPENSSL_DIR=%q OPENSSL_NO_VENDOR=1 OPENSSL_STATIC=1\n' "${OPENSSL_DIR_VALUE}"
 fi
-printf 'export RUSTY_V8_ARCHIVE=%q RUSTY_V8_SRC_BINDING_PATH=%q\n' "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}"
+if [[ -n "${RUSTY_V8_ARCHIVE}" ]]; then
+  printf 'export RUSTY_V8_ARCHIVE=%q RUSTY_V8_SRC_BINDING_PATH=%q\n' "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}"
+fi
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
     "${ANDROID_CLANG}" "${ANDROID_CLANG}" "${ANDROID_CLANG}++" "${RUSTFLAGS_VALUE}" "$(command -v protoc)"
