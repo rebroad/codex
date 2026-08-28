@@ -13,7 +13,7 @@ build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
-cargo_setup := "eval \"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\";"
+cargo_setup := "codex_cargo_env_output=\"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\" || exit $?; eval \"$codex_cargo_env_output\" || exit $?;"
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
 
 # Display help
