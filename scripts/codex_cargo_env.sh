@@ -101,33 +101,21 @@ if [[ "${TARGET_MODE}" == android && "${HOST_TARGET}" == "${TARGET}" ]]; then
   RECIPE_TARGET_MODE=native
 fi
 
-# All Cargo writers for a platform/profile share this lock.  The lock is
-# emitted into the caller's shell below, so it remains held for the whole
-# Cargo invocation rather than only while this helper is running.
-TARGET_LOCK_FILE="${TARGET_ROOT}.lock"
-mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
-
 LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
-RUSTC_VERSION="$(${RUSTC_BIN} -vV)"
-LINKER_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER:-}"
 RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
-FINGERPRINT_RUSTFLAGS_VALUE="${RUSTFLAGS_VALUE}"
 MOLD_BIN="$(command -v mold || true)"
-LINKER_IDENTITY=unavailable
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
   [[ -x "${ANDROID_CLANG}" ]] || { echo "Android linker not found" >&2; exit 1; }
   ANDROID_BUILTINS="$(${ANDROID_CLANG} -print-file-name=libclang_rt.builtins-aarch64-android.a)"
   [[ -s "${ANDROID_BUILTINS}" ]] || { echo "Android compiler builtins archive not found" >&2; exit 1; }
-  LINKER_VALUE="${ANDROID_CLANG}"
-  FINGERPRINT_RUSTFLAGS_VALUE="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${ANDROID_BUILTINS}"
   RUSTFLAGS_VALUE="-Clink-arg=${ANDROID_BUILTINS}"
 fi
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  MOLD_AVAILABLE=false
   if [[ -n "${MOLD_BIN}" ]]; then
-    mold_identity="$("${MOLD_BIN}" --version | head -n 1):$(sha256sum "${MOLD_BIN}" | awk '{print $1}')"
     mold_probe_dir="${TMPDIR:-${RUNNER_TEMP:-/var/tmp}}/codex-mold-probe"
     mkdir -p "${mold_probe_dir}"
     mold_probe_src="${mold_probe_dir}/probe.c"
@@ -135,15 +123,13 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
     printf '%s\n' 'int main(void) { return 0; }' >"${mold_probe_src}"
     if "${ANDROID_CLANG}" -fuse-ld=mold "${mold_probe_src}" -o "${mold_probe_bin}" >/dev/null 2>&1; then
       RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=mold"
-      FINGERPRINT_RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=mold"
-      LINKER_IDENTITY="mold:${mold_identity}"
+      MOLD_AVAILABLE=true
     fi
     rm -f "${mold_probe_src}" "${mold_probe_bin}"
   fi
-  if [[ "${LINKER_IDENTITY}" == unavailable ]]; then
+  if [[ "${MOLD_AVAILABLE}" != true ]]; then
     lld_bin="$(command -v ld.lld || true)"
     [[ -n "${lld_bin}" ]] || { echo "Neither Mold nor LLD is available for Android linking" >&2; exit 1; }
-    lld_identity="$("${lld_bin}" --version | head -n 1):$(sha256sum "${lld_bin}" | awk '{print $1}')"
     mold_probe_dir="${TMPDIR:-${RUNNER_TEMP:-/var/tmp}}/codex-lld-probe"
     mkdir -p "${mold_probe_dir}"
     mold_probe_src="${mold_probe_dir}/probe.c"
@@ -156,21 +142,14 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
     fi
     rm -f "${mold_probe_src}" "${mold_probe_bin}"
     RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=lld"
-    FINGERPRINT_RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=lld"
-    LINKER_IDENTITY="lld:${lld_identity}"
   fi
-fi
-if [[ "${LINKER_IDENTITY}" == unavailable && -n "${LINKER_VALUE}" && -x "${LINKER_VALUE}" ]]; then
-  LINKER_IDENTITY="driver:${LINKER_VALUE}:$(sha256sum "${LINKER_VALUE}" | awk '{print $1}')"
 fi
 
 OPENSSL_VERSION="$(bash "${SOURCE_REPO}/scripts/openssl_artifacts.sh" version "${LOCK_FILE}")"
 OPENSSL_DIR_VALUE=''
-OPENSSL_IDENTITY=vendored
 if OPENSSL_ENV="$(bash "${SOURCE_REPO}/scripts/openssl_artifacts.sh" env "${BUILD_REPO}" "${TARGET}" "${OPENSSL_VERSION}" 2>/dev/null)"; then
   eval "${OPENSSL_ENV}"
   OPENSSL_DIR_VALUE="${OPENSSL_DIR}"
-  OPENSSL_IDENTITY="${OPENSSL_DIR}:$(sha256sum "${OPENSSL_DIR}/.metadata" | awk '{print $1}')"
 fi
 
 RUSTY_V8_VERSION="$(python3 "${SOURCE_REPO}/scripts/rusty_v8_version.py" "${LOCK_FILE}")"
@@ -181,52 +160,19 @@ if RUSTY_V8_ENV="$(bash "${SOURCE_REPO}/scripts/resolve_rusty_v8_artifacts.sh" \
   --target="${TARGET}" --output-dir="${RUSTY_V8_DIR}" \
   --cargo-build-dir="${TARGET_ROOT}" 2>/dev/null)"; then
   eval "${RUSTY_V8_ENV}"
-  RUSTY_V8_IDENTITY="$(sha256sum "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}" | awk '{print $1}' | tr '\n' ':')"
 elif [[ "${TARGET_MODE}" == native ]]; then
   echo "Rusty V8 artifacts are unavailable for the native target" >&2
   exit 1
-else
-  RUSTY_V8_IDENTITY=from-source
 fi
-LOCK_GRAPH_FINGERPRINT="$(python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
-  --manifest "${BUILD_REPO}/codex-rs/Cargo.toml" \
-  --source-lock "${LOCK_FILE}" --fingerprint)"
 
-FINGERPRINT_INPUT="$(printf '%s\n' \
-  "mode=${MODE}" "target_mode=${RECIPE_TARGET_MODE}" "target=${TARGET}" \
-  "host=${HOST_TARGET}" "rustc=${RUSTC_VERSION}" \
-  "lockfile=${LOCK_GRAPH_FINGERPRINT}" \
-  "linker=${LINKER_VALUE}" "linker_identity=${LINKER_IDENTITY}" "rustflags=${FINGERPRINT_RUSTFLAGS_VALUE}" \
-  "openssl=${OPENSSL_VERSION}:${OPENSSL_IDENTITY}" \
-  "rusty_v8=${RUSTY_V8_VERSION}:${RUSTY_V8_IDENTITY}" \
-  'CODEX_BUILD_TIMESTAMP=0000000000-000000000000')"
-FINGERPRINT="$(printf '%s' "${FINGERPRINT_INPUT}" | sha256sum | awk '{print substr($1, 1, 16)}')"
 TARGET_DIR="${TARGET_ROOT}"
-MARKER="${TARGET_DIR}/.codex-cargo-recipe"
-
-if [[ -e "${TARGET_DIR}" && ! -d "${TARGET_DIR}" ]]; then
-  echo "Cargo target path is not a directory: ${TARGET_DIR}" >&2
-  exit 1
-fi
-
-if [[ -d "${TARGET_DIR}" ]]; then
-  if [[ ! -f "${MARKER}" ]]; then
-    has_contents=false
-    [[ -n "$(find "${TARGET_DIR}" -mindepth 1 -maxdepth 1 -print -quit)" ]] && has_contents=true
-    if [[ "${has_contents}" == true ]]; then
-      echo "shared Cargo target has no recipe marker: ${TARGET_DIR}" >&2
-      echo "move it aside or remove it manually after confirming no build is using it" >&2
-      exit 1
-    fi
-  elif ! grep -Fxq "${FINGERPRINT}" "${MARKER}"; then
-    echo "shared Cargo target has an incompatible recipe: ${TARGET_DIR}" >&2
-    echo "move it aside or remove it manually after confirming no build is using it" >&2
-    exit 1
-  fi
-fi
+# All Cargo writers for a platform/profile share this lock.  The lock is
+# emitted into the caller's shell below, so it remains held for the whole
+# Cargo invocation rather than only while this helper is running.
+TARGET_LOCK_FILE="${TARGET_DIR}.lock"
+mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 
 mkdir -p "${TARGET_DIR}"
-printf '%s\n' "${FINGERPRINT}" >"${MARKER}"
 
 TARGET_LINK="${BUILD_REPO}/codex-rs/target-${PURPOSE}"
 if [[ -e "${TARGET_LINK}" && ! -L "${TARGET_LINK}" ]]; then
@@ -241,7 +187,7 @@ if [[ "${OUTPUT}" == target ]]; then
 fi
 
 printf '%s\n' 'unset CC CXX AR RANLIB CFLAGS CXXFLAGS TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_ALL_STATIC PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS'
-printf 'export RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_TARGET_DIR=%q CODEX_BUILD_TIMESTAMP=0000000000-000000000000 CODEX_BUILD_FINGERPRINT=%q\n' "${TARGET_DIR}" "${FINGERPRINT}"
+printf 'export RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_TARGET_DIR=%q CODEX_BUILD_TIMESTAMP=0000000000-000000000000\n' "${TARGET_DIR}"
 if command -v flock >/dev/null 2>&1; then
   printf 'exec 9>>%q\nflock -x 9\n' "${TARGET_LOCK_FILE}"
 else
