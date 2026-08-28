@@ -184,6 +184,18 @@ async fn slash_wake_starts_an_empty_turn_without_recording_user_input() {
 }
 
 #[tokio::test]
+async fn slash_wake_does_not_submit_a_second_turn_while_one_is_pending() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Wake);
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.dispatch_command(SlashCommand::Wake);
+
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn queued_slash_compact_dispatches_after_active_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
