@@ -5,7 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: codex_cargo_env.sh --source-repo DIR --build-repo DIR
   --mode debug|release --target-mode native|musl|armv7|android
-  [--purpose NAME] [--invalidate]
+  [--purpose NAME]
   [--emit|--print-target]
 EOF
 }
@@ -16,7 +16,6 @@ MODE=debug
 TARGET_MODE=native
 PURPOSE="${CODEX_CARGO_PURPOSE:-default}"
 OUTPUT=emit
-INVALIDATE_TARGET=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,17 +24,12 @@ while [[ $# -gt 0 ]]; do
     --mode) MODE="${2:?missing build mode}"; shift 2 ;;
     --target-mode) TARGET_MODE="${2:?missing target mode}"; shift 2 ;;
     --purpose) PURPOSE="${2:?missing target purpose}"; shift 2 ;;
-    --invalidate) INVALIDATE_TARGET=true; shift ;;
     --emit) OUTPUT=emit; shift ;;
     --print-target) OUTPUT=target; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
-
-if [[ "${CODEX_INVALIDATE_TARGET:-}" == 1 ]]; then
-  INVALIDATE_TARGET=true
-fi
 
 [[ -d "${SOURCE_REPO}/codex-rs" ]] || { echo "source repository not found: ${SOURCE_REPO}" >&2; exit 1; }
 [[ -d "${BUILD_REPO}/codex-rs" ]] || { echo "build repository not found: ${BUILD_REPO}" >&2; exit 1; }
@@ -219,22 +213,18 @@ if [[ -d "${TARGET_DIR}" ]]; then
   if [[ ! -f "${MARKER}" ]]; then
     has_contents=false
     [[ -n "$(find "${TARGET_DIR}" -mindepth 1 -maxdepth 1 -print -quit)" ]] && has_contents=true
-    if [[ "${has_contents}" == true && "${INVALIDATE_TARGET}" != true ]]; then
+    if [[ "${has_contents}" == true ]]; then
       echo "shared Cargo target has no recipe marker: ${TARGET_DIR}" >&2
-      echo "move it aside or rerun with CODEX_INVALIDATE_TARGET=1" >&2
+      echo "move it aside or remove it manually after confirming no build is using it" >&2
       exit 1
     fi
-  elif ! grep -Fxq "${FINGERPRINT}" "${MARKER}" && [[ "${INVALIDATE_TARGET}" != true ]]; then
+  elif ! grep -Fxq "${FINGERPRINT}" "${MARKER}"; then
     echo "shared Cargo target has an incompatible recipe: ${TARGET_DIR}" >&2
-    echo "rerun with CODEX_INVALIDATE_TARGET=1 to invalidate this exact target" >&2
+    echo "move it aside or remove it manually after confirming no build is using it" >&2
     exit 1
   fi
 fi
 
-if [[ "${INVALIDATE_TARGET}" == true && -d "${TARGET_DIR}" ]]; then
-  echo "Invalidating shared Cargo target: ${TARGET_DIR}" >&2
-  find "${TARGET_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-fi
 mkdir -p "${TARGET_DIR}"
 printf '%s\n' "${FINGERPRINT}" >"${MARKER}"
 
