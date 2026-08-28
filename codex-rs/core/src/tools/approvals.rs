@@ -571,10 +571,13 @@ impl Session {
         {
             ApprovalReviewer::for_policy(*approval_policy, *reviewer)
         } else {
-            ApprovalReviewer::for_policy(
-                ctx.review_context.approval_policy,
-                ctx.review_context.approvals_reviewer,
-            )
+            let reviewer = self
+                .current_approvals_reviewer(
+                    ctx.review_context.turn(),
+                    ctx.review_context.approvals_reviewer,
+                )
+                .await;
+            ApprovalReviewer::for_policy(ctx.review_context.approval_policy, reviewer)
         };
 
         let decision = match reviewer {
