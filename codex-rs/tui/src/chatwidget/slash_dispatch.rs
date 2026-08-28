@@ -634,6 +634,13 @@ impl ChatWidget {
             self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
             return;
         }
+        if self.is_user_turn_pending_or_running() {
+            self.add_error_message(
+                "A turn is already in progress; wait for it to finish before using /wake."
+                    .to_string(),
+            );
+            return;
+        }
         let effective_mode = self.effective_collaboration_mode();
         if effective_mode.model().trim().is_empty() {
             self.add_error_message(
@@ -652,8 +659,20 @@ impl ChatWidget {
             .config
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
-            .filter(|_| self.current_model_supports_personality());
+            .filter(|_| {
+                self.model_catalog
+                    .try_list_models()
+                    .ok()
+                    .and_then(|models| {
+                        models
+                            .into_iter()
+                            .find(|preset| preset.model == effective_mode.model())
+                            .map(|preset| preset.supports_personality)
+                    })
+                    .unwrap_or(true)
+            });
         let op = AppCommand::user_turn(
+            uuid::Uuid::new_v4().to_string(),
             Vec::new(),
             self.config.cwd.to_path_buf(),
             AskForApproval::from(self.config.permissions.approval_policy.value()),
