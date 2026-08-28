@@ -104,6 +104,7 @@ fi
 LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
 RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
 MOLD_BIN="$(command -v mold || true)"
+DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-0}"
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
@@ -148,6 +149,10 @@ elif [[ "${TARGET}" == aarch64-linux-android ]]; then
   # __clear_cache reference; preserve the target-specific flags emitted by
   # build_android and make the archive extraction independent of link order.
   RUSTFLAGS_VALUE="-Clink-arg=-Wl,-u,__clear_cache ${RUSTFLAGS_VALUE}"
+fi
+
+if [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
+  RUSTFLAGS_VALUE+=" -D warnings"
 fi
 
 OPENSSL_VERSION="$(bash "${SOURCE_REPO}/scripts/openssl_artifacts.sh" version "${LOCK_FILE}")"
