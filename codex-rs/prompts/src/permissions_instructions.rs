@@ -25,7 +25,7 @@ const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("../templates/permissions/approval_policy/on_request.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
     include_str!("../templates/permissions/approval_policy/on_request_rule_request_permission.md");
-const AUTO_REVIEW_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
+const APPROVAL_DENIAL_GUIDANCE: &str = "If an approval request is rejected, proceed only with a materially safer alternative, or inform the user of the risk and ask for approval.";
 const NETWORK_ACCESS_PLACEHOLDER: &str = "{{ network_access }}";
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
@@ -228,7 +228,7 @@ fn append_section(text: &mut String, section: &str) {
 
 fn approval_text(
     approval_policy: AskForApproval,
-    approvals_reviewer: ApprovalsReviewer,
+    _approvals_reviewer: ApprovalsReviewer,
     approval_messages: Option<&ApprovalMessages>,
     exec_policy: &Policy,
     exec_permission_approvals_enabled: bool,
@@ -236,10 +236,7 @@ fn approval_text(
 ) -> String {
     if let Some(approval_messages) = approval_messages {
         let selected = match &approval_policy {
-            AskForApproval::OnRequest => match approvals_reviewer {
-                ApprovalsReviewer::User => approval_messages.on_request.as_ref(),
-                ApprovalsReviewer::AutoReview => approval_messages.on_request_auto_review.as_ref(),
-            },
+            AskForApproval::OnRequest => approval_messages.on_request.as_ref(),
             AskForApproval::Never => approval_messages.never.as_ref(),
             AskForApproval::UnlessTrusted => approval_messages.unless_trusted.as_ref(),
             AskForApproval::Granular(_) => None,
@@ -287,12 +284,11 @@ fn approval_text(
         ),
     };
 
-    if approvals_reviewer == ApprovalsReviewer::AutoReview
-        && approval_policy != AskForApproval::Never
-    {
-        format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
-    } else {
-        text
+    match approval_policy {
+        AskForApproval::OnRequest | AskForApproval::UnlessTrusted => {
+            format!("{text}\n\n{APPROVAL_DENIAL_GUIDANCE}")
+        }
+        AskForApproval::Never | AskForApproval::Granular(_) => text,
     }
 }
 
