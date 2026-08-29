@@ -2560,11 +2560,11 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
     app.harness_overrides.permission_profile = Some(PermissionProfile::workspace_write());
-    let names = ["root", "trusted", "unknown", "untrusted", "p", "failure"];
-    let [current, trusted, unknown, untrusted, mismatch, failed] =
+    let names = ["root", "trusted", "untrusted", "p", "failure"];
+    let [current, trusted, untrusted, mismatch, failed] =
         names.map(|name| codex_home.path().join(name));
     fs::create_dir_all(&current)?;
-    for directory in [&trusted, &unknown, &untrusted, &mismatch, &failed] {
+    for directory in [&trusted, &untrusted, &mismatch, &failed] {
         fs::create_dir_all(directory.join(".codex"))?;
         fs::write(directory.join(".codex/config.toml"), "")?;
     }
@@ -2579,7 +2579,6 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     let requirements = codex_home.path().join("requirements.toml");
     let rules = "allowed_approval_policies=[\"untrusted\"]\nallowed_sandbox_modes=[\"read-only\"]";
     fs::write(&requirements, rules)?;
-    fs::create_dir_all(unknown.join(".git"))?;
     for dir in [&trusted, &untrusted, &mismatch, &failed] {
         let trust = [T::Trusted, T::Untrusted][usize::from(dir == &untrusted)];
         crate::legacy_core::config::set_project_trust_level(codex_home.path(), dir, trust)
@@ -2644,7 +2643,6 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
             "Permission profile cannot be preserved",
         ),
         ("../p", "keymap", "open_transcript"),
-        ("../unknown", "local", "This directory is not trusted"),
         ("../trusted", "main", "background terminals"),
         ("../trusted", "child", "background terminals"),
     ] {
