@@ -61,6 +61,8 @@ require_command() {
 }
 
 cd "${REPO_ROOT}"
+CARGO_SHEAR_VERSION="$(sed -n 's/^[[:space:]]*tool: cargo-shear@\([^[:space:]]*\).*$/\1/p' .github/workflows/rust-ci.yml | head -n 1)"
+[[ -n "${CARGO_SHEAR_VERSION}" ]] || die "could not read cargo-shear version from .github/workflows/rust-ci.yml"
 require_command cargo
 require_command rustc
 require_command python3
@@ -85,23 +87,39 @@ else
 fi
 
 install_cargo_tool() {
-  local package="$1" executable="$2" root_args=()
-  if [[ -n "${PREFIX:-}" && -x "${PREFIX}/bin/${executable}" ]]; then
-    return
+  local package="$1" executable="$2" version="${3:-}" installed_path="" package_spec
+  local root_args=()
+  package_spec="${package}"
+  if [[ -n "${version}" ]]; then
+    package_spec="${package}@${version}"
   fi
-  if [[ -z "${PREFIX:-}" ]] && command -v "${executable}" >/dev/null 2>&1; then
-    return
+  if [[ -n "${PREFIX:-}" && -x "${PREFIX}/bin/${executable}" ]]; then
+    installed_path="${PREFIX}/bin/${executable}"
+  elif [[ -z "${PREFIX:-}" ]] && command -v "${executable}" >/dev/null 2>&1; then
+    installed_path="$(command -v "${executable}")"
+  fi
+  if [[ -n "${installed_path}" ]]; then
+    if [[ -z "${version}" ]]; then
+      return
+    fi
+    if [[ -n "${PREFIX:-}" && -f "${PREFIX}/.crates2.json" ]]; then
+      if grep -Fq "\"${package} ${version} (" "${PREFIX}/.crates2.json"; then
+        return
+      fi
+    elif "${installed_path}" --version 2>/dev/null | grep -Fq "${version}"; then
+      return
+    fi
   fi
   [[ "${CHECK_ONLY}" == true ]] && die "missing ${executable}"
   if [[ -n "${PREFIX:-}" && -d "${PREFIX}/bin" ]]; then
     root_args=(--root "${PREFIX}")
   fi
-  cargo install --locked "${root_args[@]}" "${package}"
+  cargo install --locked "${root_args[@]}" "${package_spec}"
 }
 
 install_cargo_tool cargo-nextest cargo-nextest
 install_cargo_tool cargo-insta cargo-insta
-install_cargo_tool cargo-shear cargo-shear
+install_cargo_tool cargo-shear cargo-shear "${CARGO_SHEAR_VERSION}"
 
 echo "Development environment prerequisites are available."
 printf '  just:         %s\n' "$(command -v just)"
