@@ -101,9 +101,11 @@ install_cargo_tool() {
 
 install_cargo_tool cargo-nextest cargo-nextest
 install_cargo_tool cargo-insta cargo-insta
+install_cargo_tool cargo-shear cargo-shear
 
 echo "Development environment prerequisites are available."
 printf '  just:         %s\n' "$(command -v just)"
 printf '  ripgrep:      %s\n' "$(command -v rg)"
 printf '  cargo-nextest: %s\n' "$(command -v cargo-nextest)"
 printf '  cargo-insta:   %s\n' "$(command -v cargo-insta)"
+printf '  cargo-shear:   %s\n' "$(command -v cargo-shear)"
