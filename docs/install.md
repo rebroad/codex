@@ -31,6 +31,9 @@ cargo install --locked dotslash
 # Install nextest for the `just test` helper.
 cargo install --locked cargo-nextest
 
+# Or install the repository's development prerequisites in one step.
+scripts/setup-dev-environment.sh
+
 # Build Codex.
 cargo build
 
