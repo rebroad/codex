@@ -7,6 +7,11 @@ Usage: codex_cargo_env.sh --source-repo DIR --build-repo DIR
   --mode debug|release --target-mode native|musl|armv7|android
   [--purpose NAME]
   [--emit|--print-target]
+
+Each --emit invocation records the Cargo artifact operation in
+BUILD_REPO/build/cargo-artifact-operations.jsonl.  The record's target_dir,
+timestamp, and fingerprint can be used to identify artifacts produced by
+that operation without relying on target-purpose symlinks.
 EOF
 }
 
@@ -150,6 +155,66 @@ if [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
   RUSTFLAGS_VALUE+=" -D warnings"
 fi
 
+record_artifact_operation() {
+  local ledger lock_file timestamp source_revision source_state_fingerprint
+  local rustc_fingerprint operation fingerprint
+  ledger="${BUILD_REPO}/build/cargo-artifact-operations.jsonl"
+  lock_file="${ledger}.lock"
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  source_revision="$(git -C "${SOURCE_REPO}" rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
+  source_state_fingerprint="$({
+    git -C "${SOURCE_REPO}" diff --no-ext-diff --binary HEAD
+    git -C "${SOURCE_REPO}" status --porcelain=v1 --untracked-files=all
+  } | sha256sum | awk '{print $1}')"
+  rustc_fingerprint="$("${RUSTC_BIN}" -vV | sha256sum | awk '{print $1}')"
+  operation="${CODEX_CARGO_OPERATION:-${PURPOSE}}"
+  fingerprint="$({
+    printf '%s\0' \
+      "${source_revision}" "${MODE}" "${TARGET_MODE}" "${RECIPE_TARGET_MODE}" \
+      "${PURPOSE}" "${operation}" "${TARGET}" "${TARGET_DIR}" \
+      "${RUSTFLAGS_VALUE}" "${rustc_fingerprint}" "${source_state_fingerprint}" \
+      "${OPENSSL_VERSION}" "${RUSTY_V8_VERSION}"
+  } | sha256sum | awk '{print $1}')"
+
+  export CODEX_ARTIFACT_TIMESTAMP="${timestamp}"
+  export CODEX_ARTIFACT_OPERATION="${operation}"
+  export CODEX_ARTIFACT_PURPOSE="${PURPOSE}"
+  export CODEX_ARTIFACT_MODE="${MODE}"
+  export CODEX_ARTIFACT_TARGET_MODE="${TARGET_MODE}"
+  export CODEX_ARTIFACT_TARGET="${TARGET}"
+  export CODEX_ARTIFACT_TARGET_DIR="${TARGET_DIR}"
+  export CODEX_ARTIFACT_SOURCE_REVISION="${source_revision}"
+  export CODEX_ARTIFACT_SOURCE_STATE_FINGERPRINT="${source_state_fingerprint}"
+  export CODEX_ARTIFACT_FINGERPRINT="${fingerprint}"
+
+  mkdir -p "$(dirname "${ledger}")"
+  python3 - "${ledger}" "${lock_file}" <<'PY'
+import fcntl
+import json
+import os
+import sys
+
+ledger, lock_path = sys.argv[1:]
+record = {
+    "timestamp": os.environ["CODEX_ARTIFACT_TIMESTAMP"],
+    "operation": os.environ["CODEX_ARTIFACT_OPERATION"],
+    "purpose": os.environ["CODEX_ARTIFACT_PURPOSE"],
+    "mode": os.environ["CODEX_ARTIFACT_MODE"],
+    "target_mode": os.environ["CODEX_ARTIFACT_TARGET_MODE"],
+    "target": os.environ["CODEX_ARTIFACT_TARGET"],
+    "target_dir": os.environ["CODEX_ARTIFACT_TARGET_DIR"],
+    "source_revision": os.environ["CODEX_ARTIFACT_SOURCE_REVISION"],
+    "source_state_fingerprint": os.environ["CODEX_ARTIFACT_SOURCE_STATE_FINGERPRINT"],
+    "fingerprint": os.environ["CODEX_ARTIFACT_FINGERPRINT"],
+}
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    with open(ledger, "a", encoding="utf-8") as output:
+        output.write(json.dumps(record, sort_keys=True) + "\n")
+        output.flush()
+PY
+}
+
 OPENSSL_VERSION="$(bash "${SOURCE_REPO}/scripts/openssl_artifacts.sh" version "${LOCK_FILE}")"
 OPENSSL_DIR_VALUE=''
 if OPENSSL_ENV="$(bash "${SOURCE_REPO}/scripts/openssl_artifacts.sh" env "${BUILD_REPO}" "${TARGET}" "${OPENSSL_VERSION}" 2>/dev/null)"; then
@@ -179,17 +244,12 @@ mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 
 mkdir -p "${TARGET_DIR}"
 
-TARGET_LINK="${BUILD_REPO}/codex-rs/target-${PURPOSE}"
-if [[ -e "${TARGET_LINK}" && ! -L "${TARGET_LINK}" ]]; then
-  echo "target purpose link is not a symbolic link: ${TARGET_LINK}" >&2
-  exit 1
-fi
-ln -sfn "${TARGET_DIR}" "${TARGET_LINK}"
-
 if [[ "${OUTPUT}" == target ]]; then
   printf '%s\n' "${TARGET_DIR}"
   exit 0
 fi
+
+record_artifact_operation
 
 printf '%s\n' 'unset CC CXX AR RANLIB CFLAGS CXXFLAGS TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_ALL_STATIC PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS'
 printf 'export RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_TARGET_DIR=%q CODEX_BUILD_TIMESTAMP=0000000000-000000000000\n' "${TARGET_DIR}"

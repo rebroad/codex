@@ -14,7 +14,7 @@ cargo_source_directory := source_repo / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
 cargo_lock_setup := if os_family() == "windows" { "" } else { "exec 9>\"" + build_tree + "/.codex-cargo.lock\"; flock 9; " }
-cargo_setup := cargo_lock_setup + "codex_cargo_env_output=\"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\" || exit $?; eval \"$codex_cargo_env_output\" || exit $?;"
+cargo_setup := cargo_lock_setup + "export CODEX_CARGO_OPERATION=\"${CODEX_CARGO_OPERATION:-$0}\"; codex_cargo_env_output=\"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\" || exit $?; eval \"$codex_cargo_env_output\" || exit $?;"
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
 
 # Display help
@@ -62,6 +62,10 @@ fmt:
 # Check formatting without modifying files.
 fmt-check:
     @{{ python }} ../scripts/format.py --check
+
+# List Cargo artifact operations recorded in the designated build tree.
+cargo-artifact-log *args:
+    {{ python }} ../scripts/cargo_artifact_operations.py --ledger "{{ build_repo }}/build/cargo-artifact-operations.jsonl" "$@"
 
 fix *args:
     cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-fix; {{ cargo_setup }} cargo clippy --fix --tests --allow-dirty --locked "$@"
