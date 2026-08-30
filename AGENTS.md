@@ -5,6 +5,7 @@ In the `codex-rs` folder where the Rust code lives:
 - Never disable sccache for Rust commands: do not set `RUSTC_WRAPPER=` or otherwise unset the configured wrapper. Use the configured wrapper, or explicitly set `RUSTC_WRAPPER=/usr/bin/sccache`. If sccache fails, report the failure instead of bypassing it.
 - Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness. Ideally run it sending stdout and stderr to a file.
 - When making any changes, always try to keep as closely aligned to the `upstream` branch as possible.
+- A downstream commit is any commit after the fork's merge base with `upstream`. Commits that fix a downstream commit must be `fixup!` commits targeting that downstream commit. Never create a `fixup!` commit targeting an upstream commit at or before the merge base; changes belonging to upstream history require a regular commit for explicit upstream history maintenance.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
@@ -117,6 +118,8 @@ Search for breaking changes in external integration surfaces:
 For agent changes prefer integration tests over unit tests. Integration tests are under `core/suite` and use `test_codex` to set up a test instance of codex.
 
 Features that change the agent logic MUST add an integration test:
+
+- Tests are required for additional functionality or behavior. Do not add tests solely for removing downstream functionality; when removing functionality, remove the tests that were added with that functionality.
 
 - Provide a list of major logic changes and user-facing behaviors that need to be tested.
 
