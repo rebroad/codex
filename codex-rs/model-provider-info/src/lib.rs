@@ -192,7 +192,7 @@ impl ModelProviderInfoOverrides {
             provider.env_key_instructions = Some(value.clone());
         }
         if let Some(value) = &self.experimental_bearer_token {
-            provider.experimental_bearer_token = Some(value.clone());
+            provider.experimental_bearer_token = Some(value.clone().into());
         }
         if let Some(value) = &self.auth {
             provider.auth = Some(value.clone());
@@ -206,13 +206,18 @@ impl ModelProviderInfoOverrides {
             provider.wire_api = value;
         }
         if let Some(value) = &self.query_params {
-            provider.query_params = Some(value.clone());
+            provider.query_params = Some(
+                value
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone().into()))
+                    .collect(),
+            );
         }
         if let Some(value) = &self.http_headers {
             provider
                 .http_headers
                 .get_or_insert_default()
-                .extend(value.clone());
+                .extend(value.iter().map(|(key, value)| (key.clone(), value.clone().into())));
         }
         if let Some(value) = &self.env_http_headers {
             provider
