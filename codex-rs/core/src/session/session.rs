@@ -580,20 +580,6 @@ async fn warm_plugins_and_skills_for_session_init(
 }
 
 impl Session {
-    /// Returns the reviewer currently configured for new approval requests.
-    ///
-    /// Approval routing is live session state rather than part of the model's
-    /// immutable turn context, so changing this setting takes effect at the
-    /// next approval boundary without starting a new turn.
-    pub(crate) async fn current_approvals_reviewer(&self) -> ApprovalsReviewer {
-        self.state
-            .lock()
-            .await
-            .session_configuration
-            .step_settings
-            .approvals_reviewer
-    }
-
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.thread_id

@@ -2687,7 +2687,7 @@ impl Session {
             });
         };
 
-        let approvals_reviewer = self.current_approvals_reviewer().await;
+        let approvals_reviewer = step_context.settings.approvals_reviewer();
         if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer) {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;

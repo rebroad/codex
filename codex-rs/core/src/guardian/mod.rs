@@ -94,7 +94,6 @@ pub(crate) struct GuardianReviewContext {
     #[expect(dead_code)]
     pub(crate) reasoning_summary: ReasoningSummary,
     pub(crate) approval_policy: AskForApproval,
-    #[expect(dead_code)]
     pub(crate) approvals_reviewer: ApprovalsReviewer,
 }
 
