@@ -214,10 +214,11 @@ impl ModelProviderInfoOverrides {
             );
         }
         if let Some(value) = &self.http_headers {
-            provider
-                .http_headers
-                .get_or_insert_default()
-                .extend(value.iter().map(|(key, value)| (key.clone(), value.clone().into())));
+            provider.http_headers.get_or_insert_default().extend(
+                value
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone().into())),
+            );
         }
         if let Some(value) = &self.env_http_headers {
             provider
