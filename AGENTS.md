@@ -5,6 +5,7 @@ In the `codex-rs` folder where the Rust code lives:
 - Never disable sccache for Rust commands: do not set `RUSTC_WRAPPER=` or otherwise unset the configured wrapper. Use the configured wrapper, or explicitly set `RUSTC_WRAPPER=/usr/bin/sccache`. If sccache fails, report the failure instead of bypassing it.
 - Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness. Ideally run it sending stdout and stderr to a file.
 - When making any changes, always try to keep as closely aligned to the `upstream` branch as possible.
+- Never create a `fixup!` commit targeting an upstream commit (one at or before the merge base). Create fixups only for our downstream commits authored after the merge base; if a change belongs to upstream history, leave it for explicit upstream history maintenance rather than attaching it to an upstream commit.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
