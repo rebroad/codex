@@ -86,6 +86,7 @@ ensure_build_lockfile
 RUSTC_BIN="${RUSTC:-rustc}"
 HOST_TARGET="$(${RUSTC_BIN} -vV | sed -n 's/^host: //p')"
 SCCACHE_BIN="$(command -v sccache || true)"
+SCCACHE_WRAPPER="${BUILD_REPO}/scripts/codex_sccache_wrapper.sh"
 case "${TARGET_MODE}" in
   native) TARGET="${HOST_TARGET}"; TARGET_ROOT="${BUILD_REPO}/codex-rs/target" ;;
   musl) TARGET=x86_64-unknown-linux-musl; BASE_TARGET_DIR="${BUILD_REPO}/build/musl-${MODE}" ;;
@@ -241,13 +242,25 @@ elif [[ "${TARGET_MODE}" == native ]]; then
 fi
 
 TARGET_DIR="${TARGET_ROOT}"
-# All Cargo writers for a platform/profile share this lock.  The lock is
-# emitted into the caller's shell below, so it remains held for the whole
-# Cargo invocation rather than only while this helper is running.
-TARGET_LOCK_FILE="${TARGET_DIR}.lock"
+# Keep the shared Cargo lock outside the target directory so `cargo clean`
+# cannot unlink it, and inside the ignored build directory so source-to-build
+# synchronization cannot unlink it while another process still holds it.
+# The lock is emitted into the caller's shell below, so it remains held for
+# the whole Cargo invocation rather than only while this helper is running.
+TARGET_LOCK_FILE="${BUILD_REPO}/build/codex-cargo.lock"
 mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 
 mkdir -p "${TARGET_DIR}"
+
+if [[ -n "${SCCACHE_BIN}" ]]; then
+  export SCCACHE_DIR="${SCCACHE_DIR:-${HOME}/.cache/sccache}"
+  export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-20G}"
+  if ! "${SCCACHE_BIN}" --start-server >/dev/null 2>&1 \
+    && ! "${SCCACHE_BIN}" --show-stats >/dev/null 2>&1; then
+    echo "Unable to start the sccache server; refusing to run without the configured cache" >&2
+    exit 1
+  fi
+fi
 
 if [[ "${OUTPUT}" == target ]]; then
   printf '%s\n' "${TARGET_DIR}"
@@ -264,7 +277,8 @@ else
   echo "warning: flock unavailable; Cargo target writes will not be serialized" >&2
 fi
 if [[ -n "${SCCACHE_BIN}" ]]; then
-  printf 'export RUSTC_WRAPPER=%q SCCACHE_DIR=%q\n' "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}"
+  printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
+    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
 fi
 [[ -n "${CARGO_BUILD_JOBS:-}" ]] && printf 'export CARGO_BUILD_JOBS=%q\n' "${CARGO_BUILD_JOBS}"
 if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
