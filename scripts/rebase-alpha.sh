@@ -30,7 +30,8 @@ git remote get-url "${PUBLISH_REMOTE}" >/dev/null || \
 echo "Fetching ${UPSTREAM_REMOTE}..."
 git fetch "${UPSTREAM_REMOTE}"
 
-if ! git rev-parse --verify "${FORK_POINT_BRANCH}^{commit}" >/dev/null 2>&1; then
+fork_point_branch_ref="refs/heads/${FORK_POINT_BRANCH}"
+if ! git rev-parse --verify "${fork_point_branch_ref}^{commit}" >/dev/null 2>&1; then
   [[ "${FORK_POINT_BRANCH}" == "upstream" ]] || \
     die "fork point not found: ${FORK_POINT_BRANCH}"
 fi
@@ -45,10 +46,8 @@ if ! git show-ref --verify --quiet "refs/heads/${FORK_POINT_BRANCH}"; then
   git branch upstream "${initial_fork_point_commit}"
 fi
 
-fork_point_ref="$(git rev-parse --symbolic-full-name "${FORK_POINT_BRANCH}")"
-[[ "${fork_point_ref}" == refs/heads/* ]] || \
-  die "fork point must be a local branch: ${FORK_POINT_BRANCH}"
-fork_point_commit="$(git rev-parse "${FORK_POINT_BRANCH}^{commit}")"
+fork_point_ref="${fork_point_branch_ref}"
+fork_point_commit="$(git rev-parse "${fork_point_ref}^{commit}")"
 upstream_alpha_commit="$(git rev-parse "${UPSTREAM_ALPHA_BRANCH}^{commit}")"
 
 version_from_ref() {
