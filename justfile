@@ -63,6 +63,10 @@ fmt:
 fmt-check:
     @{{ python }} ../scripts/format.py --check
 
+# List Cargo artifact operations recorded in the designated build tree.
+cargo-artifact-log *args:
+    {{ python }} ../scripts/cargo_artifact_operations.py --ledger "{{ build_repo }}/build/cargo-artifact-operations.jsonl" "$@"
+
 fix *args:
     cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-fix; {{ cargo_setup }} cargo clippy --fix --tests --allow-dirty --locked "$@"
 
