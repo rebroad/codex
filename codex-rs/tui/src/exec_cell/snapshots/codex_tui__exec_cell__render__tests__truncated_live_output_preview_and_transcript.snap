@@ -58,6 +58,7 @@ expression: "(preview, compact, transcript)"
             Span::from("✗").red().bold(),
             Span::from(" (1)"),
             Span::from(" • 0ms").dim(),
+            Span::from(" • <timestamp>").dim(),
         ]),
     ],
 )

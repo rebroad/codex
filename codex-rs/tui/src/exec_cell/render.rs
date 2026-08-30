@@ -1094,11 +1094,59 @@ mod tests {
         cell.group.calls[0].start_time = None;
         cell.mark_failed();
         let compact = visible_lines(cell.compact_hyperlink_lines(/*width*/ 60));
-        let transcript = cell.transcript_lines(/*width*/ 60);
+        // The timestamp is covered by `transcript_completion_includes_local_date_and_time`; keep
+        // this large-output snapshot focused on truncation and styling rather than wall-clock time.
+        let mut transcript = cell.transcript_lines(/*width*/ 60);
+        for span in transcript.iter_mut().flat_map(|line| &mut line.spans) {
+            let Some(timestamp) = span.content.strip_prefix(" • ") else {
+                continue;
+            };
+            if chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S").is_ok()
+                || chrono::NaiveTime::parse_from_str(timestamp, "%H:%M:%S").is_ok()
+            {
+                span.content = " • <timestamp>".into();
+            }
+        }
 
         insta::assert_debug_snapshot!(
             "truncated_live_output_preview_and_transcript",
             (preview, compact, transcript)
+        );
+    }
+
+    #[test]
+    fn transcript_completion_includes_local_date_and_time() {
+        let mut cell = new_active_exec_command(
+            "call-id".to_string(),
+            vec!["bash".into(), "-lc".into(), "echo done".into()],
+            Vec::new(),
+            ExecCommandSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        );
+        cell.complete_call(
+            "call-id",
+            CommandOutput::new(/*exit_code*/ 0, String::new()),
+            std::time::Duration::from_millis(420),
+        );
+        let completed_at = cell
+            .completion_time(0)
+            .expect("completed exec call timestamp");
+
+        let rendered = cell
+            .transcript_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(&completed_at.format("%Y-%m-%d %H:%M:%S").to_string()));
+        assert!(rendered.contains(" • 420ms • "));
+        assert!(
+            rendered
+                .split(" • 420ms • ")
+                .nth(1)
+                .is_some_and(|timestamp| timestamp.contains(':'))
         );
     }
 
