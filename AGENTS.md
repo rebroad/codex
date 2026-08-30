@@ -1,6 +1,7 @@
 In the `codex-rs` folder where the Rust code lives:
 
 - Run Rust commands that use the configured sccache wrapper in an escalated shell. If sccache reports `Operation not permitted`, retry escalated before considering another configuration.
+- When representative A/B measurements show `CARGO_INCREMENTAL=1` without sccache is faster for the relevant build/test workload than `CARGO_INCREMENTAL=0` with sccache, prefer the faster incremental configuration. Use `CODEX_CARGO_DISABLE_SCCACHE=1` when needed, and keep the choice workload-specific rather than assuming sccache is always faster.
 - On Linux, run tests that exercise Codex's bubblewrap sandbox with an escalated shell. The normal agent shell may already be inside `bwrap//&unpriv_bwrap`, so nested sandbox tests can fail with `No permissions to create new namespace` even when the host's user-namespace settings are enabled. Rerun those failures escalated before treating them as code failures.
 - Prefer end-to-end verification with `./scripts/rebuild_codex.sh` from the designated build tree over localized checks when validating final build/run readiness. Ideally run it sending stdout and stderr to a file.
 - When making any changes, always try to keep as closely aligned to the `upstream` branch as possible.
