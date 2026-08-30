@@ -133,7 +133,10 @@ async fn autodetect_requests_exact_repository_endpoint_and_decodes_selection() {
         BASE_URL,
         &headers,
         Some("Repository".to_string()),
-        &[SanitizedGitUrl::try_from("git@github.com:rebroad/codex.git").expect("valid Git remote")],
+        &[
+            SanitizedGitUrl::try_from("git@github.com:rebroad/codex.git")
+                .expect("valid Git remote"),
+        ],
     )
     .await
     .expect("repository environment should be selected");
@@ -231,7 +234,10 @@ async fn autodetect_falls_back_to_exact_global_endpoint_and_decodes_selection() 
         BASE_URL,
         &HeaderMap::new(),
         /*desired_label*/ None,
-        &[SanitizedGitUrl::try_from("git@github.com:rebroad/codex.git").expect("valid Git remote")],
+        &[
+            SanitizedGitUrl::try_from("git@github.com:rebroad/codex.git")
+                .expect("valid Git remote"),
+        ],
     )
     .await
     .expect("global environment should be selected");
