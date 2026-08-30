@@ -42,7 +42,7 @@ pub(crate) async fn select_model_provider(
                 draw(tui, &screen)?;
             }
             TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume => draw(tui, &screen)?,
-            TuiEvent::Paste(_) => {}
+            TuiEvent::Paste(_) | TuiEvent::FocusGained | TuiEvent::FocusLost => {}
         }
     }
 
