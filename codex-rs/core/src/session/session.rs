@@ -590,6 +590,7 @@ impl Session {
             .lock()
             .await
             .session_configuration
+            .step_settings
             .approvals_reviewer
     }
 
