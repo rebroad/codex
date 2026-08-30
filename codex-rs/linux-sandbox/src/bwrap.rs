@@ -2008,9 +2008,11 @@ mod tests {
             }),
             "existing writable root should be rebound writable",
         );
-        assert!(args.args.windows(3).any(|window| {
-            window == ["--bind", missing_root.as_str(), missing_root.as_str()]
-        }));
+        assert!(
+            args.args.windows(3).any(|window| {
+                window == ["--bind", missing_root.as_str(), missing_root.as_str()]
+            })
+        );
         assert!(Path::new(&missing_root).exists());
     }
 
