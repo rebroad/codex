@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -12,8 +13,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def pinned_rust_toolchain() -> str:
+    toolchain_file = REPO_ROOT / "codex-rs" / "rust-toolchain.toml"
+    text = toolchain_file.read_text(encoding="utf-8")
+    match = re.search(r'^channel = "([^"]+)"$', text, re.MULTILINE)
+    if match is None:
+        raise RuntimeError(f"Unable to read Rust toolchain from {toolchain_file}")
+    return match.group(1)
 
 
 def configure_uv_cache() -> None:
@@ -72,7 +81,21 @@ def just_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def rust_formatter_group(*, check: bool) -> FormatterGroup:
-    args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    toolchain = pinned_rust_toolchain()
+    if shutil.which("rustup") is not None:
+        args = ["rustup", "run", toolchain, "cargo", "fmt"]
+    else:
+        rustc_version = subprocess.check_output(
+            ["rustc", "--version"], text=True
+        ).split()[1]
+        if rustc_version != toolchain:
+            raise RuntimeError(
+                "Pinned Rust toolchain "
+                f"{toolchain} is required for formatting, but rustc {rustc_version} "
+                "is active and rustup is unavailable."
+            )
+        args = ["cargo", "fmt"]
+    args.extend(["--", "--config", "imports_granularity=Item"])
     if check:
         args.append("--check")
     command = Command(tuple(args), REPO_ROOT / "codex-rs")
@@ -237,7 +260,11 @@ def main() -> int:
     )
     args = parser.parse_args()
     configure_uv_cache()
-    groups = formatter_groups(check=args.check)
+    try:
+        groups = formatter_groups(check=args.check)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"Unable to configure formatters: {error}", file=sys.stderr)
+        return 1
 
     failures: list[str] = []
     try:
