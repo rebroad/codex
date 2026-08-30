@@ -321,6 +321,14 @@ impl ChatWidget {
     /// cell. If this method treated every unknown end as "complete the active cell", the UI could
     /// merge unrelated commands and hide still-running exploring work.
     pub(crate) fn handle_command_execution_completed_now(&mut self, item: ThreadItem) {
+        self.handle_command_execution_completed_now_at(item, None);
+    }
+
+    pub(crate) fn handle_command_execution_completed_now_at(
+        &mut self,
+        item: ThreadItem,
+        completed_at: Option<chrono::DateTime<chrono::Local>>,
+    ) {
         enum ExecEndTarget {
             // Normal case: the active exec cell already tracks this call id.
             ActiveTracked,
@@ -435,6 +443,9 @@ impl ChatWidget {
                     .as_mut()
                     .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
                 {
+                    if let Some(completed_at) = completed_at {
+                        cell.set_completion_time(&id, completed_at);
+                    }
                     let completed = cell.complete_call(&id, output, duration);
                     debug_assert!(completed, "active exec cell should contain {id}");
                     if cell.should_flush() || (has_active_hook && !cell.is_active()) {
@@ -454,6 +465,9 @@ impl ChatWidget {
                     /*interaction_input*/ None,
                     self.config.animations,
                 );
+                if let Some(completed_at) = completed_at {
+                    orphan.set_completion_time(&id, completed_at);
+                }
                 let completed = orphan.complete_call(&id, output, duration);
                 debug_assert!(completed, "new orphan exec cell should contain {id}");
                 self.transcript.needs_final_message_separator = true;
@@ -471,6 +485,9 @@ impl ChatWidget {
                     /*interaction_input*/ None,
                     self.config.animations,
                 );
+                if let Some(completed_at) = completed_at {
+                    cell.set_completion_time(&id, completed_at);
+                }
                 let completed = cell.complete_call(&id, output, duration);
                 debug_assert!(completed, "new exec cell should contain {id}");
                 if (!was_running && !retain_untracked_unified_exec) || cell.should_flush() {
