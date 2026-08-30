@@ -18,10 +18,14 @@ usage() {
 }
 
 if [ -z "$codex_bin" ]; then
-    codex_bin=$(command -v codex) || {
-        printf '%s\n' 'Codex Remote: codex was not found; set CODEX_BIN to its path.' >&2
-        exit 1
-    }
+    if [ -x "$home_dir/bin/codex" ]; then
+        codex_bin="$home_dir/bin/codex"
+    else
+        codex_bin=$(command -v codex) || {
+            printf '%s\n' 'Codex Remote: codex was not found; set CODEX_BIN to its path.' >&2
+            exit 1
+        }
+    fi
 fi
 
 while [ "$#" -gt 0 ]; do

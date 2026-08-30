@@ -16,10 +16,14 @@ usage() {
 
 codex_bin="${CODEX_BIN:-}"
 if [ -z "$codex_bin" ]; then
-    codex_bin=$(command -v codex) || {
-        printf '%s\n' 'Codex Remote: codex was not found on PATH.' >&2
-        exit 1
-    }
+    if [ -x "$home_dir/bin/codex" ]; then
+        codex_bin="$home_dir/bin/codex"
+    else
+        codex_bin=$(command -v codex) || {
+            printf '%s\n' 'Codex Remote: codex was not found on PATH.' >&2
+            exit 1
+        }
+    fi
 fi
 [ -x "$codex_bin" ] || {
     printf 'Codex Remote: Codex executable is not usable: %s\n' "$codex_bin" >&2
