@@ -16,6 +16,7 @@ use crate::ui_consts::TRANSCRIPT_HINT;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
+use chrono::NaiveDate;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
@@ -196,6 +197,7 @@ impl HistoryCell for ExecCell {
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = vec![];
+        let mut last_completion_date: Option<NaiveDate> = None;
         for (i, call) in self.iter_calls().enumerate() {
             if i > 0 {
                 lines.push("".into());
@@ -233,6 +235,16 @@ impl HistoryCell for ExecCell {
                         ])
                     };
                     result.push_span(format!(" • {duration}").dim());
+                    if let Some(completed_at) = self.completion_time(i) {
+                        let date = completed_at.date_naive();
+                        let timestamp = if last_completion_date == Some(date) {
+                            completed_at.format("%H:%M:%S").to_string()
+                        } else {
+                            last_completion_date = Some(date);
+                            completed_at.format("%Y-%m-%d %H:%M:%S").to_string()
+                        };
+                        result.push_span(format!(" • {timestamp}").dim());
+                    }
                     lines.push(result);
                 }
             }
@@ -1003,6 +1015,40 @@ mod tests {
         insta::assert_debug_snapshot!(
             "truncated_live_output_preview_and_transcript",
             (preview, transcript)
+        );
+    }
+
+    #[test]
+    fn transcript_completion_includes_local_date_and_time() {
+        let mut cell = new_active_exec_command(
+            "call-id".to_string(),
+            vec!["bash".into(), "-lc".into(), "echo done".into()],
+            Vec::new(),
+            ExecCommandSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        );
+        let completed_date = chrono::Local::now().date_naive();
+        cell.complete_call(
+            "call-id",
+            CommandOutput::new(/*exit_code*/ 0, String::new()),
+            std::time::Duration::from_millis(420),
+        );
+
+        let rendered = cell
+            .transcript_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(&completed_date.format("%Y-%m-%d").to_string()));
+        assert!(rendered.contains(" • 420ms • "));
+        assert!(
+            rendered
+                .split(" • 420ms • ")
+                .nth(1)
+                .is_some_and(|timestamp| timestamp.contains(':'))
         );
     }
 
