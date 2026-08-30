@@ -417,12 +417,10 @@ impl Session {
             environments
                 .turn_environments()
                 .map(|environment| {
-                    let mut sandbox = environment.sandbox_context(/*additional_permissions*/ None);
+                    let mut sandbox =
+                        environment.sandbox_context(/*additional_permissions*/ None);
                     sandbox.debug_log_id = Some(self.thread_id().to_string());
-                    (
-                        environment.selection.environment_id.clone(),
-                        sandbox,
-                    )
+                    (environment.selection.environment_id.clone(), sandbox)
                 })
                 .collect::<HashMap<_, _>>()
         } else {
