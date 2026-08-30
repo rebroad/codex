@@ -86,6 +86,7 @@ ensure_build_lockfile
 RUSTC_BIN="${RUSTC:-rustc}"
 HOST_TARGET="$(${RUSTC_BIN} -vV | sed -n 's/^host: //p')"
 SCCACHE_BIN="$(command -v sccache || true)"
+SCCACHE_WRAPPER="${BUILD_REPO}/scripts/codex_sccache_wrapper.sh"
 case "${TARGET_MODE}" in
   native) TARGET="${HOST_TARGET}"; TARGET_ROOT="${BUILD_REPO}/codex-rs/target" ;;
   musl) TARGET=x86_64-unknown-linux-musl; BASE_TARGET_DIR="${BUILD_REPO}/build/musl-${MODE}" ;;
@@ -259,7 +260,8 @@ else
   echo "warning: flock unavailable; Cargo target writes will not be serialized" >&2
 fi
 if [[ -n "${SCCACHE_BIN}" ]]; then
-  printf 'export RUSTC_WRAPPER=%q SCCACHE_DIR=%q\n' "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}"
+  printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q\n' \
+    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}"
 fi
 [[ -n "${CARGO_BUILD_JOBS:-}" ]] && printf 'export CARGO_BUILD_JOBS=%q\n' "${CARGO_BUILD_JOBS}"
 if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
