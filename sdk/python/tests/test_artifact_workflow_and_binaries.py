@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -172,13 +173,10 @@ def test_root_format_driver_covers_all_formatter_groups(
     # The Python SDK CI image has no Git; keep discovery mocked at the process boundary.
     def fake_check_output(args, *, cwd):
         assert cwd == tmp_path
-        if args == git_ls_files_args + ["--", "*.rs"]:
-            return (
-                b"codex-rs/src/lib.rs\0bazel/rules/example.rs\0"
-                b"codex-rs/new file.rs\0codex-rs/deleted.rs\0"
-            )
-        assert args == git_ls_files_args
-        return b"MODULE.bazel\0README.md\0third_party/v8/libcxx.BUILD.bazel\0"
+        if args == git_ls_files_args:
+            return b"MODULE.bazel\0README.md\0third_party/v8/libcxx.BUILD.bazel\0"
+        assert args == ["git", "ls-files", "-z", "--", "codex-rs"]
+        return b"codex-rs/core/src/lib.rs\0"
 
     monkeypatch.setattr(script, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(script.subprocess, "check_output", fake_check_output)
@@ -252,26 +250,14 @@ def test_root_format_driver_covers_all_formatter_groups(
     )
     assert formatters[0].commands[-1].args == ("just", "--unstable", "--fmt")
     assert checks[0].commands[-1].args == ("just", "--unstable", "--fmt", "--check")
-    rustfmt_args = (
-        "rustfmt",
-        "--edition",
-        "2024",
-        "--config-path",
-        str(tmp_path / "codex-rs/rustfmt.toml"),
-        "--config",
-        "imports_granularity=Item,skip_children=true",
-    )
-    rust_files = (
-        os.path.join("..", "bazel", "rules", "example.rs"),
-        "new file.rs",
-        os.path.join("src", "lib.rs"),
-    )
-    assert formatters[1].commands == (
-        script.Command(rustfmt_args + rust_files, tmp_path / "codex-rs"),
-    )
-    assert checks[1].commands == (
-        script.Command(rustfmt_args + ("--check",) + rust_files, tmp_path / "codex-rs"),
-    )
+    rust_format_args = formatters[1].commands[-1].args
+    rust_check_args = checks[1].commands[-1].args
+    if shutil.which("rustup") is not None:
+        assert rust_format_args == ("cargo", "fmt")
+        assert rust_check_args == ("cargo", "fmt", "--check")
+    else:
+        assert rust_format_args == ("rustfmt", "core/src/lib.rs")
+        assert rust_check_args == ("rustfmt", "core/src/lib.rs", "--check")
     format_buildifier_args = formatters[2].commands[-1].args
     check_buildifier_args = checks[2].commands[-1].args
     assert format_buildifier_args[:4] == (

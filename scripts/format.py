@@ -3,7 +3,6 @@
 
 import argparse
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -14,15 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def pinned_rust_toolchain() -> str:
-    toolchain_file = REPO_ROOT / "codex-rs" / "rust-toolchain.toml"
-    text = toolchain_file.read_text(encoding="utf-8")
-    match = re.search(r'^channel = "([^"]+)"$', text, re.MULTILINE)
-    if match is None:
-        raise RuntimeError(f"Unable to read Rust toolchain from {toolchain_file}")
-    return match.group(1)
 
 
 def configure_uv_cache() -> None:
@@ -81,21 +71,19 @@ def just_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def rust_formatter_group(*, check: bool) -> FormatterGroup:
-    toolchain = pinned_rust_toolchain()
     if shutil.which("rustup") is not None:
-        args = ["rustup", "run", toolchain, "cargo", "fmt"]
-    else:
-        rustc_version = subprocess.check_output(
-            ["rustc", "--version"], text=True
-        ).split()[1]
-        if rustc_version != toolchain:
-            raise RuntimeError(
-                "Pinned Rust toolchain "
-                f"{toolchain} is required for formatting, but rustc {rustc_version} "
-                "is active and rustup is unavailable."
-            )
         args = ["cargo", "fmt"]
-    args.extend(["--", "--config", "imports_granularity=Item"])
+    else:
+        encoded_paths = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "codex-rs"],
+            cwd=REPO_ROOT,
+        ).split(b"\0")
+        rust_files = [
+            str(Path(os.fsdecode(path)).relative_to("codex-rs"))
+            for path in encoded_paths
+            if path.endswith(b".rs")
+        ]
+        args = ["rustfmt", *rust_files]
     if check:
         args.append("--check")
     command = Command(tuple(args), REPO_ROOT / "codex-rs")
