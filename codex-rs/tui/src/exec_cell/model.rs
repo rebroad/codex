@@ -10,6 +10,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use super::live_output::LiveCommandOutput;
+use chrono::DateTime;
+use chrono::Local;
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Either;
@@ -77,6 +79,9 @@ pub(crate) struct ExecCall {
 #[derive(Debug)]
 pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
+    // Kept parallel with `calls` so the wall-clock timestamp does not affect the monotonic
+    // duration used for elapsed-time measurement.
+    completion_times: Vec<Option<DateTime<Local>>>,
     animations_enabled: bool,
 }
 
@@ -84,6 +89,7 @@ impl ExecCell {
     pub(crate) fn new(call: ExecCall, animations_enabled: bool) -> Self {
         Self {
             calls: vec![call],
+            completion_times: vec![None],
             animations_enabled,
         }
     }
@@ -139,6 +145,7 @@ impl ExecCell {
         });
         if continues_exploration || continues_compact_group {
             self.calls.push(call);
+            self.completion_times.push(None);
             true
         } else {
             false
@@ -156,12 +163,14 @@ impl ExecCell {
         output: CommandOutput,
         duration: Duration,
     ) -> bool {
-        let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
+        let Some(index) = self.calls.iter().rposition(|c| c.call_id == call_id) else {
             return false;
         };
+        let call = &mut self.calls[index];
         call.output = Some(output);
         call.duration = Some(duration);
         call.start_time = None;
+        self.completion_times[index] = Some(Local::now());
         true
     }
 
@@ -195,7 +204,7 @@ impl ExecCell {
     }
 
     pub(crate) fn mark_failed(&mut self) {
-        for call in self.calls.iter_mut() {
+        for (index, call) in self.calls.iter_mut().enumerate() {
             if call.duration.is_none() {
                 let elapsed = call
                     .start_time
@@ -206,6 +215,7 @@ impl ExecCell {
                 call.output
                     .get_or_insert_with(CommandOutput::default)
                     .exit_code = 1;
+                self.completion_times[index] = Some(Local::now());
             }
         }
     }
@@ -231,6 +241,10 @@ impl ExecCell {
 
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {
         self.calls.iter()
+    }
+
+    pub(crate) fn completion_time(&self, index: usize) -> Option<DateTime<Local>> {
+        self.completion_times.get(index).copied().flatten()
     }
 
     pub(crate) fn append_output(&mut self, call_id: &str, chunk: &str) -> bool {
