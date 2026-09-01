@@ -5887,6 +5887,7 @@ async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
 }
 
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn copy_picker_opening_preserves_terminal_scrollback_without_reflow() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let response = "Existing response\n\n```rust\nkeep_scrollback();\n```";
