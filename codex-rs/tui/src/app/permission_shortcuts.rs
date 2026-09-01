@@ -1,7 +1,12 @@
-//! Confirm session-only permission changes before updating local state.
+//! Confirm permission changes before updating local state.
 
 use super::*;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
+
+pub(super) enum PermissionChangePersistence {
+    SessionOnly,
+    PersistReviewer,
+}
 
 impl App {
     pub(super) async fn apply_permission_shortcut(
@@ -10,6 +15,7 @@ impl App {
         tui: &mut tui::Tui,
         thread_id: ThreadId,
         selection: PermissionProfileSelection,
+        persistence: PermissionChangePersistence,
     ) {
         if self.current_displayed_thread_id() != Some(thread_id)
             || self.chat_widget.thread_id() != Some(thread_id)
@@ -53,6 +59,19 @@ impl App {
             self.set_approvals_reviewer_in_app_and_widget(config.approvals_reviewer);
             self.runtime_approval_policy_override = selection.approval_policy;
             self.runtime_permission_profile_override = Some(RuntimePermissionProfileOverride::from_config(&config));
+            if matches!(persistence, PermissionChangePersistence::PersistReviewer) {
+                crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        "approvals_reviewer",
+                        serde_json::json!(config.approvals_reviewer.to_string()),
+                    )],
+                )
+                .await
+                .map_err(|err| {
+                    color_eyre::eyre::eyre!(crate::config_update::format_config_error(&err))
+                })?;
+            }
             self.sync_active_thread_permission_settings_to_cached_session().await;
             self.insert_history_cell(tui, Box::new(history_cell::new_info_event(format!("Permissions updated to {}", selection.display_label), /*hint*/ None)));
             Ok(())
