@@ -95,6 +95,21 @@ impl ChatWidget {
                 self.restore_realtime_transcripts_before_turn(&notification.turn.id);
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
+            ServerNotification::ThreadStatusChanged(notification) => {
+                if let Some(waiting_until_ms) = notification.waiting_until_ms {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_millis() as i64)
+                        .unwrap_or_default();
+                    let remaining_ms = waiting_until_ms.saturating_sub(now_ms).max(0) as u64;
+                    self.set_waiting_status(Some(Duration::from_millis(remaining_ms)));
+                } else if matches!(
+                    notification.status,
+                    codex_app_server_protocol::ThreadStatus::Active { .. }
+                ) {
+                    self.set_status_header(String::from("Working"));
+                }
+            }
             ServerNotification::ItemStarted(notification) => {
                 self.handle_item_started_notification(notification, replay_kind);
             }
@@ -344,7 +359,6 @@ impl ChatWidget {
             | ServerNotification::GatewayOAuthChanged(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
-            | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadReverted(_)
             | ServerNotification::ThreadQueueChanged(_)
             | ServerNotification::ThreadArchived(_)
