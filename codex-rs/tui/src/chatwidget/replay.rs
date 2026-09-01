@@ -224,6 +224,9 @@ impl ChatWidget {
                 output,
                 ..
             } => {
+                if name == "wait" && namespace.is_none() {
+                    self.restore_reasoning_status_header();
+                }
                 if let Some((source_thread_id, prompt)) =
                     crate::dynamic_tools::parse_delegated_tool_output(
                         &name,
