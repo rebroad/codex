@@ -178,6 +178,7 @@ fn guardian_stdin_reviews_preserve_parent_command_history() {
     }
 }
 
+#[test]
 fn legacy_command_presentation_preserves_command_details() {
     let cwd = PathUri::parse("file:///home/alice/repo").expect("valid cwd");
     let command = vec![
