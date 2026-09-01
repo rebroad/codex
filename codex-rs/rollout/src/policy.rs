@@ -211,6 +211,7 @@ mod tests {
         let event = EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
             response_id: "response-1".to_string(),
             token_usage: None,
+            usage_metadata: None,
             effective_model: Some("gpt-5.6-luna".to_string()),
         });
 
