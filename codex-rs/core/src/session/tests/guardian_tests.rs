@@ -177,7 +177,7 @@ async fn next_exec_approval(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
+async fn request_permissions_routes_to_guardian_when_live_reviewer_is_enabled() {
     let server = start_mock_server().await;
     let guardian_request_log = mount_sse_sequence(
         &server,
@@ -226,6 +226,17 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     );
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
+    Arc::make_mut(&mut turn_context_raw.config).approvals_reviewer = ApprovalsReviewer::User;
+    session
+        .update_settings(crate::session::SessionSettingsUpdate {
+            step_settings: StepSettingsUpdate {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("test setup should update the live approvals reviewer");
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
@@ -313,7 +324,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
 }
 
 #[tokio::test]
-async fn request_permissions_uses_issuing_step_policy_and_reviewer() {
+async fn request_permissions_uses_issuing_step_policy_and_live_reviewer() {
     let server = start_mock_server().await;
     let guardian_requests = mount_sse_once(
         &server,
@@ -328,7 +339,7 @@ async fn request_permissions_uses_issuing_step_policy_and_reviewer() {
         Vec::new(),
         |config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
-            config.approvals_reviewer = ApprovalsReviewer::User;
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
             config
                 .features
@@ -340,13 +351,13 @@ async fn request_permissions_uses_issuing_step_policy_and_reviewer() {
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut step = StepContext::for_test(turn);
     let captured = Arc::get_mut(&mut step).expect("unshared step");
-    // The issuing step differs from the admitted Never/User turn.
+    // The issuing step differs from the admitted Never/AutoReview turn.
     update_selected_settings_for_test(Arc::make_mut(&mut captured.settings), |selected| {
         selected
             .approval_policy
             .set(AskForApproval::OnRequest)
             .expect("set step policy");
-        selected.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        selected.approvals_reviewer = ApprovalsReviewer::User;
     });
     let permissions = RequestPermissionProfile {
         network: Some(NetworkPermissions {
