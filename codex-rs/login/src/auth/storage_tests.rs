@@ -55,6 +55,7 @@ async fn file_storage_custom_file_stays_separate_from_legacy() -> anyhow::Result
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
 
     legacy_storage.save(&legacy_auth)?;
