@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 CHECK_ONLY=false
+ANDROID_PHANTOM_PROCESS_MINIMUM=128
 
 usage() {
   cat <<'EOF'
@@ -22,6 +23,10 @@ die() {
   exit 1
 }
 
+is_android_host() {
+  [[ "$(uname -o 2>/dev/null || true)" == Android ]]
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) CHECK_ONLY=true; shift ;;
@@ -34,6 +39,9 @@ install_system_tools() {
   local missing=()
   command -v just >/dev/null 2>&1 || missing+=(just)
   command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
+  if is_android_host && ! command -v adb >/dev/null 2>&1; then
+    missing+=(android-tools)
+  fi
   ((${#missing[@]} == 0)) && return
   [[ "${CHECK_ONLY}" == true ]] && die "missing ${missing[*]}"
 
@@ -56,6 +64,71 @@ install_system_tools() {
   fi
 }
 
+android_adb_serial() {
+  local devices=()
+  if [[ -n "${ANDROID_SERIAL:-}" ]]; then
+    [[ "$(adb -s "${ANDROID_SERIAL}" get-state 2>/dev/null || true)" == device ]] \
+      || die "ANDROID_SERIAL device is not connected: ${ANDROID_SERIAL}"
+    printf '%s\n' "${ANDROID_SERIAL}"
+    return
+  fi
+
+  mapfile -t devices < <(adb devices | awk '$2 == "device" { print $1 }')
+  ((${#devices[@]} > 0)) \
+    || die "no ADB device is connected; enable wireless debugging and connect this Android device"
+  ((${#devices[@]} == 1)) \
+    || die "multiple ADB devices are connected; set ANDROID_SERIAL"
+  printf '%s\n' "${devices[0]}"
+}
+
+configure_android_phantom_process_limit() {
+  is_android_host || return
+
+  local serial current effective desired override_supported=false override_value=''
+  require_command adb
+  serial="$(android_adb_serial)"
+  current="$(adb -s "${serial}" shell device_config get activity_manager max_phantom_processes | tr -d '\r')"
+  effective="$(adb -s "${serial}" shell dumpsys activity settings \
+    | sed -n 's/^[[:space:]]*max_phantom_processes=//p' \
+    | head -n 1 \
+    | tr -d '\r')"
+  if adb -s "${serial}" shell device_config help | grep -q '^  override '; then
+    override_supported=true
+    override_value="$(adb -s "${serial}" shell device_config list_local_overrides \
+      | sed -n 's#^activity_manager/max_phantom_processes=##p' \
+      | head -n 1 \
+      | tr -d '\r')"
+  fi
+  if [[ "${effective}" =~ ^[0-9]+$ ]] \
+    && ((effective >= ANDROID_PHANTOM_PROCESS_MINIMUM)) \
+    && { [[ "${override_supported}" == false ]] \
+      || [[ "${override_value}" == "${effective}" ]]; }; then
+    printf '  Android max phantom processes: %s (device %s)\n' "${effective}" "${serial}"
+    return
+  fi
+
+  [[ "${CHECK_ONLY}" == false ]] \
+    || die "Android max_phantom_processes is ${effective}; run setup without --check to apply a durable minimum of ${ANDROID_PHANTOM_PROCESS_MINIMUM}"
+  desired="${ANDROID_PHANTOM_PROCESS_MINIMUM}"
+  if [[ "${current}" =~ ^[0-9]+$ ]] && ((current > desired)); then
+    desired="${current}"
+  fi
+  if [[ "${override_supported}" == true ]]; then
+    adb -s "${serial}" shell device_config override activity_manager max_phantom_processes \
+      "${desired}"
+  fi
+  adb -s "${serial}" shell device_config put activity_manager max_phantom_processes \
+    "${desired}"
+  effective="$(adb -s "${serial}" shell dumpsys activity settings \
+    | sed -n 's/^[[:space:]]*max_phantom_processes=//p' \
+    | head -n 1 \
+    | tr -d '\r')"
+  [[ "${effective}" =~ ^[0-9]+$ ]] \
+    && ((effective >= ANDROID_PHANTOM_PROCESS_MINIMUM)) \
+    || die "failed to raise Android max_phantom_processes; effective value is ${effective}"
+  printf '  Android max phantom processes: %s (device %s)\n' "${effective}" "${serial}"
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
@@ -73,6 +146,7 @@ CARGO_BIN_DIR="${CARGO_HOME:-${HOME}/.cargo}/bin"
 export PATH="${CARGO_BIN_DIR}:${PATH}"
 
 install_system_tools
+configure_android_phantom_process_limit
 
 if command -v rustup >/dev/null 2>&1; then
   if [[ "${CHECK_ONLY}" == true ]]; then
