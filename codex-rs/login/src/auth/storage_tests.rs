@@ -56,6 +56,7 @@ async fn file_storage_custom_file_migrates_from_legacy_and_saves_separately() ->
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
 
     legacy_storage.save(&legacy_auth)?;
