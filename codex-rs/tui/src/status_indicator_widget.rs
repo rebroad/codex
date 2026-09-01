@@ -55,6 +55,8 @@ pub(crate) struct StatusIndicatorWidget {
     elapsed_running: Duration,
     last_resume_at: Instant,
     is_paused: bool,
+    waiting_duration: Option<Duration>,
+    waiting_started_at: Instant,
     poll_count: usize,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
@@ -94,6 +96,8 @@ impl StatusIndicatorWidget {
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
+            waiting_duration: None,
+            waiting_started_at: Instant::now(),
             poll_count: 0,
 
             app_event_tx,
@@ -109,6 +113,21 @@ impl StatusIndicatorWidget {
     /// Update the animated header label (left of the brackets).
     pub(crate) fn update_header(&mut self, header: String) {
         self.header = header;
+    }
+
+    pub(crate) fn set_waiting(&mut self, duration: Duration) {
+        self.set_waiting_at(duration, Instant::now());
+    }
+
+    fn set_waiting_at(&mut self, duration: Duration, now: Instant) {
+        self.header = String::from("Waiting");
+        self.waiting_duration = Some(duration);
+        self.waiting_started_at = now;
+        self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn clear_waiting(&mut self) {
+        self.waiting_duration = None;
     }
 
     /// Update the details text shown below the header.
@@ -195,6 +214,12 @@ impl StatusIndicatorWidget {
         self.elapsed_duration_at(now).as_secs()
     }
 
+    fn waiting_duration_at(&self, now: Instant) -> Option<Duration> {
+        self.waiting_duration.map(|duration| {
+            duration.saturating_sub(now.saturating_duration_since(self.waiting_started_at))
+        })
+    }
+
     pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
@@ -247,18 +272,25 @@ impl Renderable for StatusIndicatorWidget {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.render_at(area, buf, Instant::now());
+    }
+}
+
+impl StatusIndicatorWidget {
+    fn render_at(&self, area: Rect, buf: &mut Buffer, now: Instant) {
         if area.is_empty() {
             return;
         }
 
-        if self.animations_enabled {
+        if self.animations_enabled || self.waiting_duration.is_some() {
             // Schedule next animation frame.
             self.frame_requester
                 .schedule_frame_in(Duration::from_millis(200));
         }
-        let now = Instant::now();
-        let elapsed_duration = self.elapsed_duration_at(now);
-        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
+        let pretty_duration = self
+            .waiting_duration_at(now)
+            .unwrap_or_else(|| self.elapsed_duration_at(now));
+        let pretty_duration = fmt_elapsed_compact(pretty_duration.as_secs());
         let poll_count = self.poll_count;
         let poll_prefix = (poll_count > 0).then(|| {
             let label = if poll_count == 1 { "poll" } else { "polls" };
@@ -284,7 +316,7 @@ impl Renderable for StatusIndicatorWidget {
         {
             spans.extend(vec![
                 format!(
-                    "({}{pretty_elapsed} • ",
+                    "({}{pretty_duration} • ",
                     poll_prefix.as_deref().unwrap_or("")
                 )
                 .dim(),
@@ -292,7 +324,13 @@ impl Renderable for StatusIndicatorWidget {
                 " to interrupt)".dim(),
             ]);
         } else {
-            spans.push(format!("({}{pretty_elapsed})", poll_prefix.as_deref().unwrap_or("")).dim());
+            spans.push(
+                format!(
+                    "({}{pretty_duration})",
+                    poll_prefix.as_deref().unwrap_or("")
+                )
+                .dim(),
+            );
         }
         if let Some(message) = &self.inline_message {
             // Keep optional context after elapsed/interrupt text so that core
@@ -431,6 +469,43 @@ mod tests {
             .collect::<String>();
 
         assert!(line.starts_with("Working (0s • esc to interrupt)"));
+    }
+
+    #[test]
+    fn renders_waiting_countdown() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        let baseline = Instant::now();
+        w.set_waiting_at(Duration::from_secs(125), baseline);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+        terminal
+            .draw(|f| w.render_at(f.area(), f.buffer_mut(), baseline + Duration::from_secs(65)))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn waiting_countdown_stops_at_zero() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        let baseline = Instant::now();
+        w.set_waiting_at(Duration::from_secs(10), baseline);
+
+        assert_eq!(
+            w.waiting_duration_at(baseline + Duration::from_secs(15)),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
