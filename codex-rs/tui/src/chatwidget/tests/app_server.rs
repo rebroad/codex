@@ -951,9 +951,11 @@ async fn live_app_server_command_output_delta_transcript_snapshot() {
         }
     }
     let completed = completed.expect("expected the interrupted command in history");
-    let completed = regex_lite::Regex::new(r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)$")
-        .expect("valid duration regex")
-        .replace(&completed, " • <duration>");
+    let completed = regex_lite::Regex::new(
+        r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)(?: • \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})?$",
+    )
+    .expect("valid duration regex")
+    .replace(&completed, " • <duration>");
     assert_chatwidget_snapshot!(
         "live_app_server_command_output_delta_interrupted",
         completed
