@@ -1149,6 +1149,7 @@ async fn auth_manager_logout_removes_only_custom_auth_file() -> Result<(), std::
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
     super::save_auth(
         dir.path(),
