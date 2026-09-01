@@ -436,6 +436,16 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .expect("single session ref")
         .services
         .models_manager = models_manager;
+    session
+        .update_settings(crate::session::SessionSettingsUpdate {
+            step_settings: StepSettingsUpdate {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("test setup should update the live approvals reviewer");
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
