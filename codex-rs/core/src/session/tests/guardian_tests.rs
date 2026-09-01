@@ -229,7 +229,10 @@ async fn request_permissions_routes_to_guardian_when_live_reviewer_is_enabled() 
     Arc::make_mut(&mut turn_context_raw.config).approvals_reviewer = ApprovalsReviewer::User;
     session
         .update_settings(crate::session::SessionSettingsUpdate {
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            step_settings: StepSettingsUpdate {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await
