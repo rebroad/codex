@@ -119,7 +119,7 @@ fn rejects_invalid_or_incomplete_configuration() {
 
 #[test]
 fn derives_target_operating_system_and_placement() {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     let expected_local_target_os = TestTargetOs::Linux;
     #[cfg(target_os = "macos")]
     let expected_local_target_os = TestTargetOs::MacOs;
