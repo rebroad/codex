@@ -2651,6 +2651,7 @@ impl Session {
     ) -> Option<RequestPermissionsResponse> {
         let turn_context = &step_context.turn;
         let approval_policy = step_context.settings.approval_policy();
+        let approvals_reviewer = step_context.settings.approvals_reviewer();
         match approval_policy {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2687,7 +2688,6 @@ impl Session {
             });
         };
 
-        let approvals_reviewer = step_context.settings.approvals_reviewer();
         if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
         {
             let originating_turn_state = {
