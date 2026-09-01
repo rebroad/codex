@@ -1010,7 +1010,17 @@ mod tests {
         let preview = cell.display_lines(/*width*/ 60);
         cell.calls[0].start_time = None;
         cell.mark_failed();
-        let transcript = cell.transcript_lines(/*width*/ 60);
+        // The timestamp is covered by `transcript_completion_includes_local_date_and_time`; keep
+        // this large-output snapshot focused on truncation and styling rather than wall-clock time.
+        let mut transcript = cell.transcript_lines(/*width*/ 60);
+        for span in transcript.iter_mut().flat_map(|line| &mut line.spans) {
+            let Some(timestamp) = span.content.strip_prefix(" • ") else {
+                continue;
+            };
+            if chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S").is_ok() {
+                span.content = " • <timestamp>".into();
+            }
+        }
 
         insta::assert_debug_snapshot!(
             "truncated_live_output_preview_and_transcript",
