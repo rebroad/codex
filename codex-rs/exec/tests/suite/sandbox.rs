@@ -31,7 +31,7 @@ pub(super) async fn spawn_command_under_sandbox(
         core_test_support::find_codex_linux_sandbox_exe()
             .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?,
     );
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "linux"))]
     let codex_linux_sandbox_exe = None;
     let exec_request = build_exec_request(
         ExecParams {
@@ -160,7 +160,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     };
     #[cfg(not(target_os = "linux"))]
     let sandbox_env = HashMap::new();
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "linux"))]
     let writable_roots = Vec::<AbsolutePathBuf>::new();
 
     // From https://man7.org/linux/man-pages/man7/sem_overview.7.html
