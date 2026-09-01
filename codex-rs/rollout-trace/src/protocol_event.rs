@@ -377,6 +377,8 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadQueueChanged(_)
         | EventMsg::TurnStarted(_)
+        | EventMsg::TurnWaitStarted(_)
+        | EventMsg::TurnWaitCompleted(_)
         | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
@@ -436,6 +438,7 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
     match event {
         EventMsg::SessionConfigured(_) => Some("session_configured"),
         EventMsg::TurnStarted(_) => Some("turn_started"),
+        EventMsg::TurnWaitStarted(_) | EventMsg::TurnWaitCompleted(_) => None,
         EventMsg::TurnComplete(_) => Some("turn_complete"),
         EventMsg::TurnAborted(_) => Some("turn_aborted"),
         EventMsg::ThreadRolledBack(_) => Some("thread_rolled_back"),

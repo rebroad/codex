@@ -1378,6 +1378,12 @@ pub enum EventMsg {
     #[serde(rename = "task_started", alias = "turn_started")]
     TurnStarted(TurnStartedEvent),
 
+    /// Agent execution has begun waiting for a yielded tool result.
+    TurnWaitStarted(TurnWaitStartedEvent),
+
+    /// Agent execution has finished waiting for a yielded tool result.
+    TurnWaitCompleted(TurnWaitCompletedEvent),
+
     /// Persistent thread-settings overrides from the correlated submission have
     /// been applied to the session configuration.
     ThreadSettingsApplied(ThreadSettingsAppliedEvent),
@@ -2143,6 +2149,15 @@ pub struct TurnStartedEvent {
     #[serde(default)]
     pub collaboration_mode_kind: ModeKind,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TurnWaitStartedEvent {
+    /// Requested wait duration in milliseconds.
+    pub yield_time_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TurnWaitCompletedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ThreadSettingsAppliedEvent {
