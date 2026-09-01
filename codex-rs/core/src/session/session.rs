@@ -591,15 +591,28 @@ impl Session {
         turn_context: &TurnContext,
         captured_reviewer: ApprovalsReviewer,
     ) -> ApprovalsReviewer {
-        let belongs_to_older_turn = {
+        let active_reviewer = {
             let active = self.active_turn.lock().await;
             active
                 .as_ref()
                 .and_then(|active| active.task.as_ref())
-                .is_some_and(|task| task.turn_context.sub_id != turn_context.sub_id)
+                .map(|task| {
+                    if task.turn_context.sub_id == turn_context.sub_id {
+                        Some(
+                            task.turn_context
+                                .current_settings
+                                .load()
+                                .approvals_reviewer(),
+                        )
+                    } else {
+                        None
+                    }
+                })
         };
-        if belongs_to_older_turn {
-            return captured_reviewer;
+        match active_reviewer {
+            Some(Some(reviewer)) => return reviewer,
+            Some(None) => return captured_reviewer,
+            None => {}
         }
         self.state
             .lock()
