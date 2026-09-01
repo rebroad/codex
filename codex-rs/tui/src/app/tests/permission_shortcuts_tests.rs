@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::permission_shortcuts::PermissionChangePersistence;
 use codex_arg0::Arg0DispatchPaths;
 use pretty_assertions::assert_eq;
 
@@ -53,12 +54,19 @@ async fn permission_shortcut_rejections_leave_state_unchanged() -> Result<()> {
             &mut tui,
             ThreadId::new(),
             read_only_selection(),
+            PermissionChangePersistence::SessionOnly,
         )
         .await;
         assert_eq!(app.transcript_cells.len(), transcript_len);
         assert!(events.try_recv().is_err());
-        app.apply_permission_shortcut(&mut app_server, &mut tui, thread_id, read_only_selection())
-            .await;
+        app.apply_permission_shortcut(
+            &mut app_server,
+            &mut tui,
+            thread_id,
+            read_only_selection(),
+            PermissionChangePersistence::SessionOnly,
+        )
+        .await;
         assert_eq!(
             RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref()),
             original
@@ -105,8 +113,14 @@ async fn permission_shortcut_confirms_without_persisting() -> Result<()> {
     let contents = std::fs::read_to_string(&config_path)?;
     while events.try_recv().is_ok() {}
 
-    app.apply_permission_shortcut(&mut app_server, &mut tui, thread_id, read_only_selection())
-        .await;
+    app.apply_permission_shortcut(
+        &mut app_server,
+        &mut tui,
+        thread_id,
+        read_only_selection(),
+        PermissionChangePersistence::SessionOnly,
+    )
+    .await;
 
     let cell = app.transcript_cells.last().expect("confirmed notice");
     insta::assert_snapshot!(
@@ -133,6 +147,61 @@ async fn permission_shortcut_confirms_without_persisting() -> Result<()> {
         events.try_recv().is_err(),
         "must not queue another update or config write"
     );
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_preset_confirms_thread_settings_and_persists_reviewer() -> Result<()> {
+    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(&config_path, "approvals_reviewer = \"auto_review\"\n")?;
+    let mut app_server = start_config_write_test_app_server(&app).await?;
+    let started = app_server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget
+        .handle_thread_session_quiet(started.session.clone());
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    while events.try_recv().is_ok() {}
+
+    app.apply_permission_shortcut(
+        &mut app_server,
+        &mut tui,
+        thread_id,
+        read_only_selection(),
+        PermissionChangePersistence::PersistReviewer,
+    )
+    .await;
+
+    let settings = app
+        .primary_session_configured
+        .as_ref()
+        .expect("primary thread settings should remain cached");
+    assert_eq!(
+        settings.active_permission_profile,
+        Some(ActivePermissionProfile::new(":read-only"))
+    );
+    assert_eq!(settings.approvals_reviewer, ApprovalsReviewer::User);
+    assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
+    assert_eq!(
+        app.chat_widget.config_ref().approvals_reviewer,
+        ApprovalsReviewer::User
+    );
+    assert_eq!(
+        std::fs::read_to_string(config_path)?,
+        "approvals_reviewer = \"user\"\n"
+    );
+    let cell = app.transcript_cells.last().expect("confirmed notice");
+    insta::assert_snapshot!(
+        lines_to_single_string(&cell.display_lines(/*width*/ 80)),
+        @"• Permissions updated to Read Only"
+    );
+    assert!(events.try_recv().is_err());
     app_server.shutdown().await?;
     Ok(())
 }
