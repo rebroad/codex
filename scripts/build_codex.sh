@@ -3,16 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_TREE=""
-SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 case "${SCRIPT_REPO##*/}" in
   *.build|*.make)
     BUILD_TREE="${SCRIPT_REPO}"
-    SOURCE_REPO="${SCRIPT_REPO%.*}"
+    SOURCE_REPO="$(cd -- "${SCRIPT_REPO%.*}" && pwd -P)"
     ;;
   *)
     SOURCE_REPO="${SCRIPT_REPO}"
     for candidate in "${SOURCE_REPO}.build" "${SOURCE_REPO}.make"; do
-      if [[ -d "${candidate}" ]]; then BUILD_TREE="${candidate}"; break; fi
+      if [[ -d "${candidate}" ]]; then
+        BUILD_TREE="$(cd -- "${candidate}" && pwd -P)"
+        break
+      fi
     done
     ;;
 esac
@@ -25,8 +28,11 @@ if [[ ! -d "${SOURCE_REPO}/codex-rs" ]]; then
   exit 1
 fi
 BUILD_REPO="${BUILD_TREE}"
+[[ "${BUILD_REPO}" != "${SOURCE_REPO}" ]] \
+  || { echo "build_codex.sh: build tree must be a sibling of the source checkout, not the source checkout itself" >&2; exit 1; }
 BUILD_WORKSPACE="${BUILD_REPO}/codex-rs"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
+INSTALL_DIR_EXPLICIT="false"
 VERSION=""
 PACKAGE_VERSION=""
 MODE="debug"
@@ -38,6 +44,7 @@ PACKAGE_NPM="false"
 PUBLISH_NPM="false"
 PREFLIGHT_ONLY="false"
 DRY_RUN="false"
+INSTALL_TARGETS=""
 SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
@@ -62,7 +69,7 @@ source "${SOURCE_REPO}/scripts/openssl_artifacts.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/rebuild_codex.sh [options]
+Usage: scripts/build_codex.sh [options]
 
 Builds from the source checkout into the first existing sibling build tree
 (<repo>.build or <repo>.make), retaining Cargo's incremental cache.
@@ -88,11 +95,12 @@ Options:
   --no-sync                Reuse the already-synced sibling source tree
   --jobs N                 Set CARGO_BUILD_JOBS
   --install-dir PATH       Install versioned binary and codex symlink there
+  --install TARGETS        Build and install to comma-separated SSH targets
   -h, --help               Show this help
 EOF
 }
 
-die() { echo "rebuild_codex.sh: $*" >&2; exit 1; }
+die() { echo "build_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
 
 authenticate_sudo() {
@@ -279,7 +287,7 @@ sync_sources() {
   [[ "${SYNCED}" == true ]] && return
   if [[ "${NO_SYNC:-0}" == 1 ]]; then SYNCED=true; return; fi
   if command -v cpto >/dev/null 2>&1; then
-    cpto "${SOURCE_REPO}" "${BUILD_REPO}"
+    cpto --no-lngit --nogit "${SOURCE_REPO}" "${BUILD_REPO}"
   else
     echo "cpto not found; syncing source without deleting build artifacts" >&2
     tar --exclude='./.git' -cf - -C "${SOURCE_REPO}" . | tar -xf - -C "${BUILD_REPO}"
@@ -908,6 +916,88 @@ install_test_stdio_server() {
   echo "Installed ${INSTALL_BIN_DIR}/test_stdio_server"
 }
 
+remote_install_dir() {
+  case "${1}" in
+    armv7|android) ssh "${2}" 'printf "%s/bin" "$HOME"' ;;
+    native) ssh "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
+    *) die "unsupported remote build mode: ${1}" ;;
+  esac
+}
+
+remote_target_architecture() {
+  local target="${1}" architecture
+  architecture="$(ssh "${target}" 'rustc -vV 2>/dev/null | sed -n "s/^host: //p"; uname -m' \
+    | head -n 1)" || die "could not SSH to install target ${target}"
+  [[ -n "${architecture}" ]] || die "could not determine architecture for install target ${target}"
+  echo "${architecture}"
+}
+
+install_remote_binary() {
+  local target="${1}" binary="${2}" version="${3}" install_dir="${4}" short name staging remote_tmp
+  [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
+  short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
+  name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
+  remote_tmp="/var/tmp/${name}.$$"
+  mkdir -p "$(dirname "${staging}")"
+  install -m 0755 "${binary}" "${staging}"
+  patch_timestamp "${staging}" "${version}" "${short}"
+  scp "${staging}" "${target}:${remote_tmp}"
+  ssh "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_INSTALL'
+set -euo pipefail
+install_dir="$1"
+name="$2"
+remote_tmp="$3"
+mkdir -p "$install_dir"
+install -m 0755 "$remote_tmp" "$install_dir/$name"
+ln -sfn "$name" "$install_dir/codex"
+rm -f "$remote_tmp"
+printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir"
+REMOTE_INSTALL
+  rm -f "${staging}"
+}
+
+install_target() {
+  local target="${1}" architecture target_mode binary install_dir
+  architecture="$(remote_target_architecture "${target}")"
+  case "${architecture}" in
+    armv7*|armv6*) target_mode=armv7 ;;
+    aarch64-linux-android) target_mode=android ;;
+    x86_64*)
+      [[ "$(native_target_host)" == x86_64-* ]] \
+        || die "install target ${target} has ${architecture}; local host is $(native_target_host)"
+      target_mode=native
+      ;;
+    *) die "unsupported architecture ${architecture} for install target ${target}" ;;
+  esac
+  install_dir="$(remote_install_dir "${target_mode}" "${target}")"
+  [[ "${INSTALL_DIR_EXPLICIT}" == true ]] && install_dir="${INSTALL_BIN_DIR}"
+  echo "Installing to ${target} (${architecture}, ${target_mode})..." >&2
+  TARGET_MODE="${target_mode}"
+  case "${target_mode}" in
+    native)
+      [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] \
+        && die "native V8 source builds are disabled; use the upstream Rusty V8 artifact"
+      configure_rusty_v8_artifacts native \
+        || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
+      ;;
+    armv7)
+      configure_rusty_v8_artifacts armv7 || prepare_armv7_rusty_v8_source
+      ;;
+    android)
+      configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source
+      ;;
+  esac
+  refresh_build_lockfile
+  if [[ "${target_mode}" == android ]]; then
+    build_android
+    binary="${BUILD_REPO}/build/android-artifact/codex.bin"
+  else
+    binary="$(cargo_build "${MODE}" "${target_mode}")"
+  fi
+  install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}"
+}
+
 build_android() {
   local ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
   local user_home="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}"
@@ -936,6 +1026,7 @@ build_android() {
   export PATH="${llvm}/bin:${PATH}"
   export ANDROID_NDK_HOME="${ndk}" LIBLZMA_NO_PKG_CONFIG=1 BZIP2_NO_PKG_CONFIG=1 BZIP2_STATIC=1
   export PKG_CONFIG_ALLOW_CROSS=1 CODEX_SKIP_VENDORED_BWRAP=1
+  export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-} -Clink-arg=${builtins}"
   export CC_aarch64_linux_android="${llvm}/bin/aarch64-linux-android29-clang"
   export CXX_aarch64_linux_android="${llvm}/bin/aarch64-linux-android29-clang++"
   export AR_aarch64_linux_android="${llvm}/bin/llvm-ar"
@@ -971,7 +1062,7 @@ run_preflight() {
   (
     cd "${SOURCE_REPO}"
     bash -n \
-      scripts/rebuild_codex.sh \
+      scripts/build_codex.sh \
       scripts/build.sh \
       scripts/build_armv7.sh \
       scripts/resolve_rusty_v8_artifacts.sh \
@@ -1025,8 +1116,10 @@ while (($#)); do
     --no-sync) NO_SYNC=1; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
     --jobs=*) CARGO_BUILD_JOBS="${1#*=}"; shift ;;
-    --install-dir) INSTALL_BIN_DIR="${2:-}"; shift 2 ;;
-    --install-dir=*) INSTALL_BIN_DIR="${1#*=}"; shift ;;
+    --install-dir) INSTALL_BIN_DIR="${2:-}"; INSTALL_DIR_EXPLICIT=true; shift 2 ;;
+    --install-dir=*) INSTALL_BIN_DIR="${1#*=}"; INSTALL_DIR_EXPLICIT=true; shift ;;
+    --install) INSTALL_TARGETS="${2:-}"; shift 2 ;;
+    --install=*) INSTALL_TARGETS="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option ${1} (use --help)" ;;
   esac
@@ -1116,6 +1209,17 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
+if [[ -n "${INSTALL_TARGETS}" ]]; then
+  IFS=',' read -r -a INSTALL_TARGET_LIST <<<"${INSTALL_TARGETS}"
+  [[ "${#INSTALL_TARGET_LIST[@]}" -gt 0 ]] || die "install target list must not be empty"
+  for install_target_name in "${INSTALL_TARGET_LIST[@]}"; do
+    [[ -n "${install_target_name}" ]] || die "install target list contains an empty target"
+  done
+  for install_target_name in "${INSTALL_TARGET_LIST[@]}"; do
+    install_target "${install_target_name}"
+  done
+  exit 0
+fi
 if [[ "${PACKAGE_NPM}" == true ]]; then
   if [[ "${CODEX_BUILD_FROM_SOURCE:-false}" != true ]]; then
     download_latest_fork_npm_release

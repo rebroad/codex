@@ -101,7 +101,7 @@ profile_path() { [[ "${1}" == release ]] && echo release || echo debug; }
 require_binary() {
   [[ -x "${1}" ]] || {
     echo "Missing executable: ${1}" >&2
-    echo "Build it with scripts/rebuild_codex.sh --release --build-npm-vendor" >&2
+    echo "Build it with scripts/build_codex.sh --release --build-npm-vendor" >&2
     exit 1
   }
 }
