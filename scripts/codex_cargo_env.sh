@@ -237,10 +237,12 @@ elif [[ "${TARGET_MODE}" == native ]]; then
 fi
 
 TARGET_DIR="${TARGET_ROOT}"
-# All Cargo writers for a platform/profile share this lock.  The lock is
-# emitted into the caller's shell below, so it remains held for the whole
-# Cargo invocation rather than only while this helper is running.
-TARGET_LOCK_FILE="${TARGET_DIR}.lock"
+# Keep the shared Cargo lock outside the target directory so `cargo clean`
+# cannot unlink it, and inside the ignored build directory so source-to-build
+# synchronization cannot unlink it while another process still holds it.
+# The lock is emitted into the caller's shell below, so it remains held for
+# the whole Cargo invocation rather than only while this helper is running.
+TARGET_LOCK_FILE="${BUILD_REPO}/build/codex-cargo.lock"
 mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 
 mkdir -p "${TARGET_DIR}"
