@@ -1,4 +1,9 @@
 use super::*;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "windows"
+))]
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
