@@ -32,41 +32,50 @@ export ANDROID_NDK_HOME="$HOME/Android/Sdk/ndk/28.2.13676358"
 scripts/build.sh android
 ```
 
-For the complete repeatable workflow, use `scripts/rebuild_codex.sh`. It
+For the complete repeatable workflow, use `scripts/build_codex.sh`. It
 supports debug/release builds, the sibling-tree cache, Linux musl x64,
 Linux ARMv7, Android ARM64, timestamped installs in `~/.cargo/bin`, npm
 packaging, and opt-in npm/GitHub publishing:
 
 ```bash
-scripts/rebuild_codex.sh --release
-scripts/rebuild_codex.sh --release --package-local-npm
-scripts/rebuild_codex.sh --release --target armv7
-scripts/rebuild_codex.sh --release --target android --package-npm
-scripts/rebuild_codex.sh --release --target all --package-local-npm
+scripts/build_codex.sh --release
+scripts/build_codex.sh --release --package-local-npm
+scripts/build_codex.sh --release --target armv7
+scripts/build_codex.sh --release --target android --package-npm
+scripts/build_codex.sh --release --target all --package-local-npm
 # Full local assembly, audit, and npm publication.
-scripts/rebuild_codex.sh --release --publish-local-npm
+scripts/build_codex.sh --release --publish-local-npm
 # Start the GitHub build/release workflow; this does not compile locally.
-scripts/rebuild_codex.sh --release --start-github-release
+scripts/build_codex.sh --release --start-github-release
 ```
 
 ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
 `ARMV7_LINKER`). The musl and ARMv7 binaries are staged as platform variants
-of `@reb.ai/codex`. `rebuild_codex.sh` requests sudo only when it actually
+of `@reb.ai/codex`. `build_codex.sh` requests sudo only when it actually
 needs to install missing musl build tools; cached/reused artifact and Android
 runs do not prompt for sudo.
+
+To build and install sequentially to one or more SSH targets, pass their SSH
+aliases as a comma-separated list. The script identifies each target over SSH
+before selecting native, ARMv7, or Android compilation; `--install-dir` can
+override the target's default user executable directory:
+
+```bash
+scripts/build_codex.sh --release --install target-a,target-b
+```
 
 For a Termux/Android operational install, use the existing user executable
 directory so both interactive shells and Termux:Boot resolve the same binary:
 
 ```bash
-scripts/rebuild_codex.sh --release --install-dir "$HOME/bin"
+scripts/build_codex.sh --release --install-dir "$HOME/bin"
 install -Dm755 scripts/remote-control/codex-remote-start "$HOME/bin/codex-remote-start"
 install -Dm755 scripts/remote-control/codex-pairing-code "$HOME/bin/codex-pairing-code"
 install -Dm755 scripts/remote-control/codex-remote-healthcheck "$HOME/bin/codex-remote-healthcheck"
 codex-remote-healthcheck
 ```
 
-The rebuild script deliberately does not edit shell startup files. If a
+The build script deliberately does not edit shell startup files. If a
 service uses a different executable, set `CODEX_BIN` explicitly and verify the
 running daemon with the health check.
 
@@ -186,7 +195,7 @@ Target selection is deliberately split from the host build matrix:
 For a complete nine-package candidate, use:
 
 ```bash
-scripts/rebuild_codex.sh --release --target all --package-local-npm
+scripts/build_codex.sh --release --target all --package-local-npm
 ```
 
 `--publish-local-npm` implies `--package-local-npm` and selects `all` by
@@ -222,7 +231,7 @@ codex-v0.148.0-alpha.5.9084226b62.202608082151
 # Create/push the source release tag, wait for CI to appear, and print its run
 # and job URLs plus the command to watch it. The script does not watch CI.
 # No local cargo compilation or npm packaging is performed by this command.
-scripts/rebuild_codex.sh --release --start-github-release
+scripts/build_codex.sh --release --start-github-release
 
 # Download and audit the exact completed GitHub candidate locally instead of
 # using the workflow's npm publish job.

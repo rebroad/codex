@@ -12,11 +12,7 @@ dist/
 bazel-*
 user.bazelrc
 build/
-# Rusty V8 artifacts belong to the sibling build tree and must survive cpto.
-build/rusty-v8-artifacts/
 codex-rs/target/
-codex-rs/target.*/
-codex-rs/target-*
 out/
 storybook-static/
 
