@@ -158,9 +158,9 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
         // Skip on Linux hosts where Landlock cannot actually be enforced.
         None => return,
     };
-    #[cfg(target_os = "macos")]
-    let sandbox_env = HashMap::new();
     #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
+    #[cfg(target_os = "macos")]
     let writable_roots = Vec::<AbsolutePathBuf>::new();
 
     // From https://man7.org/linux/man-pages/man7/sem_overview.7.html
