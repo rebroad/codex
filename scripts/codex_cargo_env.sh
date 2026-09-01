@@ -281,8 +281,9 @@ else
   echo "warning: flock unavailable; Cargo target writes will not be serialized" >&2
 fi
 if [[ -n "${SCCACHE_BIN}" ]]; then
-  printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q\n' \
-    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}"
+  printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
+    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}" \
+    "${SCCACHE_CACHE_SIZE:-20G}"
 fi
 [[ -n "${CARGO_BUILD_JOBS:-}" ]] && printf 'export CARGO_BUILD_JOBS=%q\n' "${CARGO_BUILD_JOBS}"
 if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
