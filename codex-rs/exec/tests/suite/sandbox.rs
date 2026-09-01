@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 use codex_core::spawn::StdioPolicy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -31,7 +31,7 @@ pub(super) async fn spawn_command_under_sandbox(
         core_test_support::find_codex_linux_sandbox_exe()
             .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?,
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     let codex_linux_sandbox_exe = None;
     let exec_request = build_exec_request(
         ExecParams {
@@ -158,7 +158,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
         // Skip on Linux hosts where Landlock cannot actually be enforced.
         None => return,
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     let sandbox_env = HashMap::new();
     #[cfg(not(target_os = "linux"))]
     let writable_roots = Vec::<AbsolutePathBuf>::new();
