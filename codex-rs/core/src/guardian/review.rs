@@ -76,6 +76,7 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
 );
 
 const GUARDIAN_REVIEW_MAX_ATTEMPTS: i64 = 3;
+const APPROVAL_REVIEW_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn plugin_attribution_for_guardian_request(
     turn: &TurnContext,
@@ -806,6 +807,9 @@ pub(crate) fn spawn_approval_request_review(
     let runtime = session.services.runtime_handle.clone();
     let spawn_result = std::thread::Builder::new()
         .name("codex-approval-review".to_string())
+        // Session initialization includes MCP runtime setup and can exceed Android's
+        // default thread stack before the review itself begins.
+        .stack_size(APPROVAL_REVIEW_THREAD_STACK_SIZE)
         .spawn(move || {
             let decision = runtime.block_on(run_guardian_review(
                 session, context, review_id, request, reasons, options,
