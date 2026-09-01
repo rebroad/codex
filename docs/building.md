@@ -12,8 +12,11 @@ sibling build tree (`codex.build`, or `codex.make`). The Android target is
 - An offline Cargo cache containing the workspace dependencies
 
 The Android compatibility delta is intentionally small: OpenSSL is vendored
-for `aarch64-linux-android`, and the Android TLS/linker configuration is kept
-in `codex-rs/.cargo/config.toml` and `codex-rs/cli/src/android_tls_alignment.rs`.
+for `aarch64-linux-android`, and the Android linker configuration is kept in
+`codex-rs/.cargo/config.toml` and `scripts/codex_cargo_env.sh`. Native Termux
+builds link the retained input in `scripts/android_tls_alignment.S` into every
+Cargo executable, including test harnesses, so ARM64 Bionic receives the
+required 64-byte `PT_TLS` alignment.
 
 ## Recommended builds
 
