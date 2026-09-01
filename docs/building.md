@@ -81,6 +81,33 @@ If `cpto` is available in `PATH`, the build script uses
 is absent, the script uses a tar-based source sync that leaves generated build
 artifacts in place. Build outputs are also listed in `.gitignore`.
 
+## Native Termux build process limit
+
+Android tracks native commands started by Termux as phantom processes and
+normally permits at most 32 across the device. A large Rust workspace can
+cross that limit even with one Cargo job, causing `rustc` or `sccache` to exit
+without a compiler diagnostic. For native builds on Android, connect the
+device to its own wireless-debugging endpoint and run:
+
+```bash
+scripts/setup-dev-environment.sh
+scripts/setup-dev-environment.sh --check
+```
+
+On Android, the setup script installs `android-tools` when needed and raises
+`activity_manager.max_phantom_processes` to 128 through the connected ADB
+device. Where Android supports per-flag overrides, the script makes this one
+value sticky so DeviceConfig server sync cannot restore the default of 32. It
+leaves an existing value higher than 128 unchanged. Set `ANDROID_SERIAL` when
+more than one device is connected. This is a persistent, device-wide
+resource-policy change; phantom-process monitoring and its excessive-CPU
+protection remain enabled.
+
+Android 14 and newer also expose **Disable child process restrictions** in
+Developer options. That broader switch disables both the process-count and
+excessive-CPU restrictions, so the setup script prefers the narrower numeric
+limit needed for builds.
+
 ## Exact Android build environment
 
 The script expands to the following essential Cargo configuration:
