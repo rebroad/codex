@@ -117,7 +117,26 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
   [[ -x "${ANDROID_CLANG}" ]] || { echo "Android linker not found" >&2; exit 1; }
   ANDROID_BUILTINS="$(${ANDROID_CLANG} -print-file-name=libclang_rt.builtins-aarch64-android.a)"
   [[ -s "${ANDROID_BUILTINS}" ]] || { echo "Android compiler builtins archive not found" >&2; exit 1; }
+  ANDROID_TLS_ALIGNMENT_SOURCE="${SOURCE_REPO}/scripts/android_tls_alignment.S"
+  [[ -f "${ANDROID_TLS_ALIGNMENT_SOURCE}" ]] || {
+    echo "Android TLS alignment source not found" >&2
+    exit 1
+  }
+  ANDROID_TLS_ALIGNMENT_FINGERPRINT="$({
+    sha256sum "${ANDROID_TLS_ALIGNMENT_SOURCE}"
+    "${ANDROID_CLANG}" --version
+  } | sha256sum | awk '{print $1}')"
+  ANDROID_TLS_ALIGNMENT_DIR="${BUILD_REPO}/build/android-tls-alignment"
+  ANDROID_TLS_ALIGNMENT_OBJECT="${ANDROID_TLS_ALIGNMENT_DIR}/${ANDROID_TLS_ALIGNMENT_FINGERPRINT}.o"
+  if [[ ! -s "${ANDROID_TLS_ALIGNMENT_OBJECT}" ]]; then
+    mkdir -p "${ANDROID_TLS_ALIGNMENT_DIR}"
+    "${ANDROID_CLANG}" -c "${ANDROID_TLS_ALIGNMENT_SOURCE}" \
+      -o "${ANDROID_TLS_ALIGNMENT_OBJECT}.tmp"
+    mv "${ANDROID_TLS_ALIGNMENT_OBJECT}.tmp" "${ANDROID_TLS_ALIGNMENT_OBJECT}"
+  fi
   RUSTFLAGS_VALUE="-Clink-arg=${ANDROID_BUILTINS}"
+  RUSTFLAGS_VALUE+=" -Clink-arg=${ANDROID_TLS_ALIGNMENT_OBJECT}"
+  RUSTFLAGS_VALUE+=" -Clink-arg=-Wl,-u,codex_android_tls_alignment"
 fi
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
