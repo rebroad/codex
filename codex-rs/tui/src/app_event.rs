@@ -61,6 +61,7 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
+#[cfg(target_os = "windows")]
 use codex_protocol::models::ActivePermissionProfile;
 
 use crate::history_cell::HistoryCell;
@@ -1022,6 +1023,14 @@ pub(crate) enum AppEvent {
         selection: PermissionProfileSelection,
     },
 
+    /// Apply a permission preset from the permissions popup to the active thread.
+    ///
+    /// Unlike the keyboard shortcut, the popup also persists the selected reviewer
+    /// as the user's default configuration.
+    ApplyPermissionPreset {
+        selection: PermissionProfileSelection,
+    },
+
     /// Open the Windows world-writable directories warning.
     /// If `preset` is `Some`, the confirmation will apply the provided
     /// approval/sandbox configuration on Continue; if `None`, it performs no
@@ -1098,13 +1107,11 @@ pub(crate) enum AppEvent {
     UpdateAskForApprovalPolicy(AskForApproval),
 
     /// Update the current built-in active permission profile in the running app and widget.
+    #[cfg(target_os = "windows")]
     UpdateActivePermissionProfile(ActivePermissionProfile),
 
     /// Select a named permission profile, optionally applying built-in mode settings too.
     SelectPermissionProfile(PermissionProfileSelection),
-
-    /// Update the current approvals reviewer in the running app and widget.
-    UpdateApprovalsReviewer(ApprovalsReviewer),
 
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
@@ -1367,7 +1374,7 @@ pub(crate) enum AppEvent {
 }
 
 /// Named profile selection to apply after any required UI guardrails complete.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PermissionProfileSelection {
     pub profile_id: String,
     pub approval_policy: Option<AskForApproval>,

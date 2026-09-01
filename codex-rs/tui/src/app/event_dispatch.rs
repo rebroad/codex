@@ -6,6 +6,7 @@
 use super::resize_reflow::trailing_run_start;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::app::permission_shortcuts::PermissionChangePersistence;
 use crate::app_event::RecapTrigger;
 use crate::app_event::ThreadTitleDestination;
 use crate::app_server_session::ForkGoalContinuation;
@@ -1585,7 +1586,29 @@ impl App {
                 );
             }
             AppEvent::ApplyPermissionShortcut { thread_id, selection } => {
-                self.apply_permission_shortcut(app_server, tui, thread_id, selection).await;
+                self.apply_permission_shortcut(
+                    app_server,
+                    tui,
+                    thread_id,
+                    selection,
+                    PermissionChangePersistence::SessionOnly,
+                )
+                .await;
+            }
+            AppEvent::ApplyPermissionPreset { selection } => {
+                let Some(thread_id) = self.active_thread_id else {
+                    self.chat_widget
+                        .add_error_message("No active thread is available.".to_string());
+                    return Ok(AppRunControl::Continue);
+                };
+                self.apply_permission_shortcut(
+                    app_server,
+                    tui,
+                    thread_id,
+                    selection,
+                    PermissionChangePersistence::PersistReviewer,
+                )
+                .await;
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
@@ -2224,6 +2247,7 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
             }
+            #[cfg(target_os = "windows")]
             AppEvent::UpdateActivePermissionProfile(active_permission_profile) => {
                 let mut config = self.config.clone();
                 let Some(permission_profile) = self
@@ -2301,28 +2325,6 @@ impl App {
             AppEvent::SelectPermissionProfile(selection) => {
                 if self.apply_permission_profile_selection(selection).await {
                     self.chat_widget.submit_initial_user_message_if_pending();
-                }
-            }
-            AppEvent::UpdateApprovalsReviewer(policy) => {
-                self.config.approvals_reviewer = policy;
-                self.chat_widget.set_approvals_reviewer(policy);
-                self.sync_active_thread_permission_settings_to_cached_session()
-                    .await;
-                if let Err(err) = crate::config_update::write_config_batch(
-                    app_server.request_handle(),
-                    vec![crate::config_update::replace_config_value(
-                        "approvals_reviewer",
-                        serde_json::json!(policy.to_string()),
-                    )],
-                )
-                .await
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to persist approvals reviewer update"
-                    );
-                    self.chat_widget
-                        .add_error_message(format!("Failed to save approvals reviewer: {err}"));
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
