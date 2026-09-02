@@ -48,6 +48,7 @@ SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
 LOCKFILE_REGENERATION_REQUIRED="false"
+ALLOW_CONCURRENT_BUILD="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 BUILD_TIMESTAMP_SEPARATOR="-"
@@ -92,6 +93,7 @@ Options:
   --dry-run                Use supported dry-run checks
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced sibling source tree
+  --allow-concurrent-build  Bypass the shared Cargo target lock and share the target directory
   --jobs N                 Set CARGO_BUILD_JOBS
   --install TARGETS        Build and install to comma-separated SSH targets
   -h, --help               Show this help
@@ -100,6 +102,20 @@ EOF
 
 die() { echo "build_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
+
+BUILD_PROCESS_REGISTRY="${BUILD_REPO}/build/codex-build-processes"
+BUILD_PROCESS_RECORD="${BUILD_PROCESS_REGISTRY}/$$"
+register_build_process() {
+  mkdir -p "${BUILD_PROCESS_REGISTRY}"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'command=%s\n' "$(ps -p $$ -o args= 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  } >"${BUILD_PROCESS_RECORD}"
+}
+cleanup_build_process() {
+  rm -f "${BUILD_PROCESS_RECORD}"
+}
 
 authenticate_sudo() {
   [[ "${SUDO_AUTHENTICATED}" == true ]] && return
@@ -1190,6 +1206,7 @@ while (($#)); do
     --skip-build) SKIP_BUILD=true; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
+    --allow-concurrent-build) ALLOW_CONCURRENT_BUILD=true; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
     --jobs=*) CARGO_BUILD_JOBS="${1#*=}"; shift ;;
     --install) INSTALL_TARGETS="${2:-}"; shift 2 ;;
@@ -1198,6 +1215,11 @@ while (($#)); do
     *) die "unknown option ${1} (use --help)" ;;
   esac
 done
+
+export CODEX_ALLOW_CONCURRENT_BUILD="${ALLOW_CONCURRENT_BUILD}"
+export CODEX_BUILD_PID="$$"
+register_build_process
+trap cleanup_build_process EXIT
 
 read_toolchain
 native_target_host() {
