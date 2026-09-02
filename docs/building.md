@@ -88,10 +88,12 @@ Outputs are:
 ../codex.build/build/android-artifact/libc++_shared.so
 ```
 
-If `cpto` is available in `PATH`, the build script uses
-`cpto --no-lngit --nogit` to preserve the build cache. It is optional; when it
-is absent, the script uses a tar-based source sync that leaves generated build
-artifacts in place. Build outputs are also listed in `.gitignore`.
+If `cpto` is available in `PATH`, the build script uses it to preserve the
+build cache. Git-worktree metadata is synchronized when possible; if the
+destination's `.git` metadata is unsuitable, `cpto` warns and continues with
+the file synchronization. It is optional; when absent, the script uses a
+tar-based source sync that leaves generated build artifacts in place. Build
+outputs are also listed in `.gitignore`.
 
 ## Native Termux build process limit
 

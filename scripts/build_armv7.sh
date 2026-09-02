@@ -21,7 +21,7 @@ if [[ ${REPO_DIR} != *.build && ${REPO_DIR} != *.make && ${ALLOW_SOURCE_BUILD} !
     echo "Missing required command: cpto" >&2
     exit 1
   fi
-  cpto --no-lngit --nogit "${REPO_DIR}" "${build_repo_candidate}"
+  cpto "${REPO_DIR}" "${build_repo_candidate}"
   if [[ "${CARGO_TARGET_DIR:-}" == "${REPO_DIR}/"* ]]; then
     CARGO_TARGET_DIR="${build_repo_candidate}/${CARGO_TARGET_DIR#"${REPO_DIR}/"}"
     export CARGO_TARGET_DIR
@@ -51,8 +51,8 @@ GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
 GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-}"
 STRIP_BINARY="true"
 BINARY_ONLY="true"
-DEPLOY_REMOTE="true"
-DEPLOY_HOST="${DEPLOY_HOST:-pi3}"
+DEPLOY_REMOTE="false"
+DEPLOY_HOST="${DEPLOY_HOST:-}"
 DEPLOY_DIR="${DEPLOY_DIR:-~/bin}"
 BUILD_TIMESTAMP_PLACEHOLDER="000000000000"
 BUILD_COMMIT_HASH_PLACEHOLDER="0000000000"
@@ -133,8 +133,8 @@ Options:
   --no-strip            Keep debug symbols in output binary
   --binary-only         Publish only the binary under dist/local-armv7 (default; skip tar.gz/.sha256/.json)
   --full-artifacts      Publish binary + tar.gz + sha256 + metadata
-  --no-deploy-remote    Skip default deploy to pi3:~/bin
-  --deploy-host=<host>  Remote SSH host for post-build deploy (default: pi3)
+  --no-deploy-remote    Skip remote deployment
+  --deploy-host=<host>  Remote SSH host for post-build deploy
   --deploy-dir=<path>   Remote install dir for versioned binary + symlink (default: ~/bin)
   --allow-gnu-ld        Allow falling back to GNU ld if lld is unavailable
   -h, --help            Show this help
@@ -1014,7 +1014,7 @@ run_in_docker_buster() {
   fi
 }
 
-validate_pi3_abi_compat() {
+validate_armv7_abi_compat() {
   local bin_path="$1"
   local glibc_versions max_glibc
 
@@ -1025,12 +1025,12 @@ validate_pi3_abi_compat() {
   fi
   max_glibc="$(tail -n1 <<<"${glibc_versions}")"
   if ! awk -v v="${max_glibc}" 'BEGIN { split(v, a, "."); exit !((a[1] < 2) || (a[1] == 2 && a[2] <= 28)) }'; then
-    echo "Built binary is not Pi OS Buster compatible (requires GLIBC_${max_glibc})." >&2
+    echo "Built binary is not Raspberry Pi OS Buster compatible (requires GLIBC_${max_glibc})." >&2
     echo "Re-run with --build-env=docker-buster (or keep default --build-env=auto)." >&2
     exit 1
   fi
   if strings "${bin_path}" | grep -q 'libssl\.so\.3'; then
-    echo "Built binary links against OpenSSL 3 (libssl.so.3), but Pi OS Buster provides OpenSSL 1.1." >&2
+    echo "Built binary links against OpenSSL 3 (libssl.so.3), but Raspberry Pi OS Buster provides OpenSSL 1.1." >&2
     echo "Re-run with --build-env=docker-buster (or keep default --build-env=auto)." >&2
     exit 1
   fi
@@ -1318,6 +1318,7 @@ for arg in "$@"; do
       ;;
     --deploy-host=*)
       DEPLOY_HOST="${arg#*=}"
+      DEPLOY_REMOTE="true"
       ;;
     --deploy-dir=*)
       DEPLOY_DIR="${arg#*=}"
@@ -1662,7 +1663,7 @@ elif [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   if [[ "${BUILD_ENV}" == host ]]; then
     echo "Skipping Pi OS Buster ABI gate for explicit host build."
   else
-    validate_pi3_abi_compat "${bin_path}"
+    validate_armv7_abi_compat "${bin_path}"
   fi
   deploy_remote_binary "${bin_path}" "${DEPLOY_HOST}" "${DEPLOY_DIR}"
 fi
