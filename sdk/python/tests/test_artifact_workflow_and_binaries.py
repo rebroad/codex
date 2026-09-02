@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -154,9 +155,12 @@ def test_root_format_driver_covers_all_formatter_groups(
     ]
 
     def fake_check_output(args, *, cwd):
-        assert args == git_ls_files_args
+        if args == git_ls_files_args:
+            assert cwd == script.REPO_ROOT
+            return b"MODULE.bazel\0README.md\0third_party/v8/libcxx.BUILD.bazel\0"
+        assert args == ["git", "ls-files", "-z", "--", "codex-rs"]
         assert cwd == script.REPO_ROOT
-        return b"MODULE.bazel\0README.md\0third_party/v8/libcxx.BUILD.bazel\0"
+        return b"codex-rs/core/src/lib.rs\0"
 
     monkeypatch.setattr(script.subprocess, "check_output", fake_check_output)
     formatters = script.formatter_groups(check=False)
@@ -229,21 +233,14 @@ def test_root_format_driver_covers_all_formatter_groups(
     )
     assert formatters[0].commands[-1].args == ("just", "--unstable", "--fmt")
     assert checks[0].commands[-1].args == ("just", "--unstable", "--fmt", "--check")
-    assert formatters[1].commands[-1].args == (
-        "cargo",
-        "fmt",
-        "--",
-        "--config",
-        "imports_granularity=Item",
-    )
-    assert checks[1].commands[-1].args == (
-        "cargo",
-        "fmt",
-        "--",
-        "--config",
-        "imports_granularity=Item",
-        "--check",
-    )
+    rust_format_args = formatters[1].commands[-1].args
+    rust_check_args = checks[1].commands[-1].args
+    if shutil.which("rustup") is not None:
+        assert rust_format_args == ("cargo", "fmt")
+        assert rust_check_args == ("cargo", "fmt", "--check")
+    else:
+        assert rust_format_args == ("rustfmt", "core/src/lib.rs")
+        assert rust_check_args == ("rustfmt", "core/src/lib.rs", "--check")
     format_buildifier_args = formatters[2].commands[-1].args
     check_buildifier_args = checks[2].commands[-1].args
     assert format_buildifier_args[:4] == (
