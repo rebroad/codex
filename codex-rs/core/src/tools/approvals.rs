@@ -577,10 +577,7 @@ impl Session {
                     ctx.review_context.approvals_reviewer,
                 )
                 .await;
-            ApprovalReviewer::for_policy(
-                ctx.review_context.approval_policy,
-                reviewer,
-            )
+            ApprovalReviewer::for_policy(ctx.review_context.approval_policy, reviewer)
         };
 
         let decision = match reviewer {
