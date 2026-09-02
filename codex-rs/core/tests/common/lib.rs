@@ -228,7 +228,7 @@ allow_local_binding = true
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
         codex_linux_sandbox_exe: Some(
@@ -238,12 +238,12 @@ fn default_test_overrides() -> ConfigOverrides {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides::default()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
@@ -674,7 +674,7 @@ macro_rules! skip_if_target_windows {
 #[macro_export]
 macro_rules! codex_linux_sandbox_exe_or_skip {
     () => {{
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
@@ -684,13 +684,13 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
                 }
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             None
         }
     }};
     ($return_value:expr $(,)?) => {{
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
@@ -700,7 +700,7 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
                 }
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             None
         }
