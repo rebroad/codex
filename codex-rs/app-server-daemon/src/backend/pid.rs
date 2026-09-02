@@ -602,6 +602,15 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
 
     match read_process_start_time(record.pid).await {
         Ok(start_time) => Ok(start_time == record.process_start_time),
+        Err(err)
+            if cfg!(target_os = "android")
+                && err
+                    .root_cause()
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(false)
+        }
         Err(_err) if !process_exists(record.pid) => Ok(false),
         Err(err) => Err(err),
     }
