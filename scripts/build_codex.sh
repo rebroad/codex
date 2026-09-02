@@ -727,7 +727,7 @@ cargo_build() {
     )
   fi
   if [[ "${target_mode}" == musl ]]; then
-    configure_musl_build_tools "${triple}"
+    configure_musl_build_tools "${triple}" >&2
     local musl_cc="${MUSL_CC:-}"
     if [[ -z "${musl_cc}" ]]; then
       musl_cc="$(command -v musl-gcc || true)"
@@ -922,9 +922,34 @@ install_test_stdio_server() {
 remote_install_dir() {
   case "${1}" in
     armv7|android) ssh "${2}" 'printf "%s/bin" "$HOME"' ;;
-    native) ssh "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
+    native|musl) ssh "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
     *) die "unsupported remote build mode: ${1}" ;;
   esac
+}
+
+remote_glibc_version() {
+  ssh "${1}" 'getconf GNU_LIBC_VERSION 2>/dev/null | sed -n "s/^glibc //p"'
+}
+
+glibc_version_is_older() {
+  local older_major older_minor newer_major newer_minor
+  [[ "${1}" =~ ^([0-9]+)\.([0-9]+)$ ]] || return 1
+  older_major="${BASH_REMATCH[1]}"
+  older_minor="${BASH_REMATCH[2]}"
+  [[ "${2}" =~ ^([0-9]+)\.([0-9]+)$ ]] || return 1
+  newer_major="${BASH_REMATCH[1]}"
+  newer_minor="${BASH_REMATCH[2]}"
+  ((10#${older_major} < 10#${newer_major} \
+    || (10#${older_major} == 10#${newer_major} \
+      && 10#${older_minor} < 10#${newer_minor})))
+}
+
+native_glibc_is_compatible() {
+  local target="${1}" local_glibc target_glibc
+  local_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | sed -n 's/^glibc //p')"
+  target_glibc="$(remote_glibc_version "${target}")" || return 0
+  [[ -n "${local_glibc}" && -n "${target_glibc}" ]] || return 0
+  ! glibc_version_is_older "${target_glibc}" "${local_glibc}"
 }
 
 remote_target_architecture() {
@@ -993,7 +1018,12 @@ install_target() {
     x86_64*)
       [[ "$(native_target_host)" == x86_64-* ]] \
         || die "install target ${target} has ${architecture}; local host is $(native_target_host)"
-      target_mode=native
+      if native_glibc_is_compatible "${target}"; then
+        target_mode=native
+      else
+        echo "Target ${target} has older glibc; selecting the static musl build." >&2
+        target_mode=musl
+      fi
       ;;
     *) die "unsupported architecture ${architecture} for install target ${target}" ;;
   esac
