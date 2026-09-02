@@ -108,19 +108,21 @@ scripts/setup-dev-environment.sh
 scripts/setup-dev-environment.sh --check
 ```
 
-On Android, the setup script installs `android-tools` when needed and raises
-`activity_manager.max_phantom_processes` to 128 through the connected ADB
-device. Where Android supports per-flag overrides, the script makes this one
-value sticky so DeviceConfig server sync cannot restore the default of 32. It
-leaves an existing value higher than 128 unchanged. Set `ANDROID_SERIAL` when
-more than one device is connected. This is a persistent, device-wide
-resource-policy change; phantom-process monitoring and its excessive-CPU
-protection remain enabled.
+On Android, the setup script installs `android-tools` when needed, raises
+`activity_manager.max_phantom_processes` to 128, and disables Android's child
+process restrictions through the connected ADB device. Where Android supports
+per-flag overrides, the script makes the numeric limit sticky so DeviceConfig
+server sync cannot restore the default of 32. It leaves an existing value
+higher than 128 unchanged. Set `ANDROID_SERIAL` when more than one device is
+connected. These are persistent, device-wide resource-policy changes; the
+child-process setting disables both phantom-process count trimming and
+excessive-CPU enforcement for native processes started by Termux.
 
 Android 14 and newer also expose **Disable child process restrictions** in
-Developer options. That broader switch disables both the process-count and
-excessive-CPU restrictions, so the setup script prefers the narrower numeric
-limit needed for builds.
+Developer options. The setup script applies the equivalent
+`persist.sys.fflag.override.settings_enable_monitor_phantom_procs=false`
+property through ADB, so the developer-option state is reproducible for
+scripted Android builds.
 
 ## Exact Android build environment
 
