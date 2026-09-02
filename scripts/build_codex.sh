@@ -57,6 +57,7 @@ CARGO_CMD=(cargo)
 RUSTC_CMD=(rustc)
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 SUDO_AUTHENTICATED="false"
+SSH_OPTS=(-o ConnectTimeout="${CODEX_SSH_CONNECT_TIMEOUT:-10}" -o ServerAliveInterval=5 -o ServerAliveCountMax=2)
 
 # Rebuild jobs have their own purpose link so its timestamp identifies the
 # last rebuild invocation, even when Cargo reuses the same shared target.
@@ -935,13 +936,13 @@ install_test_stdio_server() {
 
 remote_install_dir() {
   case "${1}" in
-    native|musl|armv7|android) ssh "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
+    native|musl|armv7|android) ssh "${SSH_OPTS[@]}" "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
     *) die "unsupported remote build mode: ${1}" ;;
   esac
 }
 
 remote_glibc_version() {
-  ssh "${1}" 'getconf GNU_LIBC_VERSION 2>/dev/null | sed -n "s/^glibc //p"'
+  ssh "${SSH_OPTS[@]}" "${1}" 'getconf GNU_LIBC_VERSION 2>/dev/null | sed -n "s/^glibc //p"'
 }
 
 glibc_version_is_older() {
@@ -967,7 +968,7 @@ native_glibc_is_compatible() {
 
 remote_target_architecture() {
   local target="${1}" architecture
-  architecture="$(ssh "${target}" 'rustc -vV 2>/dev/null | sed -n "s/^host: //p"; uname -m' \
+  architecture="$(ssh "${SSH_OPTS[@]}" "${target}" 'rustc -vV 2>/dev/null | sed -n "s/^host: //p"; uname -m' \
     | head -n 1)" || {
       echo "Unable to reach install target ${target}; deferring it for retry." >&2
       return 75
@@ -986,7 +987,7 @@ install_remote_binary() {
   short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
   name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
-  if ! remote_tmp="$(ssh "${target}" 'mktemp "${TMPDIR:-/var/tmp}/codex-install.XXXXXX"')"; then
+  if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" 'mktemp "${TMPDIR:-/var/tmp}/codex-install.XXXXXX"')"; then
     echo "Unable to reach install target ${target}; deferring it for retry." >&2
     rm -f "${staging}"
     return 75
@@ -996,12 +997,12 @@ install_remote_binary() {
   if [[ "${already_stamped}" != true ]]; then
     patch_timestamp "${staging}" "${version}" "${short}"
   fi
-  if ! scp "${staging}" "${target}:${remote_tmp}"; then
+  if ! scp "${SSH_OPTS[@]}" "${staging}" "${target}:${remote_tmp}"; then
     echo "Unable to upload to install target ${target}; deferring it for retry." >&2
     rm -f "${staging}"
     return 75
   fi
-  if ! ssh "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_INSTALL'
+  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_INSTALL'
 set -euo pipefail
 install_dir="$1"
 name="$2"
