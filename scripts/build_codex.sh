@@ -997,7 +997,7 @@ install_remote_binary() {
   if [[ "${already_stamped}" != true ]]; then
     patch_timestamp "${staging}" "${version}" "${short}"
   fi
-  if ! scp "${SSH_OPTS[@]}" "${staging}" "${target}:${remote_tmp}"; then
+  if ! rsync -e "ssh ${SSH_OPTS[*]}" -- "${staging}" "${target}:${remote_tmp}"; then
     echo "Unable to upload to install target ${target}; deferring it for retry." >&2
     rm -f "${staging}"
     return 75
@@ -1038,7 +1038,17 @@ REMOTE_INSTALL
     rm -f "${staging}"
     return 75
   fi
+  cleanup_remote_install_artifacts "${target}" "${staging}"
   rm -f "${staging}"
+}
+
+cleanup_remote_install_artifacts() {
+  local target="${1}" current="${2}" artifact
+  for artifact in "${BUILD_REPO}/build/remote-install/${target}-codex-"*; do
+    [[ -f "${artifact}" && "${artifact}" != "${current}" ]] || continue
+    rm -f "${artifact}"
+    echo "Removed older remote-install artifact ${artifact}"
+  done
 }
 
 install_target() {
@@ -1311,6 +1321,7 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
 fi
 sync_sources
 if [[ -n "${INSTALL_TARGETS}" ]]; then
+  require_cmd rsync
   IFS=',' read -r -a INSTALL_TARGET_LIST <<<"${INSTALL_TARGETS}"
   [[ "${#INSTALL_TARGET_LIST[@]}" -gt 0 ]] || die "install target list must not be empty"
   for install_target_name in "${INSTALL_TARGET_LIST[@]}"; do
