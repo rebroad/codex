@@ -2688,10 +2688,7 @@ impl Session {
         };
 
         let approvals_reviewer = self
-            .current_approvals_reviewer(
-                turn_context,
-                step_context.settings.approvals_reviewer(),
-            )
+            .current_approvals_reviewer(turn_context, step_context.settings.approvals_reviewer())
             .await;
         if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
         {
