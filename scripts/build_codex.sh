@@ -32,7 +32,6 @@ BUILD_REPO="${BUILD_TREE}"
   || { echo "build_codex.sh: build tree must be a sibling of the source checkout, not the source checkout itself" >&2; exit 1; }
 BUILD_WORKSPACE="${BUILD_REPO}/codex-rs"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
-INSTALL_DIR_EXPLICIT="false"
 VERSION=""
 PACKAGE_VERSION=""
 MODE="debug"
@@ -94,7 +93,6 @@ Options:
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced sibling source tree
   --jobs N                 Set CARGO_BUILD_JOBS
-  --install-dir PATH       Install versioned binary and codex symlink there
   --install TARGETS        Build and install to comma-separated SSH targets
   -h, --help               Show this help
 EOF
@@ -921,8 +919,7 @@ install_test_stdio_server() {
 
 remote_install_dir() {
   case "${1}" in
-    armv7|android) ssh "${2}" 'printf "%s/bin" "$HOME"' ;;
-    native|musl) ssh "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
+    native|musl|armv7|android) ssh "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
     *) die "unsupported remote build mode: ${1}" ;;
   esac
 }
@@ -996,6 +993,26 @@ remote_tmp="$3"
 mkdir -p "$install_dir"
 install -m 0755 "$remote_tmp" "$install_dir/$name"
 ln -sfn "$name" "$install_dir/codex"
+current="$install_dir/$name"
+for candidate in "$install_dir"/codex-*; do
+  [[ -f "$candidate" && ! -L "$candidate" && "$candidate" != "$current" ]] || continue
+  [[ "$(stat -c '%s' "$candidate")" == "$(stat -c '%s' "$current")" ]] || continue
+  [[ "$candidate" -nt "$current" ]] && continue
+  if command -v fuser >/dev/null 2>&1 && fuser -s "$candidate"; then
+    printf 'Keeping adjacent binary in use: %s\n' "$candidate" >&2
+    continue
+  fi
+  rm -f "$candidate"
+  printf 'Removed older adjacent binary %s\n' "$candidate"
+done
+case ":${PATH}:" in
+  *:"${install_dir}":*) ;;
+  *)
+    mkdir -p "$HOME/bin"
+    ln -sfn "$install_dir/codex" "$HOME/bin/codex"
+    printf 'Linked %s/bin/codex -> %s/codex\n' "$HOME" "$install_dir"
+    ;;
+esac
 rm -f "$remote_tmp"
 printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir"
 REMOTE_INSTALL
@@ -1031,7 +1048,6 @@ install_target() {
     echo "Unable to determine install directory on ${target}; deferring it for retry." >&2
     return 75
   fi
-  [[ "${INSTALL_DIR_EXPLICIT}" == true ]] && install_dir="${INSTALL_BIN_DIR}"
   echo "Installing to ${target} (${architecture}, ${target_mode})..." >&2
   TARGET_MODE="${target_mode}"
   case "${target_mode}" in
@@ -1124,7 +1140,6 @@ run_preflight() {
     cd "${SOURCE_REPO}"
     bash -n \
       scripts/build_codex.sh \
-      scripts/build.sh \
       scripts/build_armv7.sh \
       scripts/resolve_rusty_v8_artifacts.sh \
       scripts/package_npm.sh \
@@ -1177,8 +1192,6 @@ while (($#)); do
     --no-sync) NO_SYNC=1; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
     --jobs=*) CARGO_BUILD_JOBS="${1#*=}"; shift ;;
-    --install-dir) INSTALL_BIN_DIR="${2:-}"; INSTALL_DIR_EXPLICIT=true; shift 2 ;;
-    --install-dir=*) INSTALL_BIN_DIR="${1#*=}"; INSTALL_DIR_EXPLICIT=true; shift ;;
     --install) INSTALL_TARGETS="${2:-}"; shift 2 ;;
     --install=*) INSTALL_TARGETS="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;

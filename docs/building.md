@@ -25,11 +25,11 @@ sibling build tree and never compiles in the source tree:
 
 ```bash
 # Native Linux release binary.
-scripts/build.sh linux
+scripts/build_codex.sh --release
 
 # ARM64 Android/Termux release binary and stripped staging directory.
 export ANDROID_NDK_HOME="$HOME/Android/Sdk/ndk/28.2.13676358"
-scripts/build.sh android
+scripts/build_codex.sh --release --target android
 ```
 
 For the complete repeatable workflow, use `scripts/build_codex.sh`. It
@@ -57,18 +57,20 @@ runs do not prompt for sudo.
 
 To build and install sequentially to one or more SSH targets, pass their SSH
 aliases as a comma-separated list. The script identifies each target over SSH
-before selecting native, ARMv7, or Android compilation; `--install-dir` can
-override the target's default user executable directory:
+before selecting native, ARMv7, or Android compilation. Remote installs always
+place versioned binaries in `~/.cargo/bin` and add `~/bin/codex` as a fallback
+when Cargo's bin directory is not already on `PATH`:
 
 ```bash
 scripts/build_codex.sh --release --install target-a,target-b
 ```
 
-For a Termux/Android operational install, use the existing user executable
-directory so both interactive shells and Termux:Boot resolve the same binary:
+For a Termux/Android operational install, the same `~/.cargo/bin` plus
+`~/bin/codex` layout is used so both interactive shells and Termux:Boot can
+resolve the binary:
 
 ```bash
-scripts/build_codex.sh --release --install-dir "$HOME/bin"
+scripts/build_codex.sh --release --install target-a
 install -Dm755 scripts/remote-control/codex-remote-start "$HOME/bin/codex-remote-start"
 install -Dm755 scripts/remote-control/codex-pairing-code "$HOME/bin/codex-pairing-code"
 install -Dm755 scripts/remote-control/codex-remote-healthcheck "$HOME/bin/codex-remote-healthcheck"
