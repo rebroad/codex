@@ -366,7 +366,7 @@ if [[ -n "${RUSTY_V8_ARCHIVE}" ]]; then
   printf 'export RUSTY_V8_ARCHIVE=%q RUSTY_V8_SRC_BINDING_PATH=%q\n' "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}"
 fi
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
-  printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
+  printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-${CODEX_CARGO_BUILD_JOBS:-1}} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
     "${ANDROID_CLANG}" "${ANDROID_CLANG}" "${ANDROID_CLANG}++" "${RUSTFLAGS_VALUE}" "$(command -v protoc)"
 elif [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
   printf 'export RUSTFLAGS=\"${RUSTFLAGS:-} -D warnings\"\n'
