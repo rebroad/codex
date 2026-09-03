@@ -69,8 +69,9 @@ impl Drop for DisconnectableWebSocketProxy {
 
 pub(crate) fn test_codex_helper_paths() -> anyhow::Result<TestCodexHelperPaths> {
     let (helper_binary, codex_linux_sandbox_exe) = super::current_test_binary_helper_paths()?;
+    let codex_exe = codex_utils_cargo_bin::cargo_bin("codex").unwrap_or(helper_binary);
     Ok(TestCodexHelperPaths {
-        codex_exe: helper_binary,
+        codex_exe,
         codex_linux_sandbox_exe,
     })
 }
