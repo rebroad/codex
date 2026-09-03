@@ -27,6 +27,16 @@ pub(crate) const SYSTEM_PROXY_REQUEST_URL_ENV: &str =
     "CODEX_EXEC_SERVER_TEST_SYSTEM_PROXY_REQUEST_URL";
 pub(crate) const SYSTEM_PROXY_URL_ENV: &str = "CODEX_EXEC_SERVER_TEST_SYSTEM_PROXY_URL";
 
+#[allow(dead_code)]
+pub(crate) fn skip_if_android_filesystem_sandbox_unavailable() -> bool {
+    if cfg!(target_os = "android") {
+        eprintln!("skipping filesystem-sandbox test: Android has no filesystem sandbox backend");
+        true
+    } else {
+        false
+    }
+}
+
 const CODEX_WINDOWS_SANDBOX_ARG1: &str = "--run-as-windows-sandbox";
 const DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG: &str = "--codex-test-delayed-output-after-exit-child";
 
