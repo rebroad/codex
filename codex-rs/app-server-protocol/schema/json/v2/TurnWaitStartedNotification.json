@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    },
+    "yieldTimeMs": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "threadId",
+    "turnId",
+    "yieldTimeMs"
+  ],
+  "title": "TurnWaitStartedNotification",
+  "type": "object"
+}

@@ -1861,6 +1861,8 @@ server_notification_definitions! {
     ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
+    TurnWaitStarted => "turn/wait/started" (v2::TurnWaitStartedNotification),
+    TurnWaitCompleted => "turn/wait/completed" (v2::TurnWaitCompletedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
     HookCompleted => "hook/completed" (v2::HookCompletedNotification),

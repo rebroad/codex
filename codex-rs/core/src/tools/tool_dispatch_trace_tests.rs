@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
@@ -15,6 +16,7 @@ use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::code_mode::CodeModeWaitHandler;
@@ -319,6 +321,38 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
             .is_some()
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn code_mode_wait_emits_wait_lifecycle_events() -> anyhow::Result<()> {
+    let (session, turn, events) = make_session_and_context_with_rx().await;
+
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(CodeModeWaitHandler));
+    let invocation = test_invocation(
+        session,
+        turn,
+        "wait-call",
+        WAIT_TOOL_NAME,
+        ToolCallSource::CodeMode {
+            cell_id: "cell-1".to_string(),
+            runtime_tool_call_id: "nested-wait-call".to_string(),
+        },
+        r#"{"cell_id":"missing","yield_time_ms":5000}"#,
+    );
+
+    let result = registry
+        .dispatch_any_with_terminal_outcome(invocation, /*terminal_outcome_reached*/ None)
+        .await;
+    assert!(result.is_err());
+
+    let started = events.recv().await.expect("wait started event");
+    assert!(matches!(
+        started.msg,
+        EventMsg::TurnWaitStarted(event) if event.yield_time_ms == 5_000
+    ));
+    let completed = events.recv().await.expect("wait completed event");
+    assert!(matches!(completed.msg, EventMsg::TurnWaitCompleted(_)));
     Ok(())
 }
 
