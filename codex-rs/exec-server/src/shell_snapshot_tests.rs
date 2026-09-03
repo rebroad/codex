@@ -22,6 +22,15 @@ use crate::protocol::ShellInfo;
 use crate::protocol::ShellSnapshotRequest;
 use crate::telemetry::ExecServerTelemetry;
 
+fn test_bash_path() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        return "/data/data/com.termux/files/usr/bin/bash";
+    }
+    #[cfg(not(target_os = "android"))]
+    "/bin/bash"
+}
+
 #[test_case(1; "succeeds_on_first_attempt")]
 #[test_case(2; "recovers_on_second_attempt")]
 #[test_case(3; "recovers_on_last_attempt")]
@@ -33,27 +42,33 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
     let home = tempfile::TempDir::new()?;
     let profile = home.path().join(".bashrc");
     std::fs::write(&profile, "printf x >> \"$HOME/captures\"\nexit 7\n")?;
+    let mut env = HashMap::from([
+        (
+            "HOME".to_string(),
+            home.path().to_string_lossy().into_owned(),
+        ),
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+    ]);
+    #[cfg(target_os = "android")]
+    env.insert(
+        "BASH_ENV".to_string(),
+        profile.to_string_lossy().into_owned(),
+    );
     let params = ExecParams {
         process_id: ProcessId::from("snapshot-retry"),
         argv: vec![
-            "/bin/bash".to_string(),
+            test_bash_path().to_string(),
             "-lc".to_string(),
             "true".to_string(),
         ],
         cwd: codex_utils_path_uri::PathUri::from_host_native_path(home.path())?,
-        env: HashMap::from([
-            (
-                "HOME".to_string(),
-                home.path().to_string_lossy().into_owned(),
-            ),
-            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
-        ]),
+        env,
         env_policy: None,
         shell_snapshot: Some(ShellSnapshotRequest {
             scope_id: "attachment-1".to_string(),
             shell: ShellInfo {
                 name: "bash".to_string(),
-                path: "/bin/bash".to_string(),
+                path: test_bash_path().to_string(),
             },
         }),
         tty: false,
