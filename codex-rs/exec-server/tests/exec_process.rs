@@ -64,6 +64,15 @@ use common::current_test_binary_helper_paths;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
 
+fn test_bash_path() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        return "/data/data/com.termux/files/usr/bin/bash";
+    }
+    #[cfg(not(target_os = "android"))]
+    "/bin/bash"
+}
+
 struct ProcessContext {
     backend: Arc<dyn ExecBackend>,
     _server: Option<ExecServerHarness>,
@@ -144,8 +153,8 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
     let (shell_path, profile_name) = match shell_name {
-        "bash" if automatic_startup => ("/bin/bash", ".bash-env"),
-        "bash" => ("/bin/bash", ".bashrc"),
+        "bash" if automatic_startup => (test_bash_path(), ".bash-env"),
+        "bash" => (test_bash_path(), ".bashrc"),
         "sh" => ("/bin/sh", ".snapshot-env"),
         "zsh" if automatic_startup => ("/bin/zsh", ".zshenv"),
         "zsh" => ("/bin/zsh", ".zshrc"),
@@ -189,7 +198,7 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
             profile_path.to_string_lossy().into_owned(),
         );
     }
-    if shell_name == "bash" && automatic_startup {
+    if shell_name == "bash" && (automatic_startup || cfg!(target_os = "android")) {
         configured_environment.insert(
             "BASH_ENV".to_string(),
             profile_path.to_string_lossy().into_owned(),
@@ -305,7 +314,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             .start(ExecParams {
                 process_id: ProcessId::from(format!("managed-snapshot-{attempt}")),
                 argv: vec![
-                    "/bin/bash".to_string(),
+                    test_bash_path().to_string(),
                     "-lc".to_string(),
                     "profile_helper; printf '|%s|%s|%s' \"$PROFILE_ALLOWED\" \"$CODEX_NETWORK_PROXY_ACTIVE\" \"$HTTP_PROXY\"".to_string(),
                 ],
@@ -315,7 +324,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                     scope_id: "managed-attachment".to_string(),
                     shell: ShellInfo {
                         name: "bash".to_string(),
-                        path: "/bin/bash".to_string(),
+                        path: test_bash_path().to_string(),
                     },
                 }),
                 env: HashMap::new(),
@@ -378,7 +387,7 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
     let (shell_path, profile_name) = match shell_name {
-        "bash" => ("/bin/bash", ".bashrc"),
+        "bash" => (test_bash_path(), ".bashrc"),
         "zsh" => ("/bin/zsh", ".zshrc"),
         name => anyhow::bail!("unsupported test shell {name}"),
     };
