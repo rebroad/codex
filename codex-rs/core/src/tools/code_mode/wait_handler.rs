@@ -9,6 +9,9 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TurnWaitCompletedEvent;
+use codex_protocol::protocol::TurnWaitStartedEvent;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -95,7 +98,17 @@ impl CodeModeWaitHandler {
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
                 let cell_id = codex_code_mode::CellId::new(args.cell_id);
-                let wait_response = if args.terminate {
+                if !args.terminate {
+                    exec.session
+                        .send_event(
+                            exec.turn.as_ref(),
+                            EventMsg::TurnWaitStarted(TurnWaitStartedEvent {
+                                yield_time_ms: args.yield_time_ms,
+                            }),
+                        )
+                        .await;
+                }
+                let wait_result = if args.terminate {
                     exec.session
                         .services
                         .code_mode_service
@@ -114,7 +127,22 @@ impl CodeModeWaitHandler {
                 .map_err(|error| {
                     telemetry.finish(/*success*/ false);
                     FunctionCallError::RespondToModel(error)
-                })?;
+                });
+                if !args.terminate {
+                    exec.session
+                        .send_event(
+                            exec.turn.as_ref(),
+                            EventMsg::TurnWaitCompleted(TurnWaitCompletedEvent),
+                        )
+                        .await;
+                }
+                let wait_response = match wait_result {
+                    Ok(wait_response) => wait_response,
+                    Err(error) => {
+                        telemetry.finish(/*success*/ false);
+                        return Err(error);
+                    }
+                };
                 if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response {
                     let runtime_cell_id = match response {
                         codex_code_mode::RuntimeResponse::Yielded { cell_id, .. }
