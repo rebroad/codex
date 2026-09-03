@@ -168,6 +168,7 @@ async fn file_reads_reject_named_pipes() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn stream_keeps_reading_the_open_file_after_path_replacement() -> Result<()> {
     let server = exec_server().await?;
     let file_system = connect_file_system(server.websocket_url())?;
@@ -361,7 +362,7 @@ fn connect_file_system(websocket_url: &str) -> Result<Arc<dyn ExecutorFileSystem
 }
 
 // Only the Unix stream tests above need this sandbox builder.
-#[cfg(unix)]
+#[cfg(all(not(target_os = "android"), unix))]
 fn read_only_sandbox(path: std::path::PathBuf) -> codex_exec_server::FileSystemSandboxContext {
     use codex_exec_server::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;

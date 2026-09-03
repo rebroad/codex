@@ -245,6 +245,24 @@ fn default_test_overrides() -> ConfigOverrides {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
+    #[cfg(target_os = "android")]
+    if let Ok(current_exe) = std::env::current_exe() {
+        let target_debug = current_exe
+            .parent()
+            .and_then(|parent| {
+                (parent.file_name().and_then(|name| name.to_str()) == Some("deps"))
+                    .then(|| parent.parent())
+                    .flatten()
+            })
+            .or_else(|| current_exe.parent());
+        if let Some(path) = target_debug
+            .map(|directory| directory.join("codex-linux-sandbox"))
+            .filter(|path| path.is_file())
+        {
+            return Ok(path);
+        }
+    }
+
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
         .and_then(Option::as_ref)
