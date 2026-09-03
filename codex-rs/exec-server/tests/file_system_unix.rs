@@ -571,6 +571,9 @@ async fn sandboxed_file_system_helper_finds_bwrap_on_preserved_path() -> Result<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_read_file_materializes_environment_workspace_roots() -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(FileSystemImplementation::Remote).await?;
     let file_system = context.file_system;
     let tmp = TempDir::new()?;
@@ -619,6 +622,9 @@ async fn remote_read_file_materializes_environment_workspace_roots() -> Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_read_file_preserves_empty_workspace_roots() -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(FileSystemImplementation::Remote).await?;
     let file_system = context.file_system;
     let tmp = TempDir::new()?;
@@ -959,6 +965,9 @@ async fn file_system_walk_prunes_hidden_directories_without_claiming_visible_ali
 async fn file_system_sandboxed_write_rejects_unwritable_path(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1023,6 +1032,9 @@ async fn file_system_sandboxed_write_allows_explicit_alias_roots(
 async fn file_system_sandboxed_read_rejects_symlink_escape(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1106,6 +1118,9 @@ async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape(
 async fn file_system_sandboxed_write_rejects_symlink_escape(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1142,6 +1157,9 @@ async fn file_system_sandboxed_write_rejects_symlink_escape(
 async fn file_system_sandboxed_write_preserves_existing_hard_link(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1192,6 +1210,9 @@ async fn file_system_sandboxed_write_preserves_existing_hard_link(
 async fn file_system_create_directory_rejects_symlink_escape(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1230,6 +1251,9 @@ async fn file_system_create_directory_rejects_symlink_escape(
 async fn file_system_read_directory_rejects_symlink_escape(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1264,6 +1288,9 @@ async fn file_system_read_directory_rejects_symlink_escape(
 async fn file_system_copy_rejects_symlink_escape_destination(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1379,6 +1406,9 @@ async fn file_system_copy_preserves_symlink_source(
 async fn file_system_remove_rejects_symlink_escape(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 
@@ -1420,6 +1450,9 @@ async fn file_system_remove_rejects_symlink_escape(
 async fn file_system_copy_rejects_symlink_escape_source(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let context = create_file_system_context(implementation).await?;
     let file_system = context.file_system;
 

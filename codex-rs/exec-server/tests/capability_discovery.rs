@@ -385,6 +385,9 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_discovery_follows_only_permitted_external_symlinks() -> anyhow::Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let external = tempfile::tempdir()?;
     write_file(
