@@ -982,12 +982,14 @@ remote_target_architecture() {
 
 install_remote_binary() {
   local target="${1}" binary="${2}" version="${3}" install_dir="${4}" already_stamped="${5:-false}"
-  local short name staging remote_tmp
+  local short name transfer_key staging remote_tmp
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
   name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  transfer_key="${version}-${short}"
   staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
-  if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" 'mktemp "${TMPDIR:-/var/tmp}/codex-install.XXXXXX"')"; then
+  if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" \
+    'printf "%s/.codex-install-%s.tmp" "${TMPDIR:-/var/tmp}" "$1"' _ "${transfer_key}")"; then
     echo "Unable to reach install target ${target}; deferring it for retry." >&2
     rm -f "${staging}"
     return 75
@@ -998,10 +1000,9 @@ install_remote_binary() {
     patch_timestamp "${staging}" "${version}" "${short}"
   fi
   if ! rsync --compress --info=progress2 --timeout="${CODEX_RSYNC_TIMEOUT:-60}" \
-    -e "ssh ${SSH_OPTS[*]}" \
+    --partial --inplace --append-verify -e "ssh ${SSH_OPTS[*]}" \
     -- "${staging}" "${target}:${remote_tmp}"; then
     echo "Unable to upload to install target ${target}; deferring it for retry." >&2
-    ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
     rm -f "${staging}"
     return 75
   fi
