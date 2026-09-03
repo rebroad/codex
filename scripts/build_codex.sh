@@ -997,8 +997,10 @@ install_remote_binary() {
   if [[ "${already_stamped}" != true ]]; then
     patch_timestamp "${staging}" "${version}" "${short}"
   fi
-  if ! rsync -e "ssh ${SSH_OPTS[*]}" -- "${staging}" "${target}:${remote_tmp}"; then
+  if ! rsync --timeout="${CODEX_RSYNC_TIMEOUT:-60}" -e "ssh ${SSH_OPTS[*]}" \
+    -- "${staging}" "${target}:${remote_tmp}"; then
     echo "Unable to upload to install target ${target}; deferring it for retry." >&2
+    ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
     rm -f "${staging}"
     return 75
   fi
@@ -1035,6 +1037,7 @@ printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir
 REMOTE_INSTALL
   then
     echo "Unable to finish installation on ${target}; deferring it for retry." >&2
+    ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
     rm -f "${staging}"
     return 75
   fi
