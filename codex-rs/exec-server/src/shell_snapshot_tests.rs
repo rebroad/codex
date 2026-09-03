@@ -42,18 +42,6 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
     let home = tempfile::TempDir::new()?;
     let profile = home.path().join(".bashrc");
     std::fs::write(&profile, "printf x >> \"$HOME/captures\"\nexit 7\n")?;
-    let mut env = HashMap::from([
-        (
-            "HOME".to_string(),
-            home.path().to_string_lossy().into_owned(),
-        ),
-        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
-    ]);
-    #[cfg(target_os = "android")]
-    env.insert(
-        "BASH_ENV".to_string(),
-        profile.to_string_lossy().into_owned(),
-    );
     let params = ExecParams {
         process_id: ProcessId::from("snapshot-retry"),
         argv: vec![
@@ -62,7 +50,13 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
             "true".to_string(),
         ],
         cwd: codex_utils_path_uri::PathUri::from_host_native_path(home.path())?,
-        env,
+        env: HashMap::from([
+            (
+                "HOME".to_string(),
+                home.path().to_string_lossy().into_owned(),
+            ),
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ]),
         env_policy: None,
         shell_snapshot: Some(ShellSnapshotRequest {
             scope_id: "attachment-1".to_string(),
