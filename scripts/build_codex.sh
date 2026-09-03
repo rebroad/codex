@@ -997,7 +997,8 @@ install_remote_binary() {
   if [[ "${already_stamped}" != true ]]; then
     patch_timestamp "${staging}" "${version}" "${short}"
   fi
-  if ! rsync --timeout="${CODEX_RSYNC_TIMEOUT:-60}" -e "ssh ${SSH_OPTS[*]}" \
+  if ! rsync --compress --info=progress2 --timeout="${CODEX_RSYNC_TIMEOUT:-60}" \
+    -e "ssh ${SSH_OPTS[*]}" \
     -- "${staging}" "${target}:${remote_tmp}"; then
     echo "Unable to upload to install target ${target}; deferring it for retry." >&2
     ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
