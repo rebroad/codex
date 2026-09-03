@@ -257,8 +257,8 @@ async fn exec_server_http_request_uses_configured_system_proxy() -> anyhow::Resu
         [
             (SYSTEM_PROXY_REQUEST_URL_ENV, request_url),
             (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
-            ("HTTP_PROXY", ""),
-            ("http_proxy", ""),
+            ("HTTP_PROXY", proxy_url.as_str()),
+            ("http_proxy", proxy_url.as_str()),
             ("HTTPS_PROXY", ""),
             ("https_proxy", ""),
             ("ALL_PROXY", ""),
@@ -316,8 +316,8 @@ async fn exec_server_http_request_normalizes_unicode_hostname() -> anyhow::Resul
         [
             (SYSTEM_PROXY_REQUEST_URL_ENV, normalized_url),
             (SYSTEM_PROXY_URL_ENV, proxy_url.as_str()),
-            ("HTTP_PROXY", ""),
-            ("http_proxy", ""),
+            ("HTTP_PROXY", proxy_url.as_str()),
+            ("http_proxy", proxy_url.as_str()),
             ("HTTPS_PROXY", ""),
             ("https_proxy", ""),
             ("ALL_PROXY", ""),
