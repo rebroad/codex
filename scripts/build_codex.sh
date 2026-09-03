@@ -989,7 +989,7 @@ install_remote_binary() {
   transfer_key="${version}-${short}"
   staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
   if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" \
-    'printf "%s/.codex-install-%s.tmp" "${TMPDIR:-/var/tmp}" "$1"' _ "${transfer_key}")"; then
+    "printf '%s/.codex-install-${transfer_key}.tmp' \"\${TMPDIR:-/var/tmp}\"")"; then
     echo "Unable to reach install target ${target}; deferring it for retry." >&2
     rm -f "${staging}"
     return 75
@@ -1012,13 +1012,11 @@ install_dir="$1"
 name="$2"
 remote_tmp="$3"
 mkdir -p "$install_dir"
-install -m 0755 "$remote_tmp" "$install_dir/$name"
-ln -sfn "$name" "$install_dir/codex"
-current="$install_dir/$name"
+remote_size="$(stat -c '%s' "$remote_tmp")"
 for candidate in "$install_dir"/codex-*; do
-  [[ -f "$candidate" && ! -L "$candidate" && "$candidate" != "$current" ]] || continue
-  [[ "$(stat -c '%s' "$candidate")" == "$(stat -c '%s' "$current")" ]] || continue
-  [[ "$candidate" -nt "$current" ]] && continue
+  [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+  [[ "$(stat -c '%s' "$candidate")" == "$remote_size" ]] || continue
+  [[ "$candidate" -nt "$remote_tmp" ]] && continue
   if command -v fuser >/dev/null 2>&1 && fuser -s "$candidate"; then
     printf 'Keeping adjacent binary in use: %s\n' "$candidate" >&2
     continue
@@ -1026,6 +1024,8 @@ for candidate in "$install_dir"/codex-*; do
   rm -f "$candidate"
   printf 'Removed older adjacent binary %s\n' "$candidate"
 done
+install -m 0755 "$remote_tmp" "$install_dir/$name"
+ln -sfn "$name" "$install_dir/codex"
 case ":${PATH}:" in
   *:"${install_dir}":*) ;;
   *)
