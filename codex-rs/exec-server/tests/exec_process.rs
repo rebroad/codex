@@ -142,6 +142,10 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     automatic_startup: bool,
     shell_name: &str,
 ) -> Result<()> {
+    if cfg!(target_os = "android") && use_sandbox {
+        eprintln!("skipping filesystem sandbox variant: Android has no filesystem sandbox backend");
+        return Ok(());
+    }
     if use_sandbox
         && let Some(warning) =
             codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only())
@@ -198,7 +202,7 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
             profile_path.to_string_lossy().into_owned(),
         );
     }
-    if shell_name == "bash" && (automatic_startup || cfg!(target_os = "android")) {
+    if shell_name == "bash" && automatic_startup {
         configured_environment.insert(
             "BASH_ENV".to_string(),
             profile_path.to_string_lossy().into_owned(),
