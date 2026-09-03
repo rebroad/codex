@@ -380,6 +380,9 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
     shell_name: &str,
     failures_before_repair: usize,
 ) -> Result<()> {
+    if use_remote && common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if use_remote
         && let Some(warning) =
             codex_sandboxing::system_bwrap_warning(&PermissionProfile::workspace_write())
@@ -484,6 +487,9 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_sandboxed_process_preserves_custom_arg0() -> Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
         eprintln!("skipping bwrap test: {warning}");
         return Ok(());
@@ -720,6 +726,9 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_process_preserves_empty_workspace_roots() -> Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
         eprintln!("skipping bwrap test: {warning}");
         return Ok(());
@@ -1030,11 +1039,21 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
         .backend
         .start(ExecParams {
             process_id: process_id.clone().into(),
-            argv: vec![
-                helper_binary.to_string_lossy().into_owned(),
-                DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
-                release_path.to_string_lossy().into_owned(),
-            ],
+            argv: if cfg!(target_os = "android") {
+                vec![
+                    "/system/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "(while [ ! -e \"$1\" ]; do sleep 0.05; done; printf 'late output after exit\\n') & exit 0".to_string(),
+                    "sh".to_string(),
+                    release_path.to_string_lossy().into_owned(),
+                ]
+            } else {
+                vec![
+                    helper_binary.to_string_lossy().into_owned(),
+                    DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
+                    release_path.to_string_lossy().into_owned(),
+                ]
+            },
             cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             shell_snapshot: None,
             env_policy: /*env_policy*/ None,

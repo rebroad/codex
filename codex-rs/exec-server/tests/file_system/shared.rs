@@ -907,6 +907,9 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_file_operations_cannot_read_helper_siblings() -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let helper_paths = crate::common::exec_server::test_codex_helper_paths()?;
     let root = TempDir::new()?;
     let runtime_dir = root.path().join("runtime");
