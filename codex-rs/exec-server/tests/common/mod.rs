@@ -242,13 +242,13 @@ fn linux_sandbox_exe(
     guard: Option<&TestBinaryDispatchGuard>,
     current_exe: &std::path::Path,
 ) -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         guard
             .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
             .or_else(|| Some(current_exe.to_path_buf()))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         let _ = guard;
         let _ = current_exe;
