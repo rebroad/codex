@@ -54,7 +54,7 @@ pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
 
 pub(crate) fn current_test_binary_helper_paths() -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
     let current_exe = env::current_exe()?;
-    let codex_linux_sandbox_exe = if cfg!(target_os = "linux") {
+    let codex_linux_sandbox_exe = if cfg!(any(target_os = "linux", target_os = "android")) {
         TEST_BINARY_DISPATCH_GUARD
             .as_ref()
             .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
