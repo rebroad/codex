@@ -14,6 +14,71 @@ use tempfile::tempdir;
 use wiremock::MockServer;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires tmux and a locally built codex binary; run with --ignored for the wait-tool smoke"]
+async fn tmux_model_wait_tool_renders_waiting_status() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+    skip_if_no_network!(Ok(()));
+    if Command::new("tmux").arg("-V").output().is_err() {
+        eprintln!("skipping wait-tool smoke because tmux is unavailable");
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let server = MockServer::start().await;
+    let _response_mock = responses::mount_sse_once(&server, wait_tool_sse()).await;
+    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
+    write_config(codex_home.path(), &repo_root)?;
+    write_auth(codex_home.path())?;
+
+    let session_name = format!("codex-wait-tool-smoke-{}", std::process::id());
+    let _session = TmuxSession {
+        name: session_name.clone(),
+    };
+    let start_output = checked_output(
+        Command::new("tmux")
+            .arg("new-session")
+            .arg("-d")
+            .arg("-P")
+            .arg("-F")
+            .arg("#{pane_id}")
+            .arg("-x")
+            .arg("120")
+            .arg("-y")
+            .arg("40")
+            .arg("-s")
+            .arg(&session_name)
+            .arg("--")
+            .arg("env")
+            .arg(format!("CODEX_HOME={}", codex_home.path().display()))
+            .arg("OPENAI_API_KEY=dummy")
+            .arg(codex)
+            .arg("-c")
+            .arg("analytics.enabled=false")
+            .arg("-c")
+            .arg(&openai_base_url_config)
+            .arg("--no-alt-screen")
+            .arg("-C")
+            .arg(&repo_root)
+            .arg("Ask the model to wait."),
+    )?;
+    let codex_pane = stdout_text(&start_output).trim().to_string();
+    anyhow::ensure!(!codex_pane.is_empty(), "tmux did not report a pane id");
+
+    let capture =
+        wait_for_capture_contains(&codex_pane, "Waiting", Duration::from_secs(/*secs*/ 15))?;
+    anyhow::ensure!(
+        capture.contains("5s") || capture.contains("4s") || capture.contains("3s"),
+        "wait status did not show a multi-second countdown:\n{capture}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux and a locally built codex binary; run with --ignored for manual resize smoke"]
 async fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -> Result<()> {
     if cfg!(windows) {
@@ -627,6 +692,14 @@ fn resize_reflow_sse() -> String {
         responses::ev_response_created("resp-resize-smoke"),
         responses::ev_assistant_message("msg-resize-smoke", text),
         responses::ev_completed("resp-resize-smoke"),
+    ])
+}
+
+fn wait_tool_sse() -> String {
+    responses::sse(vec![
+        responses::ev_response_created("resp-wait-tool-smoke"),
+        responses::ev_function_call("call-wait-tool-smoke", "wait", r#"{"yield_time_ms":5000}"#),
+        responses::ev_completed("resp-wait-tool-smoke"),
     ])
 }
 
