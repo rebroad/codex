@@ -58,6 +58,13 @@ pub(crate) fn current_test_binary_helper_paths() -> anyhow::Result<(PathBuf, Opt
         TEST_BINARY_DISPATCH_GUARD
             .as_ref()
             .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
+            .or_else(|| {
+                current_exe
+                    .parent()
+                    .and_then(|deps| deps.parent())
+                    .map(|target_debug| target_debug.join("codex-linux-sandbox"))
+                    .filter(|path| path.is_file())
+            })
             .or_else(|| Some(current_exe.clone()))
     } else {
         None
