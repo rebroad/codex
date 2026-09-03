@@ -84,6 +84,8 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::TurnWaitCompletedNotification;
+use codex_app_server_protocol::TurnWaitStartedNotification;
 use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_item_from_guardian_event;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
@@ -185,6 +187,27 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::TurnStarted(notification))
+                .await;
+        }
+        EventMsg::TurnWaitStarted(payload) => {
+            outgoing
+                .send_server_notification(ServerNotification::TurnWaitStarted(
+                    TurnWaitStartedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id,
+                        yield_time_ms: payload.yield_time_ms,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::TurnWaitCompleted(_) => {
+            outgoing
+                .send_server_notification(ServerNotification::TurnWaitCompleted(
+                    TurnWaitCompletedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id,
+                    },
+                ))
                 .await;
         }
         EventMsg::TurnComplete(turn_complete_event) => {

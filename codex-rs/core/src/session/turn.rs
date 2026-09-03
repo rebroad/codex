@@ -1814,6 +1814,8 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
+        | EventMsg::TurnWaitStarted(_)
+        | EventMsg::TurnWaitCompleted(_)
         | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)

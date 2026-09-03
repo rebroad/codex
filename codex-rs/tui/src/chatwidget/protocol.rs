@@ -69,26 +69,17 @@ impl ChatWidget {
             ServerNotification::TurnCompleted(notification) => {
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
+            ServerNotification::TurnWaitStarted(notification) => {
+                self.bottom_pane.ensure_status_indicator();
+                self.set_status_header(String::from("Waiting"));
+                self.bottom_pane
+                    .set_status_waiting(Duration::from_millis(notification.yield_time_ms));
+            }
+            ServerNotification::TurnWaitCompleted(_) => {
+                self.set_status_header(String::from("Working"));
+            }
             ServerNotification::RawResponseItemCompleted(notification) => {
-                if let codex_protocol::models::ResponseItem::FunctionCall {
-                    name,
-                    namespace,
-                    arguments,
-                    ..
-                } = notification.item
-                    && name == "wait"
-                    && namespace.is_none()
-                    && let Ok(arguments) = serde_json::from_str::<serde_json::Value>(&arguments)
-                {
-                    let yield_time_ms = arguments
-                        .get("yield_time_ms")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(10_000);
-                    self.bottom_pane.ensure_status_indicator();
-                    self.set_status_header(String::from("Waiting"));
-                    self.bottom_pane
-                        .set_status_waiting(Duration::from_millis(yield_time_ms));
-                }
+                let _ = notification;
             }
             ServerNotification::ItemStarted(notification) => {
                 self.handle_item_started_notification(notification, replay_kind.is_some());

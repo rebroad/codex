@@ -667,6 +667,61 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 }
 
 #[tokio::test]
+async fn live_app_server_wait_notifications_render_countdown_and_restore_working() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::TurnWaitStarted(
+            codex_app_server_protocol::TurnWaitStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                yield_time_ms: 5_000,
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Waiting");
+
+    chat.handle_server_notification(
+        ServerNotification::TurnWaitCompleted(
+            codex_app_server_protocol::TurnWaitCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should remain visible");
+    assert_eq!(status.header(), "Working");
+}
+
+#[tokio::test]
 async fn live_app_server_turn_started_sets_feedback_turn_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
