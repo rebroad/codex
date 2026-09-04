@@ -155,8 +155,6 @@ impl ThreadEventStore {
         if matches!(
             notification.as_ref(),
             ServerNotification::RawResponseItemCompleted(_)
-                | ServerNotification::TurnWaitStarted(_)
-                | ServerNotification::TurnWaitCompleted(_)
                 | ServerNotification::FileChangePatchUpdated(_)
                 | ServerNotification::ServerRequestResolved(_)
                 | ServerNotification::McpToolCallProgress(_)
