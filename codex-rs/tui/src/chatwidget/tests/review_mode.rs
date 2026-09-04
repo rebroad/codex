@@ -468,6 +468,7 @@ async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming
         Op::UserTurn { .. } => {}
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
+    assert_eq!(chat.status_state.current_status.header, "Waiting");
     assert!(drain_insert_history(&mut rx).is_empty());
 
     complete_user_message(&mut chat, "user-1", "queued while running");
