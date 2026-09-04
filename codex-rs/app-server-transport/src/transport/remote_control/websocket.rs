@@ -906,6 +906,10 @@ impl RemoteControlWebsocket {
         while join_set.join_next().await.is_some() {}
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "worker arguments map directly to the websocket writer state"
+    )]
     async fn run_server_writer(
         state: Arc<Mutex<WebsocketState>>,
         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
@@ -942,6 +946,10 @@ impl RemoteControlWebsocket {
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "remote-control server event receiver is shared across reconnects"
+    )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "worker arguments map directly to the websocket writer state"
     )]
     async fn run_server_writer_inner(
         state: Arc<Mutex<WebsocketState>>,
