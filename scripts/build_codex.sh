@@ -1131,11 +1131,11 @@ install_target() {
   esac
   refresh_build_lockfile
   if [[ "${target_mode}" == android ]]; then
-    build_android
+    build_android || return $?
     binary="${BUILD_REPO}/build/android-artifact/codex.bin"
     already_stamped=true
   else
-    binary="$(cargo_build "${MODE}" "${target_mode}")"
+    binary="$(cargo_build "${MODE}" "${target_mode}")" || return $?
   fi
   install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}" "${already_stamped}"
 }
@@ -1189,7 +1189,7 @@ build_android() {
     fi
   fi
   local binary
-  binary="$(cargo_build "${MODE}" android)"
+  binary="$(cargo_build "${MODE}" android)" || return $?
   local stage="${BUILD_REPO}/build/android-artifact"
   mkdir -p "${stage}"
   install -m 0755 "${binary}" "${stage}/codex.bin"
