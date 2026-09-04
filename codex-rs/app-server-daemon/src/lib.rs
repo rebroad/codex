@@ -489,11 +489,13 @@ impl Daemon {
         )
         .await?;
         if status.status != RemoteControlConnectionStatus::Connected || status.timed_out {
-            return Err(anyhow!(
+            let mut context = format!(
                 "remote control did not become connected after app-server restart (status: {:?}, timed_out: {})",
-                status.status,
-                status.timed_out
-            ));
+                status.status, status.timed_out
+            );
+            self.append_daemon_app_server_context(&mut context).await;
+            backend::append_stderr_log_tail_context(&self.pid_file, &mut context).await;
+            return Err(anyhow!(context));
         }
         Ok(())
     }

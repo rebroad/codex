@@ -89,9 +89,35 @@ pub(crate) async fn enable_remote_control_with_connect_retry(
     connect_timeout: Duration,
     connect_retry_delay: Duration,
 ) -> Result<RemoteControlReadyStatus> {
-    let mut websocket =
-        connect_with_retry(socket_path, connect_timeout, connect_retry_delay).await?;
-    enable_remote_control_with_timeout(&mut websocket, REMOTE_CONTROL_READY_TIMEOUT).await
+    let deadline = Instant::now() + connect_timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(RemoteControlReadyStatus {
+                status: RemoteControlConnectionStatus::Errored,
+                server_name: String::new(),
+                environment_id: None,
+                timed_out: true,
+            });
+        }
+        let mut websocket = connect_with_retry(socket_path, remaining, connect_retry_delay).await?;
+        let status = enable_remote_control_with_timeout(
+            &mut websocket,
+            remaining.min(REMOTE_CONTROL_READY_TIMEOUT),
+        )
+        .await?;
+        if status.status != RemoteControlConnectionStatus::Errored {
+            return Ok(status);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(RemoteControlReadyStatus {
+                timed_out: true,
+                ..status
+            });
+        }
+        sleep(connect_retry_delay.min(remaining)).await;
+    }
 }
 
 async fn enable_remote_control_with_timeout<S>(
@@ -478,6 +504,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enable_remote_control_retries_after_errored_enable_response() -> Result<()> {
+        let dir = TempDir::new()?;
+        let socket_path = dir.path().join("app-server.sock");
+        let mut listener = UnixListener::bind(&socket_path).await?;
+        let server_task = tokio::spawn(async move {
+            for status in [
+                RemoteControlConnectionStatus::Errored,
+                RemoteControlConnectionStatus::Connected,
+            ] {
+                let mut websocket = accept_initialized_client(&mut listener).await?;
+                let enable = client::read_message(&mut websocket).await?;
+                let JSONRPCMessage::Request(enable) = enable else {
+                    panic!("expected remoteControl/enable request");
+                };
+                assert_eq!(enable.id, REMOTE_CONTROL_REQUEST_ID);
+                assert_eq!(enable.method, "remoteControl/enable");
+                client::send_message(
+                    &mut websocket,
+                    &JSONRPCMessage::Response(JSONRPCResponse {
+                        id: REMOTE_CONTROL_REQUEST_ID,
+                        result: serde_json::to_value(RemoteControlEnableResponse::from(
+                            remote_control_status(status, Some("env_test")),
+                        ))?,
+                    }),
+                )
+                .await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let status = enable_remote_control_with_connect_retry(
+            &socket_path,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .await?;
+        server_task.await??;
+
+        assert_eq!(
+            status,
+            RemoteControlReadyStatus {
+                status: RemoteControlConnectionStatus::Connected,
+                server_name: TEST_SERVER_NAME.to_string(),
+                environment_id: Some("env_test".to_string()),
+                timed_out: false,
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn enable_remote_control_retries_without_params_for_older_servers() -> Result<()> {
         let status = run_enable_remote_control_scenario(EnableScenario {
             initial_notification: None,
@@ -507,9 +584,9 @@ mod tests {
     async fn disable_remote_control_retries_without_params_for_older_servers() -> Result<()> {
         let dir = TempDir::new()?;
         let socket_path = dir.path().join("app-server.sock");
-        let listener = UnixListener::bind(&socket_path).await?;
+        let mut listener = UnixListener::bind(&socket_path).await?;
         let server_task = tokio::spawn(async move {
-            let mut websocket = accept_initialized_client(listener).await?;
+            let mut websocket = accept_initialized_client(&mut listener).await?;
             let disable = client::read_message(&mut websocket).await?;
             let JSONRPCMessage::Request(disable) = disable else {
                 panic!("expected remoteControl/disable request");
@@ -573,9 +650,9 @@ mod tests {
     async fn start_pairing_requests_manual_code() -> Result<()> {
         let dir = TempDir::new()?;
         let socket_path = dir.path().join("app-server.sock");
-        let listener = UnixListener::bind(&socket_path).await?;
+        let mut listener = UnixListener::bind(&socket_path).await?;
         let server_task = tokio::spawn(async move {
-            let mut websocket = accept_initialized_client(listener).await?;
+            let mut websocket = accept_initialized_client(&mut listener).await?;
             let pairing = client::read_message(&mut websocket).await?;
             let JSONRPCMessage::Request(pairing) = pairing else {
                 panic!("expected remoteControl/pairing/start request");
@@ -640,10 +717,10 @@ mod tests {
     }
 
     async fn serve_enable_remote_control_scenario(
-        listener: UnixListener,
+        mut listener: UnixListener,
         scenario: EnableScenario,
     ) -> Result<()> {
-        let mut websocket = accept_initialized_client(listener).await?;
+        let mut websocket = accept_initialized_client(&mut listener).await?;
         if let Some(status) = scenario.initial_notification {
             send_remote_control_status(&mut websocket, status).await?;
         }
@@ -700,7 +777,7 @@ mod tests {
     }
 
     async fn accept_initialized_client(
-        mut listener: UnixListener,
+        listener: &mut UnixListener,
     ) -> Result<WebSocketStream<codex_uds::UnixStream>> {
         let stream = listener.accept().await?;
         let mut websocket = accept_async(stream).await?;
