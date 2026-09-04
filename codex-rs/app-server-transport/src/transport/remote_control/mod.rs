@@ -871,7 +871,7 @@ async fn refresh_pairing_enrollment(
         .as_ref()
         .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
     {
-        let token_was_revoked = refresh_result.as_ref().is_some_and(|err| {
+        let token_was_revoked = refresh_result.as_ref().is_err_and(|err| {
             let message = err.to_string();
             message.contains("token_revoked") || message.contains("invalidated oauth token")
         });
