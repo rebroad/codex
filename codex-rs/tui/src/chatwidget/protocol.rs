@@ -76,10 +76,7 @@ impl ChatWidget {
                         .map(|duration| duration.as_millis() as i64)
                         .unwrap_or_default();
                     let remaining_ms = waiting_until_ms.saturating_sub(now_ms) as u64;
-                    self.bottom_pane.ensure_status_indicator();
-                    self.set_status_header(String::from("Waiting"));
-                    self.bottom_pane
-                        .set_status_waiting(Duration::from_millis(remaining_ms));
+                    self.set_waiting_status(Some(Duration::from_millis(remaining_ms)));
                 } else if matches!(
                     notification.status,
                     codex_app_server_protocol::ThreadStatus::Active { .. }
