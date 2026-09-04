@@ -134,7 +134,11 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
       -o "${ANDROID_TLS_ALIGNMENT_OBJECT}.tmp"
     mv "${ANDROID_TLS_ALIGNMENT_OBJECT}.tmp" "${ANDROID_TLS_ALIGNMENT_OBJECT}"
   fi
-  RUSTFLAGS_VALUE="-Clink-arg=${ANDROID_BUILTINS}"
+  # The builtins archive contains __clear_cache, which V8 references. Keep it
+  # whole because Rust places linker arguments before the dependent archives.
+  RUSTFLAGS_VALUE="-Clink-arg=-Wl,--whole-archive"
+  RUSTFLAGS_VALUE+=" -Clink-arg=${ANDROID_BUILTINS}"
+  RUSTFLAGS_VALUE+=" -Clink-arg=-Wl,--no-whole-archive"
   RUSTFLAGS_VALUE+=" -Clink-arg=${ANDROID_TLS_ALIGNMENT_OBJECT}"
   RUSTFLAGS_VALUE+=" -Clink-arg=-Wl,-u,codex_android_tls_alignment"
 fi
