@@ -173,6 +173,11 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
     rm -f "${mold_probe_src}" "${mold_probe_bin}"
     RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=lld"
   fi
+elif [[ "${TARGET}" == aarch64-linux-android ]]; then
+  # Cross-builds also need the compiler-builtins archive for V8's
+  # __clear_cache reference; preserve the target-specific flags emitted by
+  # build_android and make the archive extraction independent of link order.
+  RUSTFLAGS_VALUE="-Clink-arg=-Wl,-u,__clear_cache ${RUSTFLAGS_VALUE}"
 fi
 
 if [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
@@ -372,6 +377,8 @@ fi
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-${CODEX_CARGO_BUILD_JOBS:-1}} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
     "${ANDROID_CLANG}" "${ANDROID_CLANG}" "${ANDROID_CLANG}++" "${RUSTFLAGS_VALUE}" "$(command -v protoc)"
+elif [[ "${TARGET}" == aarch64-linux-android ]]; then
+  printf 'export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q\n' "${RUSTFLAGS_VALUE}"
 elif [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
   printf 'export RUSTFLAGS=\"${RUSTFLAGS:-} -D warnings\"\n'
 fi
