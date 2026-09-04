@@ -335,7 +335,6 @@ elif command -v flock >/dev/null 2>&1; then
   printf 'exec 9>>%q\n' "${TARGET_LOCK_FILE}"
   printf '%s\n' 'if ! flock -n 9; then'
   printf '  echo %q >&2\n' "Waiting for Cargo target lock: ${TARGET_LOCK_FILE}"
-  printf '  echo %q >&2\n' 'Another build owns the shared Cargo target directory; waiting prevents concurrent target writes.'
   printf '  echo %q >&2\n' 'Cargo build processes currently registered:'
   printf '  registry=%q\n' "${BUILD_REPO}/build/codex-build-processes"
   printf '  if [[ -d "${registry}" ]]; then\n'
