@@ -345,7 +345,7 @@ elif command -v flock >/dev/null 2>&1; then
   printf '      fi\n'
   printf '    done\n'
   printf '  fi\n'
-  printf '  holder_pids="$(fuser "${TARGET_LOCK_FILE}" 2>/dev/null || true)"\n'
+  printf '  holder_pids="$(fuser "${TARGET_LOCK_FILE}" 2>/dev/null | tr -s "[:space:]" "," | sed "s/,$//" || true)"\n'
   printf '  if [[ -n "${holder_pids}" ]]; then\n'
   printf '    echo %q >&2\n' 'Process(es) holding the lock:'
   printf '    ps -ww -o pid,ppid,etime,args -p "${holder_pids// /,}" >&2 || true\n'
