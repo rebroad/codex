@@ -110,7 +110,7 @@ fi
 LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
 RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
 MOLD_BIN="$(command -v mold || true)"
-DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-0}"
+DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-1}"
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
