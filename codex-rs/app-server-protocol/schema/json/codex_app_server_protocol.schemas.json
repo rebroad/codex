@@ -4830,46 +4830,6 @@
           "properties": {
             "method": {
               "enum": [
-                "turn/wait/started"
-              ],
-              "title": "Turn/wait/startedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/TurnWaitStartedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Turn/wait/startedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "turn/wait/completed"
-              ],
-              "title": "Turn/wait/completedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/TurnWaitCompletedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Turn/wait/completedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
                 "hook/started"
               ],
               "title": "Hook/startedNotificationMethod",
@@ -20110,7 +20070,8 @@
       "ThreadActiveFlag": {
         "enum": [
           "waitingOnApproval",
-          "waitingOnUserInput"
+          "waitingOnUserInput",
+          "waitingOnTool"
         ],
         "type": "string"
       },
@@ -23493,6 +23454,14 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "waitingUntilMs": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -24570,46 +24539,6 @@
           "name",
           "output"
         ],
-        "type": "object"
-      },
-      "TurnWaitCompletedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId",
-          "turnId"
-        ],
-        "title": "TurnWaitCompletedNotification",
-        "type": "object"
-      },
-      "TurnWaitStartedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
-          },
-          "yieldTimeMs": {
-            "format": "uint64",
-            "minimum": 0.0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "threadId",
-          "turnId",
-          "yieldTimeMs"
-        ],
-        "title": "TurnWaitStartedNotification",
         "type": "object"
       },
       "TurnsPage": {

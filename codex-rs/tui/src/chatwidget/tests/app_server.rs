@@ -688,11 +688,19 @@ async fn live_app_server_wait_notifications_render_countdown_and_restore_working
     );
 
     chat.handle_server_notification(
-        ServerNotification::TurnWaitStarted(
-            codex_app_server_protocol::TurnWaitStartedNotification {
+        ServerNotification::ThreadStatusChanged(
+            codex_app_server_protocol::ThreadStatusChangedNotification {
                 thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                yield_time_ms: 5_000,
+                status: codex_app_server_protocol::ThreadStatus::Active {
+                    active_flags: vec![codex_app_server_protocol::ThreadActiveFlag::WaitingOnTool],
+                },
+                waiting_until_ms: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .expect("system clock should be after Unix epoch")
+                        .as_millis() as i64
+                        + 5_000,
+                ),
             },
         ),
         /*replay_kind*/ None,
@@ -705,10 +713,13 @@ async fn live_app_server_wait_notifications_render_countdown_and_restore_working
     assert_eq!(status.header(), "Waiting");
 
     chat.handle_server_notification(
-        ServerNotification::TurnWaitCompleted(
-            codex_app_server_protocol::TurnWaitCompletedNotification {
+        ServerNotification::ThreadStatusChanged(
+            codex_app_server_protocol::ThreadStatusChangedNotification {
                 thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
+                status: codex_app_server_protocol::ThreadStatus::Active {
+                    active_flags: Vec::new(),
+                },
+                waiting_until_ms: None,
             },
         ),
         /*replay_kind*/ None,

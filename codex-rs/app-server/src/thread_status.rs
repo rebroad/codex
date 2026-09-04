@@ -149,6 +149,22 @@ impl ThreadWatchManager {
             runtime.is_loaded = true;
             runtime.running = true;
             runtime.has_system_error = false;
+            runtime.waiting_until_ms = None;
+        })
+        .await;
+    }
+
+    pub(crate) async fn note_wait_started(&self, thread_id: &str, yield_time_ms: u64) {
+        let waiting_until_ms = unix_timestamp_ms().saturating_add(yield_time_ms as i64);
+        self.update_runtime_for_thread(thread_id, move |runtime| {
+            runtime.waiting_until_ms = Some(waiting_until_ms);
+        })
+        .await;
+    }
+
+    pub(crate) async fn note_wait_completed(&self, thread_id: &str) {
+        self.update_runtime_for_thread(thread_id, |runtime| {
+            runtime.waiting_until_ms = None;
         })
         .await;
     }
@@ -166,6 +182,7 @@ impl ThreadWatchManager {
             runtime.running = false;
             runtime.pending_permission_requests = 0;
             runtime.pending_user_input_requests = 0;
+            runtime.waiting_until_ms = None;
             runtime.is_loaded = false;
         })
         .await;
@@ -176,6 +193,7 @@ impl ThreadWatchManager {
             runtime.running = false;
             runtime.pending_permission_requests = 0;
             runtime.pending_user_input_requests = 0;
+            runtime.waiting_until_ms = None;
             runtime.has_system_error = true;
         })
         .await;
@@ -186,6 +204,7 @@ impl ThreadWatchManager {
             runtime.running = false;
             runtime.pending_permission_requests = 0;
             runtime.pending_user_input_requests = 0;
+            runtime.waiting_until_ms = None;
         })
         .await;
     }
@@ -341,6 +360,7 @@ impl ThreadWatchState {
             Some(ThreadStatusChangedNotification {
                 thread_id: thread_id.to_string(),
                 status: ThreadStatus::NotLoaded,
+                waiting_until_ms: None,
             })
         } else {
             None
@@ -422,7 +442,14 @@ impl ThreadWatchState {
             return None;
         }
 
-        Some(ThreadStatusChangedNotification { thread_id, status })
+        Some(ThreadStatusChangedNotification {
+            waiting_until_ms: self
+                .runtime_by_thread_id
+                .get(&thread_id)
+                .and_then(|runtime| runtime.waiting_until_ms),
+            thread_id,
+            status,
+        })
     }
 }
 
@@ -433,6 +460,7 @@ struct RuntimeFacts {
     pending_permission_requests: u32,
     pending_user_input_requests: u32,
     has_system_error: bool,
+    waiting_until_ms: Option<i64>,
 }
 
 fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
@@ -447,6 +475,9 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
     if runtime.pending_user_input_requests > 0 {
         active_flags.push(ThreadActiveFlag::WaitingOnUserInput);
     }
+    if runtime.waiting_until_ms.is_some() {
+        active_flags.push(ThreadActiveFlag::WaitingOnTool);
+    }
 
     if runtime.running || !active_flags.is_empty() {
         return ThreadStatus::Active { active_flags };
@@ -457,6 +488,14 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
     }
 
     ThreadStatus::Idle
+}
+
+fn unix_timestamp_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -736,6 +775,7 @@ mod tests {
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
                 status: ThreadStatus::Idle,
+                waiting_until_ms: None,
             },
         );
 
@@ -747,6 +787,7 @@ mod tests {
                 status: ThreadStatus::Active {
                     active_flags: vec![],
                 },
+                waiting_until_ms: None,
             },
         );
 
@@ -756,6 +797,7 @@ mod tests {
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
                 status: ThreadStatus::NotLoaded,
+                waiting_until_ms: None,
             },
         );
     }
@@ -791,6 +833,7 @@ mod tests {
                 status: ThreadStatus::Active {
                     active_flags: vec![],
                 },
+                waiting_until_ms: None,
             },
         );
     }
