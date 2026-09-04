@@ -1733,18 +1733,36 @@ async fn prepare_remote_control_enrollment(
                 .await?;
             }
             Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                if recover_remote_control_auth(
-                    auth_context.auth_recovery,
-                    auth_context.auth_change_rx,
+                enrollment_ref.clear_server_token();
+                let reenroll_result = enroll_and_persist_remote_control_server(
+                    remote_control_target,
+                    state_db,
+                    RemoteControlEnrollmentAuthContext {
+                        auth: &auth,
+                        recovery: auth_context,
+                    },
+                    enrollment,
+                    connect_options,
+                    status_publisher,
+                    RemoteControlEnrollmentSelection::ReplaceExisting,
                 )
-                .await
-                {
+                .await;
+                if let Err(reenroll_err) = reenroll_result {
+                    if recover_remote_control_auth(
+                        auth_context.auth_recovery,
+                        auth_context.auth_change_rx,
+                    )
+                    .await
+                    {
+                        let _ = reenroll_err;
+                        return Err(io::Error::other(format!(
+                            "{err}; retrying after auth recovery"
+                        )));
+                    }
                     return Err(io::Error::other(format!(
-                        "{err}; retrying after auth recovery"
+                        "{err}; remote control re-enrollment failed: {reenroll_err}"
                     )));
                 }
-                enrollment_ref.clear_server_token();
-                return Err(err);
             }
             Err(err) => return Err(err),
         }
@@ -2508,6 +2526,8 @@ mod tests {
         expected_enrollment.remote_control_target = remote_control_target.clone();
         expected_enrollment.expires_at =
             Some(time::OffsetDateTime::now_utc() + time::Duration::minutes(4));
+        let mut expected_enrollment_after_refresh_failure = expected_enrollment.clone();
+        expected_enrollment_after_refresh_failure.clear_server_token();
         let current_enrollment = test_current_enrollment(Some(expected_enrollment.clone()));
         let (status_publisher, status_rx) = remote_control_status_channel();
         save_auth(
@@ -2565,7 +2585,10 @@ mod tests {
                 .expect("token should be readable"),
             "fresh-token"
         );
-        assert_eq!(current_enrollment.snapshot(), Some(expected_enrollment));
+        assert_eq!(
+            current_enrollment.snapshot(),
+            Some(expected_enrollment_after_refresh_failure)
+        );
         assert!(
             !auth_change_rx
                 .has_changed()

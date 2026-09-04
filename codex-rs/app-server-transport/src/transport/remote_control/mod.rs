@@ -871,23 +871,47 @@ async fn refresh_pairing_enrollment(
         .as_ref()
         .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
     {
-        let mut auth_recovery = auth_manager.unauthorized_recovery();
-        let mut auth_change_rx = auth_manager.auth_change_receiver();
-        if recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
-            match load_remote_control_auth(auth_manager).await {
-                Ok(recovered_auth) if recovered_auth.account_id == enrollment.account_id => {
-                    *auth = recovered_auth;
-                    refresh_result =
-                        refresh_remote_control_server(auth, installation_id, enrollment, mode)
-                            .await;
-                }
-                Ok(_) | Err(_) => {
-                    enrollment.clear_server_token();
-                    refresh_result = Err(pairing_unavailable_error());
-                }
+        let token_was_revoked = refresh_result.as_ref().is_some_and(|err| {
+            let message = err.to_string();
+            message.contains("token_revoked") || message.contains("invalidated oauth token")
+        });
+        if token_was_revoked {
+            let remote_control_target = enrollment.remote_control_target.clone();
+            let server_name = enrollment.server_name.clone();
+            if let Ok(new_enrollment) = enroll_remote_control_server(
+                &remote_control_target,
+                auth,
+                installation_id,
+                &server_name,
+            )
+            .await
+            {
+                *enrollment = new_enrollment;
+                refresh_result = Ok(());
             }
-        } else {
-            enrollment.clear_server_token();
+        }
+        if refresh_result
+            .as_ref()
+            .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
+        {
+            let mut auth_recovery = auth_manager.unauthorized_recovery();
+            let mut auth_change_rx = auth_manager.auth_change_receiver();
+            if recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
+                match load_remote_control_auth(auth_manager).await {
+                    Ok(recovered_auth) if recovered_auth.account_id == enrollment.account_id => {
+                        *auth = recovered_auth;
+                        refresh_result =
+                            refresh_remote_control_server(auth, installation_id, enrollment, mode)
+                                .await;
+                    }
+                    Ok(_) | Err(_) => {
+                        enrollment.clear_server_token();
+                        refresh_result = Err(pairing_unavailable_error());
+                    }
+                }
+            } else {
+                enrollment.clear_server_token();
+            }
         }
     }
     if refresh_result
