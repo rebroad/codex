@@ -104,6 +104,19 @@ EOF
 die() { echo "build_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
 
+set_termux_build_oom_score() {
+  [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == /data/data/com.termux/files/usr ]] || return
+
+  local oom_score_adj="${CODEX_BUILD_OOM_SCORE_ADJ:-500}"
+  [[ "${oom_score_adj}" =~ ^[0-9]+$ ]] || die "CODEX_BUILD_OOM_SCORE_ADJ must be a non-negative integer"
+  [[ -w /proc/self/oom_score_adj ]] || die "Termux build cannot set /proc/self/oom_score_adj"
+  printf '%s\n' "${oom_score_adj}" > /proc/self/oom_score_adj \
+    || die "failed to set /proc/self/oom_score_adj"
+  echo "Termux build OOM score preference: ${oom_score_adj}" >&2
+}
+
+set_termux_build_oom_score
+
 BUILD_PROCESS_REGISTRY="${BUILD_REPO}/build/codex-build-processes"
 BUILD_PROCESS_RECORD="${BUILD_PROCESS_REGISTRY}/$$"
 register_build_process() {
