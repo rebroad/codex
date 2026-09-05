@@ -1017,7 +1017,9 @@ mod tests {
             let Some(timestamp) = span.content.strip_prefix(" • ") else {
                 continue;
             };
-            if chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S").is_ok() {
+            if chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S").is_ok()
+                || chrono::NaiveTime::parse_from_str(timestamp, "%H:%M:%S").is_ok()
+            {
                 span.content = " • <timestamp>".into();
             }
         }
