@@ -54,6 +54,7 @@ async fn resolve_root_git_project_for_trust_rejects_dot_git_swapped_after_stat()
         path: PathUri::from_abs_path(&attacker.join(".git").abs()),
         replacement: Some(checkout.join(".git")),
         canonical_overrides: Vec::new(),
+        hidden_paths: Vec::new(),
     };
     assert_eq!(
         resolve_root_git_project_for_trust(&fs, &attacker.abs()).await,
@@ -96,6 +97,7 @@ async fn resolve_root_git_project_for_trust_preserves_canonical_checkout_case() 
                     PathUri::parse(canonical_attacker).unwrap(),
                 ),
             ],
+            hidden_paths: Vec::new(),
         };
         assert_eq!(
             resolve_root_git_project_for_trust(&fs, &attacker.abs()).await,
