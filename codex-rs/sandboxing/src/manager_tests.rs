@@ -652,10 +652,22 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
 }
 #[cfg(target_os = "android")]
 #[test]
-fn android_uses_linux_sandbox_and_legacy_filesystem_backend() {
+fn android_keeps_process_sandbox_but_fails_closed_for_restricted_filesystem() {
     assert_eq!(
         super::get_platform_sandbox(false),
         Some(super::SandboxType::LinuxSeccomp)
     );
     assert!(super::uses_legacy_linux_filesystem_sandbox());
+
+    let manager = SandboxManager::new();
+    assert_eq!(
+        manager.select_initial(
+            &PermissionProfile::read_only(),
+            SandboxablePreference::Require,
+            WindowsSandboxLevel::Disabled,
+            /*has_managed_network_requirements*/ false,
+        ),
+        SandboxType::None,
+        "Android must not claim to enforce restricted filesystem access",
+    );
 }
