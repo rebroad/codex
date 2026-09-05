@@ -353,7 +353,7 @@ elif command -v flock >/dev/null 2>&1; then
   printf '  holder_pids="$(fuser "${TARGET_LOCK_FILE}" 2>/dev/null | tr -s "[:space:]" "," | sed "s/,$//" || true)"\n'
   printf '  if [[ -n "${holder_pids}" ]]; then\n'
   printf '    echo %q >&2\n' 'Process(es) holding the lock:'
-  printf '    ps -ww -o pid,ppid,etime,args -p "${holder_pids// /,}" >&2 || true\n'
+  printf '    for holder_pid in ${holder_pids//,/ }; do ps -p "$holder_pid" -o pid,ppid,etime,args >&2 || true; done\n'
   printf '  else\n'
   printf '    echo %q >&2\n' 'No current lock holder was reported; the lock may be transitioning or held by a process outside the current PID namespace.'
   printf '  fi\n'
