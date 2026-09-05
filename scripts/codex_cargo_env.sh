@@ -113,16 +113,9 @@ MOLD_BIN="$(command -v mold || true)"
 DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-1}"
 
 if [[ "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
-  if [[ -z "${CODEX_TEST_TMPDIR:-}" ]]; then
-    TERMUX_APP_ROOT="${PREFIX%/files/usr}"
-    if [[ "${TERMUX_APP_ROOT}" == "${PREFIX}" ]]; then
-      TERMUX_APP_ROOT="$(cd "${PREFIX}/../.." && pwd)"
-    fi
-    CODEX_TEST_TMPDIR="${TERMUX_APP_ROOT}/cache/codex-test-tmp"
-  fi
-  mkdir -p "${CODEX_TEST_TMPDIR}"
-  chmod 700 "${CODEX_TEST_TMPDIR}"
-  export TMPDIR="${CODEX_TEST_TMPDIR}"
+  export TMPDIR="${TMPDIR:-${PREFIX}/tmp}"
+  mkdir -p "${TMPDIR}"
+  chmod 700 "${TMPDIR}"
 fi
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
