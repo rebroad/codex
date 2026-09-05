@@ -373,7 +373,7 @@ elif command -v flock >/dev/null 2>&1; then
   printf '      fi\n'
   printf '    done\n'
   printf '  fi\n'
-  printf '  holder_pids="$(fuser "${TARGET_LOCK_FILE}" 2>/dev/null | awk '\''{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) { if (n++) printf ","; printf "%%s", $i } }'\'' || true)"\n'
+  printf '  holder_pids="$(fuser "${TARGET_LOCK_FILE}" 2>/dev/null | awk -v self_pid="$$" '\''{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/ && $i != self_pid) { if (n++) printf ","; printf "%%s", $i } }'\'' || true)"\n'
   printf '  if [[ -n "${holder_pids}" ]]; then\n'
   printf '    echo %q >&2\n' 'Process(es) holding the lock:'
   printf '    for holder_pid in ${holder_pids//,/ }; do ps -p "$holder_pid" -o pid,ppid,etime,args >&2 || true; done\n'
