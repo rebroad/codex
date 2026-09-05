@@ -112,6 +112,19 @@ RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
 MOLD_BIN="$(command -v mold || true)"
 DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-1}"
 
+if [[ "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  if [[ -z "${CODEX_TEST_TMPDIR:-}" ]]; then
+    TERMUX_APP_ROOT="${PREFIX%/files/usr}"
+    if [[ "${TERMUX_APP_ROOT}" == "${PREFIX}" ]]; then
+      TERMUX_APP_ROOT="$(cd "${PREFIX}/../.." && pwd)"
+    fi
+    CODEX_TEST_TMPDIR="${TERMUX_APP_ROOT}/cache/codex-test-tmp"
+  fi
+  mkdir -p "${CODEX_TEST_TMPDIR}"
+  chmod 700 "${CODEX_TEST_TMPDIR}"
+  export TMPDIR="${CODEX_TEST_TMPDIR}"
+fi
+
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
   [[ -x "${ANDROID_CLANG}" ]] || { echo "Android linker not found" >&2; exit 1; }
@@ -319,6 +332,16 @@ mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 
 mkdir -p "${TARGET_DIR}"
 
+if [[ -n "${SCCACHE_BIN}" ]]; then
+  export SCCACHE_DIR="${SCCACHE_DIR:-${HOME}/.cache/sccache}"
+  export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-20G}"
+  if ! "${SCCACHE_BIN}" --start-server >/dev/null 2>&1 \
+    && ! "${SCCACHE_BIN}" --show-stats >/dev/null 2>&1; then
+    echo "Unable to start the sccache server; refusing to run without the configured cache" >&2
+    exit 1
+  fi
+fi
+
 if [[ "${OUTPUT}" == target ]]; then
   printf '%s\n' "${TARGET_DIR}"
   exit 0
@@ -364,8 +387,10 @@ else
 fi
 if [[ -n "${SCCACHE_BIN}" ]]; then
   printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
-    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}" \
-    "${SCCACHE_CACHE_SIZE:-20G}"
+    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
+fi
+if [[ -n "${TMPDIR:-}" && "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  printf 'export TMPDIR=%q\n' "${TMPDIR}"
 fi
 [[ -n "${CARGO_BUILD_JOBS:-}" ]] && printf 'export CARGO_BUILD_JOBS=%q\n' "${CARGO_BUILD_JOBS}"
 if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
