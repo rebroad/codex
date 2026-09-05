@@ -400,7 +400,7 @@ async fn unique_extra_root_loads_as_recursive_user_root() {
 
 #[tokio::test]
 async fn repo_ancestry_without_project_marker_does_not_walk_parents() {
-    let temp_dir = TempDir::new_in("/var/tmp").expect("temp dir");
+    let temp_dir = TempDir::new().expect("temp dir");
     let outer = absolute(temp_dir.path().join("outer"));
     let cwd = outer.join("nested/inner");
     fs::create_dir_all(outer.join(".agents/skills")).expect("create outer skills");
