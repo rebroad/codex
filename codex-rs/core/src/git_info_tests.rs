@@ -38,10 +38,11 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::process::Command;
 
-struct MetadataOverrideFileSystem {
+pub(crate) struct MetadataOverrideFileSystem {
     path: PathUri,
     replacement: Option<PathBuf>,
     canonical_overrides: Vec<(PathUri, PathUri)>,
+    hidden_paths: Vec<PathUri>,
 }
 
 impl MetadataOverrideFileSystem {
@@ -50,6 +51,20 @@ impl MetadataOverrideFileSystem {
             io::ErrorKind::Unsupported,
             "operation is not used by Git root discovery",
         ))
+    }
+
+    pub(crate) fn hiding_ancestor_git_markers(path: &Path) -> Self {
+        let hidden_paths = std::iter::successors(Some(path.to_path_buf()), |path| {
+            path.parent().map(Path::to_path_buf)
+        })
+        .map(|path| PathUri::from_abs_path(&path.join(".git").abs()))
+        .collect();
+        Self {
+            path: PathUri::from_abs_path(&path.join("unused").abs()),
+            replacement: None,
+            canonical_overrides: Vec::new(),
+            hidden_paths,
+        }
     }
 }
 
@@ -124,6 +139,10 @@ impl ExecutorFileSystem for MetadataOverrideFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {
+            if self.hidden_paths.iter().any(|hidden| hidden == path) {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "hidden test path"));
+            }
+
             if path == &self.path && self.replacement.is_none() {
                 Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -653,8 +672,19 @@ async fn test_get_git_working_tree_state_branch_fallback() {
 #[tokio::test]
 async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
     let tmp = TempDir::new().expect("tempdir");
+    let hidden_paths = std::iter::successors(Some(tmp.path().to_path_buf()), |path| {
+        path.parent().map(Path::to_path_buf)
+    })
+    .map(|path| PathUri::from_abs_path(&path.join(".git").abs()))
+    .collect();
+    let fs = MetadataOverrideFileSystem {
+        path: PathUri::from_abs_path(&tmp.path().join("unused").abs()),
+        replacement: None,
+        canonical_overrides: Vec::new(),
+        hidden_paths,
+    };
     assert!(
-        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &tmp.path().abs())
+        resolve_root_git_project_for_trust(&fs, &tmp.path().abs())
             .await
             .is_none()
     );
@@ -689,6 +719,7 @@ async fn resolve_root_git_project_for_trust_ignores_metadata_errors() {
         path: PathUri::from_abs_path(&nested.join(".git").abs()),
         replacement: None,
         canonical_overrides: Vec::new(),
+        hidden_paths: Vec::new(),
     };
 
     assert_eq!(
