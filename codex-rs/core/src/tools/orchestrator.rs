@@ -405,7 +405,13 @@ impl ToolOrchestrator {
                         return Err(ToolError::Codex(err));
                     }
                 }
-                if !unsandboxed_allowed && network_approval_context.is_none() {
+                let sandbox_backend_unavailable = sandbox_requested
+                    && !executor_managed_process_sandbox
+                    && initial_sandbox == SandboxType::None;
+                if !unsandboxed_allowed
+                    && !sandbox_backend_unavailable
+                    && network_approval_context.is_none()
+                {
                     otel.sandbox_outcome(
                         &otel_tn,
                         otel_ci,
