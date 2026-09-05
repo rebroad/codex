@@ -307,6 +307,18 @@ impl SandboxManager {
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
     ) -> SandboxType {
+        if cfg!(target_os = "android")
+            && matches!(
+                permission_profile.file_system_sandbox_policy().kind,
+                codex_protocol::permissions::FileSystemSandboxKind::Restricted
+            )
+        {
+            // Android currently has no filesystem-enforcement backend. Do not
+            // select the LinuxSeccomp process wrapper, whose Android helper
+            // intentionally applies only network restrictions.
+            return SandboxType::None;
+        }
+
         if self.should_sandbox(permission_profile, pref, has_managed_network_requirements) {
             get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
                 .unwrap_or(SandboxType::None)

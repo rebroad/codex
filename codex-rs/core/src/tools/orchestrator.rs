@@ -26,9 +26,11 @@ use crate::tools::sandboxing::default_exec_approval_requirement;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxManager;
@@ -303,8 +305,27 @@ impl ToolOrchestrator {
         };
 
         let initial_attempt_start = Instant::now();
-        let (first_result, first_deferred_network_approval) =
-            Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await;
+        let (first_result, first_deferred_network_approval) = if sandbox_requested
+            && !executor_managed_process_sandbox
+            && initial_sandbox == SandboxType::None
+        {
+            let message = "filesystem sandbox is unavailable on this executor; approval is required to run unrestricted";
+            let output = ExecToolCallOutput {
+                exit_code: 1,
+                stderr: StreamOutput::new(message.to_string()),
+                aggregated_output: StreamOutput::new(message.to_string()),
+                ..Default::default()
+            };
+            (
+                Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(output),
+                    network_policy_decision: None,
+                }))),
+                None,
+            )
+        } else {
+            Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await
+        };
         let initial_duration = initial_attempt_start.elapsed();
         match first_result {
             Ok(out) => {
@@ -437,7 +458,8 @@ impl ToolOrchestrator {
                         .await?;
                 }
 
-                let retry_sandbox_requested = !unsandboxed_allowed
+                let retry_sandbox_requested = initial_sandbox != SandboxType::None
+                    && !unsandboxed_allowed
                     && self.sandbox.should_sandbox(
                         &permissions,
                         sandbox_preference,
