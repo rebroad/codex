@@ -43,6 +43,7 @@ use super::support::absolute_path;
 use super::support::create_file_system_context;
 #[cfg(windows)]
 use super::support::is_unsupported_restricted_token_host;
+#[cfg(not(target_os = "android"))\]
 use super::support::read_only_sandbox;
 use super::support::workspace_write_sandbox;
 
