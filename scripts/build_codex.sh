@@ -1175,7 +1175,9 @@ build_android() {
   install -m 0755 "${binary}" "${stage}/codex.bin"
   install -m 0755 "$(dirname "${binary}")/codex-code-mode-host" "${stage}/codex-code-mode-host"
   install -m 0644 "${llvm}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "${stage}/libc++_shared.so"
-  "${llvm}/bin/llvm-strip" --strip-all "${stage}/codex.bin"
+  for staged_binary in "${stage}/codex.bin" "${stage}/codex-code-mode-host"; do
+    "${llvm}/bin/llvm-strip" --strip-all "${staged_binary}"
+  done
   patch_timestamp "${stage}/codex.bin" "${VERSION}" "${COMMIT_SHORT}"
   echo "Android artifacts staged in ${stage}"
 }
