@@ -968,6 +968,82 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox() -> Result<()>
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn outside_workspace_patch_is_applied_after_user_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "outside workspace approval uses the local filesystem"
+    );
+    let temp = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let root = temp.path().canonicalize()?;
+    let work = root.join("work");
+    let outside = root.join("outside.txt");
+    fs::create_dir(&work)?;
+    fs::write(&outside, "before\n")?;
+    let harness = apply_patch_harness_with(move |builder| {
+        builder.with_model("gpt-5.4").with_config(move |config| {
+            config.cwd = work.try_into().expect("absolute workspace");
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        })
+    })
+    .await?;
+    let test = harness.test();
+    let call_id = "apply-patch-outside-approved";
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
+        outside.display()
+    );
+    mount_apply_patch(&harness, call_id, &patch, "done").await;
+    let (sandbox_policy, permission_profile) = turn_permission_fields(
+        restrictive_workspace_write_profile(),
+        test.config.cwd.as_path(),
+    );
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "apply the patch".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::UnlessTrusted),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ApplyPatchApprovalRequest(approval) = event else {
+        panic!("expected approval before applying outside-workspace patch");
+    };
+    test.codex
+        .submit(Op::PatchApproval {
+            id: approval.call_id,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(fs::read_to_string(&outside)?, "after\n");
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn escalated_patch_rejects_symlink_swapped_after_approval_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(

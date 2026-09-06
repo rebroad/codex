@@ -114,6 +114,18 @@ pub enum ApplyPatchError {
     ImplicitInvocation,
 }
 
+impl ApplyPatchError {
+    pub(crate) fn is_sandbox_verification_unavailable(&self) -> bool {
+        match self {
+            Self::IoError(error) => error
+                .source
+                .to_string()
+                .contains("filesystem sandbox cannot be enforced on this executor"),
+            _ => false,
+        }
+    }
+}
+
 impl From<std::io::Error> for ApplyPatchError {
     fn from(err: std::io::Error) -> Self {
         ApplyPatchError::IoError(IoError {
@@ -148,7 +160,7 @@ impl PartialEq for IoError {
 
 /// Both the raw PATCH argument to `apply_patch` as well as the PATCH argument
 /// parsed into hunks.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ApplyPatchArgs {
     pub patch: String,
     pub hunks: Vec<Hunk>,
@@ -177,6 +189,9 @@ pub enum MaybeApplyPatchVerified {
     /// `argv` corresponded to an `apply_patch` invocation, and these are the
     /// resulting proposed file changes.
     Body(ApplyPatchAction),
+    /// Verification was blocked by the active filesystem sandbox. The action contains only
+    /// paths and patch syntax; file contents are deliberately loaded after approval.
+    SandboxDenied(ApplyPatchAction),
     /// `argv` could not be parsed to determine whether it corresponds to an
     /// `apply_patch` invocation.
     ShellParseError(ExtractHeredocError),
@@ -887,6 +902,29 @@ mod tests {
     /// Helper to construct a patch with the given body.
     fn wrap_patch(body: &str) -> String {
         format!("*** Begin Patch\n{body}\n*** End Patch")
+    }
+
+    #[test]
+    fn recognizes_unavailable_filesystem_sandbox_as_deferred_verification() {
+        let error = ApplyPatchError::IoError(IoError {
+            context: "I/O error".to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "filesystem sandbox cannot be enforced on this executor",
+            ),
+        });
+
+        assert!(error.is_sandbox_verification_unavailable());
+    }
+
+    #[test]
+    fn does_not_defer_target_permission_denials() {
+        let error = ApplyPatchError::IoError(IoError {
+            context: "I/O error".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Permission denied"),
+        });
+
+        assert!(!error.is_sandbox_verification_unavailable());
     }
 
     #[tokio::test]
