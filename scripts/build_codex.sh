@@ -51,6 +51,8 @@ LOCKFILE_REGENERATION_REQUIRED="false"
 ALLOW_CONCURRENT_BUILD="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
+BUILD_START_COMMIT=""
+BUILD_START_STATUS=""
 BUILD_TIMESTAMP_SEPARATOR="-"
 TOOLCHAIN=""
 CARGO_CMD=(cargo)
@@ -103,6 +105,15 @@ EOF
 
 die() { echo "build_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
+
+refresh_build_provenance() {
+  local current_commit current_status
+  current_commit="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
+  current_status="$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)"
+  if [[ "${current_commit}" != "${BUILD_START_COMMIT}" || "${current_status}" != "${BUILD_START_STATUS}" ]]; then
+    BUILD_TIMESTAMP_SEPARATOR="+"
+  fi
+}
 
 set_termux_build_oom_score() {
   [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == /data/data/com.termux/files/usr ]] || return 0
@@ -863,13 +874,13 @@ PY
 }
 
 install_binary() {
-  local binary="${1}" version="${2}" short
+  local binary="${1}" version="${2}"
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   mkdir -p "${INSTALL_BIN_DIR}"
-  short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-  local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  refresh_build_provenance
+  local name="codex-${version}-${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
-  if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
+  if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${COMMIT_SHORT}"; then
     rm -f "${INSTALL_BIN_DIR}/${name}"
     return 1
   fi
@@ -995,11 +1006,11 @@ remote_target_architecture() {
 
 install_remote_binary() {
   local target="${1}" binary="${2}" version="${3}" install_dir="${4}" already_stamped="${5:-false}"
-  local short name transfer_key staging remote_tmp
+  local name transfer_key staging remote_tmp
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
-  short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-  name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
-  transfer_key="${version}-${short}"
+  refresh_build_provenance
+  name="codex-${version}-${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  transfer_key="${version}-${COMMIT_SHORT}"
   staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
   if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" \
     "printf '%s/.codex-install-${transfer_key}.tmp' \"\${TMPDIR:-/var/tmp}\"")"; then
@@ -1010,7 +1021,7 @@ install_remote_binary() {
   mkdir -p "$(dirname "${staging}")"
   install -m 0755 "${binary}" "${staging}"
   if [[ "${already_stamped}" != true ]]; then
-    patch_timestamp "${staging}" "${version}" "${short}"
+    patch_timestamp "${staging}" "${version}" "${COMMIT_SHORT}"
   fi
   if ! rsync --compress --info=progress2 --timeout="${CODEX_RSYNC_TIMEOUT:-60}" \
     --partial --inplace --append-verify -e "ssh ${SSH_OPTS[*]}" \
@@ -1178,6 +1189,7 @@ build_android() {
   for staged_binary in "${stage}/codex.bin" "${stage}/codex-code-mode-host"; do
     "${llvm}/bin/llvm-strip" --strip-all "${staged_binary}"
   done
+  refresh_build_provenance
   patch_timestamp "${stage}/codex.bin" "${VERSION}" "${COMMIT_SHORT}"
   echo "Android artifacts staged in ${stage}"
 }
@@ -1332,8 +1344,10 @@ else
 fi
 [[ "${PACKAGE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-+.0-9A-Za-z-]+$ ]] \
   || die "invalid npm package version: ${PACKAGE_VERSION}"
-COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-if [[ -n "$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)" ]]; then
+BUILD_START_COMMIT="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
+BUILD_START_STATUS="$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)"
+COMMIT_SHORT="${BUILD_START_COMMIT:0:10}"
+if [[ -n "${BUILD_START_STATUS}" ]]; then
   BUILD_TIMESTAMP_SEPARATOR="+"
 fi
 if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
