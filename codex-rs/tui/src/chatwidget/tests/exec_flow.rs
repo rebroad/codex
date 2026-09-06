@@ -350,11 +350,11 @@ async fn compact_command_activity_groups_replayed_successes_without_hiding_decli
     .replace_all(&transcript, " • <duration>");
     insta::assert_snapshot!(transcript, @r"$ printf first
 first
-✓ • 5ms
+✓ • <duration>
 
 $ printf second
 second
-✓ • 5ms
+✓ • <duration>
 ");
     assert!(
         lines_to_single_string(&cells[1].display_lines(/*width*/ 80))
