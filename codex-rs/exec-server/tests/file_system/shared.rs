@@ -6,6 +6,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecServerRuntimePaths;
 #[cfg(unix)]
 use codex_exec_server::ExecutorFileSystem;
+#[cfg(not(target_os = "android"))]
 use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FileMetadata;
 #[cfg(unix)]
@@ -20,12 +21,17 @@ use codex_exec_server::WriteFileOptions;
 use codex_file_system::MAX_WALK_DEPTH;
 use codex_file_system::MAX_WALK_DIRECTORIES;
 use codex_file_system::MAX_WALK_ENTRIES;
+#[cfg(not(target_os = "android"))]
 use codex_protocol::models::AdditionalPermissionProfile;
+#[cfg(not(target_os = "android"))]
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+#[cfg(not(target_os = "android"))]
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
+#[cfg(not(target_os = "android"))]
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use codex_utils_path_uri::PathUri;
+#[cfg(not(target_os = "android"))]
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -1027,6 +1033,7 @@ pub(crate) async fn assert_canonicalize_resolves_directory_alias(
     Ok(())
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) async fn assert_sandboxed_canonicalize_resolves_directory_alias(
     implementation: FileSystemImplementation,
     create_directory_alias: impl FnOnce(&Path, &Path) -> Result<()>,
