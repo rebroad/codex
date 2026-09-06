@@ -161,10 +161,18 @@ async fn build_recent_work_section(
     cwd: &AbsolutePathBuf,
     recent_threads: &[StoredThread],
 ) -> Option<String> {
+    build_recent_work_section_with_fs(LOCAL_FS.as_ref(), cwd, recent_threads).await
+}
+
+async fn build_recent_work_section_with_fs(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &AbsolutePathBuf,
+    recent_threads: &[StoredThread],
+) -> Option<String> {
     let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
         let group = match AbsolutePathBuf::from_absolute_path(entry.cwd.as_path()) {
-            Ok(entry_cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &entry_cwd)
+            Ok(entry_cwd) => resolve_root_git_project_for_trust(fs, &entry_cwd)
                 .await
                 .map(AbsolutePathBuf::into_path_buf)
                 .unwrap_or_else(|| entry.cwd.clone()),
@@ -173,7 +181,7 @@ async fn build_recent_work_section(
         groups.entry(group).or_default().push(entry);
     }
 
-    let current_group = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd)
+    let current_group = resolve_root_git_project_for_trust(fs, cwd)
         .await
         .map(AbsolutePathBuf::into_path_buf)
         .unwrap_or_else(|| cwd.clone().into_path_buf());
@@ -204,7 +212,7 @@ async fn build_recent_work_section(
     let mut sections = Vec::new();
     for (group, mut entries) in groups.into_iter().take(MAX_RECENT_WORK_GROUPS) {
         entries.sort_by_key(|entry| Reverse(entry.updated_at));
-        if let Some(section) = format_thread_group(&current_group, &group, entries).await {
+        if let Some(section) = format_thread_group(fs, &current_group, &group, entries).await {
             sections.push(section);
         }
     }
@@ -502,6 +510,7 @@ fn format_startup_context_blob(body: &str) -> String {
 }
 
 async fn format_thread_group(
+    fs: &dyn ExecutorFileSystem,
     current_group: &Path,
     group: &Path,
     entries: Vec<&StoredThread>,
@@ -509,7 +518,7 @@ async fn format_thread_group(
     let latest = entries.first()?;
     let group_label =
         if let Ok(latest_cwd) = AbsolutePathBuf::from_absolute_path(latest.cwd.as_path()) {
-            if resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &latest_cwd)
+            if resolve_root_git_project_for_trust(fs, &latest_cwd)
                 .await
                 .is_some()
             {
