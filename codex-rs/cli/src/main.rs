@@ -20,6 +20,7 @@ use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
 use codex_cli::run_logout;
+use codex_cli::run_rc_login;
 use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
@@ -147,6 +148,9 @@ enum Subcommand {
 
     /// Manage login.
     Login(LoginCommand),
+
+    /// Manage the credentials used by remote control.
+    Rc(RcCommand),
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
@@ -533,6 +537,18 @@ struct LoginCommand {
 
     #[command(subcommand)]
     action: Option<LoginSubcommand>,
+}
+
+#[derive(Debug, Parser)]
+struct RcCommand {
+    #[command(subcommand)]
+    action: RcSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum RcSubcommand {
+    /// Log in and save credentials to `$CODEX_HOME/rc-auth.json`.
+    Login,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1639,6 +1655,18 @@ async fn cli_main(
                 }
             }
         }
+        Some(Subcommand::Rc(rc_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "rc",
+            )?;
+            let mut rc_config_overrides = root_config_overrides.clone();
+            prepend_config_flags(&mut rc_config_overrides, root_config_overrides.clone());
+            match rc_cli.action {
+                RcSubcommand::Login => run_rc_login(rc_config_overrides).await,
+            }
+        }
         Some(Subcommand::Logout(mut logout_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -2518,6 +2546,7 @@ fn unsupported_subcommand_name_for_strict_config(
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(_)) => Some("app"),
         Some(Subcommand::Login(_)) => Some("login"),
+        Some(Subcommand::Rc(_)) => Some("rc"),
         Some(Subcommand::Logout(_)) => Some("logout"),
         Some(Subcommand::Completion(_)) => Some("completion"),
         Some(Subcommand::Update) => Some("update"),
@@ -4436,6 +4465,17 @@ mod tests {
         .expect_err("remote-control should reject root --remote");
 
         assert!(err.to_string().contains("remote-control"));
+    }
+
+    #[test]
+    fn rc_login_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "rc", "login"]).expect("parse");
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::Rc(RcCommand {
+                action: RcSubcommand::Login
+            }))
+        );
     }
 
     #[test]

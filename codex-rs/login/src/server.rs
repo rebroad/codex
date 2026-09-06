@@ -27,6 +27,7 @@ use std::time::Duration;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
+use crate::auth::save_auth_to_file;
 use crate::callback_params::LoginCallbackResult;
 use crate::callback_params::login_callback_result_from_state;
 use crate::default_client::create_raw_auth_client;
@@ -69,6 +70,7 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub codex_home: PathBuf,
+    pub auth_file: Option<PathBuf>,
     pub client_id: String,
     pub issuer: String,
     pub port: u16,
@@ -94,6 +96,7 @@ impl ServerOptions {
     ) -> Self {
         Self {
             codex_home,
+            auth_file: None,
             client_id,
             issuer: DEFAULT_ISSUER.to_string(),
             port: DEFAULT_PORT,
@@ -442,6 +445,7 @@ async fn process_request(
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
                         opts.auth_keyring_backend_kind,
+                        opts.auth_file.clone(),
                     )
                     .await
                     {
@@ -720,6 +724,7 @@ pub async fn complete_oauth_login_with_callback_url(
         tokens.refresh_token,
         opts.cli_auth_credentials_store_mode,
         opts.auth_keyring_backend_kind,
+        opts.auth_file.clone(),
     )
     .await
 }
@@ -990,6 +995,7 @@ pub(crate) async fn exchange_code_for_tokens(
 }
 
 /// Persists exchanged credentials using the configured local auth store.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
@@ -998,6 +1004,7 @@ pub(crate) async fn persist_tokens_async(
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
+    auth_file: Option<PathBuf>,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -1024,12 +1031,15 @@ pub(crate) async fn persist_tokens_async(
             bedrock_api_key: None,
             bedrock_access_keys: None,
         };
-        save_auth(
-            &codex_home,
-            &auth,
-            auth_credentials_store_mode,
-            keyring_backend_kind,
-        )
+        match auth_file {
+            Some(auth_file) => save_auth_to_file(&codex_home, &auth_file, &auth),
+            None => save_auth(
+                &codex_home,
+                &auth,
+                auth_credentials_store_mode,
+                keyring_backend_kind,
+            ),
+        }
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?

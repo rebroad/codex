@@ -227,6 +227,7 @@ pub async fn complete_device_code_login(
         tokens.refresh_token,
         opts.cli_auth_credentials_store_mode,
         opts.auth_keyring_backend_kind,
+        None,
     )
     .await
 }

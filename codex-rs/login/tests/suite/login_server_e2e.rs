@@ -126,6 +126,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
 
     let opts = ServerOptions {
         codex_home: server_home,
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -199,6 +200,7 @@ async fn hosted_login_redirects_to_configured_open_app_url() -> Result<()> {
     let tmp = tempdir()?;
     let server = run_login_server(ServerOptions {
         codex_home: tmp.path().to_path_buf(),
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -252,6 +254,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
     let server_home = codex_home.clone();
     let opts = ServerOptions {
         codex_home: server_home,
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -295,6 +298,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
 
     let opts = ServerOptions {
         codex_home,
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -339,6 +343,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
 
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -402,6 +407,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
 
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -473,6 +479,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
 
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -623,6 +630,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
 
     let first_opts = ServerOptions {
         codex_home: first_codex_home,
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
@@ -647,6 +655,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
 
     let second_opts = ServerOptions {
         codex_home: second_codex_home,
+        auth_file: None,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         client_id: codex_login::CLIENT_ID.to_string(),
