@@ -57,6 +57,7 @@ use tokio_tungstenite::connect_async_with_config;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -1108,6 +1109,7 @@ where
 fn websocket_close_error_is_already_closed(err: &TungsteniteError) -> bool {
     match err {
         TungsteniteError::ConnectionClosed | TungsteniteError::AlreadyClosed => true,
+        TungsteniteError::Protocol(ProtocolError::SendAfterClosing) => true,
         TungsteniteError::Io(err) => matches!(
             err.kind(),
             ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::NotConnected
