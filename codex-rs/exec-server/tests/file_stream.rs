@@ -362,7 +362,7 @@ fn connect_file_system(websocket_url: &str) -> Result<Arc<dyn ExecutorFileSystem
 }
 
 // Only the Unix stream tests above need this sandbox builder.
-#[cfg(unix)]
+#[cfg(all(not(target_os = "android"), unix))]
 fn read_only_sandbox(path: std::path::PathBuf) -> codex_exec_server::FileSystemSandboxContext {
     use codex_exec_server::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
