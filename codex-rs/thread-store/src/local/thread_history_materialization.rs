@@ -24,23 +24,30 @@ pub(super) async fn materialize_to_sqlite(
     if store.state_db.is_none() {
         return Ok(());
     }
-    let projection_state = super::thread_history::projection_state(store, thread_id).await?;
-    let start_offset = projection_state
-        .as_ref()
-        .map_or(0, |state| state.next_byte_offset);
+    let resolved_rollout_path = codex_rollout::existing_rollout_path(rollout_path).await;
+    let rollout_path = resolved_rollout_path.as_deref().unwrap_or(rollout_path);
+    let is_compressed = rollout_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zst"));
+    let mut projection_state = super::thread_history::projection_state(store, thread_id).await?;
     // Projection offsets refer to the decompressed JSONL stream. A compressed rollout is
     // immutable until an append materializes it back to plain JSONL, so a complete projection
     // must not be compared with the smaller `.zst` container length.
-    if rollout_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(".jsonl.zst"))
-        && let Some(projection_state) = projection_state.as_ref()
-        && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
-        && projection_state.next_byte_offset > metadata.len()
+    if let Ok(metadata) = tokio::fs::metadata(rollout_path).await
+        && projection_state
+            .as_ref()
+            .is_some_and(|state| state.next_byte_offset > metadata.len())
     {
-        return Ok(());
+        if is_compressed {
+            return Ok(());
+        }
+        super::thread_history::delete_thread(store, thread_id).await?;
+        projection_state = None;
     }
+    let start_offset = projection_state
+        .as_ref()
+        .map_or(0, |state| state.next_byte_offset);
     if projection_state.is_none()
         && !tokio::fs::try_exists(rollout_path)
             .await
