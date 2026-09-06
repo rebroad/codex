@@ -2088,17 +2088,6 @@ async fn catch_up_skips_invalid_complete_suffixes_and_projects_later_history() {
             Vec::new(),
         ),
         (
-            "duplicate ordinal",
-            format!(
-                "{}\n{}\n{}\n",
-                rollout_line(Some(1), turn_started("turn-1")),
-                rollout_line(Some(1), turn_started("skipped-turn")),
-                rollout_line(Some(2), turn_started("turn-2")),
-            ),
-            3,
-            vec!["turn-1", "turn-2"],
-        ),
-        (
             "forward ordinal gap",
             format!("{}\n", rollout_line(Some(2), turn_started("turn-1"))),
             3,
@@ -2146,6 +2135,59 @@ async fn catch_up_skips_invalid_complete_suffixes_and_projects_later_history() {
         .expect("read projected turns");
         assert_eq!(turn_ids, expected_turn_ids, "{name}");
     }
+}
+
+#[tokio::test]
+async fn catch_up_repairs_duplicate_ordinals_before_projection() {
+    let home = TempDir::new().expect("temp dir");
+    let store = projection_store(home.path()).await;
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+    store
+        .persist_thread(thread_id, PersistContext::Standard)
+        .await
+        .expect("persist session metadata");
+
+    let pool = codex_state::open_thread_history_db(&codex_state::SqliteConfig::new_for_testing(
+        home.path().abs(),
+    ))
+    .await
+    .expect("open thread history db");
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    append_suffix(
+        rollout_path.as_path(),
+        format!("{}\n", rollout_line(Some(1), turn_started("turn-1"))).as_str(),
+    );
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("project initial turn");
+    append_suffix(
+        rollout_path.as_path(),
+        format!(
+            "{}\n{}\n",
+            rollout_line(Some(1), turn_started("duplicate-turn")),
+            rollout_line(Some(2), turn_completed("turn-1")),
+        )
+        .as_str(),
+    );
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("repair and project duplicate ordinal");
+
+    let rollout_len = i64::try_from(fs::metadata(rollout_path).expect("rollout metadata").len())
+        .expect("rollout length");
+    assert_eq!(projection_state(&pool, thread_id).await, (rollout_len, 3));
+    let turn_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?")
+            .bind(thread_id.to_string())
+            .fetch_one(&pool)
+            .await
+            .expect("count projected turns");
+    assert_eq!(turn_count, 1);
 }
 
 #[tokio::test]
