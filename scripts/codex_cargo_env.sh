@@ -113,7 +113,7 @@ MOLD_BIN="$(command -v mold || true)"
 DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-1}"
 
 if [[ "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
-  export TMPDIR="${TMPDIR:-${PREFIX}/tmp}"
+  export TMPDIR="${PREFIX}/tmp"
   mkdir -p "${TMPDIR}"
   chmod 700 "${TMPDIR}"
 fi
