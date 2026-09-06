@@ -1152,7 +1152,11 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
     );
 
     let invalid_repo = TempDir::new().expect("invalid repo");
-    std::fs::create_dir(invalid_repo.path().join(".git")).expect("invalid git directory");
+    std::fs::create_dir_all(invalid_repo.path().join(".git/objects"))
+        .expect("invalid git objects directory");
+    std::fs::create_dir(invalid_repo.path().join(".git/refs")).expect("invalid git refs directory");
+    std::fs::write(invalid_repo.path().join(".git/config"), "[invalid\n")
+        .expect("invalid git config");
     std::fs::write(
         invalid_repo.path().join(".git/HEAD"),
         "ref: refs/heads/main\n",

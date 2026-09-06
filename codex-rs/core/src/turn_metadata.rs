@@ -512,6 +512,11 @@ impl TurnMetadataState {
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspaces);
             }
 
+            state
+                .enrichment_task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
             state.git_enrichment_complete.send_replace(/*value*/ true);
         }));
     }
