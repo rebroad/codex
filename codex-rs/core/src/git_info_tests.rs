@@ -54,9 +54,18 @@ impl MetadataOverrideFileSystem {
     }
 
     pub(crate) fn hiding_ancestor_git_markers(path: &Path) -> Self {
+        Self::with_hidden_git_markers(path, None)
+    }
+
+    pub(crate) fn hiding_git_markers_above(path: &Path, boundary: &Path) -> Self {
+        Self::with_hidden_git_markers(path, Some(boundary))
+    }
+
+    fn with_hidden_git_markers(path: &Path, boundary: Option<&Path>) -> Self {
         let hidden_paths = std::iter::successors(Some(path.to_path_buf()), |path| {
             path.parent().map(Path::to_path_buf)
         })
+        .filter(|path| boundary.is_none_or(|boundary| path != boundary))
         .map(|path| PathUri::from_abs_path(&path.join(".git").abs()))
         .collect();
         Self {

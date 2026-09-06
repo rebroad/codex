@@ -87,6 +87,32 @@ pub async fn detached_memory_responses_metadata(
     permission_profile: &PermissionProfile,
     sandbox: Option<&str>,
 ) -> CodexResponsesMetadata {
+    detached_memory_responses_metadata_with_root(
+        installation_id,
+        session_id,
+        thread_id,
+        window_id,
+        session_source,
+        cwd,
+        permission_profile,
+        sandbox,
+        get_git_repo_root,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn detached_memory_responses_metadata_with_root(
+    installation_id: String,
+    session_id: String,
+    thread_id: String,
+    window_id: String,
+    session_source: &SessionSource,
+    cwd: &AbsolutePathBuf,
+    permission_profile: &PermissionProfile,
+    sandbox: Option<&str>,
+    resolve_root: impl Fn(&Path) -> Option<PathBuf>,
+) -> CodexResponsesMetadata {
     CodexResponsesMetadata {
         request_kind: Some(CodexResponsesRequestKind::Memory),
         thread_source: Some(ThreadSource::MemoryConsolidation),
@@ -95,7 +121,7 @@ pub async fn detached_memory_responses_metadata(
         sandbox_mode: Some(
             permission_profile_policy_tag(permission_profile, cwd.as_path()).to_string(),
         ),
-        workspaces: memory_workspaces(cwd).await,
+        workspaces: memory_workspaces_with_root(cwd, resolve_root).await,
         ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     }
 }
@@ -522,8 +548,11 @@ impl TurnMetadataState {
     }
 }
 
-async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetadataWorkspace> {
-    let Some(repo_root) = get_git_repo_root(cwd) else {
+async fn memory_workspaces_with_root(
+    cwd: &AbsolutePathBuf,
+    resolve_root: impl Fn(&Path) -> Option<PathBuf>,
+) -> BTreeMap<String, TurnMetadataWorkspace> {
+    let Some(repo_root) = resolve_root(cwd) else {
         return BTreeMap::new();
     };
     let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(

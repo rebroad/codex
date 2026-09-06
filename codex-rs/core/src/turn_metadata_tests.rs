@@ -193,7 +193,7 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
 
-    let header = detached_memory_responses_metadata(
+    let header = detached_memory_responses_metadata_with_root(
         String::new(),
         String::new(),
         String::new(),
@@ -202,6 +202,7 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
         &cwd,
         &PermissionProfile::read_only(),
         /*sandbox*/ None,
+        |_path| None,
     )
     .await
     .turn_metadata_json()

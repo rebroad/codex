@@ -4,7 +4,7 @@ use super::RECENT_WORK_SECTION_TOKEN_BUDGET;
 use super::STARTUP_CONTEXT_HEADER;
 use super::WORKSPACE_SECTION_TOKEN_BUDGET;
 use super::build_current_thread_section;
-use super::build_recent_work_section;
+use super::build_recent_work_section_with_fs;
 use super::build_workspace_section_with_fs;
 use super::build_workspace_section_with_user_root;
 use super::format_section;
@@ -329,7 +329,8 @@ async fn recent_work_section_groups_threads_by_cwd() {
     let current_cwd = workspace_a;
     let repo = repo.abs();
 
-    let section = build_recent_work_section(&current_cwd.abs(), &recent_threads)
+    let fs = MetadataOverrideFileSystem::hiding_git_markers_above(&current_cwd, &repo);
+    let section = build_recent_work_section_with_fs(&fs, &current_cwd.abs(), &recent_threads)
         .await
         .expect("recent work section");
     assert!(section.contains(&format!("### Git repo: {}", repo.display())));
