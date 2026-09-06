@@ -157,7 +157,14 @@ impl SecretsManager {
 }
 
 pub fn environment_id_from_cwd(cwd: &Path) -> String {
-    if let Some(repo_root) = get_git_repo_root(cwd)
+    environment_id_from_cwd_with_repo_root(cwd, get_git_repo_root)
+}
+
+fn environment_id_from_cwd_with_repo_root(
+    cwd: &Path,
+    resolve_root: impl Fn(&Path) -> Option<PathBuf>,
+) -> String {
+    if let Some(repo_root) = resolve_root(cwd)
         && let Some(name) = repo_root.file_name()
     {
         let name = name.to_string_lossy().trim().to_string();
@@ -207,7 +214,7 @@ mod tests {
     #[test]
     fn environment_id_fallback_has_cwd_prefix() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let env_id = environment_id_from_cwd(dir.path());
+        let env_id = environment_id_from_cwd_with_repo_root(dir.path(), |_path| None);
         let canonical = dir
             .path()
             .canonicalize()
