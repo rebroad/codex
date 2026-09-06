@@ -28,6 +28,19 @@ pub(super) async fn materialize_to_sqlite(
     let start_offset = projection_state
         .as_ref()
         .map_or(0, |state| state.next_byte_offset);
+    // Projection offsets refer to the decompressed JSONL stream. A compressed rollout is
+    // immutable until an append materializes it back to plain JSONL, so a complete projection
+    // must not be compared with the smaller `.zst` container length.
+    if rollout_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zst"))
+        && let Some(projection_state) = projection_state.as_ref()
+        && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
+        && projection_state.next_byte_offset > metadata.len()
+    {
+        return Ok(());
+    }
     if projection_state.is_none()
         && !tokio::fs::try_exists(rollout_path)
             .await
