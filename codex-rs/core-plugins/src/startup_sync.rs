@@ -12,8 +12,12 @@ use codex_http_client::HttpClientFactory;
 use codex_login::default_client::default_headers;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
+#[cfg(unix)]
+use codex_utils_pty::process_group::kill_process_group;
 use http::Method;
 use serde::Deserialize;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use tempfile::TempDir;
 use tracing::warn;
 use zip::ZipArchive;
@@ -693,6 +697,8 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -723,6 +729,9 @@ fn run_git_command_with_timeout(
                 Err(err) => return Err(format!("failed to poll {context}: {err}")),
             }
 
+            #[cfg(unix)]
+            let _ = kill_process_group(child.id());
+            #[cfg(not(unix))]
             let _ = child.kill();
             let output = child
                 .wait_with_output()
