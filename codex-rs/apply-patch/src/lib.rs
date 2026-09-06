@@ -114,6 +114,18 @@ pub enum ApplyPatchError {
     ImplicitInvocation,
 }
 
+impl ApplyPatchError {
+    pub(crate) fn is_permission_denied(&self) -> bool {
+        match self {
+            Self::IoError(error) => {
+                error.source.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.source.to_string().contains("Operation not permitted")
+            }
+            _ => false,
+        }
+    }
+}
+
 impl From<std::io::Error> for ApplyPatchError {
     fn from(err: std::io::Error) -> Self {
         ApplyPatchError::IoError(IoError {
@@ -148,7 +160,7 @@ impl PartialEq for IoError {
 
 /// Both the raw PATCH argument to `apply_patch` as well as the PATCH argument
 /// parsed into hunks.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ApplyPatchArgs {
     pub patch: String,
     pub hunks: Vec<Hunk>,
@@ -177,6 +189,9 @@ pub enum MaybeApplyPatchVerified {
     /// `argv` corresponded to an `apply_patch` invocation, and these are the
     /// resulting proposed file changes.
     Body(ApplyPatchAction),
+    /// Verification was blocked by the active filesystem sandbox. The action contains only
+    /// paths and patch syntax; file contents are deliberately loaded after approval.
+    SandboxDenied(ApplyPatchAction),
     /// `argv` could not be parsed to determine whether it corresponds to an
     /// `apply_patch` invocation.
     ShellParseError(ExtractHeredocError),
