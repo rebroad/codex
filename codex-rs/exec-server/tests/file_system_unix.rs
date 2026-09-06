@@ -89,6 +89,7 @@ fn assert_sandbox_denied(error: &std::io::Error) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn assert_normalized_path_rejected(error: &std::io::Error) {
     match error.kind() {
         std::io::ErrorKind::NotFound => assert!(
