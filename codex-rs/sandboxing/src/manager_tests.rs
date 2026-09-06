@@ -52,6 +52,7 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
 }
 
 #[test]
+#[cfg(not(target_os = "android"))]
 fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
     let manager = SandboxManager::new();
     let expected =
