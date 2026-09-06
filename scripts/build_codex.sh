@@ -315,7 +315,7 @@ sync_sources() {
   [[ "${SYNCED}" == true ]] && return
   if [[ "${NO_SYNC:-0}" == 1 ]]; then SYNCED=true; return; fi
   if command -v cpto >/dev/null 2>&1; then
-    cpto "${SOURCE_REPO}" "${BUILD_REPO}"
+    cpto --preserve codex-rs/Cargo.lock "${SOURCE_REPO}" "${BUILD_REPO}"
   else
     echo "cpto not found; syncing source without deleting build artifacts" >&2
     tar --exclude='./.git' -cf - -C "${SOURCE_REPO}" . | tar -xf - -C "${BUILD_REPO}"
