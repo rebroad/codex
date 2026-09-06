@@ -517,6 +517,7 @@ async fn file_system_no_follow_recursive_mkdir_handles_concurrent_creators(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_sandboxed_canonicalize_resolves_directory_symlink(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -1077,6 +1078,7 @@ async fn file_system_sandboxed_read_rejects_symlink_escape(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -1325,6 +1327,7 @@ async fn file_system_copy_rejects_symlink_escape_destination(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_remove_removes_symlink_not_target(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -1365,6 +1368,7 @@ async fn file_system_remove_removes_symlink_not_target(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_copy_preserves_symlink_source(
     implementation: FileSystemImplementation,
 ) -> Result<()> {

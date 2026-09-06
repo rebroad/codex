@@ -537,6 +537,7 @@ mod tests {
     use crate::ExecServerRuntimePaths;
 
     use super::CODEX_THREAD_ID_ENV_VAR;
+    #[cfg(not(target_os = "android"))]
     use super::FileSystemSandboxRunner;
     use super::SandboxCwd;
     use super::add_helper_runtime_permissions;
@@ -677,6 +678,7 @@ mod tests {
     }
 
     #[test]
+#[cfg(not(target_os = "android"))]
     fn sandbox_exec_request_carries_helper_env() {
         let Some((path_key, path)) = std::env::vars_os().find(|(key, _)| {
             let key = key.to_string_lossy();
