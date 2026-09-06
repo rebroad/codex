@@ -20,6 +20,8 @@ use super::*;
 const BASE_URL: &str = "https://chatgpt.com/backend-api";
 const BY_REPO_URL: &str =
     "https://chatgpt.com/backend-api/wham/environments/by-repo/github/rebroad/codex";
+const OPENAI_BY_REPO_URL: &str =
+    "https://chatgpt.com/backend-api/wham/environments/by-repo/github/openai/codex";
 const GLOBAL_URL: &str = "https://chatgpt.com/backend-api/wham/environments";
 
 #[tokio::test]
@@ -161,7 +163,7 @@ async fn autodetect_requests_exact_repository_endpoint_and_decodes_selection() {
 #[tokio::test]
 async fn autodetect_sanitizes_credential_bearing_git_origins() {
     let http = FakeHttp::new(HashMap::from([(
-        BY_REPO_URL.to_string(),
+        OPENAI_BY_REPO_URL.to_string(),
         json_response(r#"[{"id":"env-repo","label":"Repository"}]"#),
     )]));
 
@@ -185,14 +187,14 @@ async fn autodetect_sanitizes_credential_bearing_git_origins() {
             label: Some("Repository".to_string()),
         }
     );
-    assert_eq!(http.requested_urls(), vec![BY_REPO_URL.to_string()]);
+    assert_eq!(http.requested_urls(), vec![OPENAI_BY_REPO_URL.to_string()]);
 }
 
 /// Removing an SCP remote username must not prevent repository-specific discovery.
 #[tokio::test]
 async fn autodetect_recognizes_sanitized_scp_git_origins() {
     let http = FakeHttp::new(HashMap::from([(
-        BY_REPO_URL.to_string(),
+        OPENAI_BY_REPO_URL.to_string(),
         json_response(r#"[{"id":"env-repo","label":"Repository"}]"#),
     )]));
 
@@ -216,13 +218,13 @@ async fn autodetect_recognizes_sanitized_scp_git_origins() {
             label: Some("Repository".to_string()),
         }
     );
-    assert_eq!(http.requested_urls(), vec![BY_REPO_URL.to_string()]);
+    assert_eq!(http.requested_urls(), vec![OPENAI_BY_REPO_URL.to_string()]);
 }
 
 #[tokio::test]
 async fn autodetect_falls_back_to_exact_global_endpoint_and_decodes_selection() {
     let http = FakeHttp::new(HashMap::from([
-        (BY_REPO_URL.to_string(), json_response("[]")),
+        (OPENAI_BY_REPO_URL.to_string(), json_response("[]")),
         (
             GLOBAL_URL.to_string(),
             json_response(r#"[{"id":"env-global","label":"Global"}]"#),
