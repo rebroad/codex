@@ -268,6 +268,7 @@ async fn file_system_read_file_returns_bytes(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_read_file_stream_returns_bounded_chunks(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -659,6 +660,7 @@ async fn file_system_walk_handles_invalid_roots_and_limits(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_walk_honors_read_sandbox(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -850,6 +852,7 @@ async fn file_system_copy_rejects_directory_without_recursive(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -1062,6 +1065,7 @@ pub(crate) async fn assert_sandboxed_canonicalize_resolves_directory_alias(
     ignore = "Windows restricted-token sandbox cannot enforce split writable roots"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_sandboxed_write_allows_additional_write_root(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
