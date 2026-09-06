@@ -419,7 +419,8 @@ impl ApplyPatchHandler {
         )
         .await
         {
-            codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            codex_apply_patch::MaybeApplyPatchVerified::Body(changes)
+            | codex_apply_patch::MaybeApplyPatchVerified::SandboxDenied(changes) => {
                 let tool_ctx = ToolCtx {
                     session,
                     step_context: Arc::clone(&step_context),
@@ -530,7 +531,8 @@ pub(crate) async fn intercept_apply_patch(
     )
     .await
     {
-        codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+        codex_apply_patch::MaybeApplyPatchVerified::Body(changes)
+        | codex_apply_patch::MaybeApplyPatchVerified::SandboxDenied(changes) => {
             let tool_ctx = ToolCtx {
                 session,
                 step_context,

@@ -21,7 +21,7 @@ if [[ ${REPO_DIR} != *.build && ${REPO_DIR} != *.make && ${ALLOW_SOURCE_BUILD} !
     echo "Missing required command: cpto" >&2
     exit 1
   fi
-  cpto --preserve codex-rs/Cargo.lock "${REPO_DIR}" "${build_repo_candidate}"
+  cpto "${REPO_DIR}" "${build_repo_candidate}"
   if [[ "${CARGO_TARGET_DIR:-}" == "${REPO_DIR}/"* ]]; then
     CARGO_TARGET_DIR="${build_repo_candidate}/${CARGO_TARGET_DIR#"${REPO_DIR}/"}"
     export CARGO_TARGET_DIR
