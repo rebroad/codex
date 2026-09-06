@@ -1022,6 +1022,42 @@ exit 1
 
 #[cfg(unix)]
 #[test]
+fn git_timeout_kills_descendant_processes() {
+    let tmp = tempdir().expect("tempdir");
+    let child_pid_path = tmp.path().join("child.pid");
+    let mut command = std::process::Command::new("/bin/sh");
+    command.args([
+        "-c",
+        &format!(
+            "sleep 30 & printf '%s\n' $! > '{}' ; wait",
+            child_pid_path.display()
+        ),
+    ]);
+
+    let err = run_git_command_with_timeout(
+        &mut command,
+        "hanging git test",
+        Duration::from_millis(100),
+    )
+    .expect_err("hanging Git command should time out");
+    assert!(err.contains("hanging git test timed out"));
+
+    let child_pid = std::fs::read_to_string(&child_pid_path)
+        .expect("hanging child should have written its PID")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("child PID should be numeric");
+    for _ in 0..50 {
+        if unsafe { libc::kill(child_pid, 0) } == -1 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("descendant process {child_pid} survived Git timeout");
+}
+
+#[cfg(unix)]
+#[test]
 fn sync_openai_plugins_repo_via_git_cleans_up_staged_dir_on_fetch_failure() {
     let tmp = tempdir().expect("tempdir");
     let bin_dir = tempfile::Builder::new()
