@@ -641,7 +641,7 @@ mod tests {
             writable.clone(),
             FileSystemAccessMode::Write,
         )]);
-        let readable = runtime_paths.codex_self_exe.clone();
+        let readable = super::sandbox_visible_runtime_path(&runtime_paths.codex_self_exe);
 
         add_helper_runtime_permissions(
             &mut policy,
@@ -878,9 +878,8 @@ mod tests {
             cwd.as_path(),
         );
 
-        assert!(
-            policy.can_read_path_with_cwd(runtime_paths.codex_self_exe.as_path(), cwd.as_path())
-        );
+        let helper = super::sandbox_visible_runtime_path(&runtime_paths.codex_self_exe);
+        assert!(policy.can_read_path_with_cwd(helper.as_path(), cwd.as_path()));
         assert!(!policy.can_read_path_with_cwd(parent.as_path(), cwd.as_path()));
         assert!(!policy.can_read_path_with_cwd(sibling.as_path(), cwd.as_path()));
     }
