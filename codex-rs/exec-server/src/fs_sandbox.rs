@@ -101,6 +101,7 @@ impl FileSystemSandboxRunner {
         let native_permissions =
             native_permissions.materialize_project_roots_with_workspace_roots(workspace_roots);
         let mut file_system_policy = native_permissions.file_system_sandbox_policy();
+        normalize_file_system_policy_root_aliases(&mut file_system_policy);
         let helper_read_roots = if sandbox.use_legacy_landlock {
             Vec::new()
         } else {
@@ -111,7 +112,6 @@ impl FileSystemSandboxRunner {
             &helper_read_roots,
             cwd.native.as_path(),
         );
-        normalize_file_system_policy_root_aliases(&mut file_system_policy);
         let network_policy = NetworkSandboxPolicy::Restricted;
         let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
             native_permissions.enforcement(),
@@ -128,7 +128,12 @@ impl FileSystemSandboxRunner {
         workspace_roots: &[AbsolutePathBuf],
         sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
-        let helper = &self.runtime_paths.codex_self_exe;
+        let helper = sandbox_visible_runtime_path(&self.runtime_paths.codex_self_exe);
+        let linux_sandbox_helper = self
+            .runtime_paths
+            .codex_linux_sandbox_exe
+            .as_ref()
+            .map(sandbox_visible_runtime_path);
         let sandbox_manager = SandboxManager::for_file_system_helpers();
         let sandbox = sandbox_manager.select_initial(
             permission_profile,
@@ -165,7 +170,7 @@ impl FileSystemSandboxRunner {
                     environment_id: None,
                     network: None,
                     sandbox_policy_cwd: &cwd.uri,
-                    codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
+                    codex_linux_sandbox_exe: linux_sandbox_helper.as_deref(),
                     use_legacy_landlock: sandbox_context.use_legacy_landlock,
                     windows_sandbox_level: sandbox_context.windows_sandbox_level,
                     windows_sandbox_private_desktop: sandbox_context
@@ -226,13 +231,39 @@ fn native_workspace_root(root: &PathUri) -> Result<AbsolutePathBuf, JSONRPCError
 }
 
 fn helper_read_roots(runtime_paths: &ExecServerRuntimePaths) -> Vec<AbsolutePathBuf> {
-    let mut roots = vec![runtime_paths.codex_self_exe.clone()];
+    let mut roots = vec![sandbox_visible_runtime_path(&runtime_paths.codex_self_exe)];
     if let Some(path) = &runtime_paths.codex_linux_sandbox_exe
-        && !roots.contains(path)
+        && !roots.contains(&sandbox_visible_runtime_path(path))
     {
-        roots.push(path.clone());
+        roots.push(sandbox_visible_runtime_path(path));
     }
     roots
+}
+
+fn sandbox_visible_runtime_path(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    let Ok(cwd) = std::env::current_dir() else {
+        return path.clone();
+    };
+    let Some(pwd) = std::env::var_os("PWD") else {
+        return path.clone();
+    };
+    let pwd = std::path::PathBuf::from(pwd);
+    if !pwd.is_absolute() {
+        return path.clone();
+    }
+    let Ok(canonical_cwd) = cwd.canonicalize() else {
+        return path.clone();
+    };
+    let Ok(canonical_pwd) = pwd.canonicalize() else {
+        return path.clone();
+    };
+    if canonical_cwd != canonical_pwd {
+        return path.clone();
+    }
+    let Ok(suffix) = path.as_path().strip_prefix(&canonical_cwd) else {
+        return path.clone();
+    };
+    AbsolutePathBuf::from_absolute_path(pwd.join(suffix)).unwrap_or_else(|_| path.clone())
 }
 
 fn add_helper_runtime_permissions(
@@ -678,7 +709,7 @@ mod tests {
     }
 
     #[test]
-#[cfg(not(target_os = "android"))]
+    #[cfg(not(target_os = "android"))]
     fn sandbox_exec_request_carries_helper_env() {
         let Some((path_key, path)) = std::env::vars_os().find(|(key, _)| {
             let key = key.to_string_lossy();
