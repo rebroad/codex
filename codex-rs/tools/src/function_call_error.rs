@@ -15,6 +15,11 @@ impl FunctionCallError {
     pub fn failure_kind(&self) -> Option<&'static str> {
         match self {
             Self::MalformedArguments(_) => Some("parse_arguments"),
+            Self::RespondToModel(message)
+                if message.starts_with("failed to parse function arguments:") =>
+            {
+                Some("parse_arguments")
+            }
             Self::RespondToModel(_) | Self::Fatal(_) => None,
         }
     }
