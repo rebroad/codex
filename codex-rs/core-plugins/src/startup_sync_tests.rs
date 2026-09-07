@@ -1034,12 +1034,9 @@ fn git_timeout_kills_descendant_processes() {
         ),
     ]);
 
-    let err = run_git_command_with_timeout(
-        &mut command,
-        "hanging git test",
-        Duration::from_millis(100),
-    )
-    .expect_err("hanging Git command should time out");
+    let err =
+        run_git_command_with_timeout(&mut command, "hanging git test", Duration::from_millis(100))
+            .expect_err("hanging Git command should time out");
     assert!(err.contains("hanging git test timed out"));
 
     let child_pid = std::fs::read_to_string(&child_pid_path)
