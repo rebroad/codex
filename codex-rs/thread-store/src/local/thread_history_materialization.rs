@@ -66,14 +66,44 @@ pub(super) async fn materialize_to_sqlite(
     let expected_ordinal = projection_state
         .as_ref()
         .map_or(initial_ordinal, |state| state.next_ordinal);
-    let (projections, next_offset) = read_projection_steps(
+    let read_result = read_projection_steps(
         rollout_path,
         start_offset,
         expected_ordinal,
         thread_id,
         subagent_history_start_ordinal,
     )
-    .await?;
+    .await;
+    let (projections, next_offset) = match read_result {
+        Ok(result) => result,
+        Err(err)
+            if !is_compressed
+                && matches!(&err, ThreadStoreError::Internal { message } if message.contains("expected ordinal")) =>
+        {
+            if super::rollout_duplicate_repair::repair_duplicate_ordinals(thread_id, rollout_path)
+                .await?
+                .is_none()
+            {
+                return Err(err);
+            }
+            projection_state = super::thread_history::projection_state(store, thread_id).await?;
+            let start_offset = projection_state
+                .as_ref()
+                .map_or(0, |state| state.next_byte_offset);
+            let expected_ordinal = projection_state
+                .as_ref()
+                .map_or(initial_ordinal, |state| state.next_ordinal);
+            read_projection_steps(
+                rollout_path,
+                start_offset,
+                expected_ordinal,
+                thread_id,
+                subagent_history_start_ordinal,
+            )
+            .await?
+        }
+        Err(err) => return Err(err),
+    };
     // Empty valid records can still consume bytes through blank complete lines.
     if projections.is_empty() && start_offset == next_offset {
         return Ok(());
