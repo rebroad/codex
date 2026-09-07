@@ -278,18 +278,20 @@ fn handle_runtime_response(
     let mut content_items = into_function_call_output_content_items(content_items);
     sanitize_image_detail_items(supports_original, &mut content_items);
     let success = error_text.is_none();
+    let failure_kind = error_text.as_ref().and_then(|error_text| {
+        error_text
+            .starts_with("failed to parse function arguments:")
+            .then_some("parse_arguments")
+    });
     if let Some(error_text) = error_text {
         content_items.push(FunctionCallOutputContentItem::InputText {
             text: format!("Script error:\n{error_text}"),
         });
     }
     content_items = truncate_code_mode_result(content_items, max_output_tokens);
-    CodeModeToolOutput::new(
-        FunctionToolOutput::from_content(content_items, Some(success)),
-        script_status,
-        wall_time,
-        host_duration,
-    )
+    let mut output = FunctionToolOutput::from_content(content_items, Some(success));
+    output.failure_kind = failure_kind;
+    CodeModeToolOutput::new(output, script_status, wall_time, host_duration)
 }
 
 fn format_script_status(response: &RuntimeResponse) -> String {
