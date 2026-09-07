@@ -219,6 +219,7 @@ impl ToolOutput for ToolSearchOutput {
 pub struct FunctionToolOutput {
     pub body: Vec<FunctionCallOutputContentItem>,
     pub success: Option<bool>,
+    pub failure_kind: Option<&'static str>,
     pub post_tool_use_response: Option<JsonValue>,
 }
 
@@ -227,6 +228,7 @@ impl FunctionToolOutput {
         Self {
             body: vec![FunctionCallOutputContentItem::InputText { text }],
             success,
+            failure_kind: None,
             post_tool_use_response: None,
         }
     }
@@ -238,6 +240,7 @@ impl FunctionToolOutput {
         Self {
             body: content,
             success,
+            failure_kind: None,
             post_tool_use_response: None,
         }
     }
@@ -254,6 +257,10 @@ impl ToolOutput for FunctionToolOutput {
 
     fn success_for_logging(&self) -> bool {
         self.success.unwrap_or(true)
+    }
+
+    fn failure_kind(&self) -> Option<&'static str> {
+        self.failure_kind
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {

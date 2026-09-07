@@ -30,6 +30,7 @@ use crate::metrics::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
+use crate::metrics::tags::TOOL_FAILURE_KIND_TAG;
 use crate::metrics::timer::Timer;
 use crate::provider::OtelProvider;
 use crate::sanitize_metric_tag_value;
@@ -1150,6 +1151,36 @@ impl SessionTelemetry {
         Fut: Future<Output = Result<T, E>>,
         E: std::fmt::Display,
     {
+        self.log_tool_result_with_failure_kind(
+            tool_name,
+            call_id,
+            arguments,
+            extra_tags,
+            extra_trace_fields,
+            |_| None,
+            f,
+            log_output,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_tool_result_with_failure_kind<T, F, Fut, E>(
+        &self,
+        tool_name: &ToolName,
+        call_id: &str,
+        arguments: &str,
+        extra_tags: &[(&str, &str)],
+        extra_trace_fields: &[(&str, &str)],
+        failure_kind: impl Fn(&Result<T, E>) -> Option<&'static str>,
+        f: F,
+        log_output: impl FnOnce(&T) -> (String, bool),
+    ) -> Result<T, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: std::fmt::Display,
+    {
         let start = Instant::now();
         let result = f().await;
         let duration = start.elapsed();
@@ -1159,7 +1190,7 @@ impl SessionTelemetry {
             Err(error) => (error.to_string(), false),
         };
 
-        self.tool_result_with_tags(
+        self.tool_result_with_failure_kind(
             tool_name,
             call_id,
             arguments,
@@ -1168,6 +1199,7 @@ impl SessionTelemetry {
             &output,
             extra_tags,
             extra_trace_fields,
+            failure_kind(&result),
         );
 
         result
@@ -1185,11 +1217,41 @@ impl SessionTelemetry {
         extra_tags: &[(&str, &str)],
         extra_trace_fields: &[(&str, &str)],
     ) {
+        self.tool_result_with_failure_kind(
+            tool_name,
+            call_id,
+            arguments,
+            duration,
+            success,
+            output,
+            extra_tags,
+            extra_trace_fields,
+            None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn tool_result_with_failure_kind(
+        &self,
+        tool_name: &ToolName,
+        call_id: &str,
+        arguments: &str,
+        duration: Duration,
+        success: bool,
+        output: &str,
+        extra_tags: &[(&str, &str)],
+        extra_trace_fields: &[(&str, &str)],
+        failure_kind: Option<&'static str>,
+    ) {
         let flat_tool_name = tool_name.to_string();
         let success_str = if success { "true" } else { "false" };
-        let mut tags = Vec::with_capacity(2 + extra_tags.len());
+        let mut tags =
+            Vec::with_capacity(2 + extra_tags.len() + usize::from(failure_kind.is_some()));
         tags.push(("tool", flat_tool_name.as_str()));
         tags.push(("success", success_str));
+        if let Some(failure_kind) = failure_kind {
+            tags.push((TOOL_FAILURE_KIND_TAG, failure_kind));
+        }
         tags.extend_from_slice(extra_tags);
         self.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
