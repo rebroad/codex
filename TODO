@@ -1,4 +1,5 @@
-Add Delete to delete queued prompts (esc already steers)
+Add Delete to delete queued prompts (esc already steers), or a Ctrl+letter (E?) to edit queued prompts (they can become concetenated if more than one)
+Allow regexp for writeable roots config (e.g. could be derived from the repo PATH, e.g. ~/src/codex adds /mnt/kingston/builds/rebroad/src/codex.build)
 Add a Ctrl+T type thing that gives the same output as we already have (non-transcription) but makes it scrollable (like transcription does).
 Urgent: Move .codex/rules into repos (otherwise wastes input tokens as all rules sent with every prompt!)
 Add ability to edit messages to send after next tool call, in the TUI.
