@@ -102,8 +102,6 @@ test *args:
 
 [windows]
 test *args:
-    @Set-Location "{{ cargo_working_directory }}"; $env:CARGO_TARGET_DIR = "{{ cargo_target_dir }}"; cargo build -p codex-cli -p codex-code-mode-host
-    @Set-Location "{{ cargo_working_directory }}"; $env:CARGO_TARGET_DIR = "{{ cargo_target_dir }}"; cargo build -p codex-rmcp-client --bin test_stdio_server
     @Set-Location "{{ cargo_working_directory }}"; $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
