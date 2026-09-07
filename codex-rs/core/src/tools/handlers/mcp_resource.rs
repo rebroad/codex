@@ -366,9 +366,8 @@ fn parse_arguments(raw_args: &str) -> Result<Option<Value>, FunctionCallError> {
     if raw_args.trim().is_empty() {
         Ok(None)
     } else {
-        let value: Value = serde_json::from_str(raw_args).map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
-        })?;
+        let value: Value = serde_json::from_str(raw_args)
+            .map_err(|err| FunctionCallError::MalformedArguments(err.to_string()))?;
         if value.is_null() {
             Ok(None)
         } else {
@@ -382,11 +381,10 @@ where
     T: DeserializeOwned,
 {
     match arguments {
-        Some(value) => serde_json::from_value(value).map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
-        }),
-        None => Err(FunctionCallError::RespondToModel(
-            "failed to parse function arguments: expected value".to_string(),
+        Some(value) => serde_json::from_value(value)
+            .map_err(|err| FunctionCallError::MalformedArguments(err.to_string())),
+        None => Err(FunctionCallError::MalformedArguments(
+            "expected value".to_string(),
         )),
     }
 }

@@ -17,6 +17,11 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
+    /// Returns a bounded classification for a failed tool result, when one is available.
+    fn failure_kind(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Whether this output contains external context that should disable memory generation when
     /// `memories.disable_on_external_context` is enabled.
     fn contains_external_context(&self) -> bool {
@@ -61,6 +66,10 @@ where
 
     fn success_for_logging(&self) -> bool {
         (**self).success_for_logging()
+    }
+
+    fn failure_kind(&self) -> Option<&'static str> {
+        (**self).failure_kind()
     }
 
     fn contains_external_context(&self) -> bool {
