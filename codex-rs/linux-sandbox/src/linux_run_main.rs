@@ -1693,9 +1693,16 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         allow_isolated_local_ipc,
         command,
     } = args;
-    let current_exe = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(err) => panic!("failed to resolve current executable path: {err}"),
+    let current_exe = current_process_argv0();
+    let current_exe = if Path::new(&current_exe).is_file() {
+        current_exe
+    } else if current_exe == CODEX_LINUX_SANDBOX_ARG0 {
+        current_exe
+    } else {
+        match std::env::current_exe() {
+            Ok(path) => path.to_string_lossy().into_owned(),
+            Err(err) => panic!("failed to resolve current executable path: {err}"),
+        }
     };
     let permission_profile_json = match serde_json::to_string(permission_profile) {
         Ok(json) => json,
@@ -1703,7 +1710,7 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
     };
 
     let mut inner = vec![
-        current_exe.to_string_lossy().to_string(),
+        current_exe,
         "--sandbox-policy-cwd".to_string(),
         sandbox_policy_cwd.to_string_lossy().to_string(),
     ];

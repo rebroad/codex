@@ -17,6 +17,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use codex_utils_path_uri::PathUri;
@@ -133,7 +134,8 @@ impl FileSystemSandboxRunner {
             .runtime_paths
             .codex_linux_sandbox_exe
             .as_ref()
-            .map(sandbox_visible_runtime_path);
+            .map(sandbox_visible_runtime_path)
+            .or_else(find_linux_sandbox_executable);
         let sandbox_manager = SandboxManager::for_file_system_helpers();
         let sandbox = sandbox_manager.select_initial(
             permission_profile,
@@ -179,6 +181,15 @@ impl FileSystemSandboxRunner {
             })
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))
     }
+}
+
+fn find_linux_sandbox_executable() -> Option<AbsolutePathBuf> {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join(CODEX_LINUX_SANDBOX_ARG0))
+        .find(|path| path.is_file())
+        .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
 }
 
 fn helper_env_with_debug_log_id(
@@ -241,6 +252,19 @@ fn helper_read_roots(runtime_paths: &ExecServerRuntimePaths) -> Vec<AbsolutePath
 }
 
 fn sandbox_visible_runtime_path(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        let target_dir = std::path::PathBuf::from(target_dir);
+        if target_dir.is_absolute()
+            && let (Ok(canonical_target_dir), Ok(canonical_path)) =
+                (target_dir.canonicalize(), path.as_path().canonicalize())
+            && path.as_path().starts_with(&canonical_target_dir)
+            && let Ok(suffix) = canonical_path.strip_prefix(&canonical_target_dir)
+            && let Ok(visible_path) = AbsolutePathBuf::from_absolute_path(target_dir.join(suffix))
+        {
+            return visible_path;
+        }
+    }
+
     let Ok(cwd) = std::env::current_dir() else {
         return path.clone();
     };
