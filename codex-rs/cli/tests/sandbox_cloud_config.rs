@@ -32,6 +32,7 @@ extends = ":workspace"
 enabled = true
 "#;
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandbox_fetches_and_enforces_cloud_managed_permission_profile() -> Result<()> {
     let server = MockServer::start().await;
