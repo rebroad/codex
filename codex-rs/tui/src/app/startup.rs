@@ -491,8 +491,9 @@ impl App {
                     &config,
                     &harness_overrides,
                 );
+                let resume_progress = app_server.resume_progress_handle();
                 let resumed = match startup_draft
-                    .run_until(
+                    .run_until_with_progress(
                         tui,
                         app_server.resume_thread(
                             &local_settings,
@@ -500,6 +501,7 @@ impl App {
                             target_session.thread_id,
                             model_settings,
                         ),
+                        resume_progress,
                     )
                     .await
                 {
@@ -555,8 +557,9 @@ impl App {
                         };
                         config.model_provider_id = provider_id;
                         config.model_provider = provider;
+                        let resume_progress = app_server.resume_progress_handle();
                         match startup_draft
-                            .run_until(
+                            .run_until_with_progress(
                                 tui,
                                 app_server.resume_thread(
                                     &local_settings,
@@ -564,6 +567,7 @@ impl App {
                                     target_session.thread_id,
                                     crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
                                 ),
+                                resume_progress,
                             )
                             .await
                         {

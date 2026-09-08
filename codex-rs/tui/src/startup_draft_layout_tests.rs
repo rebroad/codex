@@ -16,6 +16,7 @@ fn owned_startup_keeps_the_live_bottom_geometry() {
         &pump.header,
         &pump.bottom_pane,
         StartupDraftSessionAction::New,
+        0,
     );
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 16,
