@@ -1071,6 +1071,45 @@ REMOTE_INSTALL
   rm -f "${staging}"
 }
 
+install_remote_auxiliary_binary() {
+  local target="${1}" binary="${2}" install_dir="${3}" name="${4}"
+  local staging remote_tmp
+  [[ -x "${binary}" ]] || die "built auxiliary binary not found: ${binary}"
+  staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
+  if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" \
+    "printf '%s/.codex-${name}.tmp' \"\${TMPDIR:-/var/tmp}\"")"; then
+    echo "Unable to reach install target ${target}; deferring it for retry." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  mkdir -p "$(dirname "${staging}")"
+  install -m 0755 "${binary}" "${staging}"
+  if ! rsync --compress --info=progress2 --timeout="${CODEX_RSYNC_TIMEOUT:-60}" \
+    --partial --inplace --append-verify -e "ssh ${SSH_OPTS[*]}" \
+    -- "${staging}" "${target}:${remote_tmp}"; then
+    echo "Unable to upload auxiliary binary to install target ${target}; deferring it for retry." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_AUXILIARY_INSTALL'
+set -euo pipefail
+install_dir="$1"
+name="$2"
+remote_tmp="$3"
+mkdir -p "$install_dir"
+install -m 0755 "$remote_tmp" "$install_dir/$name"
+rm -f "$remote_tmp"
+printf 'Installed %s/%s\n' "$install_dir" "$name"
+REMOTE_AUXILIARY_INSTALL
+  then
+    echo "Unable to finish auxiliary binary installation on ${target}; deferring it for retry." >&2
+    ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
+    rm -f "${staging}"
+    return 75
+  fi
+  rm -f "${staging}"
+}
+
 cleanup_remote_install_artifacts() {
   local target="${1}" current="${2}" artifact
   for artifact in "${BUILD_REPO}/build/remote-install/${target}-codex-"*; do
@@ -1128,7 +1167,12 @@ install_target() {
   else
     binary="$(cargo_build "${MODE}" "${target_mode}")" || return $?
   fi
-  install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}" "${already_stamped}"
+  install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}" "${already_stamped}" || return $?
+  if [[ "${target_mode}" == armv7 ]]; then
+    install_remote_auxiliary_binary \
+      "${target}" "$(dirname "${binary}")/codex-code-mode-host" \
+      "${install_dir}" codex-code-mode-host || return $?
+  fi
 }
 
 build_android() {
