@@ -207,7 +207,7 @@ pub async fn verify_apply_patch_args_with_mode(
 ) -> MaybeApplyPatchVerified {
     match try_verify_apply_patch_args(args.clone(), cwd, update_file_mode, fs, sandbox).await {
         Ok(action) => MaybeApplyPatchVerified::Body(action),
-        Err(err) if sandbox.is_some() && err.is_permission_denied() => {
+        Err(err) if sandbox.is_some() && err.is_sandbox_verification_unavailable() => {
             match unverified_apply_patch_action(args, cwd, update_file_mode) {
                 Ok(action) => MaybeApplyPatchVerified::SandboxDenied(action),
                 Err(err) => MaybeApplyPatchVerified::CorrectnessError(err),
