@@ -15,22 +15,29 @@ PACKAGE_VERSION = re.compile(r'^version = "([^"]+)"$', re.MULTILINE)
 
 
 def workspace_versions(manifest: Path) -> dict[str, str]:
-    result = subprocess.run(
-        [
-            "cargo",
-            "metadata",
-            "--locked",
-            "--offline",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--manifest-path",
-            str(manifest),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "cargo",
+                "metadata",
+                "--locked",
+                "--offline",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+                str(manifest),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "").strip()
+        message = f"cargo metadata failed for {manifest}"
+        if detail:
+            message += f":\n{detail}"
+        raise RuntimeError(message) from error
     metadata = json.loads(result.stdout)
     workspace_members = set(metadata["workspace_members"])
     return {
