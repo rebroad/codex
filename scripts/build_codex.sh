@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Keep the logical path here: the designated build sibling may itself be a
+# symlink into a separate build filesystem, and source discovery depends on
+# its logical .build/.make name.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -L)"
 BUILD_TREE=""
-SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -L)"
 case "${SCRIPT_REPO##*/}" in
   *.build|*.make)
     BUILD_TREE="${SCRIPT_REPO}"
@@ -437,6 +440,14 @@ refresh_build_lockfile() {
   else
     echo "Keeping generated build-tree Cargo.lock." >&2
   fi
+  # Git stores workspace package versions as 0.0.0 to avoid version churn.
+  # Cargo resolves them to the actual workspace version in the build tree;
+  # materialize those versions after cpto syncs the Git lockfile, before any
+  # Cargo operation can observe the generated lockfile.
+  python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
+    --manifest "${BUILD_WORKSPACE}/Cargo.toml" \
+    --source-lock "${source_lock}" \
+    --build-lock "${build_lock}"
   if [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]]; then
     local lock_update_fingerprint_file="${BUILD_REPO}/build/.codex-armv7-lock-update-fingerprint"
     local lock_update_fingerprint stored_lock_update_fingerprint=""
