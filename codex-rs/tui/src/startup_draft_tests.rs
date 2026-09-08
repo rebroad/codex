@@ -14,6 +14,7 @@ use super::StartupDraftSessionAction;
 use super::handle_startup_draft_key;
 use super::startup_draft_bottom_pane;
 use super::startup_draft_renderable;
+use super::startup_draft_renderable_with_progress;
 use super::startup_session_header;
 use crate::app_event_sender::AppEventSender;
 use crate::legacy_core::config::ConfigBuilder;
@@ -39,7 +40,31 @@ where
         initial_screen: StartupDraftInitialScreen::Composer,
         session_action: StartupDraftSessionAction::New,
         pending_paste_newline: None,
+        progress: None,
     }
+}
+
+#[test]
+fn startup_draft_renders_resume_progress_percentage() {
+    let pump = startup_test_pump(std::iter::empty());
+    let renderable = startup_draft_renderable_with_progress(
+        &pump.header,
+        &pump.bottom_pane,
+        StartupDraftSessionAction::Resume,
+        42,
+    );
+    let area = Rect::new(0, 0, 80, renderable.desired_height(80));
+    let mut buffer = Buffer::empty(area);
+    renderable.render(area, &mut buffer);
+    let rendered = (0..area.height)
+        .map(|row| {
+            (0..area.width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Resuming session… 42%"));
 }
 
 #[test]

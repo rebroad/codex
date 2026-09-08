@@ -1,6 +1,7 @@
 //! Bounded app-server transcript loading for resume, fork, and transcript views.
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 
 use super::AppServerSession;
 use crate::history_cell::HistoryRenderMode;
@@ -238,6 +239,7 @@ impl AppServerSession {
         };
         let mut scanned_items = 0;
         let mut rendered_rows = 0;
+        let mut loaded_pages: usize = 0;
         loop {
             let remaining_rows = row_budget.map(|budget| budget.saturating_sub(rendered_rows));
             let remaining_items = item_budget.map(|budget| budget.saturating_sub(scanned_items));
@@ -265,6 +267,7 @@ impl AppServerSession {
                 break;
             }
             scanned_items = scanned_items.saturating_add(page.data.len());
+            loaded_pages = loaded_pages.saturating_add(1);
             let items = self
                 .merge_thread_item_page(thread_id, page, &mut state, &mut thread.turns)
                 .await?;
@@ -274,6 +277,20 @@ impl AppServerSession {
             } else {
                 rendered_rows = rendered_rows.saturating_add(items.len());
             }
+            let hydration_progress = item_budget.map_or_else(
+                || loaded_pages.min(5) * 10,
+                |budget| {
+                    scanned_items
+                        .min(budget)
+                        .saturating_mul(50)
+                        .checked_div(budget.max(1))
+                        .unwrap_or(0)
+                },
+            );
+            self.resume_progress.store(
+                40_u8.saturating_add(u8::try_from(hydration_progress).unwrap_or(50)),
+                Ordering::Relaxed,
+            );
             if state.next_item_cursor.is_none() {
                 break;
             }

@@ -21,6 +21,7 @@ use codex_features::Feature;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 impl AppServerSession {
@@ -78,6 +79,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         model_settings: ResumeModelSettings,
     ) -> Result<AppServerStartedThread> {
+        self.resume_progress.store(5, Ordering::Relaxed);
         let session_config = if matches!(
             model_settings,
             ResumeModelSettings::RestoreFromThread | ResumeModelSettings::PreserveExistingThread
@@ -228,6 +230,7 @@ impl AppServerSession {
                 ));
             }
         };
+        self.resume_progress.store(35, Ordering::Relaxed);
         self.hydrate_initial_thread_history(
             &mut response.thread,
             response.turns_backwards_cursor.clone(),
@@ -236,6 +239,7 @@ impl AppServerSession {
             HistoryHydrationScope::Initial,
         )
         .await?;
+        self.resume_progress.store(95, Ordering::Relaxed);
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -247,6 +251,7 @@ impl AppServerSession {
             self.remember_task_tool_thread(thread_id);
             started.task_tools_available = true;
         }
+        self.resume_progress.store(100, Ordering::Relaxed);
         Ok(started)
     }
 }
