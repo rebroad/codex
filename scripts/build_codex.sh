@@ -108,9 +108,20 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command
 
 refresh_build_provenance() {
   local current_commit current_status
-  current_commit="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
-  current_status="$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)"
+  current_commit="$(git -C "${BUILD_REPO}" rev-parse HEAD)"
+  current_status="$(git -C "${BUILD_REPO}" status --porcelain --untracked-files=all \
+    | sed -E '/(^|[[:space:]])Cargo\.lock$/d')"
   if [[ "${current_commit}" != "${BUILD_START_COMMIT}" || "${current_status}" != "${BUILD_START_STATUS}" ]]; then
+    BUILD_TIMESTAMP_SEPARATOR="+"
+  fi
+}
+
+capture_build_provenance() {
+  BUILD_START_COMMIT="$(git -C "${BUILD_REPO}" rev-parse HEAD)"
+  BUILD_START_STATUS="$(git -C "${BUILD_REPO}" status --porcelain --untracked-files=all \
+    | sed -E '/(^|[[:space:]])Cargo\.lock$/d')"
+  COMMIT_SHORT="${BUILD_START_COMMIT:0:10}"
+  if [[ -n "${BUILD_START_STATUS}" ]]; then
     BUILD_TIMESTAMP_SEPARATOR="+"
   fi
 }
@@ -1388,12 +1399,6 @@ else
 fi
 [[ "${PACKAGE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-+.0-9A-Za-z-]+$ ]] \
   || die "invalid npm package version: ${PACKAGE_VERSION}"
-BUILD_START_COMMIT="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
-BUILD_START_STATUS="$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)"
-COMMIT_SHORT="${BUILD_START_COMMIT:0:10}"
-if [[ -n "${BUILD_START_STATUS}" ]]; then
-  BUILD_TIMESTAMP_SEPARATOR="+"
-fi
 if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
@@ -1480,6 +1485,7 @@ elif [[ "${TARGET_MODE}" == native ]]; then
   configure_rusty_v8_artifacts native || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
 fi
 refresh_build_lockfile
+capture_build_provenance
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
   exit 0
