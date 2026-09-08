@@ -4,6 +4,9 @@ use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use std::task::Poll;
 use std::time::Duration;
 use std::time::Instant;
@@ -48,6 +51,10 @@ use crate::version::CODEX_CLI_VERSION;
 
 const STARTUP_EVENT_BATCH_SIZE: usize = 64;
 const STARTUP_PASTE_NEWLINE_TIMEOUT: Duration = Duration::from_millis(120);
+const STARTUP_PROGRESS_TICK: Duration = Duration::from_millis(250);
+
+/// Shared completion estimate for a startup operation that can report progress.
+pub(crate) type StartupProgress = Arc<AtomicU8>;
 
 /// Identifies the first interactive surface expected for the current invocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +101,7 @@ pub(crate) struct StartupDraftPump {
     initial_screen: StartupDraftInitialScreen,
     session_action: StartupDraftSessionAction,
     pending_paste_newline: Option<(Instant, String)>,
+    progress: Option<StartupProgress>,
 }
 
 impl StartupDraft {
@@ -129,6 +137,7 @@ impl StartupDraft {
                 initial_screen,
                 session_action,
                 pending_paste_newline: None,
+                progress: None,
             },
         };
         draft.pump.show_initial_screen(&mut draft.tui)?;
@@ -208,9 +217,16 @@ impl StartupDraftPump {
             self.draw(tui, tui.terminal.last_known_screen_size)?;
         }
         tokio::pin!(future);
+        let mut progress_tick = tokio::time::interval(STARTUP_PROGRESS_TICK);
+        progress_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 output = &mut future => return Ok(output),
+                _ = progress_tick.tick() => {
+                    if self.initial_screen == StartupDraftInitialScreen::Composer {
+                        self.draw(tui, tui.terminal.last_known_screen_size)?;
+                    }
+                }
                 event = self.events.next() => {
                     let Some(event) = event else {
                         return Err(io::Error::new(
@@ -222,6 +238,22 @@ impl StartupDraftPump {
                 }
             }
         }
+    }
+
+    /// Poll startup work while displaying a completion estimate supplied by the operation.
+    pub(crate) async fn run_until_with_progress<F>(
+        &mut self,
+        tui: &mut Tui,
+        future: F,
+        progress: StartupProgress,
+    ) -> io::Result<F::Output>
+    where
+        F: Future,
+    {
+        self.progress = Some(progress);
+        let result = self.run_until(tui, future).await;
+        self.progress = None;
+        result
     }
 
     /// Preserve pending draft edits while continuing to reject startup actions and submission.
@@ -379,8 +411,14 @@ impl StartupDraftPump {
                 .schedule_frame_in(ChatComposer::recommended_paste_flush_delay());
         }
         self.bottom_pane.pre_draw_tick();
-        let renderable =
-            startup_draft_renderable(&self.header, &self.bottom_pane, self.session_action);
+        let renderable = startup_draft_renderable_with_progress(
+            &self.header,
+            &self.bottom_pane,
+            self.session_action,
+            self.progress
+                .as_ref()
+                .map_or(0, |progress| progress.load(Ordering::Relaxed)),
+        );
         let desired_height = renderable.desired_height(screen_size.width);
         tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
             let area = frame.area();
@@ -468,10 +506,20 @@ fn startup_session_header(config: Option<&Config>) -> Box<dyn HistoryCell> {
     )
 }
 
+#[cfg(test)]
 fn startup_draft_renderable<'a>(
     header: &'a dyn Renderable,
     bottom_pane: &'a BottomPane,
     session_action: StartupDraftSessionAction,
+) -> RenderableItem<'a> {
+    startup_draft_renderable_with_progress(header, bottom_pane, session_action, 0)
+}
+
+fn startup_draft_renderable_with_progress<'a>(
+    header: &'a dyn Renderable,
+    bottom_pane: &'a BottomPane,
+    session_action: StartupDraftSessionAction,
+    progress: u8,
 ) -> RenderableItem<'a> {
     let mut renderable = FlexRenderable::new();
     renderable.push(/*flex*/ 1, RenderableItem::Borrowed(header));
@@ -481,6 +529,11 @@ fn startup_draft_renderable<'a>(
         StartupDraftSessionAction::Fork => Some("  Forking session…"),
     };
     if let Some(loading_message) = loading_message {
+        let loading_message = if progress == 0 {
+            loading_message.to_string()
+        } else {
+            format!("{loading_message} {progress}%")
+        };
         renderable.push(
             /*flex*/ 0,
             RenderableItem::Owned(Box::new(loading_message.dim())),
