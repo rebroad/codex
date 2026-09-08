@@ -124,9 +124,6 @@ capture_build_provenance() {
   BUILD_START_STATUS="$(git -C "${BUILD_REPO}" status --porcelain --untracked-files=all \
     | sed -E '/(^|[[:space:]])Cargo\.lock$/d')"
   COMMIT_SHORT="${BUILD_START_COMMIT:0:10}"
-  if [[ -n "${BUILD_START_STATUS}" ]]; then
-    BUILD_TIMESTAMP_SEPARATOR="+"
-  fi
 }
 
 set_termux_build_oom_score() {
@@ -1414,6 +1411,7 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
+capture_build_provenance
 if [[ -n "${INSTALL_TARGETS}" ]]; then
   require_cmd rsync
   IFS=',' read -r -a INSTALL_TARGET_LIST <<<"${INSTALL_TARGETS}"
@@ -1496,7 +1494,6 @@ elif [[ "${TARGET_MODE}" == native ]]; then
   configure_rusty_v8_artifacts native || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
 fi
 refresh_build_lockfile
-capture_build_provenance
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
   exit 0
