@@ -177,6 +177,7 @@ fn linux_sandbox_command(
     args.extend(command.iter().map(|entry| (*entry).to_string()));
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    cmd.kill_on_drop(true);
     cmd.args(args)
         .current_dir(cwd)
         .env_clear()
@@ -865,7 +866,6 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
             /*allow_network_for_proxy*/ true,
             env,
         );
-        command.kill_on_drop(true);
         commands.push(command);
     }
 
@@ -931,7 +931,6 @@ async fn cancelling_sandbox_closes_active_proxy_connection() {
             /*allow_network_for_proxy*/ true,
             env,
         );
-        command.kill_on_drop(true);
         let mut child = command.spawn().expect("launch sandbox");
         let (mut upstream, _) = tokio::time::timeout(OPERATION_TIMEOUT, async {
             loop {

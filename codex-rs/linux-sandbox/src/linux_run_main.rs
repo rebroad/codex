@@ -178,6 +178,12 @@ pub struct LandlockCommand {
 /// 2. Apply in-process restrictions (no_new_privs + seccomp).
 /// 3. `execvp` into the final command.
 pub fn run_main() -> ! {
+    // The sandbox helper is a supervisor for the command it launches. If its
+    // caller exits unexpectedly, let the kernel terminate this supervisor so
+    // it cannot outlive the Codex process and leave a command behind.
+    let parent_pid = unsafe { libc::getppid() };
+    terminate_with_parent(parent_pid);
+
     let LandlockCommand {
         sandbox_policy_cwd,
         command_cwd,
