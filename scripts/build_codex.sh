@@ -116,6 +116,18 @@ refresh_build_provenance() {
     | sed -E '/(^|[[:space:]])Cargo\.lock$/d')"
   if [[ "${current_commit}" != "${BUILD_START_COMMIT}" || "${current_status}" != "${BUILD_START_STATUS}" ]]; then
     BUILD_TIMESTAMP_SEPARATOR="+"
+    echo "Build checkout changed during the build; using '+' in the installed version." >&2
+    if [[ "${current_commit}" != "${BUILD_START_COMMIT}" ]]; then
+      printf '  commit: %s -> %s\n' "${BUILD_START_COMMIT}" "${current_commit}" >&2
+    fi
+    if [[ "${current_status}" != "${BUILD_START_STATUS}" ]]; then
+      echo '  tracked/untracked status delta (Cargo.lock excluded):' >&2
+      diff -u \
+        --label 'build status at start' \
+        --label 'build status at end' \
+        <(printf '%s\n' "${BUILD_START_STATUS}") \
+        <(printf '%s\n' "${current_status}") >&2 || true
+    fi
   fi
 }
 
@@ -1179,6 +1191,7 @@ install_target() {
       ;;
   esac
   refresh_build_lockfile
+  capture_build_provenance
   if [[ "${target_mode}" == android ]]; then
     build_android || return $?
     binary="${BUILD_REPO}/build/android-artifact/codex.bin"
@@ -1411,7 +1424,6 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
-capture_build_provenance
 if [[ -n "${INSTALL_TARGETS}" ]]; then
   require_cmd rsync
   IFS=',' read -r -a INSTALL_TARGET_LIST <<<"${INSTALL_TARGETS}"
@@ -1494,6 +1506,7 @@ elif [[ "${TARGET_MODE}" == native ]]; then
   configure_rusty_v8_artifacts native || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
 fi
 refresh_build_lockfile
+capture_build_provenance
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
   exit 0
