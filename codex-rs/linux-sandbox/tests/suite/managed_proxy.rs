@@ -853,7 +853,7 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
             }));
         }
 
-        let mut command = linux_sandbox_command(
+        let command = linux_sandbox_command(
             &[
                 test_executable,
                 "--exact",
