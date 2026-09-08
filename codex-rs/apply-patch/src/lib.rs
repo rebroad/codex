@@ -115,11 +115,13 @@ pub enum ApplyPatchError {
 }
 
 impl ApplyPatchError {
-    pub(crate) fn is_permission_denied(&self) -> bool {
+    pub(crate) fn is_sandbox_verification_unavailable(&self) -> bool {
         match self {
             Self::IoError(error) => {
+                let message = error.source.to_string();
                 error.source.kind() == std::io::ErrorKind::PermissionDenied
-                    || error.source.to_string().contains("Operation not permitted")
+                    || message.contains("Operation not permitted")
+                    || message.contains("filesystem sandbox cannot be enforced on this executor")
             }
             _ => false,
         }
@@ -902,6 +904,19 @@ mod tests {
     /// Helper to construct a patch with the given body.
     fn wrap_patch(body: &str) -> String {
         format!("*** Begin Patch\n{body}\n*** End Patch")
+    }
+
+    #[test]
+    fn recognizes_unavailable_filesystem_sandbox_as_deferred_verification() {
+        let error = ApplyPatchError::IoError(IoError {
+            context: "I/O error".to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "filesystem sandbox cannot be enforced on this executor",
+            ),
+        });
+
+        assert!(error.is_sandbox_verification_unavailable());
     }
 
     #[tokio::test]
