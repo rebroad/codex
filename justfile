@@ -13,6 +13,7 @@ build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
 cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
+sync_build_tree := source_repo / "scripts/sync_build_tree.sh"
 cargo_lock_setup := if os_family() == "windows" { "" } else { "mkdir -p \"" + build_repo + "/build\"; exec 9>\"" + build_repo + "/build/codex-cargo.lock\"; flock 9; " }
 cargo_setup := "export CODEX_CARGO_OPERATION=\"${CODEX_CARGO_OPERATION:-$0}\"; codex_cargo_env_output=\"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\" || exit $?; eval \"$codex_cargo_env_output\" || exit $?;"
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
@@ -98,7 +99,7 @@ install:
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
-    @cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test CODEX_DENY_WARNINGS=1 CARGO_INCREMENTAL=0; if test "$(rustc -vV | sed -n "s/^host: //p")" = aarch64-linux-android; then export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_CODEGEN_UNITS=1; fi; {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_DEV_CODEGEN_UNITS CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n "s/^host: //p")" != aarch64-linux-android; then NEXTEST_PROFILE=local cargo nextest run --locked --no-fail-fast "$@"; else echo "cargo-nextest is unavailable on Android; using cargo test" >&2; cargo test --locked "$@"; fi
+    @bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}" && cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test CODEX_DENY_WARNINGS=1 CARGO_INCREMENTAL=0; if test "$(rustc -vV | sed -n "s/^host: //p")" = aarch64-linux-android; then export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_CODEGEN_UNITS=1; fi; {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_DEV_CODEGEN_UNITS CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n "s/^host: //p")" != aarch64-linux-android; then NEXTEST_PROFILE=local cargo nextest run --locked --no-fail-fast "$@"; else echo "cargo-nextest is unavailable on Android; using cargo test" >&2; cargo test --locked "$@"; fi
 
 [windows]
 test *args:
