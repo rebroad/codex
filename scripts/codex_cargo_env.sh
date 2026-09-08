@@ -349,6 +349,9 @@ if [[ "${CODEX_ALLOW_CONCURRENT_BUILD:-false}" == true ]]; then
 elif command -v flock >/dev/null 2>&1; then
   printf 'TARGET_LOCK_FILE=%q\n' "${TARGET_LOCK_FILE}"
   printf 'exec 9>>%q\n' "${TARGET_LOCK_FILE}"
+  # Do not let compiler wrappers such as sccache inherit the workspace lock;
+  # their daemon can outlive this shell and strand the lock indefinitely.
+  printf '%s\n' 'python3 -c '\''import fcntl; fcntl.fcntl(9, fcntl.F_SETFD, fcntl.FD_CLOEXEC)'\'''
   printf '%s\n' 'if ! flock -n 9; then'
   printf '  echo %q >&2\n' "Waiting for Cargo target lock: ${TARGET_LOCK_FILE}"
   printf '  echo %q >&2\n' 'Cargo build processes currently registered:'
