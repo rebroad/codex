@@ -6,6 +6,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecServerRuntimePaths;
 #[cfg(unix)]
 use codex_exec_server::ExecutorFileSystem;
+#[cfg(not(target_os = "android"))]
 use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FileMetadata;
 #[cfg(unix)]
@@ -20,12 +21,17 @@ use codex_exec_server::WriteFileOptions;
 use codex_file_system::MAX_WALK_DEPTH;
 use codex_file_system::MAX_WALK_DIRECTORIES;
 use codex_file_system::MAX_WALK_ENTRIES;
+#[cfg(not(target_os = "android"))]
 use codex_protocol::models::AdditionalPermissionProfile;
+#[cfg(not(target_os = "android"))]
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+#[cfg(not(target_os = "android"))]
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
+#[cfg(not(target_os = "android"))]
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use codex_utils_path_uri::PathUri;
+#[cfg(not(target_os = "android"))]
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -37,6 +43,7 @@ use super::support::absolute_path;
 use super::support::create_file_system_context;
 #[cfg(windows)]
 use super::support::is_unsupported_restricted_token_host;
+#[cfg(not(target_os = "android"))]
 use super::support::read_only_sandbox;
 use super::support::workspace_write_sandbox;
 
@@ -268,6 +275,7 @@ async fn file_system_read_file_returns_bytes(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_read_file_stream_returns_bounded_chunks(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -659,6 +667,7 @@ async fn file_system_walk_handles_invalid_roots_and_limits(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_walk_honors_read_sandbox(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -850,6 +859,7 @@ async fn file_system_copy_rejects_directory_without_recursive(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
@@ -907,6 +917,9 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_file_operations_cannot_read_helper_siblings() -> Result<()> {
+    if crate::common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let helper_paths = crate::common::exec_server::test_codex_helper_paths()?;
     let root = TempDir::new()?;
     let runtime_dir = root.path().join("runtime");
@@ -1021,6 +1034,7 @@ pub(crate) async fn assert_canonicalize_resolves_directory_alias(
     Ok(())
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) async fn assert_sandboxed_canonicalize_resolves_directory_alias(
     implementation: FileSystemImplementation,
     create_directory_alias: impl FnOnce(&Path, &Path) -> Result<()>,
@@ -1059,6 +1073,7 @@ pub(crate) async fn assert_sandboxed_canonicalize_resolves_directory_alias(
     ignore = "Windows restricted-token sandbox cannot enforce split writable roots"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "android"))]
 async fn file_system_sandboxed_write_allows_additional_write_root(
     implementation: FileSystemImplementation,
 ) -> Result<()> {

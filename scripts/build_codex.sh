@@ -3,16 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_TREE=""
-SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 case "${SCRIPT_REPO##*/}" in
   *.build|*.make)
     BUILD_TREE="${SCRIPT_REPO}"
-    SOURCE_REPO="${SCRIPT_REPO%.*}"
+    SOURCE_REPO="$(cd -- "${SCRIPT_REPO%.*}" && pwd -P)"
     ;;
   *)
     SOURCE_REPO="${SCRIPT_REPO}"
     for candidate in "${SOURCE_REPO}.build" "${SOURCE_REPO}.make"; do
-      if [[ -d "${candidate}" ]]; then BUILD_TREE="${candidate}"; break; fi
+      if [[ -d "${candidate}" ]]; then
+        BUILD_TREE="$(cd -- "${candidate}" && pwd -P)"
+        break
+      fi
     done
     ;;
 esac
@@ -25,6 +28,8 @@ if [[ ! -d "${SOURCE_REPO}/codex-rs" ]]; then
   exit 1
 fi
 BUILD_REPO="${BUILD_TREE}"
+[[ "${BUILD_REPO}" != "${SOURCE_REPO}" ]] \
+  || { echo "build_codex.sh: build tree must be a sibling of the source checkout, not the source checkout itself" >&2; exit 1; }
 BUILD_WORKSPACE="${BUILD_REPO}/codex-rs"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
 VERSION=""
@@ -38,18 +43,23 @@ PACKAGE_NPM="false"
 PUBLISH_NPM="false"
 PREFLIGHT_ONLY="false"
 DRY_RUN="false"
+INSTALL_TARGETS=""
 SYNCED="false"
 RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
 LOCKFILE_REGENERATION_REQUIRED="false"
+ALLOW_CONCURRENT_BUILD="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
+BUILD_START_COMMIT=""
+BUILD_START_STATUS=""
 BUILD_TIMESTAMP_SEPARATOR="-"
 TOOLCHAIN=""
 CARGO_CMD=(cargo)
 RUSTC_CMD=(rustc)
 FORK_RELEASE_REPO="${CODEX_FORK_RELEASE_REPO:-rebroad/codex}"
 SUDO_AUTHENTICATED="false"
+SSH_OPTS=(-o ConnectTimeout="${CODEX_SSH_CONNECT_TIMEOUT:-10}" -o ServerAliveInterval=5 -o ServerAliveCountMax=2)
 
 # Rebuild jobs have their own purpose link so its timestamp identifies the
 # last rebuild invocation, even when Cargo reuses the same shared target.
@@ -62,7 +72,7 @@ source "${SOURCE_REPO}/scripts/openssl_artifacts.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/rebuild_codex.sh [options]
+Usage: scripts/build_codex.sh [options]
 
 Builds from the source checkout into the first existing sibling build tree
 (<repo>.build or <repo>.make), retaining Cargo's incremental cache.
@@ -86,14 +96,51 @@ Options:
   --dry-run                Use supported dry-run checks
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced sibling source tree
+  --allow-concurrent-build  Bypass the shared Cargo target lock and share the target directory
   --jobs N                 Set CARGO_BUILD_JOBS
-  --install-dir PATH       Install versioned binary and codex symlink there
+  --install TARGETS        Build and install to comma-separated SSH targets
   -h, --help               Show this help
 EOF
 }
 
-die() { echo "rebuild_codex.sh: $*" >&2; exit 1; }
+die() { echo "build_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
+
+refresh_build_provenance() {
+  local current_commit current_status
+  current_commit="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
+  current_status="$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)"
+  if [[ "${current_commit}" != "${BUILD_START_COMMIT}" || "${current_status}" != "${BUILD_START_STATUS}" ]]; then
+    BUILD_TIMESTAMP_SEPARATOR="+"
+  fi
+}
+
+set_termux_build_oom_score() {
+  [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == /data/data/com.termux/files/usr ]] || return 0
+
+  local oom_score_adj="${CODEX_BUILD_OOM_SCORE_ADJ:-500}"
+  [[ "${oom_score_adj}" =~ ^[0-9]+$ ]] || die "CODEX_BUILD_OOM_SCORE_ADJ must be a non-negative integer"
+  [[ -w /proc/self/oom_score_adj ]] || die "Termux build cannot set /proc/self/oom_score_adj"
+  printf '%s\n' "${oom_score_adj}" > /proc/self/oom_score_adj \
+    || die "failed to set /proc/self/oom_score_adj"
+  echo "Termux build OOM score preference: ${oom_score_adj}" >&2
+}
+
+set_termux_build_oom_score
+
+BUILD_PROCESS_REGISTRY="${BUILD_REPO}/build/codex-build-processes"
+BUILD_PROCESS_RECORD="${BUILD_PROCESS_REGISTRY}/$$"
+register_build_process() {
+  mkdir -p "${BUILD_PROCESS_REGISTRY}"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'command=%s\n' "$(ps -p $$ -o args= 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  } >"${BUILD_PROCESS_RECORD}"
+}
+cleanup_build_process() {
+  rm -f "${BUILD_PROCESS_RECORD}"
+}
 
 authenticate_sudo() {
   [[ "${SUDO_AUTHENTICATED}" == true ]] && return
@@ -289,6 +336,7 @@ sync_sources() {
 
 prepare_armv7_rusty_v8_source() {
   [[ "${RUSTY_V8_ARMV7_PREPARED}" == true ]] && return
+  local target_mode="${1:-armv7}"
   local source_repo="${RUSTY_V8_REPO_DIR:-${SOURCE_REPO%/codex}/rusty_v8}"
   local build_repo=""
   for candidate in "${source_repo}.build" "${source_repo}.make"; do
@@ -344,7 +392,9 @@ prepare_armv7_rusty_v8_source() {
     rm -rf "${rust_toolchain}"
   fi
   local manifest="${BUILD_WORKSPACE}/Cargo.toml"
-  set_v8_path_patch "${manifest}" "${build_repo}"
+  if [[ "${target_mode}" != armv7 ]]; then
+    set_v8_path_patch "${manifest}" "${build_repo}"
+  fi
   RUSTY_V8_ARMV7_PREPARED="true"
 }
 
@@ -716,7 +766,7 @@ cargo_build() {
     )
   fi
   if [[ "${target_mode}" == musl ]]; then
-    configure_musl_build_tools "${triple}"
+    configure_musl_build_tools "${triple}" >&2
     local musl_cc="${MUSL_CC:-}"
     if [[ -z "${musl_cc}" ]]; then
       musl_cc="$(command -v musl-gcc || true)"
@@ -824,13 +874,13 @@ PY
 }
 
 install_binary() {
-  local binary="${1}" version="${2}" short
+  local binary="${1}" version="${2}"
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
   mkdir -p "${INSTALL_BIN_DIR}"
-  short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-  local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  refresh_build_provenance
+  local name="codex-${version}-${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
-  if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
+  if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${COMMIT_SHORT}"; then
     rm -f "${INSTALL_BIN_DIR}/${name}"
     return 1
   fi
@@ -908,6 +958,223 @@ install_test_stdio_server() {
   echo "Installed ${INSTALL_BIN_DIR}/test_stdio_server"
 }
 
+remote_install_dir() {
+  case "${1}" in
+    native|musl|armv7|android) ssh "${SSH_OPTS[@]}" "${2}" 'printf "%s/.cargo/bin" "$HOME"' ;;
+    *) die "unsupported remote build mode: ${1}" ;;
+  esac
+}
+
+remote_glibc_version() {
+  ssh "${SSH_OPTS[@]}" "${1}" 'getconf GNU_LIBC_VERSION 2>/dev/null | sed -n "s/^glibc //p"'
+}
+
+glibc_version_is_older() {
+  local older_major older_minor newer_major newer_minor
+  [[ "${1}" =~ ^([0-9]+)\.([0-9]+)$ ]] || return 1
+  older_major="${BASH_REMATCH[1]}"
+  older_minor="${BASH_REMATCH[2]}"
+  [[ "${2}" =~ ^([0-9]+)\.([0-9]+)$ ]] || return 1
+  newer_major="${BASH_REMATCH[1]}"
+  newer_minor="${BASH_REMATCH[2]}"
+  ((10#${older_major} < 10#${newer_major} \
+    || (10#${older_major} == 10#${newer_major} \
+      && 10#${older_minor} < 10#${newer_minor})))
+}
+
+native_glibc_is_compatible() {
+  local target="${1}" local_glibc target_glibc
+  local_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | sed -n 's/^glibc //p')"
+  target_glibc="$(remote_glibc_version "${target}")" || return 0
+  [[ -n "${local_glibc}" && -n "${target_glibc}" ]] || return 0
+  ! glibc_version_is_older "${target_glibc}" "${local_glibc}"
+}
+
+remote_target_architecture() {
+  local target="${1}" architecture
+  architecture="$(ssh "${SSH_OPTS[@]}" "${target}" 'rustc -vV 2>/dev/null | sed -n "s/^host: //p"; uname -m' \
+    | head -n 1)" || {
+      echo "Unable to reach install target ${target}; deferring it for retry." >&2
+      return 75
+    }
+  [[ -n "${architecture}" ]] || {
+    echo "Could not determine architecture for install target ${target}; deferring it for retry." >&2
+    return 75
+  }
+  echo "${architecture}"
+}
+
+install_remote_binary() {
+  local target="${1}" binary="${2}" version="${3}" install_dir="${4}" already_stamped="${5:-false}"
+  local name transfer_key staging remote_tmp
+  [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
+  refresh_build_provenance
+  name="codex-${version}-${COMMIT_SHORT}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  transfer_key="${version}-${COMMIT_SHORT}"
+  staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
+  if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" \
+    "printf '%s/.codex-install-${transfer_key}.tmp' \"\${TMPDIR:-/var/tmp}\"")"; then
+    echo "Unable to reach install target ${target}; deferring it for retry." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  mkdir -p "$(dirname "${staging}")"
+  install -m 0755 "${binary}" "${staging}"
+  if [[ "${already_stamped}" != true ]]; then
+    patch_timestamp "${staging}" "${version}" "${COMMIT_SHORT}"
+  fi
+  if ! rsync --compress --info=progress2 --timeout="${CODEX_RSYNC_TIMEOUT:-60}" \
+    --partial --inplace --append-verify -e "ssh ${SSH_OPTS[*]}" \
+    -- "${staging}" "${target}:${remote_tmp}"; then
+    echo "Unable to upload to install target ${target}; deferring it for retry." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_INSTALL'
+set -euo pipefail
+install_dir="$1"
+name="$2"
+remote_tmp="$3"
+mkdir -p "$install_dir"
+remote_size="$(stat -c '%s' "$remote_tmp")"
+for candidate in "$install_dir"/codex-*; do
+  [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+  [[ "$(stat -c '%s' "$candidate")" == "$remote_size" ]] || continue
+  [[ "$candidate" -nt "$remote_tmp" ]] && continue
+  if command -v fuser >/dev/null 2>&1 && fuser -s "$candidate"; then
+    printf 'Keeping adjacent binary in use: %s\n' "$candidate" >&2
+    continue
+  fi
+  rm -f "$candidate"
+  printf 'Removed older adjacent binary %s\n' "$candidate"
+done
+install -m 0755 "$remote_tmp" "$install_dir/$name"
+ln -sfn "$name" "$install_dir/codex"
+case ":${PATH}:" in
+  *:"${install_dir}":*) ;;
+  *)
+    mkdir -p "$HOME/bin"
+    ln -sfn "$install_dir/codex" "$HOME/bin/codex"
+    printf 'Linked %s/bin/codex -> %s/codex\n' "$HOME" "$install_dir"
+    ;;
+esac
+rm -f "$remote_tmp"
+printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir"
+REMOTE_INSTALL
+  then
+    echo "Unable to finish installation on ${target}; deferring it for retry." >&2
+    ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
+    rm -f "${staging}"
+    return 75
+  fi
+  cleanup_remote_install_artifacts "${target}" "${staging}"
+  rm -f "${staging}"
+}
+
+install_remote_auxiliary_binary() {
+  local target="${1}" binary="${2}" install_dir="${3}" name="${4}"
+  local staging remote_tmp
+  [[ -x "${binary}" ]] || die "built auxiliary binary not found: ${binary}"
+  staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
+  if ! remote_tmp="$(ssh "${SSH_OPTS[@]}" "${target}" \
+    "printf '%s/.codex-${name}.tmp' \"\${TMPDIR:-/var/tmp}\"")"; then
+    echo "Unable to reach install target ${target}; deferring it for retry." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  mkdir -p "$(dirname "${staging}")"
+  install -m 0755 "${binary}" "${staging}"
+  if ! rsync --compress --info=progress2 --timeout="${CODEX_RSYNC_TIMEOUT:-60}" \
+    --partial --inplace --append-verify -e "ssh ${SSH_OPTS[*]}" \
+    -- "${staging}" "${target}:${remote_tmp}"; then
+    echo "Unable to upload auxiliary binary to install target ${target}; deferring it for retry." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_AUXILIARY_INSTALL'
+set -euo pipefail
+install_dir="$1"
+name="$2"
+remote_tmp="$3"
+mkdir -p "$install_dir"
+install -m 0755 "$remote_tmp" "$install_dir/$name"
+rm -f "$remote_tmp"
+printf 'Installed %s/%s\n' "$install_dir" "$name"
+REMOTE_AUXILIARY_INSTALL
+  then
+    echo "Unable to finish auxiliary binary installation on ${target}; deferring it for retry." >&2
+    ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
+    rm -f "${staging}"
+    return 75
+  fi
+  rm -f "${staging}"
+}
+
+cleanup_remote_install_artifacts() {
+  local target="${1}" current="${2}" artifact
+  for artifact in "${BUILD_REPO}/build/remote-install/${target}-codex-"*; do
+    [[ -f "${artifact}" && "${artifact}" != "${current}" ]] || continue
+    rm -f "${artifact}"
+    echo "Removed older remote-install artifact ${artifact}"
+  done
+}
+
+install_target() {
+  local target="${1}" architecture target_mode binary install_dir already_stamped=false
+  if ! architecture="$(remote_target_architecture "${target}")"; then
+    return 75
+  fi
+  case "${architecture}" in
+    armv7*|armv6*) target_mode=armv7 ;;
+    aarch64-linux-android) target_mode=android ;;
+    x86_64*)
+      [[ "$(native_target_host)" == x86_64-* ]] \
+        || die "install target ${target} has ${architecture}; local host is $(native_target_host)"
+      if native_glibc_is_compatible "${target}"; then
+        target_mode=native
+      else
+        echo "Target ${target} has older glibc; selecting the static musl build." >&2
+        target_mode=musl
+      fi
+      ;;
+    *) die "unsupported architecture ${architecture} for install target ${target}" ;;
+  esac
+  if ! install_dir="$(remote_install_dir "${target_mode}" "${target}")"; then
+    echo "Unable to determine install directory on ${target}; deferring it for retry." >&2
+    return 75
+  fi
+  echo "Installing to ${target} (${architecture}, ${target_mode})..." >&2
+  TARGET_MODE="${target_mode}"
+  case "${target_mode}" in
+    native)
+      [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] \
+        && die "native V8 source builds are disabled; use the upstream Rusty V8 artifact"
+      configure_rusty_v8_artifacts native \
+        || die "OpenAI Rusty V8 artifacts are unavailable for the native target"
+      ;;
+    armv7)
+      configure_rusty_v8_artifacts armv7 || prepare_armv7_rusty_v8_source armv7
+      ;;
+    android)
+      configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source android
+      ;;
+  esac
+  refresh_build_lockfile
+  if [[ "${target_mode}" == android ]]; then
+    build_android || return $?
+    binary="${BUILD_REPO}/build/android-artifact/codex.bin"
+    already_stamped=true
+  else
+    binary="$(cargo_build "${MODE}" "${target_mode}")" || return $?
+  fi
+  install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}" "${already_stamped}" || return $?
+  if [[ "${target_mode}" == armv7 ]]; then
+    install_remote_auxiliary_binary \
+      "${target}" "$(dirname "${binary}")/codex-code-mode-host" \
+      "${install_dir}" codex-code-mode-host || return $?
+  fi
+}
+
 build_android() {
   local ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
   local user_home="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}"
@@ -936,6 +1203,7 @@ build_android() {
   export PATH="${llvm}/bin:${PATH}"
   export ANDROID_NDK_HOME="${ndk}" LIBLZMA_NO_PKG_CONFIG=1 BZIP2_NO_PKG_CONFIG=1 BZIP2_STATIC=1
   export PKG_CONFIG_ALLOW_CROSS=1 CODEX_SKIP_VENDORED_BWRAP=1
+  export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-} -Clink-arg=${builtins}"
   export CC_aarch64_linux_android="${llvm}/bin/aarch64-linux-android29-clang"
   export CXX_aarch64_linux_android="${llvm}/bin/aarch64-linux-android29-clang++"
   export AR_aarch64_linux_android="${llvm}/bin/llvm-ar"
@@ -956,13 +1224,16 @@ build_android() {
     fi
   fi
   local binary
-  binary="$(cargo_build "${MODE}" android)"
+  binary="$(cargo_build "${MODE}" android)" || return $?
   local stage="${BUILD_REPO}/build/android-artifact"
   mkdir -p "${stage}"
   install -m 0755 "${binary}" "${stage}/codex.bin"
   install -m 0755 "$(dirname "${binary}")/codex-code-mode-host" "${stage}/codex-code-mode-host"
   install -m 0644 "${llvm}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "${stage}/libc++_shared.so"
-  "${llvm}/bin/llvm-strip" --strip-all "${stage}/codex.bin"
+  for staged_binary in "${stage}/codex.bin" "${stage}/codex-code-mode-host"; do
+    "${llvm}/bin/llvm-strip" --strip-all "${staged_binary}"
+  done
+  refresh_build_provenance
   patch_timestamp "${stage}/codex.bin" "${VERSION}" "${COMMIT_SHORT}"
   echo "Android artifacts staged in ${stage}"
 }
@@ -971,8 +1242,7 @@ run_preflight() {
   (
     cd "${SOURCE_REPO}"
     bash -n \
-      scripts/rebuild_codex.sh \
-      scripts/build.sh \
+      scripts/build_codex.sh \
       scripts/build_armv7.sh \
       scripts/resolve_rusty_v8_artifacts.sh \
       scripts/package_npm.sh \
@@ -1023,14 +1293,20 @@ while (($#)); do
     --skip-build) SKIP_BUILD=true; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
+    --allow-concurrent-build) ALLOW_CONCURRENT_BUILD=true; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
     --jobs=*) CARGO_BUILD_JOBS="${1#*=}"; shift ;;
-    --install-dir) INSTALL_BIN_DIR="${2:-}"; shift 2 ;;
-    --install-dir=*) INSTALL_BIN_DIR="${1#*=}"; shift ;;
+    --install) INSTALL_TARGETS="${2:-}"; shift 2 ;;
+    --install=*) INSTALL_TARGETS="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option ${1} (use --help)" ;;
   esac
 done
+
+export CODEX_ALLOW_CONCURRENT_BUILD="${ALLOW_CONCURRENT_BUILD}"
+export CODEX_BUILD_PID="$$"
+register_build_process
+trap cleanup_build_process EXIT
 
 read_toolchain
 native_target_host() {
@@ -1112,10 +1388,59 @@ else
 fi
 [[ "${PACKAGE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-+.0-9A-Za-z-]+$ ]] \
   || die "invalid npm package version: ${PACKAGE_VERSION}"
+BUILD_START_COMMIT="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
+BUILD_START_STATUS="$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)"
+COMMIT_SHORT="${BUILD_START_COMMIT:0:10}"
+if [[ -n "${BUILD_START_STATUS}" ]]; then
+  BUILD_TIMESTAMP_SEPARATOR="+"
+fi
 if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
+if [[ -n "${INSTALL_TARGETS}" ]]; then
+  require_cmd rsync
+  IFS=',' read -r -a INSTALL_TARGET_LIST <<<"${INSTALL_TARGETS}"
+  [[ "${#INSTALL_TARGET_LIST[@]}" -gt 0 ]] || die "install target list must not be empty"
+  for install_target_name in "${INSTALL_TARGET_LIST[@]}"; do
+    [[ -n "${install_target_name}" ]] || die "install target list contains an empty target"
+  done
+  FAILED_INSTALL_TARGETS=()
+  for install_target_name in "${INSTALL_TARGET_LIST[@]}"; do
+    if install_target "${install_target_name}"; then
+      :
+    else
+      status=$?
+      if [[ "${status}" -eq 75 ]]; then
+        FAILED_INSTALL_TARGETS+=("${install_target_name}")
+      else
+        exit "${status}"
+      fi
+    fi
+  done
+  if [[ "${#FAILED_INSTALL_TARGETS[@]}" -gt 0 ]]; then
+    echo "Retrying deferred target installation after the remaining builds..." >&2
+    RETRY_FAILED_INSTALL_TARGETS=()
+    for install_target_name in "${FAILED_INSTALL_TARGETS[@]}"; do
+      if install_target "${install_target_name}"; then
+        :
+      else
+        status=$?
+        if [[ "${status}" -eq 75 ]]; then
+          RETRY_FAILED_INSTALL_TARGETS+=("${install_target_name}")
+        else
+          exit "${status}"
+        fi
+      fi
+    done
+    if [[ "${#RETRY_FAILED_INSTALL_TARGETS[@]}" -gt 0 ]]; then
+      printf 'Install still unavailable for: %s\n' \
+        "$(IFS=,; echo "${RETRY_FAILED_INSTALL_TARGETS[*]}")" >&2
+      exit 75
+    fi
+  fi
+  exit 0
+fi
 if [[ "${PACKAGE_NPM}" == true ]]; then
   if [[ "${CODEX_BUILD_FROM_SOURCE:-false}" != true ]]; then
     download_latest_fork_npm_release
@@ -1142,13 +1467,13 @@ if [[ "${PACKAGE_NPM}" == true ]]; then
         : # build_armv7.sh owns ARMv7 toolchain and Rusty V8 setup.
         ;;
       android-arm64)
-        configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source
+        configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source android
         ;;
     esac
   done
 elif [[ "${TARGET_MODE}" == armv7 || "${TARGET_MODE}" == android ]]; then
   if [[ "${TARGET_MODE}" == android ]]; then
-    configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source
+    configure_rusty_v8_artifacts android || prepare_armv7_rusty_v8_source android
   fi
 elif [[ "${TARGET_MODE}" == native ]]; then
   [[ "${V8_FROM_SOURCE:-}" =~ ^(1|true|yes)$ ]] && die "native V8 source builds are disabled; use the upstream Rusty V8 artifact"
@@ -1158,11 +1483,6 @@ refresh_build_lockfile
 if [[ "${PREFLIGHT_ONLY:-false}" == true ]]; then
   run_preflight
   exit 0
-fi
-
-COMMIT_SHORT="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
-if [[ -n "$(git -C "${SOURCE_REPO}" status --porcelain --untracked-files=all)" ]]; then
-  BUILD_TIMESTAMP_SEPARATOR="+"
 fi
 
 if [[ "${PACKAGE_NPM}" == true ]]; then

@@ -242,9 +242,9 @@ async fn watchable_skill_root_paths_exclude_plugin_and_system_roots() {
 
 #[tokio::test]
 async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
-    let codex_home = tempfile::tempdir_in("/var/tmp").expect("tempdir");
-    let home_dir = tempfile::tempdir_in("/var/tmp").expect("home tempdir");
-    let cwd = tempfile::tempdir_in("/var/tmp").expect("tempdir");
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let home_dir = tempfile::tempdir().expect("home tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
     write_user_skill(&codex_home, "user", "user-skill", "from the host loader");
     let plugin_skill_path = write_plugin_skill(
         &codex_home,
@@ -289,9 +289,9 @@ async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
 async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root() {
     use std::os::unix::fs::symlink;
 
-    let codex_home = tempfile::tempdir_in("/var/tmp").expect("tempdir");
-    let home_dir = tempfile::tempdir_in("/var/tmp").expect("home tempdir");
-    let cwd = tempfile::tempdir_in("/var/tmp").expect("tempdir");
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let home_dir = tempfile::tempdir().expect("home tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
     let plugin_skill_path = write_plugin_skill(
         &codex_home,
         "test",

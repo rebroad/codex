@@ -791,8 +791,10 @@ fn web_link_labels_use_link_style_and_preserve_inline_formatting() {
 fn web_link_labels_keep_link_style_in_wrapped_prose_and_tables() {
     let links =
         "[plain](https://example.com) [`code`](https://example.com) [<b>](https://example.com)";
-    for markdown in [links.to_string(), format!("| Links |\n| --- |\n| {links} |")]
-    {
+    for markdown in [
+        links.to_string(),
+        format!("| Links |\n| --- |\n| {links} |"),
+    ] {
         for width in [32, 80] {
             let text = render_markdown_text_with_width(&markdown, Some(width));
             let labels = text

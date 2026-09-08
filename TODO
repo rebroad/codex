@@ -1,4 +1,9 @@
+Add Delete to delete queued prompts (esc already steers), or a Ctrl+letter (E?) to edit queued prompts (they can become concetenated if more than one)
+Keep the auto_review verdicts visible in the TUI (so the user can read decisions already made)
+Allow regexp for writeable roots config (e.g. could be derived from the repo PATH, e.g. ~/src/codex adds /mnt/kingston/builds/rebroad/src/codex.build)
+Add a Ctrl+T type thing that gives the same output as we already have (non-transcription) but makes it scrollable (like transcription does).
 Urgent: Move .codex/rules into repos (otherwise wastes input tokens as all rules sent with every prompt!)
+Add ability to edit messages to send after next tool call, in the TUI.
 Show new memories (Optional. When memory files are updated, show this to the user)
 Fix ~/.codex/memories read-only issue when the project is $HOME !
 A prompt of "." can be ignored but can unpause a session.
@@ -12,4 +17,5 @@ Add a progress report/bar for `codex resume` given how slow it can be!
 Add ability to clear/delete a queued steer in the TUI (delete key?)
 Make app-server daemon restart reliably replace the remote-control server and wait for the control socket so clients can reconnect.
 Verify session and turn lifecycle state across app-server replacement, including stale `Working` UI state and `turn/interrupt` returning `no active turn`.
-Improve build/test reuse: the focused Android TUI test currently recompiles the broad test-profile graph; avoid unconditional CLI/code-mode-host/RMCP prebuilds when they are unnecessary, keep `just test` and `rebuild_codex.sh` environments identical (including `RUSTUP_DISABLE_SELF_UPDATE`, explicit `PROTOC`, and inherited host-tool cleanup), and verify the zeroed compile metadata reuses rebuild artifacts. Rusty V8 and OpenSSL are already being reused successfully.
+Improve build/test reuse: the focused Android TUI test currently recompiles the broad test-profile graph; avoid unconditional CLI/code-mode-host/RMCP prebuilds when they are unnecessary, keep `just test` and `build_codex.sh` environments identical (including `RUSTUP_DISABLE_SELF_UPDATE`, explicit `PROTOC`, and inherited host-tool cleanup), and verify the zeroed compile metadata reuses rebuild artifacts. Rusty V8 and OpenSSL are already being reused successfully.
+Make model-visible escalation instructions clearly explain that `apply_patch` can request `require_escalated`, and verify this over remote-control on flip7.

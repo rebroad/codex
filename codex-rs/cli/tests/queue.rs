@@ -191,7 +191,7 @@ async fn run_remote_queue_command(response: QueueResponse) -> Result<(Output, Va
 #[cfg(unix)]
 #[tokio::test]
 async fn queue_rejects_local_daemon_that_does_not_support_queueing() -> Result<()> {
-    let codex_home = tempfile::tempdir_in("/tmp")?;
+    let codex_home = tempfile::tempdir()?;
     let socket_path = codex_app_server::app_server_control_socket_path(codex_home.path())?;
     std::fs::create_dir_all(
         socket_path
@@ -232,7 +232,7 @@ async fn queue_rejects_local_daemon_that_does_not_support_queueing() -> Result<(
 #[cfg(unix)]
 #[tokio::test]
 async fn queue_rejects_overrides_that_bypass_local_daemon() -> Result<()> {
-    let codex_home = tempfile::tempdir_in("/tmp")?;
+    let codex_home = tempfile::tempdir()?;
     let socket_path = codex_app_server::app_server_control_socket_path(codex_home.path())?;
     std::fs::create_dir_all(
         socket_path

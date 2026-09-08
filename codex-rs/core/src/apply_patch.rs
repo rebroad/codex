@@ -77,7 +77,11 @@ pub(crate) fn convert_apply_patch_to_protocol(
                 move_path,
                 new_content: _new_content,
             } => FileChange::Update {
-                unified_diff: unified_diff.clone(),
+                unified_diff: if unified_diff.is_empty() {
+                    action.patch.clone()
+                } else {
+                    unified_diff.clone()
+                },
                 move_path: move_path.as_ref().map(PathUri::to_path_buf),
             },
         };

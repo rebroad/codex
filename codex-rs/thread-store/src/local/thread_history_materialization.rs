@@ -24,7 +24,27 @@ pub(super) async fn materialize_to_sqlite(
     if store.state_db.is_none() {
         return Ok(());
     }
-    let projection_state = super::thread_history::projection_state(store, thread_id).await?;
+    let resolved_rollout_path = codex_rollout::existing_rollout_path(rollout_path).await;
+    let rollout_path = resolved_rollout_path.as_deref().unwrap_or(rollout_path);
+    let is_compressed = rollout_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zst"));
+    let mut projection_state = super::thread_history::projection_state(store, thread_id).await?;
+    // Projection offsets refer to the decompressed JSONL stream. A compressed rollout is
+    // immutable until an append materializes it back to plain JSONL, so a complete projection
+    // must not be compared with the smaller `.zst` container length.
+    if let Ok(metadata) = tokio::fs::metadata(rollout_path).await
+        && projection_state
+            .as_ref()
+            .is_some_and(|state| state.next_byte_offset > metadata.len())
+    {
+        if is_compressed {
+            return Ok(());
+        }
+        super::thread_history::delete_thread(store, thread_id).await?;
+        projection_state = None;
+    }
     let start_offset = projection_state
         .as_ref()
         .map_or(0, |state| state.next_byte_offset);
@@ -46,14 +66,44 @@ pub(super) async fn materialize_to_sqlite(
     let expected_ordinal = projection_state
         .as_ref()
         .map_or(initial_ordinal, |state| state.next_ordinal);
-    let (projections, next_offset) = read_projection_steps(
+    let read_result = read_projection_steps(
         rollout_path,
         start_offset,
         expected_ordinal,
         thread_id,
         subagent_history_start_ordinal,
     )
-    .await?;
+    .await;
+    let (projections, next_offset) = match read_result {
+        Ok(result) => result,
+        Err(err)
+            if !is_compressed
+                && matches!(&err, ThreadStoreError::Internal { message } if message.contains("expected ordinal")) =>
+        {
+            if super::rollout_duplicate_repair::repair_duplicate_ordinals(thread_id, rollout_path)
+                .await?
+                .is_none()
+            {
+                return Err(err);
+            }
+            projection_state = super::thread_history::projection_state(store, thread_id).await?;
+            let start_offset = projection_state
+                .as_ref()
+                .map_or(0, |state| state.next_byte_offset);
+            let expected_ordinal = projection_state
+                .as_ref()
+                .map_or(initial_ordinal, |state| state.next_ordinal);
+            read_projection_steps(
+                rollout_path,
+                start_offset,
+                expected_ordinal,
+                thread_id,
+                subagent_history_start_ordinal,
+            )
+            .await?
+        }
+        Err(err) => return Err(err),
+    };
     // Empty valid records can still consume bytes through blank complete lines.
     if projections.is_empty() && start_offset == next_offset {
         return Ok(());

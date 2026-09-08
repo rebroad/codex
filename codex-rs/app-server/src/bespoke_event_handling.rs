@@ -187,6 +187,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::TurnStarted(notification))
                 .await;
         }
+        EventMsg::TurnWaitStarted(payload) => {
+            thread_watch_manager
+                .note_wait_started(&conversation_id.to_string(), payload.yield_time_ms)
+                .await;
+        }
+        EventMsg::TurnWaitCompleted(_) => {
+            thread_watch_manager
+                .note_wait_completed(&conversation_id.to_string())
+                .await;
+        }
         EventMsg::TurnComplete(turn_complete_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;

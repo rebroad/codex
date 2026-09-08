@@ -344,17 +344,17 @@ async fn compact_command_activity_groups_replayed_successes_without_hiding_decli
     );
     let transcript = lines_to_single_string(&cells[0].transcript_lines(/*width*/ 80));
     let transcript = regex_lite::Regex::new(
-        r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)(?: • \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})?$",
+        r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)(?: • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2})?$",
     )
     .expect("valid completion timestamp regex")
     .replace_all(&transcript, " • <duration>");
     insta::assert_snapshot!(transcript, @r"$ printf first
 first
-✓ • 5ms
+✓ • <duration>
 
 $ printf second
 second
-✓ • 5ms
+✓ • <duration>
 ");
     assert!(
         lines_to_single_string(&cells[1].display_lines(/*width*/ 80))

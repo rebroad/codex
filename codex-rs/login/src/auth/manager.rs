@@ -1130,6 +1130,16 @@ pub fn save_auth(
     storage.save(auth)
 }
 
+/// Persist authentication credentials in an explicitly selected JSON file.
+pub fn save_auth_to_file(
+    codex_home: &Path,
+    auth_file: &Path,
+    auth: &AuthDotJson,
+) -> std::io::Result<()> {
+    FileAuthStorage::with_auth_file(codex_home.to_path_buf(), Some(auth_file.to_path_buf()))
+        .save(auth)
+}
+
 /// Load the raw stored auth payload without applying environment overrides.
 ///
 /// Returns `None` when no credentials are stored. Prefer `AuthManager` for

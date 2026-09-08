@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 CHECK_ONLY=false
 ANDROID_PHANTOM_PROCESS_MINIMUM=128
+ANDROID_PHANTOM_PROCESS_MONITOR_PROPERTY=persist.sys.fflag.override.settings_enable_monitor_phantom_procs
+ANDROID_PHANTOM_PROCESS_MONITOR_DISABLED=false
 
 usage() {
   cat <<'EOF'
@@ -129,6 +131,28 @@ configure_android_phantom_process_limit() {
   printf '  Android max phantom processes: %s (device %s)\n' "${effective}" "${serial}"
 }
 
+configure_android_child_process_restrictions() {
+  is_android_host || return
+
+  local serial current
+  require_command adb
+  serial="$(android_adb_serial)"
+  current="$(adb -s "${serial}" shell getprop "${ANDROID_PHANTOM_PROCESS_MONITOR_PROPERTY}" | tr -d '\r')"
+  if [[ "${current}" == "${ANDROID_PHANTOM_PROCESS_MONITOR_DISABLED}" ]]; then
+    printf '  Android child process restrictions: disabled (device %s)\n' "${serial}"
+    return
+  fi
+
+  [[ "${CHECK_ONLY}" == false ]] \
+    || die "Android child process restrictions are enabled; run setup without --check to disable them"
+  adb -s "${serial}" shell setprop "${ANDROID_PHANTOM_PROCESS_MONITOR_PROPERTY}" \
+    "${ANDROID_PHANTOM_PROCESS_MONITOR_DISABLED}"
+  current="$(adb -s "${serial}" shell getprop "${ANDROID_PHANTOM_PROCESS_MONITOR_PROPERTY}" | tr -d '\r')"
+  [[ "${current}" == "${ANDROID_PHANTOM_PROCESS_MONITOR_DISABLED}" ]] \
+    || die "failed to disable Android child process restrictions; setting is ${current}"
+  printf '  Android child process restrictions: disabled (device %s)\n' "${serial}"
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
@@ -147,6 +171,7 @@ export PATH="${CARGO_BIN_DIR}:${PATH}"
 
 install_system_tools
 configure_android_phantom_process_limit
+configure_android_child_process_restrictions
 
 if command -v rustup >/dev/null 2>&1; then
   if [[ "${CHECK_ONLY}" == true ]]; then

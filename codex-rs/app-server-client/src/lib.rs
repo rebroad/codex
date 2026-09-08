@@ -1924,11 +1924,12 @@ mod tests {
             .await
             .expect("client should reconnect")
             .expect("reconnect observer should complete");
-        assert!(
+        assert!(matches!(
             timeout(Duration::from_millis(100), client.next_event())
                 .await
-                .is_err()
-        );
+                .expect("reconnected event should arrive"),
+            Some(AppServerEvent::Reconnected)
+        ));
         client.shutdown().await.expect("shutdown should complete");
     }
 

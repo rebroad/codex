@@ -25,48 +25,59 @@ sibling build tree and never compiles in the source tree:
 
 ```bash
 # Native Linux release binary.
-scripts/build.sh linux
+scripts/build_codex.sh --release
 
 # ARM64 Android/Termux release binary and stripped staging directory.
 export ANDROID_NDK_HOME="$HOME/Android/Sdk/ndk/28.2.13676358"
-scripts/build.sh android
+scripts/build_codex.sh --release --target android
 ```
 
-For the complete repeatable workflow, use `scripts/rebuild_codex.sh`. It
+For the complete repeatable workflow, use `scripts/build_codex.sh`. It
 supports debug/release builds, the sibling-tree cache, Linux musl x64,
 Linux ARMv7, Android ARM64, timestamped installs in `~/.cargo/bin`, npm
 packaging, and opt-in npm/GitHub publishing:
 
 ```bash
-scripts/rebuild_codex.sh --release
-scripts/rebuild_codex.sh --release --package-local-npm
-scripts/rebuild_codex.sh --release --target armv7
-scripts/rebuild_codex.sh --release --target android --package-npm
-scripts/rebuild_codex.sh --release --target all --package-local-npm
+scripts/build_codex.sh --release
+scripts/build_codex.sh --release --package-local-npm
+scripts/build_codex.sh --release --target armv7
+scripts/build_codex.sh --release --target android --package-npm
+scripts/build_codex.sh --release --target all --package-local-npm
 # Full local assembly, audit, and npm publication.
-scripts/rebuild_codex.sh --release --publish-local-npm
+scripts/build_codex.sh --release --publish-local-npm
 # Start the GitHub build/release workflow; this does not compile locally.
-scripts/rebuild_codex.sh --release --start-github-release
+scripts/build_codex.sh --release --start-github-release
 ```
 
 ARMv7 requires an installed `arm-linux-gnueabihf-gcc` (or set
 `ARMV7_LINKER`). The musl and ARMv7 binaries are staged as platform variants
-of `@reb.ai/codex`. `rebuild_codex.sh` requests sudo only when it actually
+of `@reb.ai/codex`. `build_codex.sh` requests sudo only when it actually
 needs to install missing musl build tools; cached/reused artifact and Android
 runs do not prompt for sudo.
 
-For a Termux/Android operational install, use the existing user executable
-directory so both interactive shells and Termux:Boot resolve the same binary:
+To build and install sequentially to one or more SSH targets, pass their SSH
+aliases as a comma-separated list. The script identifies each target over SSH
+before selecting native, ARMv7, or Android compilation. Remote installs always
+place versioned binaries in `~/.cargo/bin` and add `~/bin/codex` as a fallback
+when Cargo's bin directory is not already on `PATH`:
 
 ```bash
-scripts/rebuild_codex.sh --release --install-dir "$HOME/bin"
+scripts/build_codex.sh --release --install target-a,target-b
+```
+
+For a Termux/Android operational install, the same `~/.cargo/bin` plus
+`~/bin/codex` layout is used so both interactive shells and Termux:Boot can
+resolve the binary:
+
+```bash
+scripts/build_codex.sh --release --install target-a
 install -Dm755 scripts/remote-control/codex-remote-start "$HOME/bin/codex-remote-start"
 install -Dm755 scripts/remote-control/codex-pairing-code "$HOME/bin/codex-pairing-code"
 install -Dm755 scripts/remote-control/codex-remote-healthcheck "$HOME/bin/codex-remote-healthcheck"
 codex-remote-healthcheck
 ```
 
-The rebuild script deliberately does not edit shell startup files. If a
+The build script deliberately does not edit shell startup files. If a
 service uses a different executable, set `CODEX_BIN` explicitly and verify the
 running daemon with the health check.
 
@@ -79,10 +90,12 @@ Outputs are:
 ../codex.build/build/android-artifact/libc++_shared.so
 ```
 
-If `cpto` is available in `PATH`, the build script uses
-`cpto --no-lngit --nogit` to preserve the build cache. It is optional; when it
-is absent, the script uses a tar-based source sync that leaves generated build
-artifacts in place. Build outputs are also listed in `.gitignore`.
+If `cpto` is available in `PATH`, the build script uses it to preserve the
+build cache. Git-worktree metadata is synchronized when possible; if the
+destination's `.git` metadata is unsuitable, `cpto` warns and continues with
+the file synchronization. It is optional; when absent, the script uses a
+tar-based source sync that leaves generated build artifacts in place. Build
+outputs are also listed in `.gitignore`.
 
 ## Native Termux build process limit
 
@@ -97,19 +110,21 @@ scripts/setup-dev-environment.sh
 scripts/setup-dev-environment.sh --check
 ```
 
-On Android, the setup script installs `android-tools` when needed and raises
-`activity_manager.max_phantom_processes` to 128 through the connected ADB
-device. Where Android supports per-flag overrides, the script makes this one
-value sticky so DeviceConfig server sync cannot restore the default of 32. It
-leaves an existing value higher than 128 unchanged. Set `ANDROID_SERIAL` when
-more than one device is connected. This is a persistent, device-wide
-resource-policy change; phantom-process monitoring and its excessive-CPU
-protection remain enabled.
+On Android, the setup script installs `android-tools` when needed, raises
+`activity_manager.max_phantom_processes` to 128, and disables Android's child
+process restrictions through the connected ADB device. Where Android supports
+per-flag overrides, the script makes the numeric limit sticky so DeviceConfig
+server sync cannot restore the default of 32. It leaves an existing value
+higher than 128 unchanged. Set `ANDROID_SERIAL` when more than one device is
+connected. These are persistent, device-wide resource-policy changes; the
+child-process setting disables both phantom-process count trimming and
+excessive-CPU enforcement for native processes started by Termux.
 
 Android 14 and newer also expose **Disable child process restrictions** in
-Developer options. That broader switch disables both the process-count and
-excessive-CPU restrictions, so the setup script prefers the narrower numeric
-limit needed for builds.
+Developer options. The setup script applies the equivalent
+`persist.sys.fflag.override.settings_enable_monitor_phantom_procs=false`
+property through ADB, so the developer-option state is reproducible for
+scripted Android builds.
 
 ## Exact Android build environment
 
@@ -186,7 +201,7 @@ Target selection is deliberately split from the host build matrix:
 For a complete nine-package candidate, use:
 
 ```bash
-scripts/rebuild_codex.sh --release --target all --package-local-npm
+scripts/build_codex.sh --release --target all --package-local-npm
 ```
 
 `--publish-local-npm` implies `--package-local-npm` and selects `all` by
@@ -222,7 +237,7 @@ codex-v0.148.0-alpha.5.9084226b62.202608082151
 # Create/push the source release tag, wait for CI to appear, and print its run
 # and job URLs plus the command to watch it. The script does not watch CI.
 # No local cargo compilation or npm packaging is performed by this command.
-scripts/rebuild_codex.sh --release --start-github-release
+scripts/build_codex.sh --release --start-github-release
 
 # Download and audit the exact completed GitHub candidate locally instead of
 # using the workflow's npm publish job.

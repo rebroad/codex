@@ -69,26 +69,23 @@ impl ChatWidget {
             ServerNotification::TurnCompleted(notification) => {
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
-            ServerNotification::RawResponseItemCompleted(notification) => {
-                if let codex_protocol::models::ResponseItem::FunctionCall {
-                    name,
-                    namespace,
-                    arguments,
-                    ..
-                } = notification.item
-                    && name == "wait"
-                    && namespace.is_none()
-                    && let Ok(arguments) = serde_json::from_str::<serde_json::Value>(&arguments)
-                {
-                    let yield_time_ms = arguments
-                        .get("yield_time_ms")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(10_000);
-                    self.bottom_pane.ensure_status_indicator();
-                    self.set_status_header(String::from("Waiting"));
-                    self.bottom_pane
-                        .set_status_waiting(Duration::from_millis(yield_time_ms));
+            ServerNotification::ThreadStatusChanged(notification) => {
+                if let Some(waiting_until_ms) = notification.waiting_until_ms {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_millis() as i64)
+                        .unwrap_or_default();
+                    let remaining_ms = waiting_until_ms.saturating_sub(now_ms) as u64;
+                    self.set_waiting_status(Some(Duration::from_millis(remaining_ms)));
+                } else if matches!(
+                    notification.status,
+                    codex_app_server_protocol::ThreadStatus::Active { .. }
+                ) {
+                    self.set_status_header(String::from("Working"));
                 }
+            }
+            ServerNotification::RawResponseItemCompleted(notification) => {
+                let _ = notification;
             }
             ServerNotification::ItemStarted(notification) => {
                 self.handle_item_started_notification(notification, replay_kind.is_some());
@@ -232,7 +229,6 @@ impl ChatWidget {
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
-            | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadReverted(_)
             | ServerNotification::ThreadQueueChanged(_)
             | ServerNotification::ThreadArchived(_)

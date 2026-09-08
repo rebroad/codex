@@ -110,7 +110,13 @@ fi
 LOCK_FILE="${BUILD_REPO}/codex-rs/Cargo.lock"
 RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
 MOLD_BIN="$(command -v mold || true)"
-DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-0}"
+DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-1}"
+
+if [[ "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  export TMPDIR="${PREFIX}/tmp"
+  mkdir -p "${TMPDIR}"
+  chmod 700 "${TMPDIR}"
+fi
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
@@ -134,7 +140,11 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
       -o "${ANDROID_TLS_ALIGNMENT_OBJECT}.tmp"
     mv "${ANDROID_TLS_ALIGNMENT_OBJECT}.tmp" "${ANDROID_TLS_ALIGNMENT_OBJECT}"
   fi
-  RUSTFLAGS_VALUE="-Clink-arg=${ANDROID_BUILTINS}"
+  # V8 references __clear_cache. Force extraction of that object from the
+  # builtins archive, but leave the rest of the archive selective because Rust
+  # supplies overlapping compiler-builtins symbols.
+  RUSTFLAGS_VALUE="-Clink-arg=-Wl,-u,__clear_cache"
+  RUSTFLAGS_VALUE+=" -Clink-arg=${ANDROID_BUILTINS}"
   RUSTFLAGS_VALUE+=" -Clink-arg=${ANDROID_TLS_ALIGNMENT_OBJECT}"
   RUSTFLAGS_VALUE+=" -Clink-arg=-Wl,-u,codex_android_tls_alignment"
 fi
@@ -169,6 +179,11 @@ if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-
     rm -f "${mold_probe_src}" "${mold_probe_bin}"
     RUSTFLAGS_VALUE+=" -Clink-arg=-fuse-ld=lld"
   fi
+elif [[ "${TARGET}" == aarch64-linux-android ]]; then
+  # Cross-builds also need the compiler-builtins archive for V8's
+  # __clear_cache reference; preserve the target-specific flags emitted by
+  # build_android and make the archive extraction independent of link order.
+  RUSTFLAGS_VALUE="-Clink-arg=-Wl,-u,__clear_cache ${RUSTFLAGS_VALUE}"
 fi
 
 if [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
@@ -212,7 +227,11 @@ record_artifact_operation() {
 import fcntl
 import json
 import os
+import pathlib
+import shutil
+import subprocess
 import sys
+import time
 
 ledger, lock_path = sys.argv[1:]
 record = {
@@ -228,7 +247,46 @@ record = {
     "fingerprint": os.environ["CODEX_ARTIFACT_FINGERPRINT"],
 }
 with open(lock_path, "a", encoding="utf-8") as lock:
-    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"Waiting for artifact operation ledger lock: {lock_path}", file=sys.stderr)
+        registry = pathlib.Path(os.path.dirname(lock_path)) / "codex-build-processes"
+        for record_path in sorted(registry.glob("*")):
+            try:
+                fields = dict(
+                    line.split("=", 1)
+                    for line in record_path.read_text(encoding="utf-8").splitlines()
+                    if "=" in line
+                )
+                pid = int(fields["pid"])
+                os.kill(pid, 0)
+            except (FileNotFoundError, KeyError, OSError, ValueError):
+                continue
+            print(
+                f"  pid={pid} started={fields.get('started', 'unknown')} "
+                f"command={fields.get('command', 'unknown')}",
+                file=sys.stderr,
+            )
+        holder_pids = []
+        if shutil.which("fuser"):
+            holder_pids = subprocess.run(
+                ["fuser", lock_path], capture_output=True, text=True, check=False
+            ).stdout.split()
+        if holder_pids:
+            subprocess.run(
+                ["ps", "-ww", "-o", "pid,ppid,etime,args", "-p", ",".join(holder_pids)],
+                stdout=sys.stderr,
+                check=False,
+            )
+        else:
+            print("No current ledger lock holder was reported.", file=sys.stderr)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(1)
     with open(ledger, "a", encoding="utf-8") as output:
         output.write(json.dumps(record, sort_keys=True) + "\n")
         output.flush()
@@ -256,15 +314,26 @@ elif [[ "${TARGET_MODE}" == native ]]; then
 fi
 
 TARGET_DIR="${TARGET_ROOT}"
+# The explicit override below intentionally permits concurrent writes to the
+# shared target directory. The build script still records the process in its
+# registry so later invocations can show all active and waiting builds.
 # Keep the shared Cargo lock outside the target directory so `cargo clean`
 # cannot unlink it, and inside the ignored build directory so source-to-build
 # synchronization cannot unlink it while another process still holds it.
-# The lock is emitted into the caller's shell below, so it remains held for
-# the whole Cargo invocation rather than only while this helper is running.
 TARGET_LOCK_FILE="${BUILD_REPO}/build/codex-cargo.lock"
 mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 
 mkdir -p "${TARGET_DIR}"
+
+if [[ -n "${SCCACHE_BIN}" ]]; then
+  export SCCACHE_DIR="${SCCACHE_DIR:-${HOME}/.cache/sccache}"
+  export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-20G}"
+  if ! "${SCCACHE_BIN}" --start-server >/dev/null 2>&1 \
+    && ! "${SCCACHE_BIN}" --show-stats >/dev/null 2>&1; then
+    echo "Unable to start the sccache server; refusing to run without the configured cache" >&2
+    exit 1
+  fi
+fi
 
 if [[ "${OUTPUT}" == target ]]; then
   printf '%s\n' "${TARGET_DIR}"
@@ -275,15 +344,77 @@ record_artifact_operation
 
 printf '%s\n' 'unset CC CXX AR RANLIB CFLAGS CXXFLAGS TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_ALL_STATIC PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS'
 printf 'export RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_TARGET_DIR=%q CODEX_BUILD_TIMESTAMP=0000000000-000000000000\n' "${TARGET_DIR}"
-if command -v flock >/dev/null 2>&1; then
-  printf 'exec 9>>%q\nflock -x 9\n' "${TARGET_LOCK_FILE}"
+if [[ "${CODEX_ALLOW_CONCURRENT_BUILD:-false}" == true ]]; then
+  printf 'echo %q >&2\n' "Concurrent build override enabled; sharing Cargo target directory ${TARGET_DIR}."
+elif command -v flock >/dev/null 2>&1; then
+  printf 'TARGET_LOCK_FILE=%q\n' "${TARGET_LOCK_FILE}"
+  printf 'exec 9>>%q\n' "${TARGET_LOCK_FILE}"
+  printf '%s\n' 'if ! flock -n 9; then'
+  printf '  echo %q >&2\n' "Waiting for Cargo target lock: ${TARGET_LOCK_FILE}"
+  printf '  echo %q >&2\n' 'Cargo build processes currently registered:'
+  printf '  registry=%q\n' "${BUILD_REPO}/build/codex-build-processes"
+  printf '  if [[ -d "${registry}" ]]; then\n'
+  printf '    for record in "${registry}"/*; do\n'
+  printf '      [[ -f "${record}" ]] || continue\n'
+  printf '      pid="$(sed -n '\''s/^pid=//p'\'' "${record}")"\n'
+  printf '      if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then\n'
+  printf '        command="$(sed -n '\''s/^command=//p'\'' "${record}")"\n'
+  printf '        started="$(sed -n '\''s/^started=//p'\'' "${record}")"\n'
+  printf '        printf '\''  pid=%%s started=%%s command=%%s\\n'\'' "${pid}" "${started}" "${command}" >&2\n'
+  printf '      else\n'
+  printf '        rm -f "${record}"\n'
+  printf '      fi\n'
+  printf '    done\n'
+  printf '  fi\n'
+  printf '  holder_pids="$(fuser "${TARGET_LOCK_FILE}" 2>/dev/null | awk -v self_pid="$$" '\''{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/ && $i != self_pid) { if (n++) printf ","; printf "%%s", $i } }'\'' || true)"\n'
+  printf '  if [[ -n "${holder_pids}" ]]; then\n'
+  printf '    echo %q >&2\n' 'Processes with the lock file open:'
+  printf '    ps --cols 120 -o pid,ppid,etime,args -p "${holder_pids}" >&2 || true\n'
+  printf '    if [[ "${CODEX_CLEAN_STALE_BUILD_LOCKS:-true}" == true ]]; then\n'
+  printf '      stale_pids=()\n'
+  printf '      for holder_pid in ${holder_pids//,/ }; do\n'
+  printf '        holder_ppid="$(ps -p "${holder_pid}" -o ppid= 2>/dev/null | tr -d '\''[:space:]'\'')"\n'
+  printf '        holder_args="$(ps -ww -p "${holder_pid}" -o args= 2>/dev/null || true)"\n'
+  printf '        if [[ "${holder_ppid}" == 1 && "${holder_args}" == *bwrap* \\\n'
+  printf '          && "${holder_args}" == *--die-with-parent* \\\n'
+  printf '          && "${holder_args}" == *--codex-run-as-fs-helper* ]]; then\n'
+  printf '          stale_pids+=("${holder_pid}")\n'
+  printf '        fi\n'
+  printf '      done\n'
+  printf '      if ((${#stale_pids[@]} > 0)); then\n'
+  printf '        echo %q >&2\n' 'Cleaning orphaned Codex sandbox lock holder(s):'
+  printf '        for stale_pid in "${stale_pids[@]}"; do\n'
+  printf '          ps --cols 120 -o pid,ppid,etime,args -p "${stale_pid}" >&2 || true\n'
+  printf '          kill -TERM "${stale_pid}" 2>/dev/null || true\n'
+  printf '          for cleanup_attempt in {1..10}; do\n'
+  printf '            kill -0 "${stale_pid}" 2>/dev/null || break\n'
+  printf '            sleep 0.2\n'
+  printf '          done\n'
+  printf '          if kill -0 "${stale_pid}" 2>/dev/null; then\n'
+  printf '            echo %q >&2\n' 'TERM did not release the orphaned holder; sending KILL.'
+  printf '            kill -KILL "${stale_pid}" 2>/dev/null || true\n'
+  printf '          fi\n'
+  printf '          for cleanup_attempt in {1..10}; do\n'
+  printf '            kill -0 "${stale_pid}" 2>/dev/null || break\n'
+  printf '            sleep 0.2\n'
+  printf '          done\n'
+  printf '        done\n'
+  printf '      fi\n'
+  printf '    fi\n'
+  printf '  else\n'
+  printf '    echo %q >&2\n' 'No current lock holder was reported; the lock may be transitioning or held by a process outside the current PID namespace.'
+  printf '  fi\n'
+  printf '  echo %q >&2\n' 'Waiting for the lock to be released...'
+  printf 'fi\nflock -x 9\n'
 else
   echo "warning: flock unavailable; Cargo target writes will not be serialized" >&2
 fi
 if [[ -n "${SCCACHE_BIN}" ]]; then
   printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
-    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR:-${HOME}/.cache/sccache}" \
-    "${SCCACHE_CACHE_SIZE:-20G}"
+    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
+fi
+if [[ -n "${TMPDIR:-}" && "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  printf 'export TMPDIR=%q\n' "${TMPDIR}"
 fi
 [[ -n "${CARGO_BUILD_JOBS:-}" ]] && printf 'export CARGO_BUILD_JOBS=%q\n' "${CARGO_BUILD_JOBS}"
 if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
@@ -293,8 +424,10 @@ if [[ -n "${RUSTY_V8_ARCHIVE}" ]]; then
   printf 'export RUSTY_V8_ARCHIVE=%q RUSTY_V8_SRC_BINDING_PATH=%q\n' "${RUSTY_V8_ARCHIVE}" "${RUSTY_V8_SRC_BINDING_PATH}"
 fi
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
-  printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
+  printf 'export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-${CODEX_CARGO_BUILD_JOBS:-1}} CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=%q CC_aarch64_linux_android=%q CXX_aarch64_linux_android=%q AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q PROTOC=%q\n' \
     "${ANDROID_CLANG}" "${ANDROID_CLANG}" "${ANDROID_CLANG}++" "${RUSTFLAGS_VALUE}" "$(command -v protoc)"
+elif [[ "${TARGET}" == aarch64-linux-android ]]; then
+  printf 'export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=%q\n' "${RUSTFLAGS_VALUE}"
 elif [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
   printf 'export RUSTFLAGS=\"${RUSTFLAGS:-} -D warnings\"\n'
 fi

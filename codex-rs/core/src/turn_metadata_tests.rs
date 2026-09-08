@@ -193,7 +193,7 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
 
-    let header = detached_memory_responses_metadata(
+    let header = detached_memory_responses_metadata_with_root(
         String::new(),
         String::new(),
         String::new(),
@@ -202,6 +202,7 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
         &cwd,
         &PermissionProfile::read_only(),
         /*sandbox*/ None,
+        |_path| None,
     )
     .await
     .turn_metadata_json()
@@ -1151,7 +1152,11 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
     );
 
     let invalid_repo = TempDir::new().expect("invalid repo");
-    std::fs::create_dir(invalid_repo.path().join(".git")).expect("invalid git directory");
+    std::fs::create_dir_all(invalid_repo.path().join(".git/objects"))
+        .expect("invalid git objects directory");
+    std::fs::create_dir(invalid_repo.path().join(".git/refs")).expect("invalid git refs directory");
+    std::fs::write(invalid_repo.path().join(".git/config"), "[invalid\n")
+        .expect("invalid git config");
     std::fs::write(
         invalid_repo.path().join(".git/HEAD"),
         "ref: refs/heads/main\n",

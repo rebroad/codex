@@ -4,10 +4,12 @@ use super::RECENT_WORK_SECTION_TOKEN_BUDGET;
 use super::STARTUP_CONTEXT_HEADER;
 use super::WORKSPACE_SECTION_TOKEN_BUDGET;
 use super::build_current_thread_section;
-use super::build_recent_work_section;
+use super::build_recent_work_section_with_fs;
+use super::build_workspace_section_with_fs;
 use super::build_workspace_section_with_user_root;
 use super::format_section;
 use super::format_startup_context_blob;
+use crate::git_info_tests::MetadataOverrideFileSystem;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_git_utils::GitSha;
@@ -247,8 +249,9 @@ fn fixed_section_budgets_apply_per_section_without_total_blob_truncation() {
 #[tokio::test]
 async fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
+    let fs = MetadataOverrideFileSystem::hiding_ancestor_git_markers(cwd.path());
     assert_eq!(
-        build_workspace_section_with_user_root(&cwd.path().abs(), /*user_root*/ None).await,
+        build_workspace_section_with_fs(&fs, &cwd.path().abs(), /*user_root*/ None).await,
         None
     );
 }
@@ -326,7 +329,8 @@ async fn recent_work_section_groups_threads_by_cwd() {
     let current_cwd = workspace_a;
     let repo = repo.abs();
 
-    let section = build_recent_work_section(&current_cwd.abs(), &recent_threads)
+    let fs = MetadataOverrideFileSystem::hiding_git_markers_above(&current_cwd, &repo);
+    let section = build_recent_work_section_with_fs(&fs, &current_cwd.abs(), &recent_threads)
         .await
         .expect("recent work section");
     assert!(section.contains(&format!("### Git repo: {}", repo.display())));

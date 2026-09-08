@@ -10,7 +10,7 @@ use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 #[cfg(windows)]
 use codex_protocol::config_types::WindowsSandboxLevel;
-#[cfg(any(unix, windows))]
+#[cfg(all(not(target_os = "android"), any(unix, windows)))]
 use codex_protocol::models::PermissionProfile;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
@@ -24,17 +24,18 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 use super::prepare_exec_request;
-#[cfg(unix)]
+#[cfg(all(not(target_os = "android"), unix))]
 use crate::CODEX_ARG0_EXEC_HELPER_ARG1;
 use crate::ExecParams;
-#[cfg(any(unix, windows))]
+#[cfg(all(not(target_os = "android"), any(unix, windows)))]
 use crate::ExecServerRuntimePaths;
-#[cfg(any(unix, windows))]
+#[cfg(all(not(target_os = "android"), any(unix, windows)))]
 use crate::FileSystemSandboxContext;
 use crate::ProcessId;
 
 #[cfg(unix)]
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn sandbox_request_wraps_native_argv_on_executor() {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")
@@ -109,6 +110,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
 
 #[cfg(unix)]
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn sandbox_request_routes_custom_arg0_to_inner_helper() {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")

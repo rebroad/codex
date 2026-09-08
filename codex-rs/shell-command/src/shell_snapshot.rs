@@ -28,7 +28,12 @@ pub fn snapshot_script(shell_type: ShellType) -> Option<String> {
 pub fn snapshot_state_and_environment_script(shell_type: ShellType) -> Option<String> {
     let script = snapshot_script(shell_type)?;
     let (state, _) = script.split_once(EXPORT_CAPTURE_MARKER)?;
-    Some(format!("{state}printf '\\0'\n/usr/bin/env -0\n"))
+    let env = if cfg!(target_os = "android") {
+        "/system/bin/env"
+    } else {
+        "/usr/bin/env"
+    };
+    Some(format!("{state}printf '\\0'\n{env} -0\n"))
 }
 
 fn excluded_exports_regex() -> String {

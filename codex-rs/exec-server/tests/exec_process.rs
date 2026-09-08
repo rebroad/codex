@@ -64,6 +64,15 @@ use common::current_test_binary_helper_paths;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
 
+fn test_bash_path() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        return "/data/data/com.termux/files/usr/bin/bash";
+    }
+    #[cfg(not(target_os = "android"))]
+    "/bin/bash"
+}
+
 struct ProcessContext {
     backend: Arc<dyn ExecBackend>,
     _server: Option<ExecServerHarness>,
@@ -133,6 +142,10 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     automatic_startup: bool,
     shell_name: &str,
 ) -> Result<()> {
+    if cfg!(target_os = "android") && use_sandbox {
+        eprintln!("skipping filesystem sandbox variant: Android has no filesystem sandbox backend");
+        return Ok(());
+    }
     if use_sandbox
         && let Some(warning) =
             codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only())
@@ -144,8 +157,8 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
     let (shell_path, profile_name) = match shell_name {
-        "bash" if automatic_startup => ("/bin/bash", ".bash-env"),
-        "bash" => ("/bin/bash", ".bashrc"),
+        "bash" if automatic_startup => (test_bash_path(), ".bash-env"),
+        "bash" => (test_bash_path(), ".bashrc"),
         "sh" => ("/bin/sh", ".snapshot-env"),
         "zsh" if automatic_startup => ("/bin/zsh", ".zshenv"),
         "zsh" => ("/bin/zsh", ".zshrc"),
@@ -305,7 +318,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             .start(ExecParams {
                 process_id: ProcessId::from(format!("managed-snapshot-{attempt}")),
                 argv: vec![
-                    "/bin/bash".to_string(),
+                    test_bash_path().to_string(),
                     "-lc".to_string(),
                     "profile_helper; printf '|%s|%s|%s' \"$PROFILE_ALLOWED\" \"$CODEX_NETWORK_PROXY_ACTIVE\" \"$HTTP_PROXY\"".to_string(),
                 ],
@@ -315,7 +328,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                     scope_id: "managed-attachment".to_string(),
                     shell: ShellInfo {
                         name: "bash".to_string(),
-                        path: "/bin/bash".to_string(),
+                        path: test_bash_path().to_string(),
                     },
                 }),
                 env: HashMap::new(),
@@ -367,6 +380,9 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
     shell_name: &str,
     failures_before_repair: usize,
 ) -> Result<()> {
+    if use_remote && common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if use_remote
         && let Some(warning) =
             codex_sandboxing::system_bwrap_warning(&PermissionProfile::workspace_write())
@@ -378,7 +394,7 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
     let (shell_path, profile_name) = match shell_name {
-        "bash" => ("/bin/bash", ".bashrc"),
+        "bash" => (test_bash_path(), ".bashrc"),
         "zsh" => ("/bin/zsh", ".zshrc"),
         name => anyhow::bail!("unsupported test shell {name}"),
     };
@@ -471,6 +487,9 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_sandboxed_process_preserves_custom_arg0() -> Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
         eprintln!("skipping bwrap test: {warning}");
         return Ok(());
@@ -707,6 +726,9 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_process_preserves_empty_workspace_roots() -> Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only()) {
         eprintln!("skipping bwrap test: {warning}");
         return Ok(());
@@ -1017,11 +1039,21 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
         .backend
         .start(ExecParams {
             process_id: process_id.clone().into(),
-            argv: vec![
-                helper_binary.to_string_lossy().into_owned(),
-                DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
-                release_path.to_string_lossy().into_owned(),
-            ],
+            argv: if cfg!(target_os = "android") {
+                vec![
+                    "/system/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "(while [ ! -e \"$1\" ]; do sleep 0.05; done; printf 'late output after exit\\n') & exit 0".to_string(),
+                    "sh".to_string(),
+                    release_path.to_string_lossy().into_owned(),
+                ]
+            } else {
+                vec![
+                    helper_binary.to_string_lossy().into_owned(),
+                    DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
+                    release_path.to_string_lossy().into_owned(),
+                ]
+            },
             cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             shell_snapshot: None,
             env_policy: /*env_policy*/ None,

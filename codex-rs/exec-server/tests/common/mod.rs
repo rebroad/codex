@@ -27,6 +27,16 @@ pub(crate) const SYSTEM_PROXY_REQUEST_URL_ENV: &str =
     "CODEX_EXEC_SERVER_TEST_SYSTEM_PROXY_REQUEST_URL";
 pub(crate) const SYSTEM_PROXY_URL_ENV: &str = "CODEX_EXEC_SERVER_TEST_SYSTEM_PROXY_URL";
 
+#[allow(dead_code)]
+pub(crate) fn skip_if_android_filesystem_sandbox_unavailable() -> bool {
+    if cfg!(target_os = "android") {
+        eprintln!("skipping filesystem-sandbox test: Android has no filesystem sandbox backend");
+        true
+    } else {
+        false
+    }
+}
+
 const CODEX_WINDOWS_SANDBOX_ARG1: &str = "--run-as-windows-sandbox";
 const DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG: &str = "--codex-test-delayed-output-after-exit-child";
 
@@ -54,11 +64,23 @@ pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
 
 pub(crate) fn current_test_binary_helper_paths() -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
     let current_exe = env::current_exe()?;
-    let codex_linux_sandbox_exe = if cfg!(target_os = "linux") {
-        TEST_BINARY_DISPATCH_GUARD
-            .as_ref()
-            .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
-            .or_else(|| Some(current_exe.clone()))
+    let codex_linux_sandbox_exe = if cfg!(any(target_os = "linux", target_os = "android")) {
+        let guard_helper = || {
+            TEST_BINARY_DISPATCH_GUARD
+                .as_ref()
+                .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
+        };
+        let target_helper =
+            || target_debug_directory(&current_exe).map(|dir| dir.join("codex-linux-sandbox"));
+        if cfg!(target_os = "android") {
+            target_helper()
+                .filter(|path| path.is_file())
+                .or_else(guard_helper)
+        } else {
+            guard_helper().or_else(target_helper)
+        }
+        .filter(|path| path.is_file())
+        .or_else(|| Some(current_exe.clone()))
     } else {
         None
     };
@@ -242,16 +264,36 @@ fn linux_sandbox_exe(
     guard: Option<&TestBinaryDispatchGuard>,
     current_exe: &std::path::Path,
 ) -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        guard
-            .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
-            .or_else(|| Some(current_exe.to_path_buf()))
+        let target_helper =
+            || target_debug_directory(current_exe).map(|dir| dir.join("codex-linux-sandbox"));
+        if cfg!(target_os = "android") {
+            target_helper()
+                .filter(|path| path.is_file())
+                .or_else(|| guard.and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone()))
+        } else {
+            guard
+                .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
+                .or_else(target_helper)
+        }
+        .filter(|path| path.is_file())
+        .or_else(|| Some(current_exe.to_path_buf()))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         let _ = guard;
         let _ = current_exe;
         None
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn target_debug_directory(current_exe: &std::path::Path) -> Option<&std::path::Path> {
+    let parent = current_exe.parent()?;
+    if parent.file_name().and_then(|name| name.to_str()) == Some("deps") {
+        parent.parent()
+    } else {
+        Some(parent)
     }
 }

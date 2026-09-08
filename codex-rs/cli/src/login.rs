@@ -327,7 +327,26 @@ pub async fn login_with_chatgpt(
     )
     .await;
 
-    let opts = ServerOptions::new(
+    login_with_chatgpt_to_file(
+        codex_home,
+        forced_chatgpt_workspace_id,
+        cli_auth_credentials_store_mode,
+        auth_keyring_backend_kind,
+        auth_route_config,
+        None,
+    )
+    .await
+}
+
+async fn login_with_chatgpt_to_file(
+    codex_home: PathBuf,
+    forced_chatgpt_workspace_id: Option<Vec<String>>,
+    cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    auth_keyring_backend_kind: AuthKeyringBackendKind,
+    auth_route_config: AuthRouteConfig,
+    auth_file: Option<PathBuf>,
+) -> std::io::Result<()> {
+    let mut opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
@@ -335,11 +354,46 @@ pub async fn login_with_chatgpt(
         auth_keyring_backend_kind,
         auth_route_config,
     );
+    opts.auth_file = auth_file;
     let server = run_login_server(opts)?;
 
     print_login_server_start(server.actual_port, &server.auth_url);
 
     server.block_until_done().await
+}
+
+pub async fn run_rc_login(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("starting remote-control browser login flow");
+
+    if !config
+        .auth_config()
+        .is_login_method_allowed(ForcedLoginMethod::Chatgpt)
+    {
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+
+    match login_with_chatgpt_to_file(
+        config.codex_home.to_path_buf(),
+        config.auth_config().effective_chatgpt_workspaces(),
+        AuthCredentialsStoreMode::File,
+        config.auth_keyring_backend_kind(),
+        config.auth_route_config(),
+        Some(config.codex_home.join("rc-auth.json").to_path_buf()),
+    )
+    .await
+    {
+        Ok(()) => {
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}; remote-control credentials saved");
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error logging in for remote control: {err}");
+            std::process::exit(1);
+        }
+    }
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {

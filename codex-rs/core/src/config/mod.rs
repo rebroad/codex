@@ -1041,8 +1041,8 @@ pub struct Config {
     /// Configuration for the experimental code-mode tool surface.
     pub code_mode: CodeModeConfig,
 
-    /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
-    /// Default: `300000` (5 minutes).
+    /// Configurable upper bound for empty background-terminal polls (`write_stdin`), in
+    /// milliseconds. Defaults to `300000` (5 minutes); larger values are allowed.
     pub background_terminal_max_timeout: u64,
 
     /// Compatibility-only settings retained for legacy `ghost_snapshot`

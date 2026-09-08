@@ -279,8 +279,19 @@ pub(super) async fn handle_runtime_response(
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             let success = error_text.is_none();
             if let Some(error_text) = error_text {
+                let failure_kind = error_text
+                    .starts_with("failed to parse function arguments:")
+                    .then_some("parse_arguments");
                 content_items.push(FunctionCallOutputContentItem::InputText {
                     text: format!("Script error:\n{error_text}"),
+                });
+                content_items = truncate_code_mode_result(content_items, max_output_tokens);
+                prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
+                return Ok(FunctionToolOutput {
+                    body: content_items,
+                    success: Some(false),
+                    failure_kind,
+                    post_tool_use_response: None,
                 });
             }
             content_items = truncate_code_mode_result(content_items, max_output_tokens);

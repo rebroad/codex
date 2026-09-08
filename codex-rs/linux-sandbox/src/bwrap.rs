@@ -563,6 +563,9 @@ fn create_filesystem_args(
                 } else {
                     root
                 };
+                if mount_root.is_file() {
+                    append_mount_target_parent_dir_args(&mut args, &mount_root, Path::new("/"));
+                }
                 args.push("--ro-bind".to_string());
                 args.push(path_to_string(&mount_root));
                 args.push(path_to_string(&mount_root));
@@ -2245,6 +2248,36 @@ mod tests {
                     readable_root_str.as_str(),
                 ]
         }));
+    }
+
+    #[test]
+    fn restricted_read_only_creates_parents_for_file_read_roots() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let file = temp_dir.path().join("nested").join("helper");
+        std::fs::create_dir_all(file.parent().expect("file parent")).expect("create parent");
+        std::fs::write(&file, b"helper").expect("write file");
+
+        let file = AbsolutePathBuf::from_absolute_path(&file).expect("absolute file");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: file.clone().into(),
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        }]);
+        let args =
+            create_filesystem_args(&policy, Path::new("/"), None).expect("create filesystem args");
+        let file_path = path_to_string(file.as_path());
+        let parent_path = path_to_string(file.as_path().parent().expect("file parent"));
+
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--ro-bind", file_path.as_str(), file_path.as_str()] })
+        );
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| window == ["--dir", parent_path.as_str()])
+        );
     }
 
     #[test]
