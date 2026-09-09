@@ -1018,7 +1018,7 @@ native_glibc_is_compatible() {
 
 remote_target_architecture() {
   local target="${1}" architecture
-  architecture="$(ssh "${SSH_OPTS[@]}" "${target}" 'rustc -vV 2>/dev/null | sed -n "s/^host: //p"; uname -m' \
+  architecture="$(ssh "${SSH_OPTS[@]}" "${target}" 'rustc -vV 2>/dev/null | sed -n "s/^host: //p"; if command -v rustc >/dev/null 2>&1; then :; elif [ "$(uname -m)" = aarch64 ] && [ -n "${PREFIX:-}" ] && [ -d "${PREFIX:-}" ]; then printf "%s\\n" aarch64-linux-android; else uname -m; fi' \
     | head -n 1)" || {
       echo "Unable to reach install target ${target}; deferring it for retry." >&2
       return 75
