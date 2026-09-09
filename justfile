@@ -2,12 +2,18 @@ set working-directory := "codex-rs"
 set positional-arguments
 export CODEX_REPO_ROOT := justfile_directory()
 export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
-set shell := ["python3", "-c", 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")']
-set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")']
+set shell := ["python3", "-c", 'import os, runpy; runpy.run_path(os.environ.get("JUST_SHELL", "../scripts/just-shell.py"), run_name="__main__")']
+set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.environ.get("JUST_SHELL", "../scripts/just-shell.py"), run_name="__main__")']
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
-source_repo := if path_exists(justfile_directory() / ".git" / "HEAD") == "true" { justfile_directory() } else { justfile_directory() / ".." / "codex" }
+source_repo := if path_exists(justfile_directory() / ".git" / "HEAD") == "true" {
+    justfile_directory()
+} else if path_exists(justfile_directory() / ".git") == "true" {
+    shell("realpath \"$(git -C " + justfile_directory() + " rev-parse --path-format=absolute --git-common-dir)/..\"")
+} else {
+    justfile_directory() / ".." / "codex"
+}
 build_repo := if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" }
 build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
