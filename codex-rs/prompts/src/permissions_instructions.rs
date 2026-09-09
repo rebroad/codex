@@ -228,7 +228,7 @@ fn append_section(text: &mut String, section: &str) {
 
 fn approval_text(
     approval_policy: AskForApproval,
-    _approvals_reviewer: ApprovalsReviewer,
+    approvals_reviewer: ApprovalsReviewer,
     approval_messages: Option<&ApprovalMessages>,
     exec_policy: &Policy,
     exec_permission_approvals_enabled: bool,
@@ -236,7 +236,10 @@ fn approval_text(
 ) -> String {
     if let Some(approval_messages) = approval_messages {
         let selected = match &approval_policy {
-            AskForApproval::OnRequest => approval_messages.on_request.as_ref(),
+            AskForApproval::OnRequest => match approvals_reviewer {
+                ApprovalsReviewer::User => approval_messages.on_request.as_ref(),
+                ApprovalsReviewer::AutoReview => approval_messages.on_request_auto_review.as_ref(),
+            },
             AskForApproval::Never => approval_messages.never.as_ref(),
             AskForApproval::UnlessTrusted => approval_messages.unless_trusted.as_ref(),
             AskForApproval::Granular(_) => None,
