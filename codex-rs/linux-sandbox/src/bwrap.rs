@@ -2262,16 +2262,24 @@ mod tests {
         let args = create_filesystem_args(&sandbox_policy, Path::new("/"), BwrapOptions::default())
             .expect("bwrap fs args");
         assert!(args.preserved_files.is_empty());
+        let expected_synthetic_targets = [
+            "/.git",
+            "/.agents",
+            "/.codex",
+            "/dev/.git",
+            "/dev/.agents",
+            "/dev/.codex",
+        ]
+        .into_iter()
+        .filter(|path| {
+            let path = Path::new(path);
+            !path.exists() || transient_empty_metadata_path(path).is_some()
+        })
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
         assert_eq!(
             synthetic_mount_target_paths(&args),
-            vec![
-                PathBuf::from("/.git"),
-                PathBuf::from("/.agents"),
-                PathBuf::from("/.codex"),
-                PathBuf::from("/dev/.git"),
-                PathBuf::from("/dev/.agents"),
-                PathBuf::from("/dev/.codex"),
-            ]
+            expected_synthetic_targets
         );
         let dev_mount = args
             .args
@@ -2289,6 +2297,19 @@ mod tests {
             .position(|args| args == ["--bind", "/dev", "/dev"])
             .expect("/dev bind");
         assert!(dev_mount < root_bind && root_bind < dev_bind);
+        for metadata in [".git", ".agents", ".codex"] {
+            let path = format!("/dev/{metadata}");
+            assert!(
+                args.args
+                    .windows(4)
+                    .any(|window| window == ["--perms", "555", "--tmpfs", path.as_str()])
+            );
+            assert!(
+                args.args
+                    .windows(2)
+                    .any(|window| window == ["--remount-ro", path.as_str()])
+            );
+        }
     }
 
     #[test]
