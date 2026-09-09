@@ -57,10 +57,11 @@ impl ChatWidget {
             let should_pause_active_goal = self
                 .bottom_pane
                 .active_view_will_interrupt_turn_on_key_event(key_event);
-            self.bottom_pane.handle_key_event(key_event);
             if should_pause_active_goal {
                 self.pause_active_goal_for_interrupt();
             }
+            self.flush_completed_tool_activity();
+            self.bottom_pane.handle_key_event(key_event);
             if self.bottom_pane.no_modal_or_popup_active() {
                 self.on_modal_or_popup_closed();
             }
@@ -81,9 +82,8 @@ impl ChatWidget {
             if self.is_cancellable_work_active() {
                 self.requeue_image_submission();
                 self.input_queue.recovered_queue = true;
-                if self.submit_op(AppCommand::interrupt()) {
-                    self.pause_active_goal_for_interrupt();
-                }
+                self.pause_active_goal_for_interrupt();
+                self.submit_op(AppCommand::interrupt());
             } else {
                 self.cancel_image_submission();
             }
@@ -202,9 +202,8 @@ impl ChatWidget {
             && !self.should_handle_vim_insert_escape(key_event)
         {
             self.input_queue.submit_pending_steers_after_interrupt = true;
-            if self.submit_op(AppCommand::interrupt()) {
-                self.pause_active_goal_for_interrupt();
-            } else {
+            self.pause_active_goal_for_interrupt();
+            if !self.submit_op(AppCommand::interrupt()) {
                 self.input_queue.submit_pending_steers_after_interrupt = false;
             }
             return;
@@ -233,6 +232,12 @@ impl ChatWidget {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
                 let should_pause_active_goal =
                     self.bottom_pane.should_interrupt_running_task(key_event);
+                if should_pause_active_goal {
+                    self.pause_active_goal_for_interrupt();
+                }
+                if key_event.code == KeyCode::Enter {
+                    self.flush_completed_tool_activity();
+                }
                 let input_result = self.bottom_pane.handle_key_event(key_event);
                 if matches!(
                     input_result,
@@ -242,9 +247,6 @@ impl ChatWidget {
                 }
                 crate::startup_recovery::submitted(&input_result);
                 self.sync_backend_banner_view();
-                if should_pause_active_goal {
-                    self.pause_active_goal_for_interrupt();
-                }
                 self.handle_composer_input_result(input_result, had_modal_or_popup);
             }
         }
@@ -562,6 +564,9 @@ impl ChatWidget {
                 KeyCode::Char('c'),
                 KeyModifiers::CONTROL,
             ));
+        if should_pause_active_goal {
+            self.pause_active_goal_for_interrupt();
+        }
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             self.refresh_startup_recovery();
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
@@ -572,9 +577,6 @@ impl ChatWidget {
                 } else {
                     self.arm_quit_shortcut(key);
                 }
-            }
-            if should_pause_active_goal {
-                self.pause_active_goal_for_interrupt();
             }
             if modal_or_popup_active && self.bottom_pane.no_modal_or_popup_active() {
                 self.on_modal_or_popup_closed();
@@ -596,9 +598,8 @@ impl ChatWidget {
                 self.quit_shortcut_expires_at = None;
                 self.quit_shortcut_key = None;
                 self.bottom_pane.clear_quit_shortcut_hint();
-                if self.submit_op(AppCommand::interrupt()) {
-                    self.pause_active_goal_for_interrupt();
-                }
+                self.pause_active_goal_for_interrupt();
+                self.submit_op(AppCommand::interrupt());
             } else {
                 self.request_quit_without_confirmation();
             }
@@ -614,8 +615,9 @@ impl ChatWidget {
 
         self.arm_quit_shortcut(key);
 
-        if self.is_cancellable_work_active() && self.submit_op(AppCommand::interrupt()) {
+        if self.is_cancellable_work_active() {
             self.pause_active_goal_for_interrupt();
+            self.submit_op(AppCommand::interrupt());
         }
     }
 
