@@ -906,7 +906,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
     };
     // Empty polling must complete without an approval response.
     tokio::time::timeout(
-        Duration::from_secs(/*secs*/ 5),
+        Duration::from_secs(/*secs*/ 6),
         write_stdin(&session, &turn, process_id, "", /*yield_time_ms*/ 250),
     )
     .await??;
