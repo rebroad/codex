@@ -404,7 +404,7 @@ fn catalog_approval_messages_select_reviewer_variant() {
         (
             AskForApproval::OnRequest,
             ApprovalsReviewer::AutoReview,
-            "user catalog approvals",
+            "auto-review catalog approvals",
         ),
         (
             AskForApproval::Never,
