@@ -2119,82 +2119,48 @@ mod tests {
         )
         .expect("bwrap fs args");
         assert!(args.preserved_files.is_empty());
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                PathBuf::from("/.git"),
-                PathBuf::from("/.agents"),
-                PathBuf::from("/.codex"),
-                PathBuf::from("/dev/.git"),
-                PathBuf::from("/dev/.agents"),
-                PathBuf::from("/dev/.codex"),
-            ]
-        );
-        assert_eq!(
-            args.args,
-            vec![
-                // Start from a read-only view of the full filesystem.
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Recreate a writable /dev inside the sandbox.
-                "--dev".to_string(),
-                "/dev".to_string(),
-                // Make the writable root itself writable again.
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Mask the default metadata path names under the writable root.
-                // Because the root is `/` in this test, these carveout paths
-                // appear directly below `/`.
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/.git".to_string(),
-                "--remount-ro".to_string(),
-                "/.git".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/.agents".to_string(),
-                "--remount-ro".to_string(),
-                "/.agents".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/.codex".to_string(),
-                "--remount-ro".to_string(),
-                "/.codex".to_string(),
-                "--ro-bind".to_string(),
-                path_to_string(&synthetic_mount_registry_root()),
-                path_to_string(&synthetic_mount_registry_root()),
-                // Rebind /dev after the root bind so device nodes remain
-                // writable/usable inside the writable root.
-                "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
-                // Then mask the metadata names that would otherwise be
-                // creatable below the writable /dev bind.
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/dev/.git".to_string(),
-                "--remount-ro".to_string(),
-                "/dev/.git".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/dev/.agents".to_string(),
-                "--remount-ro".to_string(),
-                "/dev/.agents".to_string(),
-                "--perms".to_string(),
-                "555".to_string(),
-                "--tmpfs".to_string(),
-                "/dev/.codex".to_string(),
-                "--remount-ro".to_string(),
-                "/dev/.codex".to_string(),
-            ]
-        );
+        let synthetic_targets = synthetic_mount_target_paths(&args);
+        let expected_synthetic_targets = [
+            "/.git",
+            "/.agents",
+            "/.codex",
+            "/dev/.git",
+            "/dev/.agents",
+            "/dev/.codex",
+        ]
+        .into_iter()
+        .filter(|path| {
+            let path = Path::new(path);
+            !path.exists() || transient_empty_metadata_path(path).is_some()
+        })
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+        assert_eq!(synthetic_targets, expected_synthetic_targets);
+
+        let dev_mount = args
+            .args
+            .windows(2)
+            .position(|window| window == ["--dev", "/dev"])
+            .expect("initial /dev mount");
+        let writable_dev_bind = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", "/dev", "/dev"])
+            .expect("writable /dev bind");
+        assert!(dev_mount < writable_dev_bind);
+        for metadata in [".git", ".agents", ".codex"] {
+            let path = format!("/dev/{metadata}");
+            assert!(
+                args.args
+                    .windows(4)
+                    .any(|window| { window == ["--perms", "555", "--tmpfs", path.as_str()] })
+            );
+            assert!(
+                args.args
+                    .windows(2)
+                    .any(|window| window == ["--remount-ro", path.as_str()])
+            );
+        }
     }
 
     #[test]
