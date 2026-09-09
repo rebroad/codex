@@ -9335,7 +9335,7 @@ async fn capability_discovery_uses_environment_permission_profile() {
         windows_sandbox_private_desktop: false,
         windows_sandbox_proxy_settings_mode: None,
         use_legacy_landlock: true,
-        debug_log_id: None,
+        debug_log_id: Some(session.thread_id().to_string()),
     };
     let environment_id = environment.selection.environment_id.clone();
     turn_context.environments.environments[0] = TurnEnvironmentState::Ready(environment);
