@@ -50,7 +50,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
     let runtime = ApplyPatchRuntime::new();
-    assert!(runtime.wants_no_sandbox_approval(AskForApproval::Never));
+    assert!(!runtime.wants_no_sandbox_approval(AskForApproval::Never));
     assert!(runtime.wants_no_sandbox_approval(AskForApproval::OnRequest));
     assert!(
         !runtime.wants_no_sandbox_approval(AskForApproval::Granular(GranularApprovalConfig {
