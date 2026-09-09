@@ -594,16 +594,16 @@ impl Session {
         {
             let active = self.active_turn.lock().await;
             if let Some(active) = active.as_ref() {
-                if let Some(task) = active.task.as_ref()
-                    && task.turn_context.sub_id == turn_context.sub_id
-                {
-                    return task
-                        .turn_context
-                        .current_settings
-                        .load()
-                        .approvals_reviewer();
+                if let Some(task) = active.task.as_ref() {
+                    if task.turn_context.sub_id == turn_context.sub_id {
+                        return task
+                            .turn_context
+                            .current_settings
+                            .load()
+                            .approvals_reviewer();
+                    }
+                    return captured_reviewer;
                 }
-                return captured_reviewer;
             }
         }
 
