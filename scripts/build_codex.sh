@@ -10,7 +10,21 @@ SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -L)"
 case "${SCRIPT_REPO##*/}" in
   *.build|*.make)
     BUILD_TREE="${SCRIPT_REPO}"
-    SOURCE_REPO="$(cd -- "${SCRIPT_REPO%.*}" && pwd -P)"
+    SOURCE_REPO=""
+    if git_common_dir="$(git -C "${SCRIPT_REPO}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+      && [[ "$(basename "${git_common_dir}")" == .git ]] \
+      && [[ -d "${git_common_dir}" ]]; then
+      source_candidate="$(dirname "${git_common_dir}")"
+      if [[ -d "${source_candidate}/codex-rs" ]]; then
+        SOURCE_REPO="${source_candidate}"
+      fi
+    fi
+    if [[ -z "${SOURCE_REPO}" ]]; then
+      source_candidate="${SCRIPT_REPO%.*}"
+      if [[ -d "${source_candidate}/codex-rs" ]]; then
+        SOURCE_REPO="$(cd -- "${source_candidate}" && pwd -P)"
+      fi
+    fi
     ;;
   *)
     SOURCE_REPO="${SCRIPT_REPO}"
@@ -26,8 +40,8 @@ if [[ -z "${BUILD_TREE}" ]]; then
   echo "No sibling build tree found; expected ${SOURCE_REPO}.build or ${SOURCE_REPO}.make" >&2
   exit 1
 fi
-if [[ ! -d "${SOURCE_REPO}/codex-rs" ]]; then
-  echo "Source checkout not found at ${SOURCE_REPO}" >&2
+if [[ -z "${SOURCE_REPO}" || ! -d "${SOURCE_REPO}/codex-rs" ]]; then
+  echo "Source checkout could not be discovered for build tree ${BUILD_TREE}" >&2
   exit 1
 fi
 BUILD_REPO="${BUILD_TREE}"
