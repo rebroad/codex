@@ -56,6 +56,7 @@ fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
             message
         ));
     });
+    tracing::callsite::rebuild_interest_cache();
 }
 
 #[tokio::test]
