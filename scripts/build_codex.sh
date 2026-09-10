@@ -1136,6 +1136,51 @@ REMOTE_AUXILIARY_INSTALL
   rm -f "${staging}"
 }
 
+install_remote_helper_script() {
+  local target="${1}" name="${2}" staging remote_tmp remote_tmp_dir source
+  source="${SOURCE_REPO}/scripts/remote-control/${name}"
+  [[ -f "${source}" ]] || die "remote-control helper not found: ${source}"
+  staging="${BUILD_REPO}/build/remote-install/${target}-${name}"
+  if ! remote_tmp_dir="$(ssh "${SSH_OPTS[@]}" "${target}" '
+    tmp_dir="${TMPDIR:-}"
+    if [ -z "$tmp_dir" ] && [ -n "${PREFIX:-}" ]; then
+      tmp_dir="$PREFIX/tmp"
+    fi
+    printf "%s" "${tmp_dir:-/var/tmp}"
+  ')"; then
+    echo "Unable to reach install target ${target}; deferring helper installation." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  remote_tmp="${remote_tmp_dir}/.codex-${name}.tmp"
+  mkdir -p "$(dirname "${staging}")"
+  install -m 0755 "${source}" "${staging}"
+  if ! rsync --compress --info=progress2 --timeout="${CODEX_RSYNC_TIMEOUT:-60}" \
+    --partial --inplace --append-verify -e "ssh ${SSH_OPTS[*]}" \
+    -- "${staging}" "${target}:${remote_tmp}"; then
+    echo "Unable to upload remote-control helper ${name} to ${target}; deferring it for retry." >&2
+    rm -f "${staging}"
+    return 75
+  fi
+  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- "${name}" "${remote_tmp}" <<'REMOTE_HELPER_INSTALL'
+set -euo pipefail
+name="$1"
+remote_tmp="$2"
+mkdir -p "$HOME/bin"
+rm -f "$HOME/bin/$name"
+install -m 0755 "$remote_tmp" "$HOME/bin/$name"
+rm -f "$remote_tmp"
+printf 'Installed %s/bin/%s\n' "$HOME" "$name"
+REMOTE_HELPER_INSTALL
+  then
+    echo "Unable to finish remote-control helper installation on ${target}; deferring it for retry." >&2
+    ssh "${SSH_OPTS[@]}" "${target}" rm -f "${remote_tmp}" || true
+    rm -f "${staging}"
+    return 75
+  fi
+  rm -f "${staging}"
+}
+
 cleanup_remote_install_artifacts() {
   local target="${1}" current="${2}" artifact
   for artifact in "${BUILD_REPO}/build/remote-install/${target}-codex-"*; do
@@ -1200,6 +1245,9 @@ install_target() {
       "${target}" "$(dirname "${binary}")/codex-code-mode-host" \
       "${install_dir}" codex-code-mode-host || return $?
   fi
+  for helper in codex-remote-start codex-pairing-code codex-remote-healthcheck; do
+    install_remote_helper_script "${target}" "${helper}" || return $?
+  done
 }
 
 build_android() {
