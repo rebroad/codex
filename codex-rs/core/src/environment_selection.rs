@@ -30,7 +30,6 @@ use futures::future::Shared;
 use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
-use tracing::instrument::WithSubscriber;
 
 use crate::session::turn_context::ShellSnapshotTask;
 use crate::session::turn_context::TurnEnvironment;
@@ -1286,7 +1285,8 @@ url = "ws://127.0.0.1:8765"
         assert_eq!(resolved.snapshot().await.to_selections(), vec![local]);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(tracing)]
     async fn blocking_snapshot_waits_for_starting_environment() {
         let buffer: &'static std::sync::Mutex<Vec<u8>> =
             Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
@@ -1297,6 +1297,7 @@ url = "ws://127.0.0.1:8765"
             .with_writer(MockWriter::new(buffer))
             .finish();
         let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
 
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
