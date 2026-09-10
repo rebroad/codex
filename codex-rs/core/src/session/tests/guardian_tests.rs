@@ -896,6 +896,7 @@ async fn delayed_exec_command_uses_its_captured_authority_after_next_turn_starts
     assert!(expect_text_output(output.as_ref()).contains("captured-action-authority"));
 }
 
+#[cfg_attr(target_os = "android", ignore)]
 #[tokio::test]
 async fn sandbox_denied_retry_uses_the_action_policy_and_reviewer() {
     #[derive(Default)]
