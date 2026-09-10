@@ -30,6 +30,7 @@ use futures::future::Shared;
 use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 
 use crate::session::turn_context::ShellSnapshotTask;
 use crate::session::turn_context::TurnEnvironment;
