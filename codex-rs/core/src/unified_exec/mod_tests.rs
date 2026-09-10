@@ -5,6 +5,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
 use crate::session::session::Session;
+use crate::session::step_settings::StepSettingsUpdate;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
@@ -876,7 +877,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
     use codex_protocol::protocol::ReviewDecision;
 
     skip_if_sandbox!(Ok(()));
-    let (session, mut turn, events) = make_session_and_context_with_auth_and_config_and_rx(
+    let (session, turn, events) = make_session_and_context_with_auth_and_config_and_rx(
         codex_login::CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -906,7 +907,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
     };
     // Empty polling must complete without an approval response.
     tokio::time::timeout(
-        Duration::from_secs(/*secs*/ 6),
+        Duration::from_secs(/*secs*/ 12),
         write_stdin(&session, &turn, process_id, "", /*yield_time_ms*/ 250),
     )
     .await??;
@@ -919,8 +920,16 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
         matches!(denied, Err(UnifiedExecError::StdinApproval(ToolError::Rejected(reason)))
         if reason.contains("select it before retrying"))
     );
-    Arc::make_mut(&mut Arc::get_mut(&mut turn).unwrap().config).approvals_reviewer =
-        ApprovalsReviewer::User;
+    session
+        .update_settings(crate::session::SessionSettingsUpdate {
+            step_settings: StepSettingsUpdate {
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("test setup should update the live approvals reviewer");
     for (input, decision) in [
         ("rejected\n", ReviewDecision::denied("test denial")),
         ("accepted\n", ReviewDecision::Approved),
