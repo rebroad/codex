@@ -473,6 +473,7 @@ mod tests {
     use tracing_test::internal::MockWriter;
 
     #[test]
+    #[serial_test::serial(tracing)]
     fn tool_call_timing_guard_ignores_code_mode_source() {
         let subscriber = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)
@@ -551,6 +552,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(tracing)]
     async fn cancellation_before_dispatch_admission_logs_dispatch_only_timing() -> anyhow::Result<()>
     {
         let (session, turn_context) = crate::session::tests::make_session_and_context().await;

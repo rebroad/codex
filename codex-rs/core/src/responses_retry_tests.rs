@@ -12,6 +12,7 @@ use tokio::time::Instant;
 use tracing_test::internal::MockWriter;
 
 #[tokio::test]
+#[serial_test::serial(tracing)]
 async fn sampling_retry_logs_stream_error_context() {
     let (_session, turn_context) = make_session_and_context().await;
     let buffer: &'static std::sync::Mutex<Vec<u8>> =

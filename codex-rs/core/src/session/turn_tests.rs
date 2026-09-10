@@ -40,6 +40,7 @@ fn assistant_output_text(text: &str) -> ResponseItem {
 }
 
 #[test]
+#[serial_test::serial(tracing)]
 fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
     let feedback = codex_feedback::CodexFeedback::new();
     let subscriber = tracing_subscriber::registry()
@@ -56,6 +57,7 @@ fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
             message
         ));
     });
+    tracing::callsite::rebuild_interest_cache();
 }
 
 #[tokio::test]
