@@ -1,4 +1,5 @@
 Add Delete to delete queued prompts (esc already steers), or a Ctrl+letter (E?) to edit queued prompts (they can become concetenated if more than one)
+Make "Working" show the last tool used, and make it clear what we're waiting for.
 Keep the auto_review verdicts visible in the TUI (so the user can read decisions already made)
 Allow regexp for writeable roots config (e.g. could be derived from the repo PATH, e.g. ~/src/codex adds /mnt/kingston/builds/rebroad/src/codex.build)
 Add a Ctrl+T type thing that gives the same output as we already have (non-transcription) but makes it scrollable (like transcription does).
