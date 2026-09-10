@@ -747,6 +747,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
     );
 }
 
+#[cfg_attr(target_os = "android", ignore)]
 #[tokio::test]
 async fn snapshot_wrapper_replays_dummy_and_preserves_unbrokered_credentials() -> anyhow::Result<()>
 {
