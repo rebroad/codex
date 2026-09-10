@@ -264,6 +264,10 @@ impl RemoteAppServerClient {
         let worker_handle = tokio::spawn(async move {
             let mut pending_requests =
                 HashMap::<RequestId, oneshot::Sender<IoResult<RequestResult>>>::new();
+            let mut request_to_retry: Option<(
+                Box<JSONRPCRequest>,
+                oneshot::Sender<IoResult<RequestResult>>,
+            )> = None;
             let mut stream = stream;
             let mut endpoint = endpoint;
             let mut reconnect_attempt = 0u32;
@@ -289,9 +293,9 @@ impl RemoteAppServerClient {
                                         continue;
                                     }
                                     pending_requests.insert(request_id.clone(), response_tx);
-                                    if let Err(err) = write_jsonrpc_message(
+                                    if let Err((err, retryable)) = write_jsonrpc_message_with_status(
                                         &mut stream,
-                                        JSONRPCMessage::Request(*request),
+                                        JSONRPCMessage::Request(request.as_ref().clone()),
                                         &endpoint,
                                     )
                                     .await
@@ -300,8 +304,13 @@ impl RemoteAppServerClient {
                                         let message = format!(
                                             "remote app server at `{endpoint}` write failed: {err_message}"
                                         );
-                                        if let Some(response_tx) = pending_requests.remove(&request_id) {
-                                            let _ = response_tx.send(Err(err));
+                                        if let Some(response_tx) = pending_requests.remove(&request_id)
+                                        {
+                                            if retryable {
+                                                request_to_retry = Some((request, response_tx));
+                                            } else {
+                                                let _ = response_tx.send(Err(err));
+                                            }
                                         }
                                         worker_exit_error = Some((ErrorKind::BrokenPipe, message));
                                         break;
@@ -529,6 +538,9 @@ impl RemoteAppServerClient {
                 }
 
                 if !should_reconnect {
+                    if let Some((_, response_tx)) = request_to_retry.take() {
+                        let _ = response_tx.send(Err(IoError::new(err_kind, err_message.clone())));
+                    }
                     break 'worker;
                 }
 
@@ -555,6 +567,29 @@ impl RemoteAppServerClient {
                                 stream = new_stream;
                                 endpoint = new_endpoint;
                                 reconnect_attempt = 0;
+                                if let Some((request, response_tx)) = request_to_retry.take() {
+                                    let request_id = request.id.clone();
+                                    pending_requests.insert(request_id.clone(), response_tx);
+                                    if let Err((err, retryable)) =
+                                        write_jsonrpc_message_with_status(
+                                            &mut stream,
+                                            JSONRPCMessage::Request(request.as_ref().clone()),
+                                            &endpoint,
+                                        )
+                                        .await
+                                    {
+                                        if let Some(response_tx) =
+                                            pending_requests.remove(&request_id)
+                                        {
+                                            if retryable {
+                                                request_to_retry = Some((request, response_tx));
+                                            } else {
+                                                let _ = response_tx.send(Err(err));
+                                            }
+                                        }
+                                        continue 'worker;
+                                    }
+                                }
                             }
                             Err(err) => {
                                 warn!(%err, "remote app-server reconnect initialize failed");
@@ -1106,6 +1141,29 @@ where
         })
 }
 
+async fn write_jsonrpc_message_with_status<S>(
+    stream: &mut WebSocketStream<S>,
+    message: JSONRPCMessage,
+    endpoint: &str,
+) -> Result<(), (IoError, bool)>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let payload = serde_json::to_string(&message).map_err(|err| (IoError::other(err), false))?;
+    stream
+        .send(Message::Text(payload.into()))
+        .await
+        .map_err(|err| {
+            let retryable = websocket_close_error_is_already_closed(&err);
+            (
+                IoError::other(format!(
+                    "failed to write websocket message to `{endpoint}`: {err}"
+                )),
+                retryable,
+            )
+        })
+}
+
 fn websocket_close_error_is_already_closed(err: &TungsteniteError) -> bool {
     match err {
         TungsteniteError::ConnectionClosed | TungsteniteError::AlreadyClosed => true,
@@ -1117,9 +1175,23 @@ fn websocket_close_error_is_already_closed(err: &TungsteniteError) -> bool {
         _ => false,
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_websocket_write_errors_are_retryable() {
+        assert!(websocket_close_error_is_already_closed(
+            &TungsteniteError::AlreadyClosed
+        ));
+        assert!(websocket_close_error_is_already_closed(
+            &TungsteniteError::Protocol(ProtocolError::SendAfterClosing)
+        ));
+        assert!(!websocket_close_error_is_already_closed(
+            &TungsteniteError::Io(IoError::other("other"))
+        ));
+    }
 
     #[tokio::test]
     async fn shutdown_tolerates_worker_exit_after_command_is_queued() {
