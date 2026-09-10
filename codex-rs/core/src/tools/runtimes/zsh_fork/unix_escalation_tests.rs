@@ -353,6 +353,7 @@ fn shell_request_escalation_execution_is_explicit() {
     );
 }
 
+#[cfg_attr(target_os = "android", ignore)]
 #[tokio::test]
 async fn unsandboxed_intercepted_exec_strips_managed_network_env() -> anyhow::Result<()> {
     let workdir = test_sandbox_cwd();

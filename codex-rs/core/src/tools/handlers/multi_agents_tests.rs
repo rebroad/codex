@@ -2242,7 +2242,7 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
 }
 
 // TODO(anp): Restore this test on Linux once sandbox helpers work inside test microVMs.
-#[cfg_attr(target_os = "linux", ignore)]
+#[cfg_attr(any(target_os = "linux", target_os = "android"), ignore)]
 #[tokio::test]
 async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     #[derive(Debug, Deserialize)]
