@@ -349,6 +349,7 @@ fn prompting_modes_do_not_allow_persistent_remember() {
 }
 
 #[tokio::test]
+#[serial_test::serial(tracing)]
 async fn mcp_tool_call_span_records_expected_fields() {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
         Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
@@ -400,6 +401,7 @@ async fn mcp_tool_call_span_records_expected_fields() {
 }
 
 #[tokio::test]
+#[serial_test::serial(tracing)]
 async fn mcp_tool_call_span_records_error_type_and_error_code() {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
         Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
@@ -491,6 +493,7 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
 }
 
 #[tokio::test]
+#[serial_test::serial(tracing)]
 async fn mcp_result_telemetry_records_allowlisted_span_fields() {
     let logs = mcp_result_telemetry_span_logs(Some(serde_json::json!({
         "codex/telemetry": {
@@ -516,6 +519,7 @@ async fn mcp_result_telemetry_records_allowlisted_span_fields() {
 }
 
 #[tokio::test]
+#[serial_test::serial(tracing)]
 async fn mcp_result_telemetry_ignores_invalid_and_missing_values() {
     let invalid_logs = mcp_result_telemetry_span_logs(Some(serde_json::json!({
         "codex/telemetry": {
@@ -551,6 +555,7 @@ async fn mcp_result_telemetry_ignores_invalid_and_missing_values() {
 }
 
 #[tokio::test]
+#[serial_test::serial(tracing)]
 async fn mcp_result_telemetry_truncates_long_target_id() {
     let truncated = "x".repeat(MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS);
     let target_id = format!("{truncated}tail");

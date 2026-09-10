@@ -41,6 +41,7 @@ fn assistant_output_text(text: &str) -> ResponseItem {
 
 #[cfg_attr(target_os = "android", ignore)]
 #[test]
+#[serial_test::serial(tracing)]
 fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
     let feedback = codex_feedback::CodexFeedback::new();
     let subscriber = tracing_subscriber::registry()
