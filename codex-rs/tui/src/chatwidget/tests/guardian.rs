@@ -812,3 +812,31 @@ async fn guardian_cleanup_drops_stale_reviews_and_restores_mcp_status() {
         "Booting MCP server: alpha"
     );
 }
+
+#[tokio::test]
+async fn guardian_cleanup_drops_reviews_after_transport_gap() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+    chat.on_mcp_server_status_updated(McpServerStatusUpdatedNotification {
+        thread_id: None,
+        name: "alpha".to_string(),
+        status: McpServerStartupState::Starting,
+        error: None,
+        failure_reason: None,
+    });
+    chat.on_guardian_assessment(guardian_command_event(
+        "stale-review",
+        "turn-1",
+        "rm -rf '/tmp/stale-review'",
+        GuardianAssessmentStatus::InProgress,
+    ));
+
+    chat.clear_guardian_review_status_after_transport_gap();
+
+    assert!(chat.status_state.pending_guardian_review_status.is_empty());
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Booting MCP server: alpha"
+    );
+}

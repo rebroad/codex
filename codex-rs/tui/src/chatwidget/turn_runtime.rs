@@ -26,6 +26,10 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn clear_guardian_review_status_after_transport_gap(&mut self) {
+        self.clear_guardian_review_status();
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
