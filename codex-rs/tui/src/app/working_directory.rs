@@ -146,6 +146,7 @@ impl App {
                     thread_id,
                     /*last_turn_id*/ None,
                     /*before_turn_id*/ None,
+                    /*after_ordinal*/ None,
                     DeferUntilNextTurn,
                 )
                 .await
