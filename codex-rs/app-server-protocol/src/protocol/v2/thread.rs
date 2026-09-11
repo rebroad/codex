@@ -531,6 +531,14 @@ pub struct ThreadForkParams {
     #[ts(optional = nullable)]
     pub before_turn_id: Option<String>,
 
+    /// Optional rollout ordinal to fork after, inclusively.
+    ///
+    /// When specified, history through this ordinal is inherited. It cannot be combined with
+    /// `last_turn_id` or `before_turn_id`.
+    #[experimental("thread/fork.afterOrdinal")]
+    #[ts(optional = nullable)]
+    pub after_ordinal: Option<u64>,
+
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     #[experimental("thread/fork.path")]

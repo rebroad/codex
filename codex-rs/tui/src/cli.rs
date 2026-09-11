@@ -54,6 +54,9 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_session_id: Option<String>,
 
+    #[clap(skip)]
+    pub fork_after_ordinal: Option<u64>,
+
     /// Internal: show all sessions (disables cwd filtering and shows CWD column).
     #[clap(skip)]
     pub fork_show_all: bool,

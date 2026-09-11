@@ -180,6 +180,7 @@ impl App {
                 thread_id,
                 /*last_turn_id*/ None,
                 /*before_turn_id*/ Some(turn_id),
+                /*after_ordinal*/ None,
                 ForkGoalContinuation::DeferUntilNextTurn,
             )
             .await;

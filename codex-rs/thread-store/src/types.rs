@@ -189,6 +189,8 @@ pub enum ForkBoundary {
     ThroughTurn(String),
     /// Inherit history preceding the original visible occurrence of this turn.
     BeforeTurn(String),
+    /// Inherit history through the specified rollout ordinal.
+    AfterOrdinal(u64),
 }
 
 /// Parameters for freezing the source history used to initialize a fork.

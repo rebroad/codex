@@ -99,6 +99,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
+        fork_after_ordinal: Option<u64>,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
@@ -465,7 +466,11 @@ impl App {
                 let forked = match startup_draft
                     .run_until(
                         tui,
-                        app_server.fork_thread(config.clone(), target_session.thread_id),
+                        app_server.fork_thread_after_ordinal(
+                            config.clone(),
+                            target_session.thread_id,
+                            fork_after_ordinal,
+                        ),
                     )
                     .await
                 {
