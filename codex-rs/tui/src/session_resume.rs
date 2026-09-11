@@ -18,7 +18,6 @@ use codex_config::types::ResumeCwdMode;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_rollout::RolloutItem;
-use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::builder_from_items;
 use codex_rollout::open_rollout_line_reader;
 use codex_rollout::read_session_meta_line;
@@ -190,7 +189,6 @@ async fn persist_session_cwd(
         meta: session_meta.meta,
         git: session_meta.git,
     });
-    append_rollout_item_to_path(rollout_path, &item).await?;
 
     if let Some(state_db_ctx) = state_db_ctx {
         let builder = builder_from_items(std::slice::from_ref(&item), rollout_path)
