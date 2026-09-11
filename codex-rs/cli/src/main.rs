@@ -421,6 +421,10 @@ struct ForkCommand {
     #[arg(long = "last", default_value_t = false)]
     last: bool,
 
+    /// Fork after this rollout ordinal, inheriting history through it.
+    #[arg(long = "after-ordinal", value_name = "ORDINAL")]
+    after_ordinal: Option<u64>,
+
     /// Show all sessions (disables cwd filtering and shows CWD column).
     #[arg(long = "all", default_value_t = false)]
     all: bool,
@@ -1582,6 +1586,7 @@ async fn cli_main(
             session_id,
             last,
             all,
+            after_ordinal,
             remote,
             config_overrides,
         })) => {
@@ -1592,6 +1597,7 @@ async fn cli_main(
                 session_id,
                 last,
                 all,
+                after_ordinal,
                 config_overrides,
             );
             let exit_info = run_interactive_tui(
@@ -2873,6 +2879,7 @@ fn finalize_fork_interactive(
     session_id: Option<String>,
     last: bool,
     show_all: bool,
+    after_ordinal: Option<u64>,
     mut fork_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so fork shares the same
@@ -2889,6 +2896,7 @@ fn finalize_fork_interactive(
     interactive.fork_last = last;
     interactive.fork_session_id = fork_session_id;
     interactive.fork_show_all = show_all;
+    interactive.fork_after_ordinal = after_ordinal;
 
     // Merge fork-scoped flags and overrides with highest precedence.
     merge_interactive_cli_flags(&mut interactive, fork_cli);
@@ -3149,6 +3157,7 @@ mod tests {
             session_id,
             last,
             all,
+            after_ordinal,
             remote: _,
             config_overrides: fork_cli,
         }) = subcommand.expect("fork present")
@@ -3157,7 +3166,15 @@ mod tests {
         };
         let SessionTuiCli(fork_cli) = fork_cli;
 
-        finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+        finalize_fork_interactive(
+            interactive,
+            root_overrides,
+            session_id,
+            last,
+            all,
+            after_ordinal,
+            fork_cli,
+        )
     }
 
     fn finalize_exec_from_args(args: &[&str]) -> ExecCli {
@@ -4275,6 +4292,13 @@ mod tests {
         let interactive = finalize_fork_from_args(["codex", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_after_ordinal_sets_boundary() {
+        let interactive =
+            finalize_fork_from_args(["codex", "fork", "--after-ordinal", "7"].as_ref());
+        assert_eq!(interactive.fork_after_ordinal, Some(7));
     }
 
     #[test]

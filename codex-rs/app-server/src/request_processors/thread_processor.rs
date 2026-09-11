@@ -4711,6 +4711,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             ephemeral,
             thread_source,
+            after_ordinal,
             exclude_turns,
             defer_goal_continuation,
         } = params;
@@ -4728,6 +4729,11 @@ impl ThreadRequestProcessor {
             )
             .await?;
         let paginated_source = matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
+        if (last_turn_id.is_some() || before_turn_id.is_some()) && after_ordinal.is_some() {
+            return Err(invalid_request(
+                "`afterOrdinal` cannot be combined with `lastTurnId` or `beforeTurnId`",
+            ));
+        }
         if last_turn_id.is_some() && before_turn_id.is_some() {
             return Err(invalid_request(
                 "`beforeTurnId` cannot be combined with `lastTurnId`",
@@ -4756,15 +4762,22 @@ impl ThreadRequestProcessor {
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);
         let prepared_fork = if paginated_source {
-            let boundary = match (last_turn_id.as_deref(), before_turn_id.as_deref()) {
-                (Some(turn_id), None) => {
+            let boundary = match (
+                last_turn_id.as_deref(),
+                before_turn_id.as_deref(),
+                after_ordinal,
+            ) {
+                (Some(turn_id), None, None) => {
                     codex_thread_store::ForkBoundary::ThroughTurn(turn_id.to_string())
                 }
-                (None, Some(turn_id)) => {
+                (None, Some(turn_id), None) => {
                     codex_thread_store::ForkBoundary::BeforeTurn(turn_id.to_string())
                 }
-                (None, None) => codex_thread_store::ForkBoundary::Latest,
-                (Some(_), Some(_)) => unreachable!("fork boundaries are mutually exclusive"),
+                (None, None, Some(ordinal)) => {
+                    codex_thread_store::ForkBoundary::AfterOrdinal(ordinal)
+                }
+                (None, None, None) => codex_thread_store::ForkBoundary::Latest,
+                _ => unreachable!("fork boundaries are mutually exclusive"),
             };
             Some(
                 self.thread_store

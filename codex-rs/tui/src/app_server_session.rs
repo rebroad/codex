@@ -798,11 +798,22 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
+        self.fork_thread_after_ordinal(config, thread_id, None)
+            .await
+    }
+
+    pub(crate) async fn fork_thread_after_ordinal(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        after_ordinal: Option<u64>,
+    ) -> Result<AppServerStartedThread> {
         self.fork_thread_at(
             config,
             thread_id,
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
+            after_ordinal,
             ForkGoalContinuation::StartIfIdle,
         )
         .await
@@ -814,6 +825,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         last_turn_id: Option<String>,
         before_turn_id: Option<String>,
+        after_ordinal: Option<u64>,
         goal_continuation: ForkGoalContinuation,
     ) -> Result<AppServerStartedThread> {
         self.fork_thread_at_with_presentation(
@@ -821,6 +833,7 @@ impl AppServerSession {
             thread_id,
             last_turn_id,
             before_turn_id,
+            after_ordinal,
             goal_continuation,
             ForkPresentation::Regular,
         )
@@ -837,6 +850,7 @@ impl AppServerSession {
             thread_id,
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
+            /*after_ordinal*/ None,
             ForkGoalContinuation::StartIfIdle,
             ForkPresentation::SideConversation,
         )
@@ -849,6 +863,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         last_turn_id: Option<String>,
         before_turn_id: Option<String>,
+        after_ordinal: Option<u64>,
         goal_continuation: ForkGoalContinuation,
         presentation: ForkPresentation,
     ) -> Result<AppServerStartedThread> {
@@ -869,6 +884,7 @@ impl AppServerSession {
         let mut params = ThreadForkParams {
             last_turn_id,
             before_turn_id,
+            after_ordinal,
             defer_goal_continuation: goal_continuation == ForkGoalContinuation::DeferUntilNextTurn,
             exclude_turns,
             ..thread_fork_params_from_config(
