@@ -30,13 +30,17 @@ codex-app-server-protocol = { workspace = true }
 codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-history = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rollout-trace = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-oss = { workspace = true }
@@ -45,6 +49,7 @@ owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+futures = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
