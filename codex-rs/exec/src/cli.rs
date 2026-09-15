@@ -64,6 +64,10 @@ pub struct Cli {
     )]
     pub json: bool,
 
+    /// Send one direct model request without starting an app-server session.
+    #[arg(long = "direct", default_value_t = false)]
+    pub direct: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(
         long = "output-last-message",

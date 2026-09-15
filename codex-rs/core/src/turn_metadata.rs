@@ -149,6 +149,20 @@ pub async fn detached_memory_responses_metadata(
     )
 }
 
+/// Builds metadata for a standalone model request that is not part of a Codex turn.
+pub fn standalone_responses_metadata(
+    installation_id: String,
+    session_id: String,
+    thread_id: String,
+    window_id: String,
+    session_source: &SessionSource,
+) -> CodexResponsesMetadata {
+    CodexResponsesMetadata {
+        subagent_header: subagent_header_value(session_source),
+        ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn detached_memory_responses_metadata_with_workspaces(
     installation_id: String,
@@ -170,9 +184,6 @@ fn detached_memory_responses_metadata_with_workspaces(
         turn_trigger: Some("memory_consolidation".to_owned()),
         subagent_header: subagent_header_value(session_source),
         sandbox: sandbox.map(ToString::to_string),
-        sandbox_mode: Some(
-            permission_profile_policy_tag(permission_profile, cwd.as_path()).to_string(),
-        ),
         workspaces,
         ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     };

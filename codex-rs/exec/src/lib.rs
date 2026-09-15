@@ -6,6 +6,7 @@
 #![deny(clippy::print_stdout)]
 
 mod cli;
+mod direct;
 mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
@@ -273,6 +274,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         color,
         last_message_file,
         json: json_mode,
+        direct,
         prompt,
         output_schema: output_schema_path,
         mut config_overrides,
@@ -642,6 +644,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         std::process::exit(1);
     }
 
+    if direct && command.is_some() {
+        anyhow::bail!("--direct is only valid for top-level codex exec runs");
+    }
+
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         codex_core::otel_init::build_provider(
             &config,
@@ -676,6 +682,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let exec_span = exec_root_span();
     if let Some(context) = traceparent_context_from_env() {
         set_parent_from_context(&exec_span, context);
+    }
+
+    if direct {
+        return direct::run(resolve_prompt(prompt), &config, json_mode).await;
     }
     let config_warnings: Vec<ConfigWarningNotification> = config
         .startup_warnings
