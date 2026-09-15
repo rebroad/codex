@@ -73,13 +73,11 @@ pub(crate) async fn run(prompt_text: String, config: &Config, json_mode: bool) -
     .await;
 
     let bare_prompt = config.bare_prompt;
-    let mut prompt = Prompt {
-        input: build_inputs(
-            (!bare_prompt).then_some(DEFAULT_DIRECT_SYSTEM_PROMPT),
-            &prompt_text,
-        ),
-        ..Prompt::default()
-    };
+    let mut prompt = Prompt::default();
+    prompt.input = build_inputs(
+        (!bare_prompt).then_some(DEFAULT_DIRECT_SYSTEM_PROMPT),
+        &prompt_text,
+    );
     if !bare_prompt && let Some(base_instructions) = config.base_instructions.as_deref() {
         prompt.base_instructions.text = base_instructions.to_string();
     }
