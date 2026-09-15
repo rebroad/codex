@@ -2,8 +2,8 @@ use anyhow::Result;
 use codex_core::ModelClient;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::detached_memory_responses_metadata;
 use codex_core::resolve_installation_id;
+use codex_core::standalone_responses_metadata;
 use codex_features::Feature;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
@@ -37,9 +37,10 @@ pub(crate) async fn run(prompt_text: String, config: &Config, json_mode: bool) -
             config.http_client_factory(),
         )
         .await;
-    let model_info = models_manager
+    let mut model_info = models_manager
         .get_model_info(&model, &config.to_models_manager_config())
         .await;
+    model_info.use_responses_lite = false;
     let auth_snapshot = auth_manager.auth().await;
     let thread_id = ThreadId::new();
     let session_source = SessionSource::Exec;
@@ -54,23 +55,19 @@ pub(crate) async fn run(prompt_text: String, config: &Config, json_mode: bool) -
         auth_snapshot
             .as_ref()
             .map(|auth| TelemetryAuthMode::from(auth.auth_mode())),
-        "codex exec --direct".to_string(),
+        "codex_exec".to_string(),
         config.otel.log_user_prompt,
         user_agent(),
         session_source.clone(),
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    let responses_metadata = detached_memory_responses_metadata(
+    let responses_metadata = standalone_responses_metadata(
         installation_id,
         thread_id.to_string(),
         thread_id.to_string(),
         format!("{thread_id}:0"),
         &session_source,
-        &config.cwd,
-        &config.permissions.effective_permission_profile(),
-        None,
-    )
-    .await;
+    );
 
     let bare_prompt = config.bare_prompt;
     let mut prompt = Prompt::default();
@@ -78,7 +75,10 @@ pub(crate) async fn run(prompt_text: String, config: &Config, json_mode: bool) -
         (!bare_prompt).then_some(DEFAULT_DIRECT_SYSTEM_PROMPT),
         &prompt_text,
     );
-    if !bare_prompt && let Some(base_instructions) = config.base_instructions.as_deref() {
+    if bare_prompt {
+        prompt.base_instructions.text.clear();
+        prompt.base_instructions.provenance = None;
+    } else if let Some(base_instructions) = config.base_instructions.as_deref() {
         prompt.base_instructions.text = base_instructions.to_string();
     }
 
