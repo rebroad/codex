@@ -983,7 +983,10 @@ release_dir_is_complete() {
   case "$layout:$expected_target" in
     package:*linux* | legacy-platform-npm:*linux*)
       case "$expected_target" in
-        armv7-unknown-linux-musleabihf | aarch64-linux-android) ;;
+        aarch64-linux-android) ;;
+        armv7-unknown-linux-musleabihf)
+          [ -x "$release_dir/codex-resources/bwrap" ] || return 1
+          ;;
         *) [ -x "$release_dir/codex-resources/bwrap" ] || return 1 ;;
       esac
       ;;

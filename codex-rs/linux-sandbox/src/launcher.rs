@@ -182,6 +182,10 @@ pub(crate) fn preferred_bwrap_supports_argv0() -> bool {
     }
 }
 
+pub(crate) fn preferred_bwrap_is_available() -> bool {
+    !matches!(preferred_bwrap_launcher(), BubblewrapLauncher::Unavailable)
+}
+
 fn system_bwrap_capabilities(system_bwrap_path: &Path) -> Option<SystemBwrapCapabilities> {
     // bubblewrap added `--argv0` in v0.9.0:
     // https://github.com/containers/bubblewrap/releases/tag/v0.9.0
