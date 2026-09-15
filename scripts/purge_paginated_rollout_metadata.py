@@ -130,7 +130,7 @@ def purge_contents(contents: bytes) -> tuple[bytes, int]:
             if isinstance(ordinal, int) and ordinal >= removed:
                 line = re.sub(
                     rb'("ordinal"\s*:\s*)\d+',
-                    rb'\g<1>' + str(ordinal - removed).encode(),
+                    rb"\g<1>" + str(ordinal - removed).encode(),
                     line,
                     count=1,
                 )
@@ -140,7 +140,9 @@ def purge_contents(contents: bytes) -> tuple[bytes, int]:
 
 def target_path(target: str, affected: list[tuple[Path, str | None, int]]) -> Path:
     requested_path = Path(target).expanduser()
-    resolved_requested_path = requested_path.resolve() if requested_path.exists() else None
+    resolved_requested_path = (
+        requested_path.resolve() if requested_path.exists() else None
+    )
     by_path = [
         path for path, _, _ in affected if resolved_requested_path == path.resolve()
     ]
@@ -159,7 +161,9 @@ def target_path(target: str, affected: list[tuple[Path, str | None, int]]) -> Pa
         raise ValueError(f"no affected paginated rollout matched {target}")
     if len(matches) > 1:
         names = ", ".join(str(path) for path in matches)
-        raise ValueError(f"multiple affected rollouts matched {target}; use a filename: {names}")
+        raise ValueError(
+            f"multiple affected rollouts matched {target}; use a filename: {names}"
+        )
     return matches[0]
 
 
@@ -185,8 +189,12 @@ def main() -> int:
         help="Codex home containing sessions/ and archived_sessions/",
     )
     modes = parser.add_mutually_exclusive_group(required=True)
-    modes.add_argument("--find", action="store_true", help="list affected rollout files")
-    modes.add_argument("--purge", metavar="SESSION_ID_OR_FILENAME", help="purge one rollout")
+    modes.add_argument(
+        "--find", action="store_true", help="list affected rollout files"
+    )
+    modes.add_argument(
+        "--purge", metavar="SESSION_ID_OR_FILENAME", help="purge one rollout"
+    )
     args = parser.parse_args()
 
     try:
@@ -207,7 +215,9 @@ def main() -> int:
             if removed == 0:
                 raise ValueError(f"no removable records found in {path}")
             write_rollout(path, repaired, path.stat().st_mode & 0o777)
-            print(f"removed {removed} non-ordinal-zero SessionMeta record(s) from {path}")
+            print(
+                f"removed {removed} non-ordinal-zero SessionMeta record(s) from {path}"
+            )
             return 0
     except (OSError, RuntimeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
