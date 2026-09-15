@@ -101,6 +101,20 @@ pub async fn detached_memory_responses_metadata(
     .await
 }
 
+/// Builds metadata for a standalone model request that is not part of a Codex turn.
+pub fn standalone_responses_metadata(
+    installation_id: String,
+    session_id: String,
+    thread_id: String,
+    window_id: String,
+    session_source: &SessionSource,
+) -> CodexResponsesMetadata {
+    CodexResponsesMetadata {
+        subagent_header: subagent_header_value(session_source),
+        ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn detached_memory_responses_metadata_with_root(
     installation_id: String,
