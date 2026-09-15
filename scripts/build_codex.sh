@@ -692,6 +692,44 @@ configure_musl_build_tools() {
   done <"${env_file}"
 }
 
+build_armv7_bwrap() {
+  local mode="${1}" target_dir="${2}"
+  local target="armv7-unknown-linux-musleabihf"
+  local cache_dir="${BUILD_REPO}/build/armv7-${mode}/cache"
+  local env_file="${cache_dir}/musl-env"
+  local runner_temp="${cache_dir}/runner"
+  local setup_script="${SOURCE_REPO}/.github/scripts/install-musl-build-tools.sh"
+  local bwrap_log="${cache_dir}/bwrap-build.log"
+  local -a profile_args=()
+
+  [[ "${mode}" == release ]] && profile_args+=(--release)
+  mkdir -p "${runner_temp}"
+  if [[ ! -s "${env_file}" ]]; then
+    [[ -f "${setup_script}" ]] || die "ARMv7 musl build-tool setup script not found: ${setup_script}"
+    : >"${env_file}"
+    TARGET="${target}" \
+      GITHUB_ENV="${env_file}" \
+      RUNNER_TEMP="${runner_temp}" \
+      CODEX_BUILD_TOOLS_DIR="${BUILD_REPO}/build/tools" \
+      bash "${setup_script}"
+  fi
+  while IFS= read -r assignment; do
+    [[ -n "${assignment}" ]] && export "${assignment}"
+  done <"${env_file}"
+
+  echo "Building bundled bubblewrap for ${target}..." >&2
+  if ! (cd "${BUILD_WORKSPACE}" && env \
+    CARGO_TARGET_DIR="${target_dir}" \
+    RUSTUP_DISABLE_SELF_UPDATE=1 \
+    CODEX_BUILD_TIMESTAMP="0000000000-000000000000" \
+    "${CARGO_CMD[@]}" build -p codex-bwrap --target "${target}" \
+    "${profile_args[@]}" --locked) >"${bwrap_log}" 2>&1; then
+    echo "ARMv7 bubblewrap build failed; last 40 lines:" >&2
+    tail -n 40 "${bwrap_log}" >&2
+    return 1
+  fi
+}
+
 cargo_build() {
   local mode="${1}" target_mode="${2}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir
   [[ "${mode}" == release ]] && profile_args+=(--release)
@@ -719,6 +757,7 @@ cargo_build() {
     if ! CARGO_TARGET_DIR="${target_dir}" "${armv7_builder}" "${armv7_args[@]}" >&2; then
       die "ARMv7 build failed; refusing to use a possibly stale binary at ${target_dir}/${triple}/${mode}/codex"
     fi
+    build_armv7_bwrap "${mode}" "${target_dir}"
     printf '%s\n' "${target_dir}/${triple}/${mode}/codex"
     return 0
   fi
@@ -1256,6 +1295,13 @@ install_target() {
     binary="$(cargo_build "${MODE}" "${target_mode}")" || return $?
   fi
   install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}" "${already_stamped}" || return $?
+  if [[ "${target_mode}" == armv7 ]]; then
+    local armv7_triple="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"
+    local bwrap_binary="${binary%/${armv7_triple}/${MODE}/codex}/${armv7_triple}/${MODE}/bwrap"
+    install_remote_auxiliary_binary \
+      "${target}" "${bwrap_binary}" \
+      "${install_dir}/codex-resources" bwrap || return $?
+  fi
   if [[ "${target_mode}" == armv7 ]]; then
     install_remote_auxiliary_binary \
       "${target}" "$(dirname "${binary}")/codex-code-mode-host" \
