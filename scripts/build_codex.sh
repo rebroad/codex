@@ -579,6 +579,8 @@ configure_rusty_v8_artifacts() {
   local crate_version="${V8_CRATE_VERSION:-$(python3 "${SOURCE_REPO}/scripts/rusty_v8_version.py" "${SOURCE_REPO}/codex-rs/Cargo.lock")}";
   [[ -n "${crate_version}" ]] || die "could not determine the pinned v8 crate version"
   local default_profile="ptrcomp_sandbox_release"
+  # V8's pointer compression and sandbox require a 64-bit target.
+  [[ "${target_mode}" == armv7 ]] && default_profile="release"
   local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
   local target_dir build_profile build_root
   target_dir="$(target_dir_for "${MODE}" "${target_mode}")"

@@ -86,6 +86,8 @@ fi
 
 if [[ "${V8_TARGET}" == *-pc-windows-msvc ]]; then
   ARCHIVE_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.lib.gz"
+elif [[ "${V8_TARGET}" == armv7-* && "${PROFILE}" == release ]]; then
+  ARCHIVE_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.a.gz"
 else
   ARCHIVE_NAME="librusty_v8_${PROFILE}_${V8_TARGET}.a.gz"
 fi
