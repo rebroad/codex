@@ -752,9 +752,19 @@ cargo_build() {
     local armv7_builder="${BUILD_REPO}/scripts/build_armv7.sh"
     [[ -x "${armv7_builder}" ]] || die "ARMv7 builder not found or not executable: ${armv7_builder}"
     local -a armv7_args=("--${mode}" "--target=${triple}" --no-deploy-remote --no-publish-github --binary-only)
+    local -a armv7_v8_env=()
+    if [[ -z "${RUSTY_V8_ARCHIVE_PATH:-}" || -z "${RUSTY_V8_BINDING_PATH:-}" ]]; then
+      configure_rusty_v8_artifacts armv7 \
+        || die "Rusty V8 artifacts are unavailable for the ARMv7 build"
+    fi
+    armv7_v8_env=(
+      "RUSTY_V8_ARCHIVE=${RUSTY_V8_ARCHIVE_PATH}"
+      "RUSTY_V8_SRC_BINDING_PATH=${RUSTY_V8_BINDING_PATH}"
+    )
     [[ -n "${CARGO_BUILD_JOBS:-}" ]] && armv7_args+=("--jobs=${CARGO_BUILD_JOBS}")
     armv7_args+=("--build-env=${ARMV7_BUILD_ENV}")
-    if ! CARGO_TARGET_DIR="${target_dir}" "${armv7_builder}" "${armv7_args[@]}" >&2; then
+    if ! env CARGO_TARGET_DIR="${target_dir}" "${armv7_v8_env[@]}" \
+      "${armv7_builder}" "${armv7_args[@]}" >&2; then
       die "ARMv7 build failed; refusing to use a possibly stale binary at ${target_dir}/${triple}/${mode}/codex"
     fi
     build_armv7_bwrap "${mode}" "${target_dir}"
@@ -1313,14 +1323,17 @@ install_target() {
     binary="$(cargo_build "${MODE}" "${target_mode}")" || return $?
   fi
   install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}" "${already_stamped}" || return $?
-  if [[ "${target_mode}" == armv7 ]]; then
-    local armv7_triple="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"
-    local bwrap_binary="${binary%/${armv7_triple}/${MODE}/codex}/${armv7_triple}/${MODE}/bwrap"
+  if [[ "${target_mode}" == armv7 || "${target_mode}" == musl ]]; then
+    local bwrap_binary="$(dirname "${binary}")/bwrap"
+    if [[ "${target_mode}" == armv7 ]]; then
+      local armv7_triple="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"
+      bwrap_binary="${binary%/${armv7_triple}/${MODE}/codex}/${armv7_triple}/${MODE}/bwrap"
+    fi
     install_remote_auxiliary_binary \
       "${target}" "${bwrap_binary}" \
       "${install_dir}/codex-resources" bwrap || return $?
   fi
-  if [[ "${target_mode}" == armv7 ]]; then
+  if [[ "${target_mode}" == native || "${target_mode}" == musl || "${target_mode}" == armv7 ]]; then
     install_remote_auxiliary_binary \
       "${target}" "$(dirname "${binary}")/codex-code-mode-host" \
       "${install_dir}" codex-code-mode-host || return $?
