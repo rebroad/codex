@@ -86,19 +86,11 @@ fi
 
 if [[ "${V8_TARGET}" == *-pc-windows-msvc ]]; then
   ARCHIVE_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.lib.gz"
-elif [[ "${V8_TARGET}" == armv7-* && "${PROFILE}" == release ]]; then
-  ARCHIVE_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.a.gz"
 else
   ARCHIVE_NAME="librusty_v8_${PROFILE}_${V8_TARGET}.a.gz"
 fi
 BINDING_NAME="src_binding_${PROFILE}_${V8_TARGET}.rs"
 CHECKSUMS_NAME="rusty_v8_${PROFILE}_${V8_TARGET}.sha256"
-LEGACY_ARCHIVE_NAME=""
-if [[ "${V8_TARGET}" == armv7-* && "${PROFILE}" == release ]]; then
-  # Older cached manifests used the usual lib-prefixed name even though the
-  # ARMv7 release asset itself uses the unprefixed name.
-  LEGACY_ARCHIVE_NAME="librusty_v8_${PROFILE}_${V8_TARGET}.a.gz"
-fi
 ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 BINDING_PATH="${OUTPUT_DIR}/${BINDING_NAME}"
 CHECKSUMS_PATH="${OUTPUT_DIR}/${CHECKSUMS_NAME}"
@@ -224,7 +216,6 @@ while read -r digest name extra; do
   }
   case "${name}" in
     "${ARCHIVE_NAME}") archive_checksum_seen=true; archive_digest="${digest}" ;;
-    "${LEGACY_ARCHIVE_NAME}") archive_checksum_seen=true; archive_digest="${digest}" ;;
     "${BINDING_NAME}") binding_checksum_seen=true; binding_digest="${digest}" ;;
     *) echo "Unexpected checksum artifact in ${CHECKSUMS_PATH}: ${name}" >&2; exit 1 ;;
   esac
