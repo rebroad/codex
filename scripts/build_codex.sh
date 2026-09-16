@@ -127,7 +127,7 @@ refresh_build_provenance() {
   local current_commit current_status
   current_commit="$(git -C "${BUILD_REPO}" rev-parse HEAD)"
   current_status="$(git -C "${BUILD_REPO}" status --porcelain --untracked-files=all \
-    | sed -E '/(^|[[:space:]])Cargo\.lock$/d')"
+    | sed -E '/(^|[[:space:]])codex-rs\/Cargo\.(lock|toml)$/d')"
   if [[ "${current_commit}" != "${BUILD_START_COMMIT}" || "${current_status}" != "${BUILD_START_STATUS}" ]]; then
     BUILD_TIMESTAMP_SEPARATOR="+"
     echo "Build checkout changed during the build; using '+' in the installed version." >&2
@@ -148,7 +148,7 @@ refresh_build_provenance() {
 capture_build_provenance() {
   BUILD_START_COMMIT="$(git -C "${BUILD_REPO}" rev-parse HEAD)"
   BUILD_START_STATUS="$(git -C "${BUILD_REPO}" status --porcelain --untracked-files=all \
-    | sed -E '/(^|[[:space:]])Cargo\.lock$/d')"
+    | sed -E '/(^|[[:space:]])codex-rs\/Cargo\.(lock|toml)$/d')"
   COMMIT_SHORT="${BUILD_START_COMMIT:0:10}"
 }
 
