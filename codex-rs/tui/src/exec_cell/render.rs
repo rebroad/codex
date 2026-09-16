@@ -1040,12 +1040,14 @@ mod tests {
             /*interaction_input*/ None,
             /*animations_enabled*/ false,
         );
-        let completed_date = chrono::Local::now().date_naive();
         cell.complete_call(
             "call-id",
             CommandOutput::new(/*exit_code*/ 0, String::new()),
             std::time::Duration::from_millis(420),
         );
+        let completed_at = cell
+            .completion_time(0)
+            .expect("completed exec call timestamp");
 
         let rendered = cell
             .transcript_lines(/*width*/ 80)
@@ -1054,7 +1056,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains(&completed_date.format("%Y-%m-%d").to_string()));
+        assert!(rendered.contains(&completed_at.format("%Y-%m-%d %H:%M:%S").to_string()));
         assert!(rendered.contains(" • 420ms • "));
         assert!(
             rendered

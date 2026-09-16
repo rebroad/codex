@@ -315,6 +315,7 @@ impl ChatWidget {
                         notification.turn.id.clone(),
                         replay_kind
                             .map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                        None,
                     );
                 }
                 self.last_non_retry_error = None;
@@ -413,6 +414,7 @@ impl ChatWidget {
                 item,
                 notification.turn_id,
                 replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                None,
             ),
         }
     }

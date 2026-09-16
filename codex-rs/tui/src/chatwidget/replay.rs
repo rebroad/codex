@@ -37,7 +37,10 @@ impl ChatWidget {
                 if hidden_nested_review_turn && matches!(item, ThreadItem::UserMessage { .. }) {
                     continue;
                 }
-                self.replay_thread_item(item, turn_id.clone(), replay_kind);
+                let completed_at = completed_at
+                    .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+                    .map(|timestamp| timestamp.with_timezone(&chrono::Local));
+                self.replay_thread_item_at(item, turn_id.clone(), replay_kind, completed_at);
             }
             let status = if hidden_nested_review_turn {
                 TurnStatus::Completed
@@ -68,13 +71,29 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn replay_thread_item(
         &mut self,
         item: ThreadItem,
         turn_id: String,
         replay_kind: ReplayKind,
     ) {
-        self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+        self.replay_thread_item_at(item, turn_id, replay_kind, None);
+    }
+
+    fn replay_thread_item_at(
+        &mut self,
+        item: ThreadItem,
+        turn_id: String,
+        replay_kind: ReplayKind,
+        completed_at: Option<chrono::DateTime<chrono::Local>>,
+    ) {
+        self.handle_thread_item(
+            item,
+            turn_id,
+            ThreadItemRenderSource::Replay(replay_kind),
+            completed_at,
+        );
     }
 
     pub(super) fn handle_thread_item(
@@ -82,6 +101,7 @@ impl ChatWidget {
         item: ThreadItem,
         turn_id: String,
         render_source: ThreadItemRenderSource,
+        completed_at: Option<chrono::DateTime<chrono::Local>>,
     ) {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
@@ -174,7 +194,7 @@ impl ChatWidget {
                 }) {
                     self.handle_command_execution_started_now(item.clone());
                 }
-                self.handle_command_execution_completed_now(item);
+                self.handle_command_execution_completed_now_at(item, completed_at);
             }
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
             ThreadItem::FileChange {

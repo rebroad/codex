@@ -247,6 +247,13 @@ impl ExecCell {
         self.completion_times.get(index).copied().flatten()
     }
 
+    pub(crate) fn set_completion_time(&mut self, call_id: &str, completed_at: DateTime<Local>) {
+        let Some(index) = self.calls.iter().rposition(|call| call.call_id == call_id) else {
+            return;
+        };
+        self.completion_times[index] = Some(completed_at);
+    }
+
     pub(crate) fn append_output(&mut self, call_id: &str, chunk: &str) -> bool {
         if chunk.is_empty() {
             return false;
