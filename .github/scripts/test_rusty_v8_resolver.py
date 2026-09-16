@@ -13,7 +13,7 @@ class RustyV8ResolverTest(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             local_repo = Path(temp_dir)
             archive = local_repo / (
-                "rusty_v8_release_armv7-unknown-linux-musleabihf.a.gz"
+                "librusty_v8_release_armv7-unknown-linux-musleabihf.a.gz"
             )
             binding = local_repo / (
                 "src_binding_release_armv7-unknown-linux-musleabihf.rs"

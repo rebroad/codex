@@ -60,8 +60,8 @@ with these raw asset names:
 - `librusty_v8_release_<target>.a.gz`
 - `src_binding_release_<target>.rs`
 
-The ARMv7 compatibility release is the exception: its static archives are
-named `rusty_v8_release_<target>.a.gz` without the `lib` prefix.
+The ARMv7 compatibility release uses the same `lib`-prefixed static archive
+naming as the other Unix targets.
 ARMv7 uses this non-sandboxed profile because V8's pointer compression and
 sandbox require 64-bit targets.
 
