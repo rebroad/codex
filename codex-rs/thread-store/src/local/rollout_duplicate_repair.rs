@@ -76,7 +76,7 @@ pub(super) async fn repair_duplicate_ordinals(
         }
         temporary.flush().await.map_err(io_error)?;
         drop(temporary);
-        rewrite_rollout_in_place(&temporary_path, rollout_path).await
+        replace_rollout(&temporary_path, rollout_path).await
     }
     .await;
     if result.is_err() {
@@ -110,26 +110,14 @@ fn backup_path(thread_id: ThreadId, rollout_path: &Path) -> ThreadStoreResult<Pa
     )))
 }
 
-async fn rewrite_rollout_in_place(
-    temporary_path: &Path,
-    rollout_path: &Path,
-) -> ThreadStoreResult<()> {
-    let mut source = tokio::fs::File::open(temporary_path)
-        .await
-        .map_err(io_error)?;
-    let mut destination = tokio::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(rollout_path)
-        .await
-        .map_err(io_error)?;
-    tokio::io::copy(&mut source, &mut destination)
-        .await
-        .map_err(io_error)?;
-    destination.flush().await.map_err(io_error)?;
-    drop(destination);
-    drop(source);
-    tokio::fs::remove_file(temporary_path)
+async fn replace_rollout(temporary_path: &Path, rollout_path: &Path) -> ThreadStoreResult<()> {
+    #[cfg(windows)]
+    {
+        tokio::fs::remove_file(rollout_path)
+            .await
+            .map_err(io_error)?;
+    }
+    tokio::fs::rename(temporary_path, rollout_path)
         .await
         .map_err(io_error)
 }

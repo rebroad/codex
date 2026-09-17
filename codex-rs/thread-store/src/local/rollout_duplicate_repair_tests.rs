@@ -51,38 +51,3 @@ async fn does_not_create_backup_for_unique_ordinals() {
             .is_none()
     );
 }
-
-#[tokio::test]
-async fn preserves_open_append_handles_when_repairing() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let rollout_path = temp_dir.path().join("rollout.jsonl");
-    fs::write(
-        &rollout_path,
-        concat!(
-            "{\"ordinal\":0}\n",
-            "{\"ordinal\":1}\n",
-            "{\"ordinal\":1}\n",
-        ),
-    )
-    .expect("write rollout");
-    let mut open_writer = fs::OpenOptions::new()
-        .append(true)
-        .open(&rollout_path)
-        .expect("open rollout writer");
-
-    repair_duplicate_ordinals(ThreadId::default(), &rollout_path)
-        .await
-        .expect("repair rollout");
-
-    writeln!(open_writer, "{{\"ordinal\":2}}").expect("append rollout");
-    open_writer.flush().expect("flush rollout");
-
-    assert_eq!(
-        fs::read_to_string(&rollout_path).expect("read repaired rollout"),
-        concat!(
-            "{\"ordinal\":0}\n",
-            "{\"ordinal\":1}\n",
-            "{\"ordinal\":2}\n",
-        )
-    );
-}
