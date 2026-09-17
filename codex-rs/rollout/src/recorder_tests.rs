@@ -1065,6 +1065,38 @@ async fn resumed_paginated_rollout_continues_after_decimal_token_count() -> std:
 }
 
 #[tokio::test]
+async fn resumed_rollout_reopens_after_path_replacement() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let rollout_path = home.path().join("rollout.jsonl");
+    write_paginated_rollout(&rollout_path, ThreadId::new(), &[1])?;
+
+    let recorder =
+        RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path.clone())).await?;
+    let replacement_path = home.path().join("rollout-replacement.jsonl");
+    fs::copy(&rollout_path, &replacement_path)?;
+    #[cfg(windows)]
+    fs::remove_file(&rollout_path)?;
+    fs::rename(replacement_path, &rollout_path)?;
+
+    recorder
+        .record_canonical_items(&[agent_message_item("after-path-replacement")])
+        .await?;
+    recorder.flush().await?;
+
+    let lines = read_rollout_lines(&rollout_path)?;
+    assert_eq!(
+        lines.iter().map(|line| line.ordinal).collect::<Vec<_>>(),
+        vec![Some(0), Some(1), Some(2)]
+    );
+    assert!(
+        fs::read_to_string(&rollout_path)?.contains("after-path-replacement"),
+        "the append should be present in the current rollout path"
+    );
+    recorder.shutdown().await
+}
+
+#[tokio::test]
 async fn resumed_paginated_rollout_repairs_unsafe_tail() -> std::io::Result<()> {
     let valid_unterminated = serde_json::to_string(&RolloutLine {
         timestamp: "2026-07-09T00:00:05Z".to_string(),

@@ -1865,11 +1865,30 @@ impl RolloutWriterState {
             return Ok(());
         }
 
-        let file = open_log_file(self.rollout_path.as_path())?;
+        let was_deferred = self.deferred_creation;
+        let mut file = open_log_file(self.rollout_path.as_path())?;
+        if !was_deferred {
+            self.ordinal_state = ordinal_state_for_rollout(&mut file, self.rollout_path.as_path())?;
+        }
         self.writer = Some(JsonlWriter {
             file: tokio::fs::File::from_std(file),
         });
         self.deferred_creation = false;
+        Ok(())
+    }
+
+    async fn ensure_writer_current(&self) -> std::io::Result<()> {
+        let Some(writer) = self.writer.as_ref() else {
+            return Ok(());
+        };
+        let writer_metadata = writer.file.metadata().await?;
+        let path_metadata = tokio::fs::metadata(self.rollout_path.as_path()).await?;
+        if !same_file_identity(&writer_metadata, &path_metadata) {
+            return Err(IoError::other(format!(
+                "rollout file was replaced while writing: {}",
+                self.rollout_path.display()
+            )));
+        }
         Ok(())
     }
 
@@ -1890,17 +1909,30 @@ impl RolloutWriterState {
 
     async fn write_pending_once(&mut self) -> std::io::Result<()> {
         self.ensure_writer_open().await?;
+        self.ensure_writer_current().await?;
+
+        let starting_ordinal_state = self.ordinal_state;
+        let starting_meta = self.meta.clone();
         self.write_session_meta_if_needed().await?;
 
-        self.write_pending_items_once().await?;
+        let written_count = self.write_pending_items_once().await?;
 
         if let Some(writer) = self.writer.as_mut() {
-            writer.file.flush().await?;
+            if let Err(err) = writer.file.flush().await {
+                self.pending_items.drain(..written_count);
+                return Err(err);
+            }
         }
+        if let Err(err) = self.ensure_writer_current().await {
+            self.ordinal_state = starting_ordinal_state;
+            self.meta = starting_meta;
+            return Err(err);
+        }
+        self.pending_items.drain(..written_count);
         Ok(())
     }
 
-    async fn write_pending_items_once(&mut self) -> std::io::Result<()> {
+    async fn write_pending_items_once(&mut self) -> std::io::Result<usize> {
         let Some(writer) = self.writer.as_mut() else {
             return Err(IoError::other("rollout writer is not open"));
         };
@@ -1924,11 +1956,11 @@ impl RolloutWriterState {
             written_count += 1;
         }
 
-        if written_count > 0 {
+        if write_result.is_err() {
             self.pending_items.drain(..written_count);
         }
 
-        write_result
+        write_result.map(|()| written_count)
     }
 }
 
@@ -2056,6 +2088,26 @@ fn ensure_rollout_is_newline_terminated(file: &mut File) -> std::io::Result<()> 
 
 struct JsonlWriter {
     file: tokio::fs::File,
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file_identity(_left: &std::fs::Metadata, _right: &std::fs::Metadata) -> bool {
+    true
 }
 
 #[derive(serde::Serialize)]
