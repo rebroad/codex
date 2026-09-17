@@ -1279,10 +1279,11 @@ fn append_read_only_subpath_args(
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    if bwrap_args.preserved_files.is_empty() {
-        bwrap_args.preserved_files.push(File::open("/dev/null")?);
-    }
-    let null_fd = bwrap_args.preserved_files[0].as_raw_fd().to_string();
+    // Bubblewrap closes each `--ro-bind-data` fd after copying, so every
+    // mount needs its own still-open descriptor until spawn.
+    let file = File::open("/dev/null")?;
+    let null_fd = file.as_raw_fd().to_string();
+    bwrap_args.preserved_files.push(file);
     bwrap_args.args.push("--ro-bind-data".to_string());
     bwrap_args.args.push(null_fd);
     bwrap_args.args.push(path_to_string(path));
@@ -2026,6 +2027,7 @@ mod tests {
                 workspace.join(".codex"),
             ]
         );
+        assert_eq!(args.preserved_files.len(), 1);
         assert!(
             !args
                 .args
@@ -2037,6 +2039,58 @@ mod tests {
         assert!(
             !args.synthetic_mount_targets[0].should_remove_after_bwrap(&metadata),
             "pre-existing empty preserved files must not be cleaned up as synthetic targets",
+        );
+    }
+
+    #[test]
+    fn empty_file_bind_data_uses_distinct_preserved_descriptors() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let dot_git = workspace.join(".git");
+        let blocked = workspace.join("blocked");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        File::create(&dot_git).expect("create empty .git file");
+
+        let workspace_root =
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
+        let blocked_root = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: workspace_root.into(),
+                access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
+            },
+            FileSystemSandboxEntry {
+                path: blocked_root.into(),
+                access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
+            },
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let data_fds = args
+            .args
+            .windows(3)
+            .filter(|window| window[0] == "--ro-bind-data")
+            .map(|window| window[1].clone())
+            .collect::<Vec<_>>();
+        let preserved_fds = args
+            .preserved_files
+            .iter()
+            .map(|file| file.as_raw_fd().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args.preserved_files.len(), 2);
+        assert_eq!(data_fds, preserved_fds);
+        assert_eq!(
+            data_fds
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            data_fds.len(),
+            "each --ro-bind-data must use a distinct still-open fd: {data_fds:?}"
         );
     }
 
