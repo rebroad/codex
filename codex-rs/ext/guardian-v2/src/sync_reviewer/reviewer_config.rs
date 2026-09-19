@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -7,6 +8,7 @@ use codex_core::config::Constrained;
 use codex_core::config::NetworkProxySpec;
 use codex_extension_api::ApprovalReviewError;
 use codex_features::Feature;
+use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_network_proxy::NetworkProxyConfig;
@@ -30,6 +32,7 @@ use tracing::warn;
 /// starting the prepared internal session remains the host's responsibility.
 pub(super) async fn prepare(
     thread_manager: &ThreadManager,
+    auth_manager: Arc<AuthManager>,
     parent_config: &Config,
     parent_environments: &[TurnEnvironmentSelection],
     parent_model: &str,
@@ -38,6 +41,7 @@ pub(super) async fn prepare(
 ) -> Result<StartThreadOptions, ApprovalReviewError> {
     let model = select_reviewer_model(
         thread_manager,
+        auth_manager,
         parent_config,
         parent_model,
         parent_reasoning_effort,
@@ -79,6 +83,7 @@ struct ReviewerModel {
 
 async fn select_reviewer_model(
     thread_manager: &ThreadManager,
+    auth_manager: Arc<AuthManager>,
     parent_config: &Config,
     parent_model: &str,
     parent_reasoning_effort: Option<ReasoningEffort>,
@@ -88,12 +93,7 @@ async fn select_reviewer_model(
     let parent_model_info = models_manager
         .get_model_info(parent_model, &manager_config)
         .await;
-    // TODO: Use the parent session's auth when reviewer spawning is wired;
-    // resumed threads may use different auth than the thread manager.
-    let provider = create_model_provider(
-        parent_config.model_provider.clone(),
-        Some(thread_manager.auth_manager()),
-    );
+    let provider = create_model_provider(parent_config.model_provider.clone(), Some(auth_manager));
     let preferred_review_model = provider.approval_review_preferred_model();
     let selected_review_model = parent_model_info
         .auto_review_model_override

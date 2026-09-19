@@ -10,6 +10,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::StaticModelsManager;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
@@ -47,8 +48,10 @@ async fn reviewer_test_codex() -> Result<TestCodex> {
 
 async fn prepare_options(test: &TestCodex, parent_config: &Config) -> Result<StartThreadOptions> {
     let extension = GuardianExtension::new(Arc::downgrade(&test.thread_manager), ());
+    let thread_id = ThreadId::from_string(test.codex.thread_extension_data().level_id())?;
     Ok(extension
         .prepare_reviewer_options(
+            thread_id,
             parent_config,
             &test.codex.environment_selections().await,
             "gpt-5.5",
@@ -187,8 +190,10 @@ async fn read_only_permissions_preserve_parent_environments_and_denied_reads() -
     }
 
     let extension = GuardianExtension::new(Arc::downgrade(&test.thread_manager), ());
+    let thread_id = ThreadId::from_string(test.codex.thread_extension_data().level_id())?;
     let options = extension
         .prepare_reviewer_options(
+            thread_id,
             &parent_config,
             &parent_environments,
             "gpt-5.5",
@@ -252,8 +257,10 @@ async fn falls_back_to_parent_model_and_effective_reasoning() -> Result<()> {
         .await?;
 
     let extension = GuardianExtension::new(Arc::downgrade(&test.thread_manager), ());
+    let thread_id = ThreadId::from_string(test.codex.thread_extension_data().level_id())?;
     let options = extension
         .prepare_reviewer_options(
+            thread_id,
             &test.config,
             &test.codex.environment_selections().await,
             "gpt-5.5",

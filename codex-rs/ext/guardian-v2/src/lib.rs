@@ -90,6 +90,6 @@ pub fn install<S, I>(
     I: Send + Sync + 'static,
 {
     registry.thread_lifecycle_contributor(Arc::new(GuardianExtension::new(agent_spawner)));
-    async_scorer::install(registry, auth_manager, thread_manager.clone());
+    async_scorer::install(registry, auth_manager.clone(), thread_manager.clone());
     sync_reviewer::install(registry, thread_manager, internal_session_spawner);
 }

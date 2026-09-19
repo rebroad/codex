@@ -22,6 +22,8 @@ use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionMetrics;
 use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
+#[cfg(test)]
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::add_originator_header;
@@ -206,6 +208,11 @@ impl LunaSampler {
             capacity: Arc::new(Semaphore::new(MAX_WEBSOCKET_CONNECTIONS)),
             active_requests: Mutex::new(VecDeque::with_capacity(MAX_WEBSOCKET_CONNECTIONS)),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.config.provider.auth_manager()
     }
 
     pub(super) async fn prewarm(&self) {
