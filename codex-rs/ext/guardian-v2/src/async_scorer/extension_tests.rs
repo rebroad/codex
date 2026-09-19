@@ -177,6 +177,9 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    let thread_auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("resumed-thread-api-key"));
+    thread_store.insert(thread_auth_manager.clone());
 
     let mut model = thread_store.get::<ModelInfo>().unwrap().as_ref().clone();
     model.node_repl_auto_review_required = true;
@@ -196,12 +199,19 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
         .await;
 
     assert!(server.handshakes().is_empty());
-    assert!(thread_store.get::<LunaSampler>().is_some());
-    thread_store
+    let sampler = thread_store
         .get::<LunaSampler>()
-        .expect("Guardian v2 should initialize")
-        .wait_for_prewarm(PREWARM_TIMEOUT)
-        .await?;
+        .expect("Guardian v2 should initialize");
+    assert!(
+        Arc::ptr_eq(
+            &sampler
+                .auth_manager()
+                .expect("Guardian v2 should have an auth manager"),
+            &thread_auth_manager,
+        ),
+        "Guardian v2 should use the owning thread auth manager"
+    );
+    sampler.wait_for_prewarm(PREWARM_TIMEOUT).await?;
     Ok(())
 }
 
