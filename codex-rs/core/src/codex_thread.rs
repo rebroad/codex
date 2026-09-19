@@ -15,6 +15,7 @@ use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+use codex_login::AuthManager;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::ThreadId;
@@ -261,6 +262,11 @@ impl CodexThread {
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.session.services.session_telemetry.clone()
+    }
+
+    /// Returns the auth manager used by this thread's session.
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        Arc::clone(&self.session.services.auth_manager)
     }
 
     /// Returns extension-owned data attached to this thread runtime.

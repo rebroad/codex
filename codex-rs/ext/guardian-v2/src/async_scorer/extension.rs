@@ -163,7 +163,11 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
             let sampler_config = LunaSamplerConfig {
                 provider: create_model_provider(
                     input.config.model_provider.clone(),
-                    Some(Arc::clone(&self.auth_manager)),
+                    input
+                        .thread_store
+                        .get::<Arc<AuthManager>>()
+                        .map(|auth_manager| auth_manager.as_ref().clone())
+                        .or_else(|| Some(Arc::clone(&self.auth_manager))),
                 ),
                 http_client_factory: input.config.http_client_factory(),
                 agent_identity_policy: if input.config.features.enabled(Feature::UseAgentIdentity) {

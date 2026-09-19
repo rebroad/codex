@@ -45,6 +45,7 @@ impl<S> GuardianExtension<S> {
     /// Prepares reviewer options for the later synchronous reviewer implementation.
     pub async fn prepare_reviewer_options(
         &self,
+        parent_thread_id: ThreadId,
         parent_config: &Config,
         parent_environments: &[TurnEnvironmentSelection],
         parent_model: &str,
@@ -54,8 +55,15 @@ impl<S> GuardianExtension<S> {
         let thread_manager = self.thread_manager.upgrade().ok_or_else(|| {
             ApprovalReviewError::Failed("thread manager is no longer available".to_string())
         })?;
+        let parent = thread_manager
+            .get_thread(parent_thread_id)
+            .await
+            .map_err(|error| {
+                ApprovalReviewError::Failed(format!("parent thread is unavailable: {error}"))
+            })?;
         reviewer_config::prepare(
             &thread_manager,
+            parent.auth_manager(),
             parent_config,
             parent_environments,
             parent_model,
