@@ -1,3 +1,4 @@
+Get `just fmt` working on a per-file basis (for git-add)
 Add Delete to delete queued prompts (esc already steers), or a Ctrl+letter (E?) to edit queued prompts (they can become concetenated if more than one), or Ctrl+C to delete the most recently-queued
 Add a search feature to the transcript view
 Make "Working" show the last tool requested, and make it clear what we're waiting for (e.g. response from the backend, or if the backend is streaming, the bytes received)
