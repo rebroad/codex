@@ -84,7 +84,6 @@ Particularly when introducing a new concept/feature/API, before adding to `codex
 - There is an existing crate other than `codex-core` that is an appropriate place for your new code to live.
 - It is time to introduce a new crate to the Cargo workspace for your new functionality. Refactor existing code as necessary to make this happen.
 
-Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
 
 ## Code Review Rules
 
