@@ -100,7 +100,8 @@ class App:
         ttk.Label(frame, text="ChatGPT Android realtime voice", font=(None, 16, "bold")).pack(anchor="w")
         ttk.Label(
             frame,
-            text=("Phone-dependent mode: speak and listen on the Flip7. "
+            text=("Phone-dependent mode: tap Start / stop voice, then say "
+                  "‘Please reply with the word OK’ into the Flip7 microphone and listen on the phone. "
                   "Optional scrcpy forwarding sends phone playback to Linux."),
             wraplength=610,
         ).pack(anchor="w", pady=(6, 14))
