@@ -481,6 +481,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 state_db: args.state_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
+                frontend_auth_manager: Arc::clone(&auth_manager),
                 auth_manager,
                 installation_id,
                 code_mode_session_provider: None,
