@@ -129,6 +129,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
     } = compaction_output_result?;
     // TODO: Emit this before compaction output validation so malformed completed
     // responses still surface their raw upstream usage.
+    sess.maybe_emit_backend_account_update(turn_context).await;
     sess.send_event(
         turn_context,
         EventMsg::RawResponseCompleted(RawResponseCompletedEvent {

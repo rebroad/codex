@@ -777,6 +777,7 @@ async fn drain_to_completed(
                 usage_metadata,
                 ..
             }) => {
+                sess.maybe_emit_backend_account_update(turn_context).await;
                 sess.send_event(
                     turn_context,
                     EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
