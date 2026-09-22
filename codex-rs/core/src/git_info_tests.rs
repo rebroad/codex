@@ -52,6 +52,7 @@ impl MetadataOverrideFileSystem {
             "operation is not used by Git root discovery",
         ))
     }
+
     pub(crate) fn hiding_ancestor_git_markers(path: &Path) -> Self {
         Self::with_hidden_git_markers(path, None)
     }
