@@ -7,12 +7,14 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
-source_repo := if path_exists(justfile_directory() / ".git" / "HEAD") == "true" { justfile_directory() } else { justfile_directory() / ".." / "codex" }
-build_repo := if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" }
+source_repo := if path_exists(justfile_directory() / ".git" / "HEAD") == "true" { justfile_directory() } else if path_exists(justfile_directory() / ".git") == "true" { shell("realpath \"$(git -C " + justfile_directory() + " rev-parse --path-format=absolute --git-common-dir)/..\"") } else { justfile_directory() / ".." / "codex" }
+build_repo_override := env_var_or_default("CODEX_BUILD_REPO", "")
+build_repo := if build_repo_override != "" { build_repo_override } else if source_repo == justfile_directory() { "" } else if path_exists(justfile_directory() / ".git") == "true" { justfile_directory() } else if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" }
 build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
-cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
+cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { error("Cargo operations are disabled in the source tree; set CODEX_BUILD_REPO to an external .build/.make tree") }
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
+sync_build_tree := source_repo / "scripts/sync_build_tree.sh"
 cargo_lock_setup := if os_family() == "windows" { "" } else { "exec 9>\"" + build_tree + "/.codex-cargo.lock\"; flock 9; " }
 cargo_setup := "export CODEX_CARGO_OPERATION=\"${CODEX_CARGO_OPERATION:-$0}\"; codex_cargo_env_output=\"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\" || exit $?; eval \"$codex_cargo_env_output\" || exit $?;"
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
@@ -57,11 +59,11 @@ app-server-test-client *args:
 
 # Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts.
 fmt:
-    @{{ cargo_lock_setup }}{{ python }} ../scripts/format.py
+    @{{ cargo_lock_setup }}{{ python }} "{{ source_repo }}/scripts/format.py"
 
 # Check formatting without modifying files.
 fmt-check:
-    @{{ python }} ../scripts/format.py --check
+    @{{ python }} "{{ source_repo }}/scripts/format.py" --check
 
 fix *args:
     cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-fix; {{ cargo_setup }} cargo clippy --fix --tests --allow-dirty --locked "$@"
@@ -183,15 +185,15 @@ mcp-server-run *args:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-core --bin codex-write-config-schema -- --out "{{ cargo_source_directory }}/core/config.schema.json"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-core --bin codex-write-config-schema -- --out "{{ cargo_source_directory }}/core/config.schema.json" && bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
-    cd "{{ cargo_working_directory }}" && {{ python }} app-server-protocol/scripts/write_schema_fixtures.py --schema-root "{{ cargo_source_directory }}/app-server-protocol/schema" {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} {{ python }} app-server-protocol/scripts/write_schema_fixtures.py --schema-root "{{ cargo_source_directory }}/app-server-protocol/schema" {args} && bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
 
 [no-cd]
 write-hooks-schema:
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures -- "{{ cargo_source_directory }}/hooks/schema"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures -- "{{ cargo_source_directory }}/hooks/schema" && bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
 
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
