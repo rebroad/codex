@@ -19,6 +19,7 @@ support Windows lifecycle management.
 ```sh
 codex app-server daemon start
 codex app-server daemon restart
+codex app-server daemon restart-if-idle
 codex app-server daemon enable-remote-control
 codex app-server daemon disable-remote-control
 codex app-server daemon stop
@@ -40,21 +41,20 @@ $HOME/.cargo/bin/codex app-server daemon bootstrap --remote-control
 ```
 
 `bootstrap` records daemon settings under `CODEX_HOME/app-server-daemon/` and
-starts app-server as a pidfile-backed detached process. The updater is started
-alongside it. The updater only watches the locally managed Cargo binary; it does
-not fetch or install updates from a URL.
+starts app-server as a pidfile-backed detached process. It does not fetch or
+watch for updates.
 
 ## Installation and update cases
 
-The daemon launches the executable used by the current CLI command. Its updater
-tracks the `codex` symlink under `$HOME/.cargo/bin`, which is updated by the
-local build/release workflow.
+The daemon launches the executable used by the current CLI command. The local
+build/release workflow explicitly requests a graceful restart after it updates
+the `codex` symlink under `$HOME/.cargo/bin`.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
-| `start` is used | The current CLI executable starts app-server and the local watcher | No | Yes, after the watcher interval. |
-| `bootstrap` is used | The current CLI executable starts app-server and the local watcher | No | Yes, after the watcher interval. |
-| A newer version is installed into Cargo bin | The updater detects the new target and restarts app-server with it | Installation is performed by the local build/release workflow | Yes. |
+| `start` is used | The current CLI executable starts app-server | No | No. |
+| `bootstrap` is used | The current CLI executable starts app-server | No | No. |
+| A newer version is installed into Cargo bin | The build workflow requests `restart-if-idle` | Installation is performed by the local build/release workflow | Yes, after active turns finish. |
 
 ### Cargo-bin installs
 
@@ -62,16 +62,12 @@ For installs created by the local build/release workflow:
 
 - lifecycle commands use the executable from the current CLI invocation
 - `bootstrap` is supported
-- the daemon's local updater tracks `$HOME/.cargo/bin/codex`
 - updates are installed as versioned binaries and selected by the `codex` symlink
 
 ### Out-of-band updates
 
-This daemon does not watch arbitrary executable files for replacement. If some
-other tool updates the Cargo-bin `codex` symlink:
-
-- the daemon's local updater detects the changed target and restarts the
-  running app-server
+This daemon does not watch executable files for replacement. Tools that update
+the Cargo-bin `codex` symlink should request `restart-if-idle` explicitly.
 
 ## Lifecycle semantics
 
@@ -81,13 +77,17 @@ JSON-RPC initialize handshake on the Unix control socket.
 `restart` stops any pid-managed daemon and starts it again using the current
 CLI executable.
 
+`restart-if-idle` sends the app-server's graceful shutdown signal and waits for
+active assistant turns to finish before starting the current CLI executable.
+It does not force-kill the app-server.
+
 `enable-remote-control` and `disable-remote-control` persist the launch setting
 for future starts. If a pid-managed app-server is already running, they restart it
 so the new setting takes effect immediately.
 
-Top-level `codex remote-control` bootstraps with `--remote-control` when the
-updater loop is not running. Otherwise it enables remote control and starts the
-daemon using the current CLI executable.
+Top-level `codex remote-control` bootstraps with `--remote-control` when needed;
+otherwise it enables remote control and starts the daemon using the current CLI
+executable.
 
 `stop` sends a graceful termination request first, then sends a second
 termination signal after the grace window if the process is still alive.
@@ -102,5 +102,4 @@ The daemon stores its local state under `CODEX_HOME/app-server-daemon/`:
 
 - `settings.json` for persisted launch settings
 - `app-server.pid` for the app-server process record
-- `app-server-updater.pid` for stopping stale updater loops from older builds
 - `daemon.lock` for daemon-wide lifecycle serialization

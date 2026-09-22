@@ -284,6 +284,34 @@ impl PidBackend {
         }
     }
 
+    /// Requests the app-server's graceful shutdown and waits for it to finish.
+    /// Unlike `stop`, this path never force-terminates the process.
+    #[cfg(unix)]
+    pub(crate) async fn stop_gracefully(&self) -> Result<()> {
+        loop {
+            let Some(record) = self.wait_for_pid_start().await? else {
+                return Ok(());
+            };
+            if !self.record_is_active(&record).await? {
+                match self.refresh_after_stale_record(&record).await? {
+                    PidFileState::Missing => return Ok(()),
+                    PidFileState::Starting | PidFileState::Running(_) => continue,
+                }
+            }
+
+            self.request_graceful_shutdown(record.pid)?;
+            loop {
+                if !self.record_is_active(&record).await? {
+                    match self.refresh_after_stale_record(&record).await? {
+                        PidFileState::Missing => return Ok(()),
+                        PidFileState::Starting | PidFileState::Running(_) => break,
+                    }
+                }
+                sleep(STOP_POLL_INTERVAL).await;
+            }
+        }
+    }
+
     async fn wait_for_pid_start(&self) -> Result<Option<PidRecord>> {
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         loop {
@@ -463,6 +491,16 @@ impl PidBackend {
         }
     }
 
+    #[cfg(unix)]
+    fn request_graceful_shutdown(&self, pid: u32) -> Result<()> {
+        match self.command_kind {
+            PidCommandKind::AppServer { .. } => request_graceful_shutdown(pid),
+            PidCommandKind::UpdateLoop => {
+                bail!("graceful shutdown is only supported for the app server")
+            }
+        }
+    }
+
     fn force_terminate_process(&self, pid: u32) -> Result<()> {
         match self.command_kind {
             PidCommandKind::AppServer { .. } => force_terminate_process(pid),
@@ -547,6 +585,21 @@ fn terminate_process(pid: u32) -> Result<()> {
         return Ok(());
     }
     Err(err).with_context(|| format!("failed to terminate pid-managed app server {pid}"))
+}
+
+#[cfg(unix)]
+fn request_graceful_shutdown(pid: u32) -> Result<()> {
+    let raw_pid = libc::pid_t::try_from(pid)
+        .with_context(|| format!("pid-managed app server pid {pid} is out of range"))?;
+    let result = unsafe { libc::kill(raw_pid, libc::SIGHUP) };
+    if result == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(err).with_context(|| format!("failed to request graceful shutdown of app server {pid}"))
 }
 
 #[cfg(unix)]

@@ -39,6 +39,7 @@ const STATE_DIR_NAME: &str = "app-server-daemon";
 pub enum LifecycleCommand {
     Start,
     Restart,
+    RestartIfIdle,
     Stop,
     Version,
 }
@@ -299,6 +300,10 @@ impl Daemon {
                 let _operation_lock = self.acquire_operation_lock().await?;
                 self.restart().await
             }
+            LifecycleCommand::RestartIfIdle => {
+                let _operation_lock = self.acquire_operation_lock().await?;
+                self.restart_if_idle().await
+            }
             LifecycleCommand::Stop => {
                 let _operation_lock = self.acquire_operation_lock().await?;
                 self.stop().await
@@ -309,8 +314,10 @@ impl Daemon {
 
     async fn start(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
         if let Ok(info) = client::probe(&self.socket_path).await {
-            self.ensure_updater_started(&settings).await?;
             return Ok(self
                 .output(
                     LifecycleStatus::AlreadyRunning,
@@ -337,7 +344,6 @@ impl Daemon {
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         self.wait_until_remote_control_ready(&settings).await?;
-        self.ensure_updater_started(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Started,
@@ -350,6 +356,9 @@ impl Daemon {
 
     async fn restart(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()
         {
@@ -366,7 +375,40 @@ impl Daemon {
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         self.wait_until_remote_control_ready(&settings).await?;
-        self.ensure_updater_started(&settings).await?;
+        Ok(self
+            .output(
+                LifecycleStatus::Restarted,
+                Some(BackendKind::Pid),
+                pid,
+                Some(info.app_server_version),
+            )
+            .await)
+    }
+
+    async fn restart_if_idle(&self) -> Result<LifecycleOutput> {
+        let settings = self.load_settings().await?;
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
+        if client::probe(&self.socket_path).await.is_ok()
+            && self.running_backend(&settings).await?.is_none()
+        {
+            return Err(anyhow!(
+                "app server is running but is not managed by codex app-server daemon"
+            ));
+        }
+
+        let Some(backend) = self.running_backend_instance(&settings).await? else {
+            return Ok(self
+                .output(LifecycleStatus::NotRunning, None, None, None)
+                .await);
+        };
+
+        self.ensure_managed_codex_bin()?;
+        backend.stop_gracefully().await?;
+        let pid = self.start_managed_backend(&settings).await?;
+        let info = self.wait_until_ready().await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Restarted,
@@ -643,14 +685,16 @@ impl Daemon {
         }
         settings.save(&self.settings_file).await?;
 
+        backend::pid_update_loop_backend(self.backend_paths(&settings))
+            .stop()
+            .await?;
+
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
         }
 
         let backend = backend::pid_backend(self.backend_paths(&settings));
         backend.start().await?;
-        let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
-        updater.start().await?;
 
         let info = self.wait_until_ready().await?;
         self.wait_until_remote_control_ready(&settings).await?;
@@ -698,13 +742,6 @@ impl Daemon {
     ) -> Result<Option<u32>> {
         let backend = backend::pid_backend(self.backend_paths_with_bin(settings, codex_bin));
         backend.start().await
-    }
-
-    async fn ensure_updater_started(&self, settings: &DaemonSettings) -> Result<()> {
-        backend::pid_update_loop_backend(self.backend_paths(settings))
-            .start()
-            .await?;
-        Ok(())
     }
 
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
