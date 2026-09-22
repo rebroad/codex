@@ -190,7 +190,7 @@ mcp-server-run *args:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-core --bin codex-write-config-schema -- --out "{{ cargo_source_directory }}/core/config.schema.json"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked -p codex-core --bin codex-write-config-schema -- --out "{{ cargo_source_directory }}/core/config.schema.json" && bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
@@ -198,7 +198,7 @@ write-app-server-schema *args:
 
 [no-cd]
 write-hooks-schema:
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures -- "{{ cargo_source_directory }}/hooks/schema"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --manifest-path "{{ cargo_working_directory }}/Cargo.toml" -p codex-hooks --bin write_hooks_schema_fixtures -- "{{ cargo_source_directory }}/hooks/schema" && bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
 
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
