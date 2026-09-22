@@ -1,4 +1,8 @@
 #[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::process::Command as StdCommand;
+#[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -56,6 +60,19 @@ pub(crate) async fn run(cargo_codex_bin: std::path::PathBuf) -> Result<()> {
             return Ok(());
         }
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Result<()> {
+    let err = StdCommand::new(managed_codex_bin)
+        .args(["app-server", "daemon", "pid-update-loop"])
+        .exec();
+    Err(err).with_context(|| {
+        format!(
+            "failed to replace updater with managed Codex binary {}",
+            managed_codex_bin.display()
+        )
+    })
 }
 
 #[cfg(not(unix))]

@@ -310,6 +310,7 @@ impl Daemon {
     async fn start(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
         if let Ok(info) = client::probe(&self.socket_path).await {
+            self.ensure_updater_started(&settings).await?;
             return Ok(self
                 .output(
                     LifecycleStatus::AlreadyRunning,
@@ -336,6 +337,7 @@ impl Daemon {
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         self.wait_until_remote_control_ready(&settings).await?;
+        self.ensure_updater_started(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Started,
@@ -364,6 +366,7 @@ impl Daemon {
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         self.wait_until_remote_control_ready(&settings).await?;
+        self.ensure_updater_started(&settings).await?;
         Ok(self
             .output(
                 LifecycleStatus::Restarted,
@@ -378,7 +381,7 @@ impl Daemon {
     pub(crate) async fn try_restart_if_running(
         &self,
         mode: RestartMode,
-        _updater_refresh_mode: UpdaterRefreshMode,
+        updater_refresh_mode: UpdaterRefreshMode,
         codex_bin: &Path,
     ) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
@@ -414,11 +417,17 @@ impl Daemon {
             RestartIfRunningOutcome::NotRunning
         };
 
+        if should_reexec_updater(updater_refresh_mode, outcome) {
+            update_loop::reexec_managed_updater(codex_bin)?;
+        }
+
         Ok(outcome)
     }
 
     async fn stop(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
+        let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
+        updater.stop().await?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
             return Ok(self
@@ -641,9 +650,7 @@ impl Daemon {
         let backend = backend::pid_backend(self.backend_paths(&settings));
         backend.start().await?;
         let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
-        if updater.is_starting_or_running().await? {
-            updater.stop().await?;
-        }
+        updater.start().await?;
 
         let info = self.wait_until_ready().await?;
         self.wait_until_remote_control_ready(&settings).await?;
@@ -691,6 +698,13 @@ impl Daemon {
     ) -> Result<Option<u32>> {
         let backend = backend::pid_backend(self.backend_paths_with_bin(settings, codex_bin));
         backend.start().await
+    }
+
+    async fn ensure_updater_started(&self, settings: &DaemonSettings) -> Result<()> {
+        backend::pid_update_loop_backend(self.backend_paths(settings))
+            .start()
+            .await?;
+        Ok(())
     }
 
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
@@ -846,6 +860,15 @@ fn restart_decision(
 }
 
 #[cfg(unix)]
+fn should_reexec_updater(
+    updater_refresh_mode: UpdaterRefreshMode,
+    outcome: RestartIfRunningOutcome,
+) -> bool {
+    updater_refresh_mode == UpdaterRefreshMode::ReexecIfManagedBinaryChanged
+        && outcome == RestartIfRunningOutcome::Restarted
+}
+
+#[cfg(unix)]
 fn try_lock_file(file: &tokio::fs::File) -> Result<bool> {
     use std::os::fd::AsRawFd;
 
@@ -886,8 +909,11 @@ mod tests {
     use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
     use super::RestartDecision;
+    use super::RestartIfRunningOutcome;
     use super::RestartMode;
+    use super::UpdaterRefreshMode;
     use super::restart_decision;
+    use super::should_reexec_updater;
     use crate::client::ProbeInfo;
 
     #[test]
@@ -930,6 +956,22 @@ mod tests {
                 RestartDecision::Restart,
             ]
         );
+    }
+
+    #[test]
+    fn updater_reexecutes_only_after_a_restart() {
+        assert!(should_reexec_updater(
+            UpdaterRefreshMode::ReexecIfManagedBinaryChanged,
+            RestartIfRunningOutcome::Restarted,
+        ));
+        assert!(!should_reexec_updater(
+            UpdaterRefreshMode::ReexecIfManagedBinaryChanged,
+            RestartIfRunningOutcome::NotRunning,
+        ));
+        assert!(!should_reexec_updater(
+            UpdaterRefreshMode::None,
+            RestartIfRunningOutcome::Restarted,
+        ));
     }
 
     #[test]

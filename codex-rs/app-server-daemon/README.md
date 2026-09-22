@@ -41,7 +41,8 @@ $HOME/.cargo/bin/codex app-server daemon bootstrap --remote-control
 
 `bootstrap` records daemon settings under `CODEX_HOME/app-server-daemon/` and
 starts app-server as a pidfile-backed detached process. The updater is started
-separately when explicitly requested.
+alongside it. The updater only watches the locally managed Cargo binary; it does
+not fetch or install updates from a URL.
 
 ## Installation and update cases
 
@@ -51,8 +52,8 @@ local build/release workflow.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
-| `start` is used | The current CLI executable starts app-server | No | No. |
-| `bootstrap` is used | The current CLI executable starts app-server | No | No. The updater requires explicit opt-in. |
+| `start` is used | The current CLI executable starts app-server and the local watcher | No | Yes, after the watcher interval. |
+| `bootstrap` is used | The current CLI executable starts app-server and the local watcher | No | Yes, after the watcher interval. |
 | A newer version is installed into Cargo bin | The updater detects the new target and restarts app-server with it | Installation is performed by the local build/release workflow | Yes. |
 
 ### Cargo-bin installs
@@ -61,7 +62,7 @@ For installs created by the local build/release workflow:
 
 - lifecycle commands use the executable from the current CLI invocation
 - `bootstrap` is supported
-- the explicitly started updater tracks `$HOME/.cargo/bin/codex`
+- the daemon's local updater tracks `$HOME/.cargo/bin/codex`
 - updates are installed as versioned binaries and selected by the `codex` symlink
 
 ### Out-of-band updates
@@ -69,10 +70,8 @@ For installs created by the local build/release workflow:
 This daemon does not watch arbitrary executable files for replacement. If some
 other tool updates the Cargo-bin `codex` symlink:
 
-- without `bootstrap`, a currently running app-server remains on the old
-  executable image until an explicit `restart`
-- with the explicitly started updater, it detects the changed target and
-  restarts the running app-server
+- the daemon's local updater detects the changed target and restarts the
+  running app-server
 
 ## Lifecycle semantics
 
