@@ -8,10 +8,11 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
 source_repo := if path_exists(justfile_directory() / ".git" / "HEAD") == "true" { justfile_directory() } else if path_exists(justfile_directory() / ".git") == "true" { shell("realpath \"$(git -C " + justfile_directory() + " rev-parse --path-format=absolute --git-common-dir)/..\"") } else { justfile_directory() / ".." / "codex" }
-build_repo := if path_exists(justfile_directory() / ".git") == "true" { if path_exists(justfile_directory() / ".git" / "HEAD") == "true" { if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" } } else { justfile_directory() } } else if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" }
+build_repo_override := env_var_or_default("CODEX_BUILD_REPO", "")
+build_repo := if build_repo_override != "" { build_repo_override } else if source_repo == justfile_directory() { "" } else if path_exists(justfile_directory() / ".git") == "true" { justfile_directory() } else if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" }
 build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
-cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { justfile_directory() / "codex-rs" }
+cargo_working_directory := if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { error("Cargo operations are disabled in the source tree; set CODEX_BUILD_REPO to an external .build/.make tree") }
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
 sync_build_tree := source_repo / "scripts/sync_build_tree.sh"
 cargo_lock_setup := if os_family() == "windows" { "" } else { "mkdir -p \"" + build_repo + "/build\"; exec 9>\"" + build_repo + "/build/codex-cargo.lock\"; flock 9; " }
