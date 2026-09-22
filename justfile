@@ -104,7 +104,7 @@ test *args:
 
 [windows]
 test *args:
-    @Set-Location "{{ cargo_working_directory }}"; $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
+    @bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Set-Location "{{ cargo_working_directory }}"; $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --locked --no-fail-fast @($args | Select-Object -Skip 1)
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.
