@@ -33,6 +33,18 @@ done
 
 [[ -d "${SOURCE_REPO}/codex-rs" ]] || { echo "source repository not found: ${SOURCE_REPO}" >&2; exit 1; }
 [[ -d "${BUILD_REPO}/codex-rs" ]] || { echo "build repository not found: ${BUILD_REPO}" >&2; exit 1; }
+SOURCE_REPO_REAL="$(cd -- "${SOURCE_REPO}" && pwd -P)"
+BUILD_REPO_REAL="$(cd -- "${BUILD_REPO}" && pwd -P)"
+case "${BUILD_REPO_REAL}/" in
+  "${SOURCE_REPO_REAL}/"*)
+    echo "build repository must be outside the source checkout: ${BUILD_REPO_REAL}" >&2
+    exit 1
+    ;;
+esac
+if [[ "${SOURCE_REPO_REAL}" == "${BUILD_REPO_REAL}" ]]; then
+  echo "source and build repositories must be different" >&2
+  exit 1
+fi
 [[ "${MODE}" == debug || "${MODE}" == release ]] || { echo "invalid mode: ${MODE}" >&2; exit 2; }
 [[ "${PURPOSE}" =~ ^[[:alnum:]_.-]+$ ]] || { echo "invalid target purpose: ${PURPOSE}" >&2; exit 2; }
 

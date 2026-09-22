@@ -59,6 +59,7 @@ def main() -> None:
         [
             "cargo",
             "test",
+            "--locked",
             "-p",
             "codex-app-server-protocol",
             "--lib",
