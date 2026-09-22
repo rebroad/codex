@@ -194,7 +194,7 @@ write-config-schema:
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} {{ python }} app-server-protocol/scripts/write_schema_fixtures.py --schema-root "{{ cargo_source_directory }}/app-server-protocol/schema" {args}
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} {{ python }} app-server-protocol/scripts/write_schema_fixtures.py --schema-root "{{ cargo_source_directory }}/app-server-protocol/schema" {args} && bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
 
 [no-cd]
 write-hooks-schema:
