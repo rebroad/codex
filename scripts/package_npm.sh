@@ -131,7 +131,8 @@ if [[ -z "${REUSE_FORK_ARTIFACT_DIR}" ]]; then
       armv7)
         ARMV7_TARGET_TRIPLE="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"
         ARMV7_DIR="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET_TRIPLE}/$(profile_path "${PROFILE}")"
-        stage_binary "${ARMV7_TARGET_TRIPLE}" "${ARMV7_DIR}/codex" "${ARMV7_DIR}/codex-code-mode-host"
+        ARMV7_BWRAP_DIR="${BUILD_TREE}/build/armv7-${PROFILE}/${ARMV7_TARGET_TRIPLE}/$(profile_path "${PROFILE}")"
+        stage_binary "${ARMV7_TARGET_TRIPLE}" "${ARMV7_DIR}/codex" "${ARMV7_DIR}/codex-code-mode-host" "${ARMV7_BWRAP_DIR}/bwrap"
         ;;
       android)
         ANDROID_STAGE="${BUILD_TREE}/build/android-artifact"
