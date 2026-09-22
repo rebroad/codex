@@ -30,6 +30,7 @@ use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::LocalIpcPolicy;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
+use crate::launcher::preferred_bwrap_is_available;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
@@ -320,6 +321,24 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
+    if !use_legacy_landlock && !preferred_bwrap_is_available() {
+        if allow_network_for_proxy {
+            panic!("bubblewrap is unavailable and managed proxy networking requires it");
+        }
+        ensure_legacy_landlock_mode_supports_policy(true, &file_system_sandbox_policy);
+        if let Err(e) = apply_permission_profile_to_current_thread(
+            &permission_profile,
+            &sandbox_policy_cwd,
+            /*apply_landlock_fs*/ true,
+            managed_network.as_ref(),
+            /*proxy_routed_network*/ false,
+            LocalIpcPolicy::Disabled,
+        ) {
+            panic!("error applying fallback Linux sandbox restrictions: {e:?}");
+        }
+        exec_or_panic(command);
+    }
+
     if !use_legacy_landlock {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
@@ -588,6 +607,8 @@ fn run_bwrap_with_proc_fallback(
         options.mount_proc = false;
     }
 
+    let network_mode = options.network_mode;
+    let mount_proc = options.mount_proc;
     let mut bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
