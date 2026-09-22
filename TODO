@@ -1,3 +1,4 @@
+Fix `just test` to auto-set CODEX_BUILD_REPO to the build sibling instead of giving the "Cargo operations are disabled in the source tree" error.
 Add Delete to delete queued prompts (esc already steers), or a Ctrl+letter (E?) to edit queued prompts (they can become concetenated if more than one), or Ctrl+C to delete the most recently-queued
 Add a search feature to the transcript view
 Add abilty to step up down ordinals in transcript view
