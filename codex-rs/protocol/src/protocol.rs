@@ -1326,6 +1326,11 @@ pub struct EnvironmentConnectionEvent {
     pub environment_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct AccountUpdatedEvent {
+    pub account_id: Option<String>,
+}
+
 /// Response event from the agent
 /// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, JsonSchema, TS)]
@@ -1333,6 +1338,9 @@ pub struct EnvironmentConnectionEvent {
 #[ts(tag = "type")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
+    /// Backend account used by subsequent model requests changed.
+    AccountUpdated(AccountUpdatedEvent),
+
     /// Error while executing a submission
     Error(ErrorEvent),
 

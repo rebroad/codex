@@ -317,6 +317,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ThreadSettingsApplied(_)
                     | EventMsg::EnvironmentConnected(_)
                     | EventMsg::EnvironmentDisconnected(_)
+                    | EventMsg::AccountUpdated(_)
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)
