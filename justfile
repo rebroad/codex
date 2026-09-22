@@ -59,11 +59,11 @@ app-server-test-client *args:
 
 # Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts.
 fmt:
-    @{{ cargo_lock_setup }}{{ python }} ../scripts/format.py
+    @{{ cargo_lock_setup }}{{ python }} "{{ source_repo }}/scripts/format.py"
 
 # Check formatting without modifying files.
 fmt-check:
-    @{{ python }} ../scripts/format.py --check
+    @{{ python }} "{{ source_repo }}/scripts/format.py" --check
 
 # List Cargo artifact operations recorded in the designated build tree.
 cargo-artifact-log *args:
