@@ -140,8 +140,9 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_account(
         &self,
         params: GetAccountParams,
+        use_backend_auth: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_response(params)
+        self.get_account_response(params, use_backend_auth)
             .await
             .map(|response| Some(response.into()))
     }
@@ -1131,16 +1132,25 @@ impl AccountRequestProcessor {
     async fn get_account_response(
         &self,
         params: GetAccountParams,
+        use_backend_auth: bool,
     ) -> Result<GetAccountResponse, JSONRPCErrorError> {
         let do_refresh = params.refresh_token;
 
-        self.refresh_token_if_requested(do_refresh).await;
+        if use_backend_auth {
+            if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+                tracing::warn!("failed to refresh backend token while getting account: {err}");
+            }
+        } else {
+            self.refresh_token_if_requested(do_refresh).await;
+        }
 
         let config = self.load_latest_config().await;
-        let provider = create_model_provider(
-            config.model_provider,
-            Some(self.frontend_auth_manager().await),
-        );
+        let auth_manager = if use_backend_auth {
+            Arc::clone(&self.auth_manager)
+        } else {
+            self.frontend_auth_manager().await
+        };
+        let provider = create_model_provider(config.model_provider, Some(auth_manager));
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
             Err(err) => return Err(invalid_request(err.to_string())),

@@ -1572,7 +1572,12 @@ impl MessageProcessor {
                 self.account_processor.cancel_login_account(params).await
             }
             ClientRequest::GetAccount { params, .. } => {
-                self.account_processor.get_account(params).await
+                self.account_processor
+                    .get_account(
+                        params,
+                        session.app_server_client_name() == Some("codex-tui"),
+                    )
+                    .await
             }
             ClientRequest::GetAuthStatus { params, .. } => {
                 self.account_processor.get_auth_status(params).await
