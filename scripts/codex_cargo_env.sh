@@ -112,6 +112,12 @@ RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
 MOLD_BIN="$(command -v mold || true)"
 DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-1}"
 
+if [[ "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  export TMPDIR="${PREFIX}/tmp"
+  mkdir -p "${TMPDIR}"
+  chmod 700 "${TMPDIR}"
+fi
+
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
   [[ -x "${ANDROID_CLANG}" ]] || { echo "Android linker not found" >&2; exit 1; }
@@ -375,6 +381,9 @@ fi
 if [[ -n "${SCCACHE_BIN}" ]]; then
   printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
     "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
+fi
+if [[ -n "${TMPDIR:-}" && "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  printf 'export TMPDIR=%q\n' "${TMPDIR}"
 fi
 [[ -n "${CARGO_BUILD_JOBS:-}" ]] && printf 'export CARGO_BUILD_JOBS=%q\n' "${CARGO_BUILD_JOBS}"
 if [[ -n "${OPENSSL_DIR_VALUE}" ]]; then
