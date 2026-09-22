@@ -2108,6 +2108,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
         | EventMsg::DynamicToolCallRequest(_)
         | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::GuardianAssessment(_)
+        | EventMsg::AccountUpdated(_)
         | EventMsg::DeprecationNotice(_)
         | EventMsg::StreamError(_)
         | EventMsg::TurnDiff(_)
@@ -2870,11 +2871,7 @@ async fn try_run_sampling_request(
                 usage_metadata,
                 end_turn,
             } => {
-                let account_id = turn_context
-                    .auth_manager
-                    .as_ref()
-                    .and_then(|auth_manager| auth_manager.auth_cached())
-                    .and_then(|auth| auth.get_account_id());
+                let account_id = sess.maybe_emit_backend_account_update(&turn_context).await;
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(

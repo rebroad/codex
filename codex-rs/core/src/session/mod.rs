@@ -352,6 +352,7 @@ use codex_protocol::models::LocalImagePreparation;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AccountUpdatedEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -2397,6 +2398,36 @@ impl Session {
             };
             self.send_event_raw(legacy_event).await;
         }
+    }
+
+    pub(crate) async fn maybe_emit_backend_account_update(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<String> {
+        let account_id = turn_context
+            .auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .and_then(|auth| auth.get_account_id());
+        let changed = {
+            let mut state = self.state.lock().await;
+            if state.last_backend_account_id == account_id {
+                false
+            } else {
+                state.last_backend_account_id = account_id.clone();
+                true
+            }
+        };
+        if changed {
+            self.send_event(
+                turn_context,
+                EventMsg::AccountUpdated(AccountUpdatedEvent {
+                    account_id: account_id.clone(),
+                }),
+            )
+            .await;
+        }
+        account_id
     }
 
     /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.

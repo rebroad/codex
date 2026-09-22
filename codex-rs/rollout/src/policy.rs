@@ -110,7 +110,8 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
                         if item.kind == SubAgentActivityKind::Completed
                 )
         }
-        EventMsg::TokenCount(_)
+        EventMsg::AccountUpdated(_)
+        | EventMsg::TokenCount(_)
         | EventMsg::RawResponseCompleted(_)
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadRolledBack(_)

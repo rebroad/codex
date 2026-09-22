@@ -838,11 +838,7 @@ async fn drain_to_completed(
                 usage_metadata,
                 ..
             }) => {
-                let account_id = turn_context
-                    .auth_manager
-                    .as_ref()
-                    .and_then(|auth_manager| auth_manager.auth_cached())
-                    .and_then(|auth| auth.get_account_id());
+                let account_id = sess.maybe_emit_backend_account_update(turn_context).await;
                 sess.record_observed_response_completed(
                     turn_context,
                     &response_id,
