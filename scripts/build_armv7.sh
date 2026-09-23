@@ -21,16 +21,24 @@ if [[ ${REPO_DIR} != *.build && ${REPO_DIR} != *.make && ${ALLOW_SOURCE_BUILD} !
     echo "Missing required command: cpto" >&2
     exit 1
   fi
-  cpto "${REPO_DIR}" "${build_repo_candidate}"
+  cpto --no-lngit --nogit "${REPO_DIR}" "${build_repo_candidate}"
+  if [[ "${CARGO_TARGET_DIR:-}" == "${REPO_DIR}/"* ]]; then
+    CARGO_TARGET_DIR="${build_repo_candidate}/${CARGO_TARGET_DIR#"${REPO_DIR}/"}"
+    export CARGO_TARGET_DIR
+  fi
+  if [[ "${ARMV7_CACHE_DIR:-}" == "${REPO_DIR}/"* ]]; then
+    ARMV7_CACHE_DIR="${build_repo_candidate}/${ARMV7_CACHE_DIR#"${REPO_DIR}/"}"
+    export ARMV7_CACHE_DIR
+  fi
   exec "${build_repo_candidate}/scripts/build_armv7.sh" "$@"
 fi
 TOOLCHAIN_FILE="${RUST_WORKSPACE_DIR}/rust-toolchain.toml"
 CARGO_LOCK_PATH="${RUST_WORKSPACE_DIR}/Cargo.lock"
 
-TARGET_DEFAULT="armv7-unknown-linux-gnueabihf"
+TARGET_DEFAULT="armv7-unknown-linux-musleabihf"
 PROFILE="release"
 TARGET="${TARGET_DEFAULT}"
-BUILD_ENV="${BUILD_ENV:-auto}"
+BUILD_ENV="${BUILD_ENV:-host}"
 EPHEMERAL="false"
 RUSTY_V8_RELEASE_REPO="${RUSTY_V8_RELEASE_REPO:-rebroad/rusty_v8}"
 RUSTY_V8_RELEASE_TAG="${RUSTY_V8_RELEASE_TAG:-}"
@@ -86,20 +94,22 @@ usage() {
   cat <<'EOF'
 Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--benchmark-linkers[=N]] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--rusty-v8-local-path=<path>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
 
-Build codex-cli with the same core armv7 environment as release CI:
+Build codex-cli and codex-code-mode-host with the same core ARMv7 musl
+environment as release CI:
 - prebuilt rusty_v8 archive + binding
-- target defaults to armv7-unknown-linux-gnueabihf
+- target defaults to armv7-unknown-linux-musleabihf
 
 Options:
   --release             Build release profile (default)
   --debug               Build debug profile
-  --target=<triple>     Override target triple (default: armv7-unknown-linux-gnueabihf)
+  --target=<triple>     Override target triple (default: armv7-unknown-linux-musleabihf)
   --jobs=N              Set Cargo build parallelism (default: all detected CPUs)
   --fast-release-build  Use local faster release overrides (thin LTO, codegen-units=16)
   --benchmark-linkers   Benchmark final codex link with lld and mold
   --benchmark-linkers=N Repeat each linker benchmark N times (default: 1)
   --build-env=<mode>    Build environment mode:
-                        auto (default): use docker-buster for armv7 unless host is buster
+                        host (default): use the host musl/Zig toolchain for ARMv7 musl
+                        auto: use docker-buster only for explicit glibc ARMv7 builds
                         host: use the installed host cross-toolchain
                         docker-buster: force Debian buster container build
   --ephemeral           One-off Docker build: do not reuse cached image/toolchain/cargo.
@@ -571,6 +581,47 @@ resolve_cargo_target_dir() {
     target_dir="${RUST_WORKSPACE_DIR}/target"
   fi
   echo "${target_dir}"
+}
+
+configure_armv7_musl_toolchain() {
+  local env_file="${ARMV7_CACHE_DIR}/musl-env"
+  local runner_temp="${ARMV7_CACHE_DIR}/runner"
+  local setup_script="${REPO_DIR}/.github/scripts/install-musl-build-tools.sh"
+
+  [[ -f "${setup_script}" ]] || {
+    echo "ARMv7 musl tool setup script not found: ${setup_script}" >&2
+    exit 1
+  }
+  if [[ ! -s "${env_file}" ]]; then
+    mkdir -p "${runner_temp}"
+    TARGET="${TARGET}" \
+      GITHUB_ENV="${env_file}" \
+      RUNNER_TEMP="${runner_temp}" \
+      bash "${setup_script}"
+  fi
+  while IFS= read -r assignment; do
+    [[ -n "${assignment}" ]] && export "${assignment}"
+  done <"${env_file}"
+
+  # The shared CI setup exports these as global variables because its Cargo
+  # invocation builds only the cross target. This wrapper also builds host
+  # build scripts, so leaving the ARM compiler in global CC makes cc-rs pass
+  # host flags (for example --target=x86_64-unknown-linux-gnu) to Zig's ARM
+  # compiler. Keep the target-specific variables above and let host probes use
+  # the native compiler.
+  unset CC CXX TARGET_CC TARGET_CXX CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS \
+    PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
+}
+
+authenticate_armv7_musl_sudo() {
+  if [[ -z "${ZIG_BIN:-}" ]] && ! command -v zig >/dev/null 2>&1; then
+    command -v sudo >/dev/null 2>&1 || {
+      echo "ARMv7 musl builds need sudo to install their build tools, but sudo is unavailable." >&2
+      exit 1
+    }
+    echo "Zig is unavailable; authenticating sudo before the ARMv7 build-tools install." >&2
+    sudo -v
+  fi
 }
 
 resolve_build_commit_short() {
@@ -1472,6 +1523,7 @@ done
 if [[ -z "${ARMV7_CACHE_DIR}" ]]; then
   ARMV7_CACHE_DIR="${REPO_DIR}/build/armv7-${PROFILE}/cache"
 fi
+mkdir -p "${ARMV7_CACHE_DIR}"
 LINKER_CAPTURE_LOG="${ARMV7_CACHE_DIR}/linker-invocations.log"
 LINKER_CAPTURE_DONE_FILE="${ARMV7_CACHE_DIR}/linker-capture.done"
 LINKER_CAPTURE_SYSROOT_DIR="${ARMV7_CACHE_DIR}/benchmark-sysroot"
@@ -1523,7 +1575,14 @@ require_cmd python3
 require_cmd file
 require_cmd mktemp
 
-if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
+if [[ "${TARGET}" == "armv7-unknown-linux-musleabihf" ]]; then
+  if [[ "${BUILD_ENV}" == "docker-buster" ]]; then
+    echo "ARMv7 musl builds cannot use the glibc docker-buster environment." >&2
+    exit 1
+  fi
+  authenticate_armv7_musl_sudo
+  configure_armv7_musl_toolchain
+elif [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   if ! command -v arm-linux-gnueabihf-gcc >/dev/null 2>&1; then
     ensure_armv7_cross_packages
   fi
@@ -1592,7 +1651,7 @@ if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
 fi
 
 cargo_use_locked="true"
-if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
+if [[ "${TARGET}" == armv7-unknown-linux-* ]]; then
   bash "${REPO_DIR}/scripts/apply_target_cargo_patches.sh" \
     "${RUST_WORKSPACE_DIR}/Cargo.toml" "${TARGET}"
   cargo_use_locked="false"
@@ -1663,7 +1722,7 @@ if (( status != 0 )); then
   if [[ "${cargo_use_locked}" == "true" ]] \
     && grep -q "cannot update the lock file .*Cargo.lock because --locked was passed" "${build_log}"; then
     echo "Locked build failed; retrying without --locked..."
-    cargo_args=(+"${TOOLCHAIN}" build -p codex-cli --target "${TARGET}")
+    cargo_args=(+"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host --target "${TARGET}")
     if [[ "${PROFILE}" == "release" ]]; then
       cargo_args+=(--release)
     fi
@@ -1722,8 +1781,18 @@ fi
 
 strip_binary_if_requested "${bin_path}" "${TARGET}"
 
+host_bin_path="${target_dir}/${TARGET}/${PROFILE}/codex-code-mode-host"
+if [[ ! -x "${host_bin_path}" ]]; then
+  echo "Build completed but code-mode host was not found at ${host_bin_path}" >&2
+  exit 1
+fi
+
+strip_binary_if_requested "${host_bin_path}" "${TARGET}"
+
 bin_desc="$(file -b "${bin_path}" || true)"
-if [[ "${TARGET}" == "${TARGET_DEFAULT}" ]] && ! grep -Eq 'ARM|arm' <<<"${bin_desc}"; then
+host_bin_desc="$(file -b "${host_bin_path}" || true)"
+if [[ "${TARGET}" == "${TARGET_DEFAULT}" ]] \
+  && { ! grep -Eq 'ARM|arm' <<<"${bin_desc}" || ! grep -Eq 'ARM|arm' <<<"${host_bin_desc}"; }; then
   echo "Built binary does not appear to be ARM (${bin_desc})" >&2
   exit 1
 fi
@@ -1731,7 +1800,12 @@ fi
 echo "Local armv7 gate passed."
 echo "Binary: ${bin_path}"
 echo "Description: ${bin_desc}"
-if [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
+echo "Code Mode host: ${host_bin_path}"
+echo "Description: ${host_bin_desc}"
+if [[ "${TARGET}" == "armv7-unknown-linux-musleabihf" ]]; then
+  readelf -l "${bin_path}" "${host_bin_path}" \
+    | grep -F 'Requesting program interpreter: /lib/ld-musl-armhf.so.1'
+elif [[ "${TARGET}" == "armv7-unknown-linux-gnueabihf" ]]; then
   if [[ "${BUILD_ENV}" == host ]]; then
     echo "Skipping Pi OS Buster ABI gate for explicit host build."
   else
