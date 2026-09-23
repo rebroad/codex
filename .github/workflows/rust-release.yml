@@ -180,9 +180,9 @@ jobs:
           set -euo pipefail
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: ./.github/actions/setup-rust-toolchain
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
