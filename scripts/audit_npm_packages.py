@@ -57,7 +57,7 @@ PLATFORMS = {
         "host": True,
     },
     "linux-armv7": {
-        "target": "armv7-unknown-linux-gnueabihf",
+        "target": "armv7-unknown-linux-musleabihf",
         "os": "linux",
         "cpu": "arm",
         "file_tokens": ("ELF", "ARM"),
