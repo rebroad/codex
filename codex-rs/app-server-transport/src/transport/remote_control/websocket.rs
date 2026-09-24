@@ -2454,14 +2454,6 @@ mod tests {
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let enroll_url = remote_control_target.enroll_url.clone();
-        let server_task = tokio::spawn(async move {
-            let (stream, request_line) = accept_http_request(&listener).await;
-            assert_eq!(
-                request_line,
-                "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
-            );
-            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
-        });
         let codex_home = TempDir::new().expect("temp dir should create");
         save_auth(
             codex_home.path(),
@@ -2470,6 +2462,23 @@ mod tests {
             AuthKeyringBackendKind::default(),
         )
         .expect("stale auth should save");
+        let fresh_auth_home = codex_home.path().to_path_buf();
+        let fresh_auth = remote_control_auth_dot_json("fresh-token");
+        let server_task = tokio::spawn(async move {
+            let (stream, request_line) = accept_http_request(&listener).await;
+            assert_eq!(
+                request_line,
+                "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+            );
+            save_auth(
+                &fresh_auth_home,
+                &fresh_auth,
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )
+            .expect("fresh auth should save after the stale request arrives");
+            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
+        });
         let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
@@ -2481,19 +2490,20 @@ mod tests {
             codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
+        assert_eq!(
+            auth_manager
+                .auth()
+                .await
+                .expect("stale auth should load")
+                .get_token()
+                .expect("stale token should be available"),
+            "stale-token"
+        );
         let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let current_enrollment = test_current_enrollment(/*enrollment*/ None);
         let (status_publisher, status_rx) = remote_control_status_channel();
-        save_auth(
-            codex_home.path(),
-            &remote_control_auth_dot_json("fresh-token"),
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-        )
-        .expect("fresh auth should save");
-
         let err = connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),
@@ -2554,14 +2564,6 @@ mod tests {
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let refresh_url = remote_control_target.refresh_url.clone();
-        let server_task = tokio::spawn(async move {
-            let (stream, request_line) = accept_http_request(&listener).await;
-            assert_eq!(
-                request_line,
-                "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
-            );
-            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
-        });
         let codex_home = TempDir::new().expect("temp dir should create");
         save_auth(
             codex_home.path(),
@@ -2570,6 +2572,23 @@ mod tests {
             AuthKeyringBackendKind::default(),
         )
         .expect("stale auth should save");
+        let fresh_auth_home = codex_home.path().to_path_buf();
+        let fresh_auth = remote_control_auth_dot_json("fresh-token");
+        let server_task = tokio::spawn(async move {
+            let (stream, request_line) = accept_http_request(&listener).await;
+            assert_eq!(
+                request_line,
+                "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+            );
+            save_auth(
+                &fresh_auth_home,
+                &fresh_auth,
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )
+            .expect("fresh auth should save after the stale request arrives");
+            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
+        });
         let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
@@ -2581,6 +2600,15 @@ mod tests {
             codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
+        assert_eq!(
+            auth_manager
+                .auth()
+                .await
+                .expect("stale auth should load")
+                .get_token()
+                .expect("stale token should be available"),
+            "stale-token"
+        );
         let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
@@ -2593,14 +2621,6 @@ mod tests {
         expected_enrollment_after_refresh_failure.clear_server_token();
         let current_enrollment = test_current_enrollment(Some(expected_enrollment.clone()));
         let (status_publisher, status_rx) = remote_control_status_channel();
-        save_auth(
-            codex_home.path(),
-            &remote_control_auth_dot_json("fresh-token"),
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-        )
-        .expect("fresh auth should save");
-
         let err = connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),

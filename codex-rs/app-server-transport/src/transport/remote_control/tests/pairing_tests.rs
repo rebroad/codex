@@ -31,10 +31,7 @@ fn remote_control_enrollment(
     }
 }
 
-async fn auth_manager_with_replacement(
-    codex_home: &TempDir,
-    replacement_account_id: &str,
-) -> Arc<AuthManager> {
+async fn auth_manager_with_replacement(codex_home: &TempDir) -> Arc<AuthManager> {
     let mut stale_auth = remote_control_auth_dot_json(Some("account_id"));
     stale_auth
         .tokens
@@ -58,19 +55,15 @@ async fn auth_manager_with_replacement(
         codex_login::test_support::transport_default_auth_route_config(),
     )
     .await;
-    let mut replacement_auth = remote_control_auth_dot_json(Some(replacement_account_id));
-    replacement_auth
-        .tokens
-        .as_mut()
-        .expect("replacement auth should include tokens")
-        .access_token = "fresh-token".to_string();
-    save_auth(
-        codex_home.path(),
-        &replacement_auth,
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )
-    .expect("replacement auth should save");
+    assert_eq!(
+        auth_manager
+            .auth()
+            .await
+            .expect("stale auth should load")
+            .get_token()
+            .expect("stale token should be available"),
+        "stale-token"
+    );
     auth_manager
 }
 
@@ -696,6 +689,15 @@ async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
         .await
         .expect("listener should bind");
     let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let auth_manager = auth_manager_with_replacement(&codex_home).await;
+    let replacement_auth_home = codex_home.path().to_path_buf();
+    let mut replacement_auth = remote_control_auth_dot_json(Some("account_id"));
+    replacement_auth
+        .tokens
+        .as_mut()
+        .expect("replacement auth should include tokens")
+        .access_token = "fresh-token".to_string();
     let server_task = tokio::spawn(async move {
         let stale_refresh_request = accept_http_request(&listener).await;
         assert_eq!(
@@ -706,6 +708,13 @@ async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
             stale_refresh_request.headers.get("authorization"),
             Some(&"Bearer stale-token".to_string())
         );
+        save_auth(
+            &replacement_auth_home,
+            &replacement_auth,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("replacement auth should save after the stale request arrives");
         respond_with_status(stale_refresh_request.stream, "401 Unauthorized", "").await;
 
         let recovered_refresh_request = accept_http_request(&listener).await;
@@ -744,8 +753,6 @@ async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
         )
         .await;
     });
-    let codex_home = TempDir::new().expect("temp dir should create");
-    let auth_manager = auth_manager_with_replacement(&codex_home, "account_id").await;
     let remote_handle =
         remote_control_handle_with_current_enrollment(&remote_control_url, auth_manager);
     remote_handle
@@ -774,12 +781,28 @@ async fn manual_refresh_remains_retryable_after_auth_recovery() {
         .await
         .expect("listener should bind");
     let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let auth_manager = auth_manager_with_replacement(&codex_home).await;
+    let replacement_auth_home = codex_home.path().to_path_buf();
+    let mut replacement_auth = remote_control_auth_dot_json(Some("account_id"));
+    replacement_auth
+        .tokens
+        .as_mut()
+        .expect("replacement auth should include tokens")
+        .access_token = "fresh-token".to_string();
     let server_task = tokio::spawn(async move {
         let stale_refresh_request = accept_http_request(&listener).await;
         assert_eq!(
             stale_refresh_request.headers.get("authorization"),
             Some(&"Bearer stale-token".to_string())
         );
+        save_auth(
+            &replacement_auth_home,
+            &replacement_auth,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("replacement auth should save after the stale request arrives");
         respond_with_status(stale_refresh_request.stream, "401 Unauthorized", "").await;
 
         let recovered_refresh_request = accept_http_request(&listener).await;
@@ -806,8 +829,6 @@ async fn manual_refresh_remains_retryable_after_auth_recovery() {
         )
         .await;
     });
-    let codex_home = TempDir::new().expect("temp dir should create");
-    let auth_manager = auth_manager_with_replacement(&codex_home, "account_id").await;
     let remote_handle =
         remote_control_handle_with_current_enrollment(&remote_control_url, auth_manager);
     remote_handle
@@ -851,6 +872,15 @@ async fn pairing_auth_recovery_failure_publishes_cleared_server_token() {
         .await
         .expect("listener should bind");
     let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let auth_manager = auth_manager_with_replacement(&codex_home).await;
+    let replacement_auth_home = codex_home.path().to_path_buf();
+    let mut replacement_auth = remote_control_auth_dot_json(Some("different_account_id"));
+    replacement_auth
+        .tokens
+        .as_mut()
+        .expect("replacement auth should include tokens")
+        .access_token = "fresh-token".to_string();
     let server_task = tokio::spawn(async move {
         let stale_refresh_request = accept_http_request(&listener).await;
         assert_eq!(
@@ -861,10 +891,15 @@ async fn pairing_auth_recovery_failure_publishes_cleared_server_token() {
             stale_refresh_request.headers.get("authorization"),
             Some(&"Bearer stale-token".to_string())
         );
+        save_auth(
+            &replacement_auth_home,
+            &replacement_auth,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("replacement auth should save after the stale request arrives");
         respond_with_status(stale_refresh_request.stream, "401 Unauthorized", "").await;
     });
-    let codex_home = TempDir::new().expect("temp dir should create");
-    let auth_manager = auth_manager_with_replacement(&codex_home, "different_account_id").await;
     let remote_handle =
         remote_control_handle_with_current_enrollment(&remote_control_url, auth_manager);
     remote_handle
