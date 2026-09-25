@@ -3,13 +3,25 @@
 
 use crate::ConfigRequirementsToml;
 use crate::config_toml::validate_model_providers;
+use crate::config_toml::validate_reserved_model_provider_ids;
+use codex_model_provider_info::ModelProviderInfoOverrides;
 use std::io;
 use toml::Value;
 
 pub(crate) fn to_config(requirements: &ConfigRequirementsToml) -> io::Result<Value> {
     let mut config = toml::Table::new();
     if let Some(providers) = &requirements.model_providers {
-        validate_model_providers(providers)
+        let providers = providers
+            .iter()
+            .map(|(id, provider)| {
+                (
+                    id.clone(),
+                    ModelProviderInfoOverrides::from(provider.clone()),
+                )
+            })
+            .collect();
+        validate_reserved_model_provider_ids(&providers)
+            .and_then(|()| validate_model_providers(&providers))
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
         config.insert(
             "model_providers".to_string(),
