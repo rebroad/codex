@@ -3097,6 +3097,7 @@ dependencies = [
  "codex-utils-path-uri",
  "codex-utils-plugins",
  "codex-utils-process",
+ "codex-utils-pty",
  "dirs",
  "flate2",
  "futures",
