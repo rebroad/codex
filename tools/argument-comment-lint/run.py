@@ -20,10 +20,11 @@ from wrapper_common import (
 
 def main() -> "Never":
     root = repo_root()
-    parsed = parse_wrapper_args(sys.argv[1:])
-    final_args = build_final_args(parsed, root / "codex-rs" / "Cargo.toml")
-
     env = os.environ.copy()
+    build_repo = Path(env.get("CODEX_BUILD_REPO", root)).resolve()
+    parsed = parse_wrapper_args(sys.argv[1:])
+    final_args = build_final_args(parsed, build_repo / "codex-rs" / "Cargo.toml")
+
     ensure_source_prerequisites(env)
     set_default_lint_env(env)
 

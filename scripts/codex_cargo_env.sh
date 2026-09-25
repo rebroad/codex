@@ -397,9 +397,8 @@ mkdir -p "${TARGET_DIR}"
 if [[ -n "${SCCACHE_BIN}" ]]; then
   export SCCACHE_DIR="${SCCACHE_DIR:-${HOME}/.cache/sccache}"
   export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-20G}"
-  if ! "${SCCACHE_BIN}" --start-server >/dev/null 2>&1 \
-    && ! "${SCCACHE_BIN}" --show-stats >/dev/null 2>&1; then
-    echo "Unable to start the sccache server; refusing to run without the configured cache" >&2
+  if ! "${SCCACHE_BIN}" --version >/dev/null 2>&1; then
+    echo "Unable to run sccache; refusing to run without the configured cache" >&2
     exit 1
   fi
 fi
