@@ -718,6 +718,7 @@ async fn run_websocket_response_stream(
     completion: &mut Option<ResponseEvent>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut last_effective_model: Option<String> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
     if matches!(
         interrupt.clone().now_or_never(),
@@ -860,6 +861,21 @@ async fn run_websocket_response_stream(
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
                     }
                     continue;
+                }
+                let effective_model = event.response_effective_model();
+                if let Some(model) = effective_model
+                    && last_effective_model.as_deref() != Some(model.as_str())
+                {
+                    if tx_event
+                        .send(Ok(ResponseEvent::EffectiveModel(model.clone())))
+                        .await
+                        .is_err()
+                    {
+                        return Err(ApiError::Stream(
+                            "response event consumer dropped".to_string(),
+                        ));
+                    }
+                    last_effective_model = Some(model);
                 }
                 let model = event.response_model();
                 // Preserve terminal usage before any accompanying notification can block.
