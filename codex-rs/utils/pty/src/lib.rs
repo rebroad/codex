@@ -1,5 +1,6 @@
 mod child;
 pub use child::Child;
+pub use child::wait_for_child_exit;
 mod child_command;
 pub use child_command::ChildStdin;
 pub use child_command::Command;

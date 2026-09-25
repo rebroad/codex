@@ -12,12 +12,16 @@ use codex_utils_pty::process_group::kill_process_group;
 use tokio::process::Child;
 use tokio::process::ChildStdout;
 use tokio::process::Command;
+#[cfg(not(target_os = "android"))]
 use tokio::signal::unix::Signal;
+#[cfg(not(target_os = "android"))]
 use tokio::signal::unix::SignalKind;
+#[cfg(not(target_os = "android"))]
 use tokio::signal::unix::signal;
 
 pub(super) struct SnapshotCapture {
     child: Child,
+    #[cfg(not(target_os = "android"))]
     sigchld: Signal,
     cleanup: bool,
     pub(super) stdout: Option<ChildStdout>,
@@ -26,12 +30,14 @@ pub(super) struct SnapshotCapture {
 impl SnapshotCapture {
     pub(super) fn spawn(command: &mut Command) -> io::Result<Self> {
         // Subscribe before spawning so a fast exit cannot lose its notification.
+        #[cfg(not(target_os = "android"))]
         let sigchld = signal(SignalKind::child())?;
         // Group cleanup must not signal the executor or other captures.
         let mut child = command.process_group(/*pgroup*/ 0).spawn()?;
         let stdout = child.stdout.take();
         Ok(Self {
             child,
+            #[cfg(not(target_os = "android"))]
             sigchld,
             cleanup: true,
             stdout,
@@ -79,6 +85,9 @@ impl SnapshotCapture {
                     }));
                 }
             }
+            #[cfg(target_os = "android")]
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            #[cfg(not(target_os = "android"))]
             self.sigchld
                 .recv()
                 .await

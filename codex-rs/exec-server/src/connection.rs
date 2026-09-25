@@ -10,6 +10,7 @@ use axum::extract::ws::Message as AxumWebSocketMessage;
 use axum::extract::ws::WebSocket as AxumWebSocket;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCRequest;
+use codex_utils_pty::wait_for_child_exit;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -185,13 +186,18 @@ async fn wait_for_stdio_termination(terminate_rx: &mut watch::Receiver<bool>) {
 
 async fn terminate_stdio_child(child_process: &mut Child, process_group_id: Option<u32>) {
     terminate_process_tree(child_process, process_group_id);
-    match timeout(STDIO_TERMINATION_GRACE_PERIOD, child_process.wait()).await {
+    match timeout(
+        STDIO_TERMINATION_GRACE_PERIOD,
+        wait_for_child_exit(child_process),
+    )
+    .await
+    {
         Ok(result) => {
             log_stdio_child_wait_result(result);
         }
         Err(_) => {
             kill_process_tree(child_process, process_group_id);
-            log_stdio_child_wait_result(child_process.wait().await);
+            log_stdio_child_wait_result(wait_for_child_exit(child_process).await);
         }
     }
 }
