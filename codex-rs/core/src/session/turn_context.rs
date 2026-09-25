@@ -254,6 +254,7 @@ impl TurnEnvironment {
             ),
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: config.use_legacy_landlock,
+            debug_log_id: None,
         }
     }
 
