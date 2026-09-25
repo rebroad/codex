@@ -225,7 +225,7 @@ async fn run_daemon_shutdown(
 }
 
 // Unix callers hold the physical socket's startup lock through bind and publication.
-async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
+pub async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
     #[cfg(windows)]
     let (socket_path, _directory_guard) = codex_uds::validate_private_socket_path(socket_path)?;
     #[cfg(windows)]
