@@ -23,6 +23,7 @@ use tracing::warn;
 /// plenty for an interactive CLI.
 pub const CHANNEL_CAPACITY: usize = 128;
 
+mod owner;
 mod remote_control;
 mod stdio;
 mod unix_socket;
@@ -30,6 +31,12 @@ mod unix_socket;
 mod unix_socket_tests;
 mod websocket;
 
+pub use owner::AppServerOwnerEndpoint;
+pub use owner::AppServerOwnerGuard;
+pub use owner::AppServerOwnerRecord;
+pub use owner::app_server_owner_record_path_for_profile;
+pub use owner::read_app_server_owner;
+pub use owner::register_app_server_owner;
 pub use remote_control::REMOTE_CONTROL_DISABLED_ENV_VAR;
 pub use remote_control::RemoteControlDisabledByRequirements;
 pub use remote_control::RemoteControlEnableError;
@@ -44,6 +51,7 @@ pub use stdio::start_stdio_connection;
 pub use unix_socket::AppServerStartupLock;
 pub use unix_socket::DaemonShutdownAccess;
 pub use unix_socket::acquire_app_server_startup_lock;
+pub use unix_socket::prepare_control_socket_path;
 pub use unix_socket::start_control_socket_acceptor;
 pub use websocket::start_websocket_acceptor;
 
@@ -61,20 +69,42 @@ pub fn daemon_recovery_file_path(codex_home: &Path) -> PathBuf {
         .join(DAEMON_RECOVERY_FILE_NAME)
 }
 
+pub const APP_SERVER_PROFILE_ENV_VAR: &str = "CODEX_PROFILE";
+
+fn active_app_server_profile() -> Option<String> {
+    std::env::var(APP_SERVER_PROFILE_ENV_VAR)
+        .ok()
+        .filter(|profile| !profile.is_empty())
+}
+
 pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
-    AbsolutePathBuf::from_absolute_path(
-        codex_home
-            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
-            .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME),
-    )
+    app_server_control_socket_path_for_profile(codex_home, active_app_server_profile().as_deref())
+}
+
+pub fn app_server_control_socket_path_for_profile(
+    codex_home: &Path,
+    profile: Option<&str>,
+) -> std::io::Result<AbsolutePathBuf> {
+    let mut directory = codex_home.join(APP_SERVER_CONTROL_SOCKET_DIR_NAME);
+    if let Some(profile) = profile {
+        directory = directory.join(profile);
+    }
+    AbsolutePathBuf::from_absolute_path(directory.join(APP_SERVER_CONTROL_SOCKET_FILE_NAME))
 }
 
 pub fn app_server_startup_lock_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
-    AbsolutePathBuf::from_absolute_path(
-        codex_home
-            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
-            .join(APP_SERVER_STARTUP_LOCK_FILE_NAME),
-    )
+    app_server_startup_lock_path_for_profile(codex_home, active_app_server_profile().as_deref())
+}
+
+pub fn app_server_startup_lock_path_for_profile(
+    codex_home: &Path,
+    profile: Option<&str>,
+) -> std::io::Result<AbsolutePathBuf> {
+    let mut directory = codex_home.join(APP_SERVER_CONTROL_SOCKET_DIR_NAME);
+    if let Some(profile) = profile {
+        directory = directory.join(profile);
+    }
+    AbsolutePathBuf::from_absolute_path(directory.join(APP_SERVER_STARTUP_LOCK_FILE_NAME))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
