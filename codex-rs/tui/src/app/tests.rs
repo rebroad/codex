@@ -7494,6 +7494,20 @@ fn active_turn_interrupt_race_extracts_actual_turn_id_from_mismatch() {
     );
 }
 
+#[test]
+fn active_turn_interrupt_missing_detects_completed_turn() {
+    let error = TypedRequestError::Server {
+        method: "turn/interrupt".to_string(),
+        source: JSONRPCErrorError {
+            code: -32600,
+            message: "no active turn to interrupt".to_string(),
+            data: None,
+        },
+    };
+
+    assert!(active_turn_interrupt_missing(&error));
+}
+
 #[tokio::test]
 async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
