@@ -4,6 +4,7 @@ use super::*;
 use crate::chatwidget::KeyEventAction;
 use crate::clipboard_copy::CopyFormat;
 use crate::clipboard_copy::worker::PasteSource;
+#[cfg(not(target_os = "android"))]
 use crate::clipboard_paste::PasteImageError;
 
 impl App {
@@ -35,6 +36,7 @@ impl App {
                 } else {
                     match self.chat_widget.paste_image() {
                         Ok(()) => {}
+                        #[cfg(not(target_os = "android"))]
                         Err(PasteImageError::NoImage(_)) if text_fallback.is_some() => {
                             self.start_clipboard_text_paste(
                                 tui,
