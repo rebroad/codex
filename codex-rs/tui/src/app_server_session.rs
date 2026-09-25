@@ -31,6 +31,7 @@ use crate::local_settings::LocalSettings;
 use crate::service_tier_resolution;
 use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
+use crate::startup_draft::StartupProgress;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
@@ -151,6 +152,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use std::time::Instant;
@@ -330,6 +332,7 @@ pub(crate) struct AppServerSession {
     managed_new_thread_defaults: Option<NewThreadModelDefaults>,
     external_agent_config_import_id: Mutex<Option<String>>,
     dynamic_tool_mcp: Option<Arc<DynamicToolMcpServer>>,
+    resume_progress: StartupProgress,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -441,7 +444,12 @@ impl AppServerSession {
             managed_new_thread_defaults: None,
             external_agent_config_import_id: Mutex::default(),
             dynamic_tool_mcp: None,
+            resume_progress: Arc::new(AtomicU8::new(0)),
         }
+    }
+
+    pub(crate) fn resume_progress_handle(&self) -> StartupProgress {
+        Arc::clone(&self.resume_progress)
     }
 
     pub(crate) async fn start_dynamic_tool_mcp(

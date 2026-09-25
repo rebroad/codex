@@ -17,6 +17,7 @@ pub(super) struct OwnedStartupLayout<'a> {
     header: &'a dyn Renderable,
     bottom: RenderableItem<'a>,
     session_action: StartupDraftSessionAction,
+    progress: u8,
 }
 
 impl<'a> OwnedStartupLayout<'a> {
@@ -24,6 +25,7 @@ impl<'a> OwnedStartupLayout<'a> {
         header: &'a dyn Renderable,
         bottom_pane: &'a BottomPane,
         session_action: StartupDraftSessionAction,
+        progress: u8,
     ) -> Self {
         Self {
             header,
@@ -33,6 +35,7 @@ impl<'a> OwnedStartupLayout<'a> {
                 ..ComposerRenderOptions::default()
             }),
             session_action,
+            progress,
         }
     }
 
@@ -64,6 +67,13 @@ impl Renderable for OwnedStartupLayout<'_> {
             StartupDraftSessionAction::Resume => Some("  Resuming session…"),
             StartupDraftSessionAction::Fork => Some("  Forking session…"),
         };
+        let message = message.map(|message| {
+            if self.progress == 0 {
+                message.to_string()
+            } else {
+                format!("{message} {}%", self.progress)
+            }
+        });
         if let Some(message) = message
             && header.bottom() < bottom.y
         {
