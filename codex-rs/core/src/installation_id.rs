@@ -1,4 +1,5 @@
 use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Result;
 use std::io::Seek;
@@ -17,8 +18,17 @@ use uuid::Uuid;
 pub(crate) const INSTALLATION_ID_FILENAME: &str = "installation_id";
 
 pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<String> {
-    let path = codex_home.join(INSTALLATION_ID_FILENAME);
-    fs::create_dir_all(codex_home).await?;
+    resolve_installation_id_at_path(codex_home.join(INSTALLATION_ID_FILENAME)).await
+}
+
+pub async fn resolve_installation_id_at_path(path: AbsolutePathBuf) -> Result<String> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "installation ID path has no parent",
+        )
+    })?;
+    fs::create_dir_all(parent).await?;
     tokio::task::spawn_blocking(move || {
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
@@ -29,7 +39,7 @@ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<Str
         }
 
         let mut file = options.open(&path)?;
-        file.lock()?;
+        codex_utils_file_lock::lock(&file)?;
 
         #[cfg(unix)]
         {
@@ -67,6 +77,7 @@ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<Str
 mod tests {
     use super::INSTALLATION_ID_FILENAME;
     use super::resolve_installation_id;
+    use super::resolve_installation_id_at_path;
     use core_test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -145,5 +156,47 @@ mod tests {
                 .expect("read rewritten installation id"),
             resolved
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_installation_id_at_path_supports_profile_storage() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let profile_path = codex_home
+            .path()
+            .join("app-server-daemon")
+            .join("chatgpt-window")
+            .join(INSTALLATION_ID_FILENAME)
+            .abs();
+
+        let resolved = resolve_installation_id_at_path(profile_path.clone())
+            .await
+            .expect("resolve profile installation id");
+
+        assert!(Uuid::parse_str(&resolved).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(profile_path).expect("read profile installation id"),
+            resolved
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_resolvers_share_one_persisted_installation_id() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let path = codex_home.path().join(INSTALLATION_ID_FILENAME).abs();
+        let mut resolvers = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let path = path.clone();
+            resolvers.spawn(async move { resolve_installation_id_at_path(path).await });
+        }
+        let mut ids = Vec::new();
+        while let Some(result) = resolvers.join_next().await {
+            ids.push(
+                result
+                    .expect("join resolver")
+                    .expect("resolve installation id"),
+            );
+        }
+        let persisted = std::fs::read_to_string(path).expect("read installation id");
+        assert_eq!(ids, vec![persisted; 16]);
     }
 }
