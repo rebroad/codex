@@ -1546,6 +1546,19 @@ impl FileSystemSandboxPolicy {
         )
     }
 
+    /// Preserves mutable path components while inheriting root metadata protections
+    /// from a writable filesystem-root bind.
+    pub fn get_writable_roots_with_cwd_preserving_mutable_paths_and_inheriting_root_metadata(
+        &self,
+        cwd: &Path,
+    ) -> Vec<WritableRoot> {
+        self.get_writable_roots_with_cwd_impl(
+            cwd,
+            WritableRootPathResolution::PreserveMutableComponents,
+            RootMetadataWriteMounts::InheritWritableRoot,
+        )
+    }
+
     fn get_writable_roots_with_cwd_impl(
         &self,
         cwd: &Path,
@@ -1588,10 +1601,7 @@ impl FileSystemSandboxPolicy {
         }
         // Include resolved gitdirs in the entries used to carve out broader grants.
         // Seatbelt grants are independent, and later bubblewrap binds cover earlier mounts.
-        let include_resolved_gitdirs = match path_resolution {
-            WritableRootPathResolution::Effective => cfg!(target_os = "linux"),
-            WritableRootPathResolution::PreserveMutableComponents => cfg!(target_os = "macos"),
-        };
+        let include_resolved_gitdirs = cfg!(target_os = "linux");
         let resolved_gitdir_entries: Vec<ResolvedFileSystemEntry> = if include_resolved_gitdirs {
             effective_entries
                 .iter()
@@ -3225,10 +3235,9 @@ mod tests {
     #[test]
     fn writable_roots_proactively_protect_missing_dot_codex() {
         let cwd = TempDir::new().expect("tempdir");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            cwd.path().canonicalize().expect("canonicalize cwd"),
-        )
-        .expect("absolute canonical root");
+        let expected_root = normalize_effective_absolute_path(
+            AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute root"),
+        );
         let expected_dot_codex = expected_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
@@ -3421,10 +3430,9 @@ mod tests {
     fn writable_roots_skip_default_metadata_when_explicit_user_rule_exists() {
         for name in [".codex", ".aws"] {
             let cwd = TempDir::new().expect("tempdir");
-            let expected_root = AbsolutePathBuf::from_absolute_path(
-                cwd.path().canonicalize().expect("canonicalize cwd"),
-            )
-            .expect("absolute canonical root");
+            let expected_root = normalize_effective_absolute_path(
+                AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute root"),
+            );
             let explicit_metadata = expected_root.join(name);
             fs::create_dir(&explicit_metadata).expect("create metadata directory");
 
@@ -3724,13 +3732,7 @@ mod tests {
         symlink_dir(&decoy, &dot_codex).expect("create .codex symlink");
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
-        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(
-            root.as_path()
-                .canonicalize()
-                .expect("canonicalize root")
-                .join(".codex"),
-        )
-        .expect("absolute .codex symlink");
+        let expected_dot_codex = normalize_effective_absolute_path(root.clone()).join(".codex");
         let unexpected_decoy =
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
@@ -3862,10 +3864,7 @@ mod tests {
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
         let alias = root.join("alias-root");
-        let expected_root = AbsolutePathBuf::from_absolute_path(
-            root.as_path().canonicalize().expect("canonicalize root"),
-        )
-        .expect("absolute canonical root");
+        let expected_root = normalize_effective_absolute_path(root.clone());
         let expected_alias = expected_root.join("alias-root");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
