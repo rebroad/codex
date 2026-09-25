@@ -52,6 +52,7 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
 }
 
 #[test]
+#[cfg(not(target_os = "android"))]
 fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
     let manager = SandboxManager::new();
     let expected =
@@ -837,4 +838,25 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
         Some(std::ffi::OsStr::new(".sandbox-bin"))
     );
     assert!(materialized_helper.exists());
+}
+#[cfg(target_os = "android")]
+#[test]
+fn android_keeps_process_sandbox_but_fails_closed_for_restricted_filesystem() {
+    assert_eq!(
+        super::get_platform_sandbox(false),
+        Some(super::SandboxType::LinuxSeccomp)
+    );
+    assert!(super::uses_legacy_linux_filesystem_sandbox());
+
+    let manager = SandboxManager::new();
+    assert_eq!(
+        manager.select_initial(
+            &PermissionProfile::read_only(),
+            SandboxablePreference::Require,
+            WindowsSandboxLevel::Disabled,
+            /*has_managed_network_requirements*/ false,
+        ),
+        SandboxType::None,
+        "Android must not claim to enforce restricted filesystem access",
+    );
 }
