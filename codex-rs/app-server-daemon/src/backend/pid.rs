@@ -381,7 +381,13 @@ impl PidBackend {
 
     #[cfg(any(unix, windows))]
     fn command_args(&self) -> Vec<Cow<'_, str>> {
-        let mut args = match &self.command_kind {
+        let mut args = Vec::new();
+        if let Ok(profile) = std::env::var(codex_app_server_transport::APP_SERVER_PROFILE_ENV_VAR)
+            && !profile.is_empty()
+        {
+            args.extend(["--profile".into(), profile.into()]);
+        }
+        args.extend(match &self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
             } => vec![
@@ -404,8 +410,8 @@ impl PidBackend {
                 }
                 args
             }
-        };
-        if matches!(self.command_kind, PidCommandKind::AppServer { .. }) {
+        });
+        if matches!(&self.command_kind, PidCommandKind::AppServer { .. }) {
             // Match first-party clients' default while preserving explicit analytics opt-outs.
             args.push("--analytics-default-enabled".into());
             for (name, enabled) in &self.feature_overrides {
