@@ -24,5 +24,5 @@ pub(crate) use error::ErrorBodyLimit;
 pub(crate) use error::OAuthError;
 pub(crate) use error::TokenErrorDetail;
 pub(crate) use error::TokenRejection;
-pub(crate) use pkce::PkceCodes;
-pub(crate) use pkce::generate_pkce;
+pub use pkce::PkceCodes;
+pub use pkce::generate_pkce;
