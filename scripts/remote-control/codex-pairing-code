@@ -1,0 +1,153 @@
+#!/usr/bin/env sh
+set -eu
+
+home_dir="${HOME:?HOME must be set}"
+codex_home="${CODEX_HOME:-$home_dir/.codex}"
+codex_bin="${CODEX_BIN:-}"
+timeout_seconds="${CODEX_REMOTE_PAIR_TIMEOUT:-20}"
+max_attempts="${CODEX_REMOTE_PAIR_ATTEMPTS:-10}"
+retry_delay="${CODEX_REMOTE_PAIR_RETRY_DELAY:-3}"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+control_socket="$codex_home/app-server-control/app-server-control.sock"
+lock_dir="$codex_home/app-server-control/pairing-code.lock"
+start_option=""
+profile_name=""
+
+usage() {
+    printf '%s\n' 'Usage: codex-pairing-code [-p|--profile PROFILE] [--debug-log]'
+}
+
+if [ -z "$codex_bin" ]; then
+    if [ -x "$home_dir/bin/codex" ]; then
+        codex_bin="$home_dir/bin/codex"
+    else
+        codex_bin=$(command -v codex) || {
+            printf '%s\n' 'Codex Remote: codex was not found; set CODEX_BIN to its path.' >&2
+            exit 1
+        }
+    fi
+fi
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --debug-log)
+            start_option="--debug-log"
+            ;;
+        -p|--profile)
+            [ "$#" -ge 2 ] || {
+                usage >&2
+                exit 2
+            }
+            profile_name="$2"
+            shift
+            ;;
+        --profile=*)
+            profile_name="${1#--profile=}"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+case "$profile_name" in
+    ""|*[!A-Za-z0-9._-]*)
+        [ -z "$profile_name" ] || printf 'Codex Remote: invalid profile name: %s\n' "$profile_name" >&2
+        [ -z "$profile_name" ] || exit 2
+        ;;
+esac
+
+if [ -n "$profile_name" ]; then
+    control_socket="$codex_home/app-server-control/$profile_name/app-server-control.sock"
+    lock_dir="$codex_home/app-server-control/$profile_name/pairing-code.lock"
+    export CODEX_PROFILE="$profile_name"
+fi
+
+start_remote_server() {
+    start_status=0
+    remote_start="$script_dir/codex-remote-start"
+    if [ ! -x "$remote_start" ]; then
+        printf 'Codex Remote: companion script is not executable: %s\n' "$remote_start" >&2
+        return 1
+    fi
+    if [ -n "$profile_name" ]; then
+        start_output="$($remote_start --profile "$profile_name" "$@" 2>&1)" || start_status=$?
+    else
+        start_output="$($remote_start "$@" 2>&1)" || start_status=$?
+    fi
+    if [ "${start_status:-0}" -ne 0 ]; then
+        [ -z "$start_output" ] || printf '%s\n' "$start_output" >&2
+        return "${start_status:-1}"
+    fi
+}
+
+mkdir -p "$(dirname "$lock_dir")"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+    printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
+    exit 1
+fi
+trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT HUP INT TERM
+
+if [ ! -S "$control_socket" ] || [ -n "$start_option" ]; then
+    start_status=0
+    if [ -n "$start_option" ]; then
+        start_remote_server "$start_option" || exit $?
+    else
+        start_remote_server || exit $?
+    fi
+fi
+
+pairing_json=""
+pairing_status=1
+attempt=1
+recovery_attempted=0
+while [ "$attempt" -le "$max_attempts" ]; do
+    pairing_status=0
+    pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
+    [ "$pairing_status" -eq 0 ] && break
+
+    case "$pairing_json" in
+        *"timed out waiting for remoteControl/pairing/start response"*|*"deadline has elapsed"*)
+            sleep 2
+            ;;
+        *"failed to connect to "*|*"Connection refused"*|*"No such file or directory"*)
+            if [ "$recovery_attempted" -eq 0 ]; then
+                recovery_attempted=1
+                start_status=0
+                if start_remote_server; then
+                    attempt=$((attempt + 1))
+                    continue
+                fi
+            fi
+            break
+            ;;
+        *"token_expired"*|*"remote control server refresh failed"*|*"remote control server enrollment failed"*|*"pairing is unavailable until enrollment completes"*)
+            sleep "$retry_delay"
+            ;;
+        *)
+            break
+            ;;
+    esac
+    attempt=$((attempt + 1))
+done
+
+if [ "$pairing_status" -ne 0 ]; then
+    printf 'Codex Remote: could not create a pairing code (%s).\n' "$pairing_json" >&2
+    exit "$pairing_status"
+fi
+
+manual_code="$(printf '%s' "$pairing_json" | sed -n \
+    's/.*"manualPairingCode"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')"
+if [ -z "$manual_code" ]; then
+    printf '%s\n' 'Codex Remote: pairing response did not contain a manual code.' >&2
+    exit 1
+fi
+
+printf '\nCodex Remote pairing code: %s\n' "$manual_code"
+printf '%s\n\n' 'ChatGPT/Codex app → Remote → Add or pair device'
