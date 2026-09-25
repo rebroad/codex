@@ -33,13 +33,13 @@ Scenario: Resolved local MXC selection preserves workspace-write permissions in 
 
     - Pipes: |
     - Logical operators: &&, ||
-    <OMITTED 45 LINES; ~808 TOKENS; hash=587bea404c7facc4>
-
-    ### Examples
-    Good examples of prefixes:
+    <OMITTED 48 LINES; ~819 TOKENS; hash=25364fc2ae19f565>
     - ["npm", "run", "dev"]
     - ["gh", "pr", "check"]
     - ["cargo", "test"]
+
+
+    If an approval request is rejected, proceed only with a materially safer alternative, or inform the user of the risk and ask for approval.
      The writable root is `<WORKSPACE_ROOT 1>`.
     </permissions instructions>
 02:message/user:

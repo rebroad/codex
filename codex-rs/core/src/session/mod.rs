@@ -3051,6 +3051,10 @@ impl Session {
         let requested_permissions = args.permissions;
         let sandbox_context = environment.sandbox_context(/*additional_permissions*/ None);
         let context = sandbox_context.policy_context();
+        let approvals_reviewer = self
+            .current_approvals_reviewer(turn_context, step_context.settings.approvals_reviewer())
+            .await;
+        if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
         {
             let action = ApprovalAction::RequestPermissions {
                 id: call_id.clone(),
@@ -3059,8 +3063,10 @@ impl Session {
                 reason: args.reason.clone(),
                 permissions: requested_permissions.clone(),
             };
+            let mut review_context = crate::guardian::GuardianReviewContext::from(step_context);
+            review_context.approvals_reviewer = approvals_reviewer;
             let approval_context = ApprovalContext {
-                review_context: crate::guardian::GuardianReviewContext::from(step_context),
+                review_context,
                 cancellation_token: Some(cancellation_token.clone()),
                 call_id: call_id.clone(),
                 tool_name: ToolName::plain("request_permissions"),
