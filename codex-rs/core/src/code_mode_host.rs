@@ -19,6 +19,7 @@ use codex_code_mode::GrpcCodeModeSessionProvider;
 use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use codex_utils_process::background_command;
+use codex_utils_pty::wait_for_child_exit;
 use hyper_util::rt::TokioIo;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncRead;
@@ -157,7 +158,7 @@ impl Drop for HostConnection {
             let _ = child.start_kill();
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 runtime.spawn(async move {
-                    let _ = child.wait().await;
+                    let _ = wait_for_child_exit(&mut child).await;
                 });
             }
         }
