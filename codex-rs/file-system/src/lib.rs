@@ -368,6 +368,10 @@ pub struct FileSystemSandboxContext {
     pub windows_sandbox_proxy_settings_mode: Option<WindowsSandboxProxySettingsMode>,
     #[serde(default)]
     pub use_legacy_landlock: bool,
+    /// Identifier used to associate nested sandbox diagnostics with the
+    /// originating Codex thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_log_id: Option<String>,
 }
 
 impl FileSystemSandboxContext {
@@ -401,6 +405,7 @@ impl FileSystemSandboxContext {
             windows_sandbox_selection: WindowsSandboxSelection::Disabled,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,
+            debug_log_id: None,
         }
     }
 
@@ -479,6 +484,8 @@ pub struct WireFileSystemSandboxContext {
     windows_sandbox_proxy_settings_mode: Option<WindowsSandboxProxySettingsMode>,
     #[serde(default)]
     use_legacy_landlock: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    debug_log_id: Option<String>,
 }
 
 /// New filesystem clients provide these paths independently of the legacy helper launch cwd.
@@ -502,6 +509,7 @@ impl From<FileSystemSandboxContext> for WireFileSystemSandboxContext {
             windows_sandbox_selection,
             windows_sandbox_proxy_settings_mode,
             use_legacy_landlock,
+            debug_log_id,
         } = sandbox;
         let permissions = ExecPermissionProfile::from(permissions);
         // Older filesystem clients sent cwd and roots only when permissions needed them; old
@@ -546,6 +554,7 @@ impl From<FileSystemSandboxContext> for WireFileSystemSandboxContext {
             windows_sandbox_selection,
             windows_sandbox_proxy_settings_mode,
             use_legacy_landlock,
+            debug_log_id,
         }
     }
 }
@@ -592,6 +601,7 @@ impl WireFileSystemSandboxContext {
             windows_sandbox_selection: self.windows_sandbox_selection,
             windows_sandbox_proxy_settings_mode: self.windows_sandbox_proxy_settings_mode,
             use_legacy_landlock: self.use_legacy_landlock,
+            debug_log_id: self.debug_log_id,
         }
     }
 }
