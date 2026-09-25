@@ -16,6 +16,13 @@ pub fn models_cache_entry(
         etag: None,
         client_version: Some(codex_models_manager::client_version_to_whole()),
         identity: crate::models_identity::identity(provider_info, auth).ok(),
+        provider_identity: Some(format!(
+            "{}|{}|{}|{:?}",
+            provider_info.name,
+            provider_info.base_url.as_deref().unwrap_or_default(),
+            provider_info.wire_api,
+            auth.map(CodexAuth::auth_mode)
+        )),
         models,
     }
 }

@@ -13,6 +13,7 @@ async fn api_key_discovery_disabled_preserves_command_auth_discovery_and_merging
     let endpoint = Arc::new(TestModelsEndpoint {
         has_command_auth: true,
         responses: Mutex::new(vec![Ok(models.clone())].into()),
+        provider_identity: "test-provider".to_string(),
         ..TestModelsEndpoint::default()
     });
     let manager = OpenAiModelsManager::new_without_cache(
