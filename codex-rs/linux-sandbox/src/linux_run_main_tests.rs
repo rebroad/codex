@@ -1,5 +1,49 @@
 #[cfg(test)]
 use super::*;
+
+#[test]
+fn session_scoped_log_path_appends_session_id_to_filename() {
+    let path = session_scoped_log_path_for_session(
+        PathBuf::from("/var/log/codex-sandbox-debug.log"),
+        Some("019fe6a7"),
+    )
+    .expect("valid session id should produce a path");
+    assert!(path.ends_with("codex-sandbox-debug.log-019fe6a7"));
+}
+
+#[test]
+fn session_scoped_log_path_falls_back_for_missing_or_unsafe_session_id() {
+    let path = PathBuf::from("/var/log/codex-sandbox-debug.log");
+    assert_eq!(
+        session_scoped_log_path_for_session(path.clone(), None),
+        None
+    );
+    assert_eq!(
+        session_scoped_log_path_for_session(path, Some("../../unsafe")),
+        None
+    );
+}
+
+#[test]
+fn process_scoped_log_path_appends_process_id() {
+    let path = process_scoped_log_path(PathBuf::from("/var/log/codex-sandbox-debug.log"));
+    assert!(path.to_string_lossy().ends_with(&format!(
+        "codex-sandbox-debug.log-pid-{}",
+        std::process::id()
+    )));
+}
+
+#[test]
+fn default_sandbox_debug_log_path_respects_tmpdir_and_avoids_slash_tmp_by_default() {
+    assert_eq!(
+        default_sandbox_debug_log_path(Some(PathBuf::from("/var/tmp"))),
+        PathBuf::from("/var/tmp/codex-sandbox-debug.log")
+    );
+    assert_eq!(
+        default_sandbox_debug_log_path(None),
+        PathBuf::from("/var/tmp/codex-sandbox-debug.log")
+    );
+}
 #[cfg(test)]
 use crate::linux_run_main::install_bwrap_signal_forwarders;
 #[cfg(test)]
