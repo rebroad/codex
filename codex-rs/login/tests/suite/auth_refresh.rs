@@ -810,6 +810,77 @@ async fn auth_reloads_disk_auth_without_calling_expired_refresh_token() -> Resul
 
 #[serial_test::serial(auth_env)]
 #[tokio::test]
+async fn auth_reloads_replaced_disk_auth_before_refresh_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let last_refresh = Utc::now() - Duration::hours(1);
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN)),
+        last_refresh: Some(last_refresh),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    let auth_changes = ctx.auth_manager.auth_change_receiver();
+    std::fs::write(ctx.codex_home.path().join("auth.json"), "{")?;
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should retain the last valid credentials")?;
+    assert_eq!(
+        cached_auth.get_token_data()?.access_token,
+        INITIAL_ACCESS_TOKEN
+    );
+    assert!(!auth_changes.has_changed()?);
+
+    let disk_tokens = build_tokens("replaced-access-token", "replaced-refresh-token");
+    let replaced_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(disk_tokens.clone()),
+        last_refresh: Some(last_refresh),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    save_auth(
+        ctx.codex_home.path(),
+        &replaced_auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should reload replaced disk auth")?;
+    assert_eq!(
+        cached_auth.get_token_data()?.access_token,
+        disk_tokens.access_token
+    );
+    assert!(auth_changes.has_changed()?);
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(
+        requests.is_empty(),
+        "reloading a fresh replacement must not refresh"
+    );
+
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
 async fn refresh_token_returns_permanent_error_for_expired_refresh_token() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
