@@ -56,6 +56,56 @@ impl Default for Prompt {
 }
 
 impl Prompt {
+    /// Removes Codex scaffolding from a prompt while preserving its user input
+    /// and response-shape settings.
+    pub(crate) fn without_scaffolding(mut self) -> Self {
+        self.tools = Arc::default();
+        self.parallel_tool_calls = false;
+        self.base_instructions = BaseInstructions {
+            text: String::new(),
+            provenance: None,
+        };
+        self.input.retain_mut(|item| {
+            let ResponseItem::Message {
+                role: item_role,
+                content,
+                internal_chat_message_metadata_passthrough: Some(metadata),
+                ..
+            } = item
+            else {
+                return true;
+            };
+            if item_role != "developer" {
+                return true;
+            }
+            let Some(content_item_kinds) = metadata.content_item_kinds.as_ref() else {
+                return true;
+            };
+            if content_item_kinds.len() != content.len() {
+                return true;
+            }
+
+            let mut retained_content = Vec::with_capacity(content.len());
+            let mut retained_kinds = Vec::with_capacity(content_item_kinds.len());
+            for (content_item, kind) in std::mem::take(content)
+                .into_iter()
+                .zip(content_item_kinds.iter())
+            {
+                if matches!(
+                    kind.0.as_str(),
+                    "generic.developer_instructions" | "managed_config.developer_instructions"
+                ) {
+                    retained_content.push(content_item);
+                    retained_kinds.push(kind.clone());
+                }
+            }
+            *content = retained_content;
+            metadata.content_item_kinds = Some(retained_kinds);
+            !content.is_empty()
+        });
+        self
+    }
+
     pub(crate) fn get_formatted_input_for_request(
         &self,
         model_info: &ModelInfo,
