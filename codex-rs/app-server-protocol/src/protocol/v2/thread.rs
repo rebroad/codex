@@ -1716,6 +1716,7 @@ pub enum ThreadStatus {
 pub enum ThreadActiveFlag {
     WaitingOnApproval,
     WaitingOnUserInput,
+    WaitingOnTool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2054,6 +2055,8 @@ pub struct ThreadStartedNotification {
 pub struct ThreadStatusChangedNotification {
     pub thread_id: String,
     pub status: ThreadStatus,
+    #[serde(default)]
+    pub waiting_until_ms: Option<i64>,
 }
 
 /// The first unread position in a durable local thread. A null position means read.
