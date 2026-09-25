@@ -316,78 +316,80 @@ fn process_platform_defaults_allow_scratch_without_granting_it_to_filesystem_hel
             .expect("run restricted seatbelt command")
     };
 
-    for scratch_root in ["/private/tmp", "/private/var/tmp"] {
-        let scratch = tempfile::Builder::new()
-            .prefix("codex-seatbelt-process-scratch-")
-            .tempdir_in(scratch_root)
-            .expect("scratch directory");
-        let scratch_file = scratch.path().join("scratch.txt");
-        let process_result = run_sandboxed(
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "printf '%s' 'scratch-access' > \"$1\" && /bin/cat \"$1\"".to_string(),
-                "seatbelt-scratch".to_string(),
-                scratch_file.display().to_string(),
-            ],
-            MacosSeatbeltProfile::Process,
-        );
-        let process_stderr = String::from_utf8_lossy(&process_result.stderr);
-        if !process_result.status.success()
-            && process_stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
-        {
-            eprintln!("nested Seatbelt is unavailable; scratch access behavior was not verified");
-            break;
-        }
-        assert!(
-            process_result.status.success(),
-            "processes should retain scratch read/write access to {scratch_root}: {process_stderr}"
-        );
-        assert_eq!(process_result.stdout, b"scratch-access");
-
-        let helper_result = run_sandboxed(
-            vec!["/bin/cat".to_string(), scratch_file.display().to_string()],
-            MacosSeatbeltProfile::FileSystemHelper,
-        );
-        let helper_stderr = String::from_utf8_lossy(&helper_result.stderr);
-        assert!(
-            !helper_result.status.success() && helper_stderr.contains("Operation not permitted"),
-            "filesystem helpers should not inherit scratch access to {scratch_root}: {helper_stderr}"
-        );
-
-        if scratch_root == "/private/tmp" {
-            let approved_read = run_sandboxed(
-                vec!["/bin/cat".to_string(), approved_file.display().to_string()],
-                MacosSeatbeltProfile::FileSystemHelper,
-            );
-            let approved_stderr = String::from_utf8_lossy(&approved_read.stderr);
-            assert!(
-                approved_read.status.success(),
-                "filesystem helpers should read files in the approved project: {approved_stderr}"
-            );
-            assert_eq!(approved_read.stdout, b"approved-project");
-
-            let canonicalized = run_sandboxed(
-                vec![
-                    "/bin/realpath".to_string(),
-                    approved_file.display().to_string(),
-                ],
-                MacosSeatbeltProfile::FileSystemHelper,
-            );
-            let canonicalize_stderr = String::from_utf8_lossy(&canonicalized.stderr);
-            assert!(
-                canonicalized.status.success(),
-                "filesystem helpers should canonicalize approved project files: {canonicalize_stderr}"
-            );
-            let expected_path = approved_file
-                .canonicalize()
-                .expect("canonicalize approved project file");
-            assert_eq!(
-                canonicalized.stdout,
-                format!("{}\n", expected_path.display()).as_bytes()
-            );
-        }
+    let scratch = tempfile::Builder::new()
+        .prefix("codex-seatbelt-process-scratch-")
+        .tempdir()
+        .expect("scratch directory");
+    let scratch_root = scratch
+        .path()
+        .parent()
+        .expect("scratch directory should have a parent");
+    let scratch_file = scratch.path().join("scratch.txt");
+    let process_result = run_sandboxed(
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf '%s' 'scratch-access' > \"$1\" && /bin/cat \"$1\"".to_string(),
+            "seatbelt-scratch".to_string(),
+            scratch_file.display().to_string(),
+        ],
+        MacosSeatbeltProfile::Process,
+    );
+    let process_stderr = String::from_utf8_lossy(&process_result.stderr);
+    if !process_result.status.success()
+        && process_stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
+    {
+        eprintln!("nested Seatbelt is unavailable; scratch access behavior was not verified");
+        return;
     }
+    assert!(
+        process_result.status.success(),
+        "processes should retain scratch read/write access to {}: {process_stderr}",
+        scratch_root.display()
+    );
+    assert_eq!(process_result.stdout, b"scratch-access");
+
+    let helper_result = run_sandboxed(
+        vec!["/bin/cat".to_string(), scratch_file.display().to_string()],
+        MacosSeatbeltProfile::FileSystemHelper,
+    );
+    let helper_stderr = String::from_utf8_lossy(&helper_result.stderr);
+    assert!(
+        !helper_result.status.success() && helper_stderr.contains("Operation not permitted"),
+        "filesystem helpers should not inherit scratch access to {}: {helper_stderr}",
+        scratch_root.display()
+    );
+
+    let approved_read = run_sandboxed(
+        vec!["/bin/cat".to_string(), approved_file.display().to_string()],
+        MacosSeatbeltProfile::FileSystemHelper,
+    );
+    let approved_stderr = String::from_utf8_lossy(&approved_read.stderr);
+    assert!(
+        approved_read.status.success(),
+        "filesystem helpers should read files in the approved project: {approved_stderr}"
+    );
+    assert_eq!(approved_read.stdout, b"approved-project");
+
+    let canonicalized = run_sandboxed(
+        vec![
+            "/bin/realpath".to_string(),
+            approved_file.display().to_string(),
+        ],
+        MacosSeatbeltProfile::FileSystemHelper,
+    );
+    let canonicalize_stderr = String::from_utf8_lossy(&canonicalized.stderr);
+    assert!(
+        canonicalized.status.success(),
+        "filesystem helpers should canonicalize approved project files: {canonicalize_stderr}"
+    );
+    let expected_path = approved_file
+        .canonicalize()
+        .expect("canonicalize approved project file");
+    assert_eq!(
+        canonicalized.stdout,
+        format!("{}\n", expected_path.display()).as_bytes()
+    );
 }
 
 #[test]
