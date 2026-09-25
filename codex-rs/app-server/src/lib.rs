@@ -8,7 +8,7 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config::UnsupportedUntrustedApprovalPolicyError;
-use codex_core::resolve_installation_id;
+use codex_core::resolve_installation_id_at_path;
 use codex_login::AuthManager;
 #[cfg(debug_assertions)]
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -41,7 +41,7 @@ use crate::transport::RemoteControlPolicy;
 use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
 use crate::transport::acquire_app_server_startup_lock;
-use crate::transport::app_server_startup_lock_path;
+use crate::transport::app_server_startup_lock_path_for_profile;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
@@ -146,9 +146,18 @@ pub use crate::code_mode_host::AppServerCodeModeHostArgs;
 pub use crate::code_mode_host::CodeModeHostTransport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
+pub use crate::transport::APP_SERVER_PROFILE_ENV_VAR;
+pub use crate::transport::AppServerOwnerEndpoint;
+pub use crate::transport::AppServerOwnerGuard;
+pub use crate::transport::AppServerOwnerRecord;
 pub use crate::transport::AppServerTransport;
 pub use crate::transport::RemoteControlStartupMode;
 pub use crate::transport::app_server_control_socket_path;
+pub(crate) use crate::transport::app_server_control_socket_path_for_profile;
+pub use crate::transport::app_server_owner_record_path_for_profile;
+pub use crate::transport::prepare_control_socket_path;
+pub use crate::transport::read_app_server_owner;
+pub use crate::transport::register_app_server_owner;
 pub use crate::transport::take_remote_control_disabled_env;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
@@ -503,6 +512,10 @@ pub async fn run_main_with_transport_options(
         loader_overrides,
         test_user_config_file_from_env(),
     )?;
+    let app_server_profile = loader_overrides
+        .user_config_profile
+        .as_ref()
+        .map(ToString::to_string);
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -639,13 +652,20 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
-    let unix_socket_startup_lock = match &transport {
-        AppServerTransport::UnixSocket { .. } => {
-            let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
-            let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
-            Some(startup_lock)
+    let needs_default_control_socket = matches!(
+        &transport,
+        AppServerTransport::UnixSocket { .. } | AppServerTransport::Stdio
+    );
+    let unix_socket_startup_lock = if needs_default_control_socket {
+        let startup_lock_path =
+            app_server_startup_lock_path_for_profile(&codex_home, app_server_profile.as_deref())?;
+        let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
+        if let AppServerTransport::UnixSocket { socket_path } = &transport {
+            prepare_control_socket_path(socket_path.as_path()).await?;
         }
-        _ => None,
+        Some(startup_lock)
+    } else {
+        None
     };
     let state_db_init = match init_sqlite_state_db_with_fresh_start_on_corruption(&config).await {
         Ok(state_db_init) => state_db_init,
@@ -766,11 +786,20 @@ pub async fn run_main_with_transport_options(
             "remote control is disabled by managed requirements",
         ));
     }
-    let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let installation_id_path = match app_server_profile.as_deref() {
+        Some(profile) => config
+            .codex_home
+            .join("app-server-daemon")
+            .join(profile)
+            .join("installation_id"),
+        None => config.codex_home.join("installation_id"),
+    };
+    let installation_id = resolve_installation_id_at_path(installation_id_path).await?;
     let transport_shutdown_token = CancellationToken::new();
     // Remote enrollment must cancel before RPC drain without shutting down telemetry.
     let remote_control_shutdown_token = transport_shutdown_token.child_token();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
+    let mut owner_endpoint_available = false;
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let graceful_signal_restart_enabled =
@@ -778,6 +807,15 @@ pub async fn run_main_with_transport_options(
     let managed_daemon = matches!(&transport, AppServerTransport::UnixSocket { .. })
         && runtime_options.managed_daemon;
     let mut app_server_client_name_rx = None;
+    if !matches!(&transport, AppServerTransport::Stdio)
+        && let Some(profile) = app_server_profile.as_deref()
+    {
+        let (client_name_tx, client_name_rx) = oneshot::channel::<String>();
+        client_name_tx
+            .send(format!("codex-profile:{profile}"))
+            .map_err(|_| std::io::Error::other("failed to set app-server profile identity"))?;
+        app_server_client_name_rx = Some(client_name_rx);
+    }
 
     match &transport {
         AppServerTransport::Stdio => {
@@ -790,6 +828,25 @@ pub async fn run_main_with_transport_options(
             )
             .await?;
             transport_accept_handles.push(handle);
+            let socket_path = app_server_control_socket_path_for_profile(
+                &codex_home,
+                app_server_profile.as_deref(),
+            )?;
+            match start_control_socket_acceptor(
+                socket_path,
+                transport_event_tx.clone(),
+                transport_shutdown_token.clone(),
+                DaemonShutdownAccess::Disabled,
+            )
+            .await
+            {
+                Ok(accept_handle) => transport_accept_handles.push(accept_handle),
+                Err(err) if err.kind() == ErrorKind::AddrInUse => {
+                    warn!(%err, "default app-server control socket is already in use")
+                }
+                Err(err) => return Err(err),
+            }
+            owner_endpoint_available = transport_accept_handles.len() > 1;
         }
         AppServerTransport::UnixSocket { socket_path } => {
             let accept_handle = start_control_socket_acceptor(
@@ -807,6 +864,7 @@ pub async fn run_main_with_transport_options(
             )
             .await?;
             transport_accept_handles.push(accept_handle);
+            owner_endpoint_available = true;
         }
         AppServerTransport::WebSocket { bind_address } => {
             let accept_handle = start_websocket_acceptor(
@@ -817,9 +875,20 @@ pub async fn run_main_with_transport_options(
             )
             .await?;
             transport_accept_handles.push(accept_handle);
+            owner_endpoint_available = true;
         }
         AppServerTransport::Off => {}
     }
+    let _app_server_owner_guard = if owner_endpoint_available {
+        register_app_server_owner(
+            &codex_home,
+            app_server_profile.as_deref(),
+            &transport,
+            env!("CARGO_PKG_VERSION"),
+        )?
+    } else {
+        None
+    };
     drop(unix_socket_startup_lock);
 
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed

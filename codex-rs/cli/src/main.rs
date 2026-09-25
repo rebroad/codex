@@ -1073,6 +1073,16 @@ async fn cli_main(
     interactive
         .shared
         .take_auto_review_config_overrides(&mut root_config_overrides);
+    if let Some(profile) = interactive.config_profile_v2.as_ref() {
+        // Keep the selected profile available to app-server path helpers and
+        // inherited daemon children for the lifetime of this CLI process.
+        unsafe {
+            std::env::set_var(
+                codex_app_server::APP_SERVER_PROFILE_ENV_VAR,
+                profile.to_string(),
+            )
+        };
+    }
     reject_root_strict_config_for_subcommand(root_strict_config, &subcommand)?;
     if let Some(subcommand) = subcommand.as_ref() {
         profile_v2_for_subcommand(&interactive, subcommand)?;
@@ -1247,11 +1257,34 @@ async fn cli_main(
                         listen
                     };
                     let auth = auth.try_into_settings()?;
+                    let extension_host_remote_control = analytics_default_enabled
+                        && matches!(&transport, codex_app_server::AppServerTransport::Stdio);
+                    if extension_host_remote_control {
+                        let codex_home = find_codex_home()?;
+                        let socket_path =
+                            codex_app_server::app_server_control_socket_path(&codex_home)?;
+                        if let Err(err) =
+                            codex_app_server::prepare_control_socket_path(socket_path.as_path())
+                                .await
+                            && err.kind() == std::io::ErrorKind::AddrInUse
+                        {
+                            tracing::info!(
+                                socket_path = %socket_path.display(),
+                                "reusing the existing app-server for extension-host stdio"
+                            );
+                            codex_stdio_to_uds::run(socket_path.as_path())
+                                .await
+                                .map_err(std::io::Error::other)?;
+                            return Ok(());
+                        }
+                    }
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
                         code_mode_host_transport: code_mode_host.into(),
                         managed_daemon,
-                        remote_control_startup_mode: match (remote_control, remote_control_disabled)
-                        {
+                        remote_control_startup_mode: match (
+                            remote_control || extension_host_remote_control,
+                            remote_control_disabled,
+                        ) {
                             (true, _) => {
                                 codex_app_server::RemoteControlStartupMode::EnabledEphemeral
                             }
@@ -1264,10 +1297,12 @@ async fn cli_main(
                         },
                         ..Default::default()
                     };
+                    let loader_overrides =
+                        loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
                     let exit = codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        LoaderOverrides::default(),
+                        loader_overrides,
                         strict_config,
                         analytics_default_enabled,
                         transport,
@@ -1882,11 +1917,12 @@ fn profile_v2_for_subcommand<'a>(
         | Subcommand::Fork(_)
         | Subcommand::Mcp(_)
         | Subcommand::Sandbox(_)
+        | Subcommand::AppServer(_)
         | Subcommand::Debug(DebugCommand {
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex queue`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and app-server: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, `codex app-server`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -3019,6 +3055,19 @@ mod tests {
             profile_v2_for_args(&["codex", "--profile", "work", "sandbox"])
                 .expect("sandbox supports config profile")
                 .as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            profile_v2_for_args(&[
+                "codex",
+                "--profile",
+                "work",
+                "app-server",
+                "daemon",
+                "start"
+            ])
+            .expect("app-server supports config profile")
+            .as_deref(),
             Some("work")
         );
     }

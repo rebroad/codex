@@ -30,6 +30,7 @@ pub use backend::BackendKind;
 use backend::BackendPaths;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_app_server_transport::APP_SERVER_PROFILE_ENV_VAR;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_utils_home_dir::find_codex_home;
 use managed_install::managed_codex_bin;
@@ -318,7 +319,12 @@ impl Daemon {
         let socket_path = app_server_control_socket_path(codex_home.as_path())?
             .as_path()
             .to_path_buf();
-        let state_dir = codex_home.as_path().join(STATE_DIR_NAME);
+        let mut state_dir = codex_home.as_path().join(STATE_DIR_NAME);
+        if let Ok(profile) = std::env::var(APP_SERVER_PROFILE_ENV_VAR)
+            && !profile.is_empty()
+        {
+            state_dir = state_dir.join(profile);
+        }
         let managed_codex_bin = managed_codex_bin(codex_home.as_path());
         // Old CLIs must not mistake a daemon-owned installation for their backend.
         let (pid_file, update_pid_file) =
