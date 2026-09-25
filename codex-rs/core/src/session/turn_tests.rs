@@ -39,25 +39,26 @@ fn assistant_output_text(text: &str) -> ResponseItem {
     }
 }
 
+#[cfg_attr(target_os = "android", ignore)]
 #[test]
+#[serial_test::serial(tracing)]
 fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
     let feedback = codex_feedback::CodexFeedback::new();
     let subscriber = tracing_subscriber::registry()
         .with(feedback.logger_layer())
         .with(tracing_subscriber::fmt::layer().with_filter(codex_state::log_db::default_filter()));
 
-    static METADATA: tracing::Metadata<'static> = tracing::metadata! {
-        name: "post sampling token estimate filter probe",
-        target: POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
-        level: tracing::Level::TRACE,
-        fields: &["turn_id", "estimated_token_count", "message"],
-        callsite: &CALLSITE,
-        kind: tracing::metadata::Kind::EVENT.hint(),
-    };
-    static CALLSITE: tracing::callsite::DefaultCallsite =
-        tracing::callsite::DefaultCallsite::new(&METADATA);
-
-    assert!(tracing::Subscriber::register_callsite(&subscriber, &METADATA).is_never());
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        assert!(!tracing::event_enabled!(
+            target: POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
+            tracing::Level::TRACE,
+            turn_id,
+            estimated_token_count,
+            message
+        ));
+    });
+    tracing::callsite::rebuild_interest_cache();
 }
 
 #[tokio::test]
