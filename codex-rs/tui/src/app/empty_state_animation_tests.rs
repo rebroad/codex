@@ -207,11 +207,11 @@ async fn empty_state_animation_preserves_header_cursor_and_footer() -> Result<()
     );
     insta::assert_snapshot!(
         "fresh_thread_header",
-        format!(
+        crate::version::normalize_cli_version_for_snapshot(&format!(
             "enabled:\n{}\n---\ndisabled:\n{}",
             text(after),
             text(&before)
-        )
+        ))
     );
     let short = Size::new(/*width*/ 120, /*height*/ 12);
     draw(&mut app, &mut tui, short)?;

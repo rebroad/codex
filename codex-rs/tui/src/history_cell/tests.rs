@@ -223,10 +223,12 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
     lines
         .iter()
         .map(|line| {
-            line.spans
+            let rendered = line
+                .spans
                 .iter()
                 .map(|span| span.content.as_ref())
-                .collect::<String>()
+                .collect::<String>();
+            crate::version::normalize_cli_version_for_snapshot(&rendered)
         })
         .collect()
 }
