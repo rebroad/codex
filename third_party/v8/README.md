@@ -10,9 +10,12 @@ Bazel consumer builds use:
 
 Local Cargo builds still use upstream prebuilt `rusty_v8` archives by default.
 Selected Cargo CI, release, and package builds override
-`RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` with Codex release assets. Bazel
-sets those variables independently in `MODULE.bazel`, selecting the pair above
-for its consumers. All Bazel compilation modes use the same published V8
+`RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` with target-selected release
+assets. The resolver routes ARMv7 and Android arm64 to the fork's `rebroad/rusty_v8`
+repository and the other targets to `openai/codex`; this keeps local Cargo
+defaults distinct from selected CI/release/package builds. Bazel sets those
+variables independently in `MODULE.bazel`, selecting the published pair above
+for supported consumers. All Bazel compilation modes use the same published V8
 release archive on supported platforms.
 
 The Bazel `v8` crate feature selection enables V8's in-process sandbox.
@@ -71,6 +74,11 @@ with these raw asset names:
 - `librusty_v8_release_<target>.a.gz`
 - `src_binding_release_<target>.rs`
 
+The ARMv7 compatibility release uses the same `lib`-prefixed static archive
+naming as the other Unix targets.
+ARMv7 uses this non-sandboxed profile because V8's pointer compression and
+sandbox require 64-bit targets.
+
 During the sandbox rollout, sandbox-enabled assets are published alongside those
 current assets on the same tag, with the Rust crate's sandbox feature suffix in
 their raw names:
@@ -127,11 +135,13 @@ hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
 it cannot truthfully reproduce upstream's `*-pc-windows-msvc` archives until we
 add a real MSVC-targeting C++ toolchain to the Bazel graph.
 
-Release and CI Cargo builds for Darwin and Linux use `RUSTY_V8_ARCHIVE` plus a
-downloaded `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release
-assets directly. We do not use `RUSTY_V8_MIRROR` because the upstream `v8` crate
-hardcodes a `v<crate_version>` tag layout, while our artifacts are published
-under `rusty-v8-v<crate_version>`.
+Release and CI Cargo builds use `RUSTY_V8_ARCHIVE` plus a downloaded
+`RUSTY_V8_SRC_BINDING_PATH`. The artifact repository is selected by target:
+`rebroad/rusty_v8` supplies x64 musl, ARMv7, and Android arm64; all other
+targets use the corresponding upstream `openai/codex` release asset. We do not
+use `RUSTY_V8_MIRROR` because the upstream `v8` crate hardcodes a
+`v<crate_version>` tag layout, while these artifacts are published under
+`rusty-v8-v<crate_version>`.
 
 Do not mix artifacts across crate versions. The archive and binding must match
 the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.
