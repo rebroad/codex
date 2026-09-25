@@ -237,6 +237,11 @@ pub(crate) fn is_history_pagination_unsupported(source: &JSONRPCErrorError) -> b
                 .any(|error| message.contains(error)))
 }
 
+fn is_active_writer_conflict(source: &JSONRPCErrorError) -> bool {
+    source.code == JSONRPC_INVALID_REQUEST
+        && source.message.contains("already has an active writer")
+}
+
 pub(crate) async fn request_thread_start_with_history_fallback(
     request_handle: &AppServerRequestHandle,
     mut request_id: RequestId,
@@ -379,8 +384,11 @@ pub(crate) struct AppServerStartedThread {
 }
 
 pub(crate) fn is_active_writer_error(err: &color_eyre::eyre::Report) -> bool {
-    err.chain()
-        .any(|cause| cause.to_string().contains("already has an active writer"))
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("already has an active writer")
+            || message.contains("the active writer belongs to this process")
+    })
 }
 
 pub(crate) fn source_agent_path(source: &SessionSource) -> Option<String> {

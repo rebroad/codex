@@ -222,7 +222,10 @@ async fn external_writer_fork_opens_editable_thread_without_taking_source_lease(
         )
         .await
         .expect_err("source still has its original writer");
-    assert!(crate::app_server_session::is_active_writer_error(&error));
+    assert!(
+        crate::app_server_session::is_active_writer_error(&error),
+        "{error:#}"
+    );
     owner.shutdown().await?;
     server.shutdown().await?;
     proxy.await??;
