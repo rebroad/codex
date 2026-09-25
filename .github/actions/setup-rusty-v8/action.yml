@@ -1,10 +1,13 @@
 name: setup-rusty-v8
-description: Download and verify Codex-built rusty_v8 artifacts for Cargo builds.
+description: Download and verify the target-selected Rusty V8 artifacts for Cargo builds.
 inputs:
   target:
     description: Rust target triple with Codex-built V8 release artifacts.
     required: true
-
+  release-repo:
+    description: GitHub repository containing the Rusty V8 release artifacts; auto selects the fork override targets.
+    required: false
+    default: auto
 runs:
   using: composite
   steps:
@@ -12,53 +15,29 @@ runs:
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
+        RELEASE_REPO: ${{ inputs.release-repo }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-
-        version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
-        release_tag="rusty-v8-v${version}"
-        base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
-        
-        profile="ptrcomp_sandbox_release"
-
-        if [[ "$TARGET" == *-pc-windows-msvc ]]; then
-          archive_name="rusty_v8_${profile}_${TARGET}.lib.gz"
-        else
-          archive_name="librusty_v8_${profile}_${TARGET}.a.gz"
-        fi
-        binding_name="src_binding_${profile}_${TARGET}.rs"
-        checksums_name="rusty_v8_${profile}_${TARGET}.sha256"
-
-        archive_path="${binding_dir}/${archive_name}"
-        binding_path="${binding_dir}/${binding_name}"
-        checksums_path="${binding_dir}/${checksums_name}"
-        trusted_checksums="${GITHUB_WORKSPACE}/third_party/v8/rusty_v8_${version//./_}_release_manifests.sha256"
-
-        if command -v sha256sum >/dev/null 2>&1; then
-          checksum_command=(sha256sum --check -)
-        else
-          checksum_command=(shasum -a 256 --check -)
-        fi
-
-        mkdir -p "${binding_dir}"
-        curl -fsSL "${base_url}/${checksums_name}" -o "${checksums_path}"
-        # Check the original manifest bytes even when either checksum file uses CRLF.
-        expected_manifest_checksum="$(grep -F "  ${checksums_name}" "${trusted_checksums}" | cut -d ' ' -f 1)"
-        actual_manifest_checksum="$(python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${checksums_path}")"
-        if [[ "${actual_manifest_checksum}" != "${expected_manifest_checksum}" ]]; then
-          echo "Checksum mismatch for ${checksums_name}: expected ${expected_manifest_checksum}, got ${actual_manifest_checksum}" >&2
+        resolver_args=(
+          --target="${TARGET}"
+          --output-dir="${binding_dir}"
+          --release-repo="${RELEASE_REPO}"
+        )
+        [[ -n "${RUSTY_V8_PROFILE:-}" ]] && resolver_args+=(--profile="${RUSTY_V8_PROFILE}")
+        resolver_output="${RUNNER_TEMP}/rusty_v8-env"
+        if ! bash "${GITHUB_WORKSPACE}/scripts/resolve_rusty_v8_artifacts.sh" "${resolver_args[@]}" > "${resolver_output}"; then
+          echo "Rusty V8 artifact resolution failed; refusing to let Cargo fall back to an unpinned download." >&2
           exit 1
         fi
-        curl -fsSL "${base_url}/${archive_name}" -o "${archive_path}"
-        curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
-
-        if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
-          echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
-          exit 1
-        fi
-
-        # Existing Windows-built release manifests use CRLF line endings.
-        (cd "${binding_dir}" && tr -d '\r' < "${checksums_path}" | "${checksum_command[@]}")
-        echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
-        echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"
+        # The resolver emits shell-escaped assignments for local `eval` callers.
+        # Decode them before writing GitHub's raw environment-file syntax, which
+        # is especially important for Windows runner paths.
+        source "${resolver_output}"
+        : "${RUSTY_V8_ARCHIVE:?resolver did not provide RUSTY_V8_ARCHIVE}"
+        : "${RUSTY_V8_SRC_BINDING_PATH:?resolver did not provide RUSTY_V8_SRC_BINDING_PATH}"
+        printf 'RUSTY_V8_ARCHIVE=%s\n' "${RUSTY_V8_ARCHIVE}" >> "${GITHUB_ENV}"
+        printf 'RUSTY_V8_SRC_BINDING_PATH=%s\n' "${RUSTY_V8_SRC_BINDING_PATH}" >> "${GITHUB_ENV}"
+        printf 'Resolved Rusty V8 archive: %s\n' "${RUSTY_V8_ARCHIVE}"
+        printf 'Resolved Rusty V8 binding: %s\n' "${RUSTY_V8_SRC_BINDING_PATH}"
