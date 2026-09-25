@@ -6,6 +6,7 @@ use super::HistoryHydrationScope;
 use super::ResumeModelSettings;
 use super::ThreadHistorySupport;
 use super::bootstrap_request_error;
+use super::is_active_writer_conflict;
 use super::is_history_pagination_unsupported;
 use super::started_thread_from_resume_response;
 use super::thread_resume_params_from_config;
@@ -207,6 +208,80 @@ impl AppServerSession {
                     .map_err(|err| {
                         bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
                     })?
+            }
+            Err(TypedRequestError::Server { source, .. }) if is_active_writer_conflict(&source) => {
+                let mut attach_failure = None;
+                let attached_response = if !self.uses_remote_workspace() {
+                    match crate::try_connect_default_local_app_server(
+                        config.codex_home.as_path(),
+                        thread_id,
+                    )
+                    .await
+                    {
+                        Ok(client) => {
+                            tracing::info!(
+                                thread_id = %thread_id,
+                                "reattaching TUI to the default local app-server after writer conflict"
+                            );
+                            let original_client = std::mem::replace(&mut self.client, client);
+                            let request_id = self.next_request_id();
+                            match self
+                                .client
+                                .request_typed(ClientRequest::ThreadResume {
+                                    request_id,
+                                    params: params.clone(),
+                                })
+                                .await
+                            {
+                                Ok(response) => Some(response),
+                                Err(err) => {
+                                    self.client = original_client;
+                                    attach_failure = Some(format!(
+                                        "the default app-server rejected the reattach request: {err}"
+                                    ));
+                                    None
+                                }
+                            }
+                        }
+                        Err(reason) => {
+                            attach_failure = Some(reason);
+                            None
+                        }
+                    }
+                } else {
+                    attach_failure = Some(
+                        "the current TUI connection is a remote app-server and no local owner endpoint was selected"
+                            .to_string(),
+                    );
+                    None
+                };
+
+                if let Some(response) = attached_response {
+                    response
+                } else {
+                    let take_over = crate::thread_takeover::offer(
+                        thread_id,
+                        config.codex_home.as_path(),
+                        attach_failure.as_deref(),
+                    )
+                    .await
+                    .wrap_err("failed to take over the active session")?;
+                    if !take_over {
+                        return Err(color_eyre::eyre::eyre!(
+                            "thread/resume cancelled because the session is already open elsewhere"
+                        ));
+                    }
+                    let request_id = self.next_request_id();
+                    self.client
+                        .request_typed(ClientRequest::ThreadResume { request_id, params })
+                        .await
+                        .map_err(|err| {
+                            bootstrap_request_error(
+                                "thread/resume failed during TUI bootstrap",
+                                err,
+                            )
+                        })?
+                }
             }
             Err(err) => {
                 return Err(bootstrap_request_error(

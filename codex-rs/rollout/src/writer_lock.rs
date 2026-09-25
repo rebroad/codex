@@ -5,11 +5,10 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use codex_protocol::ThreadId;
 use tracing::warn;
@@ -20,7 +19,6 @@ const COORDINATION_LOCK_FILE: &str = ".coordination.lock";
 /// Coordinates writer ownership within one Codex home.
 pub struct WriterLockCoordinator {
     directory: PathBuf,
-    cleanup_attempted: AtomicBool,
 }
 
 /// Keeps a thread owned until all file work has finished.
@@ -35,16 +33,13 @@ impl WriterLockCoordinator {
     pub fn new(codex_home: &Path) -> Self {
         Self {
             directory: codex_home.join(WRITER_LOCK_DIR),
-            cleanup_attempted: AtomicBool::new(false),
         }
     }
 
     /// Acquires exclusive writer ownership, returning `WouldBlock` for an active writer.
     pub fn acquire(self: &Arc<Self>, thread_id: ThreadId) -> io::Result<WriterLockGuard> {
-        let _coordination_lock = self.lock_coordination()?;
-        if !self.cleanup_attempted.swap(true, Ordering::Relaxed)
-            && let Err(err) = self.remove_stale_thread_locks()
-        {
+        let coordination_lock = self.lock_coordination()?;
+        if let Err(err) = self.remove_stale_thread_locks() {
             warn!("failed to clean up stale thread writer locks: {err}");
         }
 
@@ -65,9 +60,17 @@ impl WriterLockCoordinator {
         match file.try_lock() {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => {
+                let owner = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|contents| parse_writer_pid(&contents));
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    format!("thread {thread_id} already has an active writer"),
+                    owner.map_or_else(
+                        || format!("thread {thread_id} already has an active writer"),
+                        |pid| {
+                            format!("thread {thread_id} already has an active writer (PID {pid})")
+                        },
+                    ),
                 ));
             }
             Err(std::fs::TryLockError::Error(err)) => {
@@ -78,6 +81,20 @@ impl WriterLockCoordinator {
             }
         }
 
+        file.set_len(0).map_err(|err| {
+            io::Error::other(format!(
+                "failed to write thread writer lock {}: {err}",
+                path.display()
+            ))
+        })?;
+        writeln!(&file, "pid={}", std::process::id()).map_err(|err| {
+            io::Error::other(format!(
+                "failed to write thread writer lock {}: {err}",
+                path.display()
+            ))
+        })?;
+
+        drop(coordination_lock);
         Ok(WriterLockGuard {
             coordinator: Arc::clone(self),
             path,
@@ -169,6 +186,12 @@ impl WriterLockCoordinator {
         }
         Ok(())
     }
+}
+
+fn parse_writer_pid(contents: &str) -> Option<u32> {
+    contents
+        .lines()
+        .find_map(|line| line.strip_prefix("pid=")?.trim().parse().ok())
 }
 
 impl Drop for WriterLockGuard {
