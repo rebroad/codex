@@ -3,5 +3,12 @@ source: tui/tests/suite/focus_palette.rs
 assertion_line: 484
 expression: failure.trim()
 ---
-Error: daemon executable not found at [CODEX_HOME]/packages/app-server-daemon/current/bin/codex; repair the existing installation, or run `codex app-server daemon start` to install a missing daemon
+Error: managed Codex install not found at [CODEX_HOME]/packages/app-server-daemon/current/bin/codex
+
+This command requires the install managed by the package manager, because the daemon starts app-server from that fixed path.
+
+Install it with:
+  npm install -g @reb.ai/codex
+
+Then rerun the command you just tried.
 To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).
