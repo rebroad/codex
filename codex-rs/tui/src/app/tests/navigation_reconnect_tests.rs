@@ -251,7 +251,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             Ok::<_, color_eyre::Report>(methods)
         });
         let mut session = AppServerSession::new(
-            crate::connect_remote_app_server(endpoint).await?,
+            crate::app_server_connection::connect(&app.app_server_target).await?,
             ThreadParamsMode::Embedded,
         );
         assert!(

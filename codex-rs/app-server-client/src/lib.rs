@@ -111,6 +111,7 @@ pub enum AppServerEvent {
     Lagged { skipped: usize },
     ServerNotification(Box<ServerNotification>),
     ServerRequest(Box<ServerRequest>),
+    Reconnected,
     Disconnected { message: String },
 }
 
@@ -145,6 +146,17 @@ pub enum TypedRequestError {
         method: String,
         source: serde_json::Error,
     },
+}
+
+impl TypedRequestError {
+    /// Returns the JSON-RPC method that produced this request error.
+    pub fn method(&self) -> &str {
+        match self {
+            Self::Transport { method, .. }
+            | Self::Server { method, .. }
+            | Self::Deserialize { method, .. } => method,
+        }
+    }
 }
 
 impl fmt::Display for TypedRequestError {
@@ -2067,21 +2079,210 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_disconnect_surfaces_as_event() {
-        let websocket_url = start_test_remote_server(|mut websocket| async move {
+    async fn remote_disconnect_reconnects_without_disconnected_event() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener address");
+        let (reconnected_tx, reconnected_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("first connection should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("first websocket upgrade should succeed");
             expect_remote_initialize(&mut websocket).await;
             websocket.close(None).await.expect("close should succeed");
-        })
-        .await;
+
+            let (stream, _) = listener.accept().await.expect("reconnect should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("reconnect websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            reconnected_tx
+                .send(())
+                .expect("reconnect observer should still be waiting");
+            let _ = websocket.next().await;
+        });
+        let websocket_url = format!("ws://{addr}");
         let mut client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
             .await
             .expect("remote client should connect");
 
-        let event = client
-            .next_event()
+        timeout(Duration::from_secs(3), reconnected_rx)
             .await
-            .expect("disconnect event should arrive");
-        assert!(matches!(event, AppServerEvent::Disconnected { .. }));
+            .expect("client should reconnect")
+            .expect("reconnect observer should complete");
+        assert!(matches!(
+            timeout(Duration::from_millis(100), client.next_event())
+                .await
+                .expect("reconnected event should arrive"),
+            Some(AppServerEvent::Reconnected)
+        ));
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remote_unix_client_reconnects_after_app_server_socket_replacement() {
+        let socket_dir = test_tempdir("codex-app-server-reconnect-");
+        let socket_path = AbsolutePathBuf::from_absolute_path(socket_dir.path().join("codex.sock"))
+            .expect("socket path should resolve");
+        let mut listener = UnixListener::bind(socket_path.as_path())
+            .await
+            .expect("first listener should bind");
+        let server_socket_path = socket_path.clone();
+        let (replacement_bound_tx, replacement_bound_rx) = tokio::sync::oneshot::channel();
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (reconnected_tx, reconnected_rx) = tokio::sync::oneshot::channel();
+        let mut server = tokio::spawn(async move {
+            let stream = listener
+                .accept()
+                .await
+                .expect("first connection should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("first websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            websocket
+                .close(None)
+                .await
+                .expect("old server should close the client");
+            drop(listener);
+            match tokio::fs::remove_file(server_socket_path.as_path()).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("old socket should be removed: {error}"),
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut listener = UnixListener::bind(server_socket_path.as_path())
+                .await
+                .expect("replacement listener should bind the same endpoint");
+            replacement_bound_tx
+                .send(())
+                .expect("replacement listener observer should still be waiting");
+            let stream = listener
+                .accept()
+                .await
+                .expect("client should reconnect to the replacement server");
+            accepted_tx
+                .send(())
+                .expect("replacement connection observer should still be waiting");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("replacement websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            reconnected_tx
+                .send(())
+                .expect("reconnect observer should still be waiting");
+            let _ = websocket.next().await;
+        });
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+            client_name: "codex-tui".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            mcp_server_openai_form_elicitation: false,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
+        })
+        .await
+        .expect("client should connect to the first server");
+
+        timeout(Duration::from_secs(2), replacement_bound_rx)
+            .await
+            .expect("replacement listener should be ready")
+            .expect("replacement listener should bind");
+        tokio::select! {
+            result = timeout(Duration::from_secs(5), accepted_rx) => {
+                result
+                    .expect("client should reconnect to the replacement socket")
+                    .expect("replacement server should accept the reconnect");
+            }
+            result = &mut server => panic!("replacement server task exited before reconnect: {result:?}"),
+        }
+        timeout(Duration::from_secs(5), reconnected_rx)
+            .await
+            .expect("client should finish initialize after socket replacement")
+            .expect("replacement server should observe the reconnect");
+        assert!(matches!(
+            timeout(Duration::from_millis(100), client.next_event())
+                .await
+                .expect("reconnected event should arrive"),
+            Some(AppServerEvent::Reconnected)
+        ));
+        client
+            .shutdown()
+            .await
+            .expect("client shutdown should complete");
+        server.await.expect("replacement server should finish");
+    }
+
+    fn test_tempdir(prefix: &str) -> TempDir {
+        let root = std::env::var_os("TMPDIR")
+            .filter(|path| !path.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                #[cfg(target_os = "android")]
+                {
+                    std::env::var_os("PREFIX")
+                        .map(|prefix| std::path::PathBuf::from(prefix).join("tmp"))
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    None
+                }
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp"));
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(root)
+            .expect("temporary directory should be created")
+    }
+
+    #[tokio::test]
+    async fn remote_shutdown_interrupts_reconnect_handshake() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener address");
+        let (reconnect_started_tx, reconnect_started_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("first connection should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("first websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            websocket.close(None).await.expect("close should succeed");
+
+            let (_reconnect_stream, _) = listener
+                .accept()
+                .await
+                .expect("reconnect connection should succeed");
+            reconnect_started_tx
+                .send(())
+                .expect("reconnect observer should still be waiting");
+            std::future::pending::<()>().await;
+        });
+        let websocket_url = format!("ws://{addr}");
+        let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        timeout(Duration::from_secs(3), reconnect_started_rx)
+            .await
+            .expect("client should start reconnecting")
+            .expect("reconnect observer should complete");
+        timeout(Duration::from_secs(2), client.shutdown())
+            .await
+            .expect("shutdown should interrupt reconnect handshake")
+            .expect("shutdown should complete");
     }
 
     #[test]
