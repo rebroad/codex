@@ -9,6 +9,7 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::wrapping::RtOptions;
+use chrono::NaiveDate;
 use codex_ansi_escape::ansi_escape_line;
 use codex_utils_elapsed::format_duration;
 use ratatui::prelude::*;
@@ -20,6 +21,7 @@ impl ExecCell {
         mode: HistoryRenderMode,
     ) -> Vec<HyperlinkLine> {
         let mut lines: Vec<HyperlinkLine> = vec![];
+        let mut last_completion_date: Option<NaiveDate> = None;
         for (i, call) in self.iter_calls().enumerate() {
             if i > 0 {
                 lines.push("".into());
@@ -60,6 +62,16 @@ impl ExecCell {
                     if let Some(duration) = call.duration {
                         let duration = format_duration(duration);
                         result.push_span(format!(" • {duration}").dim());
+                    }
+                    if let Some(completed_at) = self.completion_time(i) {
+                        let date = completed_at.date_naive();
+                        let timestamp = if last_completion_date == Some(date) {
+                            completed_at.format("%H:%M:%S").to_string()
+                        } else {
+                            last_completion_date = Some(date);
+                            completed_at.format("%Y-%m-%d %H:%M:%S").to_string()
+                        };
+                        result.push_span(format!(" • {timestamp}").dim());
                     }
                     lines.push(result.into());
                 }
