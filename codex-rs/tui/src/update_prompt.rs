@@ -39,7 +39,7 @@ use ratatui::widgets::Wrap;
 #[cfg(not(debug_assertions))]
 use tokio_stream::StreamExt;
 
-const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
+const RELEASE_NOTES_URL: &str = "https://github.com/rebroad/codex/releases/latest";
 
 #[cfg(not(debug_assertions))]
 pub(crate) enum UpdatePromptOutcome {
@@ -205,7 +205,7 @@ impl WidgetRef for &UpdatePromptScreen {
         Clear.render(area, buf);
         let mut column = FlexRenderable::new();
 
-        let update_command = self.update_action.command_str();
+        let update_command = self.update_action.display_command_str();
 
         column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
         column.push(
@@ -298,7 +298,16 @@ mod tests {
         terminal
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render update prompt");
-        insta::assert_snapshot!("update_prompt_modal", terminal.backend());
+        let rendered = terminal.backend().to_string();
+        let rendered = rendered
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(
+            "update_prompt_modal",
+            crate::version::normalize_cli_version_for_snapshot(&rendered)
+        );
     }
 
     #[test]
@@ -360,7 +369,10 @@ mod tests {
         let words = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(words.contains("enter continue · esc skip"));
         assert_eq!(screen.selection(), None);
-        insta::assert_snapshot!(format!("update_picker_selected_{width}x{height}"), rendered);
+        insta::assert_snapshot!(
+            format!("update_picker_selected_{width}x{height}"),
+            crate::version::normalize_cli_version_for_snapshot(&rendered)
+        );
         screen.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(screen.selection(), Some(UpdateSelection::NotNow));
     }
