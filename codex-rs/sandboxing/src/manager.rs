@@ -49,7 +49,7 @@ pub enum SandboxablePreference {
 pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
     if cfg!(target_os = "macos") {
         Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
         Some(SandboxType::LinuxSeccomp)
     } else if cfg!(target_os = "windows") {
         if windows_sandbox_enabled {
@@ -60,6 +60,12 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     } else {
         None
     }
+}
+
+// Returns whether this platform should use the in-process Linux filesystem
+// sandbox instead of the bubblewrap-backed pipeline.
+pub const fn uses_legacy_linux_filesystem_sandbox() -> bool {
+    cfg!(target_os = "android")
 }
 
 pub fn with_managed_mitm_ca_readable_root(
@@ -317,6 +323,18 @@ impl SandboxManager {
         #[cfg(windows)]
         crate::windows_mxc::record_availability_once();
 
+        if cfg!(target_os = "android")
+            && matches!(
+                permission_profile.file_system_sandbox_policy().kind,
+                codex_protocol::permissions::FileSystemSandboxKind::Restricted
+            )
+        {
+            // Android currently has no filesystem-enforcement backend. Do not
+            // select the LinuxSeccomp process wrapper, whose Android helper
+            // intentionally applies only network restrictions.
+            return SandboxType::None;
+        }
+
         if !self.should_sandbox(permission_profile, pref, has_managed_network_requirements) {
             return SandboxType::None;
         }
@@ -492,6 +510,8 @@ impl SandboxManager {
                 }
                 let managed_network =
                     enforce_managed_network.then(|| command.managed_network.unwrap_or_default());
+                let use_legacy_landlock =
+                    use_legacy_landlock || uses_legacy_linux_filesystem_sandbox();
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
                     &pending
