@@ -4,6 +4,7 @@ use super::*;
 use crate::style::accent_color;
 use crate::terminal_hyperlinks::LineWrapPolicy;
 use crate::terminal_hyperlinks::remap_source_wrapped_line;
+use crate::version::cli_version_for_display;
 use crate::wrapping::adaptive_wrap_line_to_width;
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -33,15 +34,13 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         let update_instruction = if let Some(update_action) = self.update_action {
             line![
                 "Run ",
-                update_action.command_str().fg(accent_color()),
+                update_action.display_command_str().fg(accent_color()),
                 " to update."
             ]
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex"
-                    .fg(accent_color())
-                    .underlined(),
+                "https://github.com/rebroad/codex".cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -51,13 +50,13 @@ impl HistoryCell for UpdateAvailableHistoryCell {
                 "✨\u{200A}".bold().fg(accent_color()),
                 "Update available!".bold().fg(accent_color()),
                 " ",
-                format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
+                format!("{} -> {}", cli_version_for_display(), self.latest_version).bold(),
             ],
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
-                .fg(accent_color())
+            "https://github.com/rebroad/codex/releases/latest"
+                .cyan()
                 .underlined(),
         ];
 
@@ -71,17 +70,21 @@ impl HistoryCell for UpdateAvailableHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let update_instruction = if let Some(update_action) = self.update_action {
-            format!("Run {} to update.", update_action.command_str())
+            format!("Run {} to update.", update_action.display_command_str())
         } else {
-            "See https://github.com/openai/codex for installation options.".to_string()
+            "See https://github.com/rebroad/codex for installation options.".to_string()
         };
         vec![
             Line::from("Update available!"),
-            Line::from(format!("{CODEX_CLI_VERSION} -> {}", self.latest_version)),
+            Line::from(format!(
+                "{} -> {}",
+                cli_version_for_display(),
+                self.latest_version
+            )),
             Line::from(update_instruction),
             Line::from(""),
             Line::from("See full release notes:"),
-            Line::from("https://github.com/openai/codex/releases/latest"),
+            Line::from("https://github.com/rebroad/codex/releases/latest"),
         ]
     }
 

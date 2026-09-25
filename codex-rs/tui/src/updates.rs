@@ -31,7 +31,10 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 
     let action = update_action::get_update_action();
     let version_file = version_filepath(config);
-    let info = read_version_info(&version_file).ok();
+    let expected_source = current_update_source(action);
+    let info = read_version_info(&version_file)
+        .ok()
+        .filter(|info| info.source.as_deref() == Some(expected_source));
 
     if match &info {
         None => true,
@@ -57,17 +60,19 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
-// We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/rebroad/codex/releases/latest";
+const LATEST_ALPHA_RELEASE_URL: &str =
+    "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha";
+const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@reb.ai%2fcodex/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
     tag_name: String,
+    name: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct HomebrewCaskInfo {
+struct NpmLatestInfo {
     version: String,
 }
 
@@ -81,16 +86,17 @@ async fn check_for_update(
         ClientRouteClass::Other,
     )
     .with_legacy_custom_ca_fallback();
+    let source = current_update_source(action);
     let latest_version = match action {
         Some(UpdateAction::Daemon(_)) => return Ok(()),
         Some(UpdateAction::BrewUpgrade) => {
-            let HomebrewCaskInfo { version } = client_pool
-                .get(HOMEBREW_CASK_API_URL)
+            let NpmLatestInfo { version } = client_pool
+                .get(NPM_LATEST_URL)
                 .headers(default_headers())
                 .send()
                 .await?
                 .error_for_status()?
-                .json::<HomebrewCaskInfo>()
+                .json::<NpmLatestInfo>()
                 .await?;
             version
         }
@@ -98,7 +104,7 @@ async fn check_for_update(
         | Some(UpdateAction::BunGlobalLatest)
         | Some(UpdateAction::VitePlusGlobalLatest)
         | Some(UpdateAction::PnpmGlobalLatest) => {
-            let latest_version = fetch_latest_github_release_version(&client_pool).await?;
+            let latest_version = fetch_latest_github_release_version(&client_pool, false).await?;
             let package_info = client_pool
                 .get(npm_registry::PACKAGE_URL)
                 .headers(default_headers())
@@ -111,7 +117,12 @@ async fn check_for_update(
             latest_version
         }
         Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
-            fetch_latest_github_release_version(&client_pool).await?
+            fetch_latest_github_release_version(&client_pool, false).await?
+        }
+        Some(UpdateAction::BrewUpgradeAlpha)
+        | Some(UpdateAction::StandaloneUnixAlpha)
+        | Some(UpdateAction::StandaloneWindowsAlpha) => {
+            fetch_latest_github_release_version(&client_pool, true).await?
         }
     };
 
@@ -120,7 +131,10 @@ async fn check_for_update(
     let info = VersionInfo {
         latest_version,
         last_checked_at: Utc::now(),
-        dismissed_version: prev_info.and_then(|p| p.dismissed_version),
+        source: Some(source.to_string()),
+        dismissed_version: prev_info
+            .filter(|p| p.source.as_deref() == Some(source))
+            .and_then(|p| p.dismissed_version),
     };
 
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
@@ -131,20 +145,45 @@ async fn check_for_update(
     Ok(())
 }
 
+fn current_update_source(action: Option<UpdateAction>) -> &'static str {
+    match action {
+        Some(UpdateAction::NpmGlobalLatest)
+        | Some(UpdateAction::BunGlobalLatest)
+        | Some(UpdateAction::PnpmGlobalLatest)
+        | Some(UpdateAction::BrewUpgrade) => "npm",
+        Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
+            "github-release-stable"
+        }
+        Some(UpdateAction::BrewUpgradeAlpha)
+        | Some(UpdateAction::StandaloneUnixAlpha)
+        | Some(UpdateAction::StandaloneWindowsAlpha) => "github-release-alpha",
+    }
+}
+
 async fn fetch_latest_github_release_version(
     client_pool: &RouteAwareClientPool,
+    alpha: bool,
 ) -> anyhow::Result<String> {
     let ReleaseInfo {
         tag_name: latest_tag_name,
+        name,
     } = client_pool
-        .get(LATEST_RELEASE_URL)
+        .get(if alpha {
+            LATEST_ALPHA_RELEASE_URL
+        } else {
+            LATEST_RELEASE_URL
+        })
         .headers(default_headers())
         .send()
         .await?
         .error_for_status()?
         .json::<ReleaseInfo>()
         .await?;
-    extract_version_from_latest_tag(&latest_tag_name)
+    if alpha {
+        name.ok_or_else(|| anyhow::anyhow!("Alpha release did not include a release name"))
+    } else {
+        extract_version_from_latest_tag(&latest_tag_name)
+    }
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.

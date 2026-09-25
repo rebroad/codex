@@ -39,7 +39,7 @@ use ratatui::widgets::Wrap;
 #[cfg(not(debug_assertions))]
 use tokio_stream::StreamExt;
 
-const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
+const RELEASE_NOTES_URL: &str = "https://github.com/rebroad/codex/releases/latest";
 
 #[cfg(not(debug_assertions))]
 pub(crate) enum UpdatePromptOutcome {
@@ -205,7 +205,7 @@ impl WidgetRef for &UpdatePromptScreen {
         Clear.render(area, buf);
         let mut column = FlexRenderable::new();
 
-        let update_command = self.update_action.command_str();
+        let update_command = self.update_action.display_command_str();
 
         column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
         column.push(

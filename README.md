@@ -13,33 +13,38 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
-Run the following on Mac or Linux to install Codex CLI:
+Run the following on Mac or Linux to install the latest stable Codex CLI:
 
 ```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+curl -fsSL https://reb.ai/codex/install.sh | sh
 ```
 
 Run the following on Windows to install Codex CLI:
 
 ```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://reb.ai/codex/install.ps1 | iex"
 ```
 
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
+For the latest alpha channel, set `CODEX_RELEASE` to either `alpha` or
+`latest-alpha`:
 
 ```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
+curl -fsSL https://reb.ai/codex/install.sh | CODEX_RELEASE=alpha sh
 ```
 
 ```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
+$env:CODEX_RELEASE='alpha'; irm https://reb.ai/codex/install.ps1 | iex
 ```
+
+`latest` (the default) installs the latest stable release. `alpha` and
+`latest-alpha` install the latest release from the alpha channel. A specific
+version can still be selected with `CODEX_RELEASE` or `--release`.
 
 Codex CLI can also be installed via the following package managers:
 
 ```shell
 # Install using npm
-npm install -g @openai/codex
+npm install -g @reb.ai/codex
 ```
 
 ```shell
