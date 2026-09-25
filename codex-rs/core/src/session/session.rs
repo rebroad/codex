@@ -30,6 +30,7 @@ use codex_model_provider::SharedModelProvider;
 use codex_prompts::render_model_instructions;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ProfileWorkspaceRoot;
@@ -639,6 +640,40 @@ async fn warm_plugins_and_skills_for_session_init(
 }
 
 impl Session {
+    /// Returns the reviewer currently configured for approval requests from this turn.
+    ///
+    /// Reviewer changes take effect at the next approval boundary in the active turn.
+    /// Actions issued by an older turn retain their captured reviewer after a newer
+    /// turn starts.
+    pub(crate) async fn current_approvals_reviewer(
+        &self,
+        turn_context: &TurnContext,
+        captured_reviewer: ApprovalsReviewer,
+    ) -> ApprovalsReviewer {
+        {
+            let active = self.active_turn.lock().await;
+            if let Some(active) = active.as_ref() {
+                if let Some(task) = active.task.as_ref() {
+                    if task.turn_context.sub_id == turn_context.sub_id {
+                        return task
+                            .turn_context
+                            .next_step_settings
+                            .load()
+                            .approvals_reviewer();
+                    }
+                    return captured_reviewer;
+                }
+            }
+        }
+
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .step_settings
+            .approvals_reviewer
+    }
+
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.thread_id
