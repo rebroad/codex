@@ -10,6 +10,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -690,6 +691,104 @@ async fn test_writable_root() {
     .await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn writable_symlink_root_allows_writes_through_logical_path() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    use std::os::unix::fs::symlink;
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let real_root = tempdir.path().join("real-root");
+    let logical_root = tempdir.path().join("logical-root");
+    let target = logical_root.join("written-through-link");
+    std::fs::create_dir(&real_root).expect("create real root");
+    symlink(&real_root, &logical_root).expect("create symlinked root");
+
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-lc",
+            &format!("printf symlink-ok > {}", target.to_string_lossy()),
+        ],
+        &[logical_root],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(
+        std::fs::read_to_string(real_root.join("written-through-link"))
+            .expect("read file written through symlink"),
+        "symlink-ok"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn restricted_sandbox_routes_tmpdir_writable_root_through_logical_alias() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tempdir = tempfile::tempdir_in(std::env::temp_dir()).expect("tempdir");
+    let logical_root = tempdir.path().join("logical-root");
+    std::fs::create_dir(&logical_root).expect("create logical root");
+    let real_root = logical_root.canonicalize().expect("resolve writable root");
+    let target = logical_root.join("written-through-logical-alias");
+
+    let mut entries = vec![FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Minimal,
+        },
+        FileSystemAccessMode::Read,
+    )];
+    let sandbox_helper = codex_linux_sandbox_exe();
+    let sandbox_helper_dir =
+        AbsolutePathBuf::try_from(sandbox_helper.parent().expect("sandbox helper parent"))
+            .expect("absolute sandbox helper directory");
+    entries.push(FileSystemSandboxEntry::new(
+        sandbox_helper_dir.into(),
+        FileSystemAccessMode::Read,
+    ));
+    entries.push(FileSystemSandboxEntry::new(
+        FileSystemPath::from(
+            AbsolutePathBuf::from_absolute_path(&logical_root)
+                .expect("absolute logical writable root"),
+        ),
+        FileSystemAccessMode::Write,
+    ));
+    let permission_profile = PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted {
+            entries,
+            glob_scan_max_depth: None,
+        },
+        network: NetworkSandboxPolicy::Restricted,
+    };
+    let cwd = AbsolutePathBuf::from_absolute_path("/").expect("absolute cwd");
+    let target = target.to_string_lossy().into_owned();
+    let output = run_cmd_result_with_permission_profile_for_cwd(
+        &["/usr/bin/touch", &target],
+        cwd,
+        permission_profile,
+        create_env_from_core_vars(),
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+    )
+    .await
+    .expect("sandboxed command should execute through the configured temp directory");
+
+    assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr.text);
+    assert!(real_root.join("written-through-logical-alias").exists());
+}
+
 #[tokio::test]
 async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
     if should_skip_bwrap_tests().await {
@@ -1021,7 +1120,7 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
 }
 
 #[tokio::test]
-async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
+async fn sandbox_runs_when_codex_symlink_is_under_writable_root() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
@@ -1036,7 +1135,7 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
     let dot_codex = tmpdir.path().join(".codex");
     symlink(&decoy, &dot_codex).expect("create .codex symlink");
 
-    let output = match run_cmd_result_with_writable_roots(
+    let output = run_cmd_result_with_writable_roots(
         &["bash", "-lc", "true"],
         &[tmpdir.path().to_path_buf()],
         LONG_TIMEOUT_MS,
@@ -1044,38 +1143,9 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
         /*network_access*/ true,
     )
     .await
-    {
-        Err(err) => match err.details() {
-            CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
-                output.as_ref().clone()
-            }
-            details => panic!(".codex symlink build failure should deny: {details:?}"),
-        },
-        Ok(output) => panic!(".codex symlink build failure should deny: {output:?}"),
-    };
+    .expect("a protected symlink should not abort sandbox construction");
 
-    assert_eq!(output.exit_code, 1);
-    assert!(
-        output
-            .stderr
-            .text
-            .contains("error building bubblewrap command:"),
-        "stderr: {}",
-        output.stderr.text
-    );
-    assert!(
-        output
-            .stderr
-            .text
-            .contains("cannot enforce sandbox read-only path"),
-        "stderr: {}",
-        output.stderr.text
-    );
-    assert!(
-        !output.stderr.text.contains("panicked at"),
-        "stderr: {}",
-        output.stderr.text
-    );
+    assert_eq!(output.exit_code, 0);
 }
 
 #[tokio::test]
@@ -1376,20 +1446,33 @@ async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
     let helper_dir = AbsolutePathBuf::try_from(sandbox_helper.parent().expect("helper parent"))
         .expect("absolute helper directory");
 
-    for tmp_root in [PathBuf::from("/tmp"), temp.path().join("denied-tmp")] {
+    let configured_tmp_root = std::env::temp_dir()
+        .canonicalize()
+        .expect("resolve configured temporary directory");
+    let denied_tmp_root = temp.path().join("denied-tmp");
+    std::fs::create_dir_all(&denied_tmp_root).expect("create denied temp root");
+    let denied_tmp_root = denied_tmp_root
+        .canonicalize()
+        .expect("resolve denied temp root");
+
+    for (tmp_root, denied_path) in [
+        (
+            configured_tmp_root,
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Tmpdir,
+            },
+        ),
+        (
+            denied_tmp_root.clone(),
+            AbsolutePathBuf::try_from(denied_tmp_root.as_path())
+                .expect("absolute denied temp root")
+                .into(),
+        ),
+    ] {
         std::fs::create_dir_all(&tmp_root).expect("create temp root");
         let secret = NamedTempFile::new_in(&tmp_root).expect("denied file");
         std::fs::write(secret.path(), "private").expect("write denied file");
         for read_root in [FileSystemSpecialPath::Root, FileSystemSpecialPath::Minimal] {
-            let denied_path = if tmp_root == std::path::Path::new("/tmp") {
-                FileSystemPath::Special {
-                    value: FileSystemSpecialPath::SlashTmp,
-                }
-            } else {
-                AbsolutePathBuf::try_from(tmp_root.as_path())
-                    .expect("absolute temp root")
-                    .into()
-            };
             let policy = FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry::new(
                     FileSystemPath::Special { value: read_root },
@@ -1397,7 +1480,7 @@ async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
                 ),
                 FileSystemSandboxEntry::new(helper_dir.clone().into(), FileSystemAccessMode::Read),
                 FileSystemSandboxEntry::new(cwd.clone().into(), FileSystemAccessMode::Write),
-                FileSystemSandboxEntry::new(denied_path, FileSystemAccessMode::Deny),
+                FileSystemSandboxEntry::new(denied_path.clone(), FileSystemAccessMode::Deny),
             ]);
             let mut env = create_env_from_core_vars();
             env.insert("TMPDIR".to_string(), tmp_root.display().to_string());
