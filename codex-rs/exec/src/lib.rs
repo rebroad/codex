@@ -7,6 +7,7 @@
 
 mod cli;
 mod daybreak;
+mod direct;
 mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
@@ -277,6 +278,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         color,
         last_message_file,
         json: json_mode,
+        direct,
+        bare_prompt,
         prompt,
         output_schema: output_schema_path,
         mut config_overrides,
@@ -603,6 +606,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         default_zsh_path: None,
         base_instructions: None,
+        bare_prompt: bare_prompt.then_some(true),
         developer_instructions: None,
         personality: None,
         compact_prompt: None,
@@ -660,6 +664,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         std::process::exit(1);
     }
 
+    if direct && command.is_some() {
+        anyhow::bail!("--direct is only valid for top-level codex exec runs");
+    }
+
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         codex_core::otel_init::build_provider(
             &config,
@@ -694,6 +702,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let exec_span = exec_root_span();
     if let Some(context) = traceparent_context_from_env() {
         set_parent_from_context(&exec_span, context);
+    }
+
+    // Only explicit direct mode skips app-server startup and rollout persistence.
+    if direct {
+        return direct::run(resolve_prompt(prompt), &config, json_mode).await;
     }
     let config_warnings: Vec<ConfigWarningNotification> = config
         .startup_warnings
@@ -1493,9 +1506,14 @@ fn thread_resume_params_from_config(
 }
 
 fn thread_config_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .bypass_hook_trust
-        .then(|| HashMap::from([("bypass_hook_trust".to_string(), Value::Bool(true))]))
+    let mut overrides = HashMap::new();
+    if config.bypass_hook_trust {
+        overrides.insert("bypass_hook_trust".to_string(), Value::Bool(true));
+    }
+    if config.bare_prompt {
+        overrides.insert("bare_prompt".to_string(), Value::Bool(true));
+    }
+    (!overrides.is_empty()).then_some(overrides)
 }
 
 fn permissions_selection_from_config(config: &Config) -> Option<String> {
