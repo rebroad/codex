@@ -236,6 +236,7 @@ mod text_formatting;
 mod text_selection;
 mod theme_picker;
 mod thread_color;
+mod thread_takeover;
 mod thread_transcript;
 mod token_usage;
 mod tool_output;
@@ -518,6 +519,122 @@ async fn connect_remote_app_server(
     .await
     .wrap_err("failed to connect to remote app server")?;
     Ok(AppServerClient::Remote(app_server))
+}
+
+pub(crate) async fn try_connect_default_local_app_server(
+    codex_home: &Path,
+    thread_id: ThreadId,
+) -> Result<AppServerClient, String> {
+    let owner_profile = std::env::var(codex_app_server_client::APP_SERVER_PROFILE_ENV_VAR)
+        .ok()
+        .filter(|profile| !profile.is_empty());
+    let writer_pid_path = codex_home
+        .join("thread-writer-locks")
+        .join(format!("{thread_id}.lock"));
+    let writer_pid = std::fs::read_to_string(&writer_pid_path)
+        .ok()
+        .and_then(|contents| {
+            contents
+                .lines()
+                .find_map(|line| line.strip_prefix("pid=")?.trim().parse::<u32>().ok())
+        });
+
+    if let Some(writer_pid) = writer_pid {
+        let process_profile = format!("processes/{writer_pid}");
+        let owner = [owner_profile.as_deref(), Some(process_profile.as_str())]
+            .into_iter()
+            .find_map(|profile| {
+                match codex_app_server_client::read_app_server_owner(codex_home, profile) {
+                    Ok(Some(owner)) if owner.pid == writer_pid => Some(owner),
+                    Ok(Some(owner)) => {
+                        tracing::debug!(
+                            owner_pid = owner.pid,
+                            writer_pid,
+                            "app-server owner record does not match the active thread writer"
+                        );
+                        None
+                    }
+                    Ok(None) => None,
+                    Err(err) => {
+                        tracing::debug!(%err, "failed to read the app-server owner record");
+                        None
+                    }
+                }
+            });
+
+        if let Some(owner) = owner {
+            let endpoint = match owner.endpoint {
+                codex_app_server_client::AppServerOwnerEndpoint::UnixSocket { socket_path } => {
+                    AbsolutePathBuf::from_absolute_path(Path::new(&socket_path))
+                        .map(|socket_path| RemoteAppServerEndpoint::UnixSocket { socket_path })
+                        .map_err(|err| {
+                            format!("owner published an invalid Unix socket path: {err}")
+                        })
+                }
+                codex_app_server_client::AppServerOwnerEndpoint::WebSocket { websocket_url } => {
+                    resolve_remote_addr(&websocket_url).map_err(|err| {
+                        format!("owner published an invalid WebSocket endpoint: {err}")
+                    })
+                }
+            };
+            match endpoint {
+                Ok(endpoint) => {
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        owner_pid = writer_pid,
+                        "connecting TUI to the app-server that owns the active thread"
+                    );
+                    match connect_remote_app_server(endpoint).await {
+                        Ok(client) => return Ok(client),
+                        Err(err) => tracing::debug!(
+                            thread_id = %thread_id,
+                            owner_pid = writer_pid,
+                            %err,
+                            "could not reach the process-specific app-server owner; trying the default local app-server"
+                        ),
+                    }
+                }
+                Err(reason) => tracing::debug!(
+                    thread_id = %thread_id,
+                    owner_pid = writer_pid,
+                    %reason,
+                    "process-specific app-server owner published an invalid endpoint; trying the default local app-server"
+                ),
+            }
+        }
+    }
+
+    let endpoint = codex_app_server_client::app_server_control_socket_path(codex_home)
+        .map_err(|err| format!("could not resolve the default control socket: {err}"))?;
+    match codex_app_server_client::prepare_control_socket_path(endpoint.as_path()).await {
+        Ok(()) => {
+            return Err(format!(
+                "the default control socket is not active ({})",
+                endpoint.display()
+            ));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {}
+        Err(err) => {
+            return Err(format!(
+                "could not inspect the default control socket {}: {err}",
+                endpoint.display()
+            ));
+        }
+    }
+
+    match connect_remote_app_server(RemoteAppServerEndpoint::UnixSocket {
+        socket_path: endpoint,
+    })
+    .await
+    {
+        Ok(client) => Ok(client),
+        Err(err) => {
+            tracing::debug!(%err, "failed to attach to the default local app-server");
+            Err(format!(
+                "the default app-server could not be reached: {err:#}"
+            ))
+        }
+    }
 }
 
 async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
@@ -3080,6 +3197,205 @@ requires_openai_auth = {requires_openai_auth}
         Ok(())
     }
 
+    #[tokio::test]
+    async fn local_app_server_attach_reports_missing_socket() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let error =
+            match try_connect_default_local_app_server(codex_home.path(), ThreadId::new()).await {
+                Ok(_) => panic!("missing app-server socket should not attach"),
+                Err(error) => error,
+            };
+
+        assert!(error.contains("control socket"), "{error}");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_app_server_attach_uses_writer_pid_endpoint() -> color_eyre::Result<()> {
+        use futures::SinkExt;
+        use futures::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let codex_home = TempDir::new()?;
+        let thread_id = ThreadId::new();
+        let writer_pid = std::process::id();
+        let writer_lock = codex_home
+            .path()
+            .join("thread-writer-locks")
+            .join(format!("{thread_id}.lock"));
+        std::fs::create_dir_all(writer_lock.parent().expect("writer lock parent"))?;
+        std::fs::write(&writer_lock, format!("pid={writer_pid}\n"))?;
+
+        let process_profile = format!("processes/{writer_pid}");
+        let socket_path = codex_home.path().join("active-writer.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path)?;
+        let owner_path = codex_app_server_client::app_server_owner_record_path_for_profile(
+            codex_home.path(),
+            Some(&process_profile),
+        );
+        std::fs::create_dir_all(owner_path.parent().expect("owner record parent"))?;
+        let owner = codex_app_server_client::AppServerOwnerRecord {
+            pid: writer_pid,
+            app_server_version: "test".to_string(),
+            endpoint: codex_app_server_client::AppServerOwnerEndpoint::UnixSocket {
+                socket_path: socket_path.display().to_string(),
+            },
+        };
+        std::fs::write(&owner_path, serde_json::to_vec(&owner)?)?;
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let codex_home_path = codex_home.path().display().to_string();
+        let server = tokio::spawn(async move {
+            let result: std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                let (stream, _) = listener.accept().await?;
+                let mut websocket = tokio_tungstenite::accept_async(stream).await?;
+                let request = websocket
+                    .next()
+                    .await
+                    .transpose()?
+                    .ok_or_else(|| std::io::Error::other("client closed before initialize"))?;
+                let request: serde_json::Value = match request {
+                    Message::Text(text) => serde_json::from_str(&text)?,
+                    other => {
+                        return Err(std::io::Error::other(format!("unexpected {other:?}")).into());
+                    }
+                };
+                assert_eq!(request["method"], "initialize");
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": "initialize",
+                            "result": {
+                                "userAgent": "codex/test",
+                                "codexHome": codex_home_path,
+                                "platformFamily": "unix",
+                                "platformOs": "linux"
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+                let _ = release_rx.await;
+                Ok(())
+            }
+            .await;
+            result
+        });
+
+        let client = try_connect_default_local_app_server(codex_home.path(), thread_id)
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        assert!(matches!(client, AppServerClient::Remote(_)));
+        drop(client);
+        let _ = release_tx.send(());
+        server
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_app_server_attach_falls_back_when_writer_endpoint_is_stale()
+    -> color_eyre::Result<()> {
+        use futures::SinkExt;
+        use futures::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let codex_home = TempDir::new()?;
+        let thread_id = ThreadId::new();
+        let writer_pid = std::process::id();
+        let writer_lock = codex_home
+            .path()
+            .join("thread-writer-locks")
+            .join(format!("{thread_id}.lock"));
+        std::fs::create_dir_all(writer_lock.parent().expect("writer lock parent"))?;
+        std::fs::write(&writer_lock, format!("pid={writer_pid}\n"))?;
+
+        let process_profile = format!("processes/{writer_pid}");
+        let owner_path = codex_app_server_client::app_server_owner_record_path_for_profile(
+            codex_home.path(),
+            Some(&process_profile),
+        );
+        std::fs::create_dir_all(owner_path.parent().expect("owner record parent"))?;
+        let stale_owner = codex_app_server_client::AppServerOwnerRecord {
+            pid: writer_pid,
+            app_server_version: "stale".to_string(),
+            endpoint: codex_app_server_client::AppServerOwnerEndpoint::UnixSocket {
+                socket_path: codex_home
+                    .path()
+                    .join("missing-owner.sock")
+                    .display()
+                    .to_string(),
+            },
+        };
+        std::fs::write(&owner_path, serde_json::to_vec(&stale_owner)?)?;
+
+        let default_socket =
+            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        std::fs::create_dir_all(default_socket.as_path().parent().expect("socket parent"))?;
+        let listener = tokio::net::UnixListener::bind(default_socket.as_path())?;
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let codex_home_path = codex_home.path().display().to_string();
+        let server = tokio::spawn(async move {
+            let result: std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                let (probe, _) = listener.accept().await?;
+                drop(probe);
+                let (stream, _) = listener.accept().await?;
+                let mut websocket = tokio_tungstenite::accept_async(stream).await?;
+                let request = websocket
+                    .next()
+                    .await
+                    .transpose()?
+                    .ok_or_else(|| std::io::Error::other("client closed before initialize"))?;
+                let request: serde_json::Value = match request {
+                    Message::Text(text) => serde_json::from_str(&text)?,
+                    other => {
+                        return Err(std::io::Error::other(format!("unexpected {other:?}")).into());
+                    }
+                };
+                assert_eq!(request["method"], "initialize");
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": "initialize",
+                            "result": {
+                                "userAgent": "codex/test",
+                                "codexHome": codex_home_path,
+                                "platformFamily": "unix",
+                                "platformOs": "linux"
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+                let _ = release_rx.await;
+                Ok(())
+            }
+            .await;
+            result
+        });
+
+        let client = try_connect_default_local_app_server(codex_home.path(), thread_id)
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        assert!(matches!(client, AppServerClient::Remote(_)));
+        drop(client);
+        let _ = release_tx.send(());
+        server
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn default_daemon_auto_connect_probes_socket_only() -> color_eyre::Result<()> {
         let codex_home = TempDir::new()?;
