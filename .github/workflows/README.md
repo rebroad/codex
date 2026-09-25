@@ -1,11 +1,11 @@
 # Workflow Strategy
 
-The workflows in this directory are split so that pull requests get fast, review-friendly signal while `main` still gets the full cross-platform verification pass.
+The workflows in this directory are split so that pull requests get fast, review-friendly signal while `stable` still gets the full cross-platform verification pass.
 
 ## Pull Requests
 
 - Required checks run against GitHub's synthetic merge commit, not the pull
-  request head alone. This includes changes already on `main` and catches
+  request head alone. This includes changes already on `stable` and catches
   conflicts before they reach the branch.
 - `bazel.yml` is the main pre-merge verification path for Rust code.
   It runs Bazel `test` and Bazel `clippy` on the supported Bazel targets,
@@ -17,9 +17,9 @@ The workflows in this directory are split so that pull requests get fast, review
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
 
-## Post-Merge On `main`
+## Post-Merge On `stable`
 
-- `bazel.yml` also runs on pushes to `main`.
+- `bazel.yml` also runs on pushes to `stable`.
   This re-verifies the merged Bazel path and helps keep the BuildBuddy caches warm.
 - `rust-ci-full.yml` is the full Cargo-native verification workflow.
   It keeps the heavier checks off the PR path while still validating them after merge:
