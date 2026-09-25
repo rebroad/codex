@@ -14,15 +14,20 @@ const require = createRequire(import.meta.url);
 const codexPackageRoot = realpathSync(path.join(__dirname, ".."));
 
 const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
-  "x86_64-apple-darwin": "@openai/codex-darwin-x64",
-  "aarch64-apple-darwin": "@openai/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@openai/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64",
+  "x86_64-unknown-linux-musl": "@reb.ai/codex-linux-x64",
+  "aarch64-unknown-linux-musl": "@reb.ai/codex-linux-arm64",
+  "x86_64-apple-darwin": "@reb.ai/codex-darwin-x64",
+  "aarch64-apple-darwin": "@reb.ai/codex-darwin-arm64",
+  "x86_64-pc-windows-msvc": "@reb.ai/codex-win32-x64",
+  "aarch64-pc-windows-msvc": "@reb.ai/codex-win32-arm64",
+  "armv7-unknown-linux-musleabihf": "@reb.ai/codex-linux-armv7",
+  "aarch64-linux-android": "@reb.ai/codex-android-arm64",
 };
 
 const { platform, arch } = process;
+const isTermux =
+  platform === "android" ||
+  (platform === "linux" && process.env.PREFIX?.includes("/com.termux/"));
 
 let targetTriple = null;
 switch (platform) {
@@ -33,7 +38,10 @@ switch (platform) {
         targetTriple = "x86_64-unknown-linux-musl";
         break;
       case "arm64":
-        targetTriple = "aarch64-unknown-linux-musl";
+        targetTriple = isTermux ? "aarch64-linux-android" : "aarch64-unknown-linux-musl";
+        break;
+      case "arm":
+        targetTriple = "armv7-unknown-linux-musleabihf";
         break;
       default:
         break;
@@ -98,12 +106,12 @@ function findCodexExecutable() {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
-      ? "bun install -g @openai/codex@latest"
+      ? "bun install -g @reb.ai/codex@latest"
       : packageManager === "pnpm"
-        ? "pnpm add -g @openai/codex@latest"
+        ? "pnpm add -g @reb.ai/codex@latest"
         : packageManager === "vite-plus"
-          ? "vp install -g @openai/codex@latest"
-          : "npm install -g @openai/codex@latest";
+          ? "vp install -g @reb.ai/codex@latest"
+          : "npm install -g @reb.ai/codex@latest";
   throw new Error(
     `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
   );
@@ -124,7 +132,7 @@ function isPnpmOwnedCodexInstall(nodeModulesDir) {
 
   try {
     return (
-      realpathSync(path.join(nodeModulesDir, "@openai", "codex")) ===
+      realpathSync(path.join(nodeModulesDir, "@reb.ai", "codex")) ===
       codexPackageRoot
     );
   } catch {
@@ -232,6 +240,16 @@ const env = {
   ...process.env,
   CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,
 };
+if (isTermux) {
+  const prefix = process.env.PREFIX || "/data/data/com.termux/files/usr";
+  const blocked = new Set([`${prefix}/lib`, `${prefix}/libexec`]);
+  env.LD_LIBRARY_PATH = [
+    path.dirname(binaryPath),
+    ...(process.env.LD_LIBRARY_PATH || "")
+      .split(":")
+      .filter((entry) => entry && !blocked.has(entry)),
+  ].join(":");
+}
 delete env.CODEX_MANAGED_BY_NPM;
 delete env.CODEX_MANAGED_BY_BUN;
 delete env.CODEX_MANAGED_BY_PNPM;
