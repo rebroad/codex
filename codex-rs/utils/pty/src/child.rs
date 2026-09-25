@@ -27,6 +27,23 @@ pub struct Child {
     pub stderr: Option<ChildStderr>,
 }
 
+/// Wait for a Tokio child process to exit.
+///
+/// Android polls the child status because Tokio's SIGCHLD-backed waiter can
+/// remain pending after an exited subprocess.
+pub async fn wait_for_child_exit(child: &mut tokio::process::Child) -> io::Result<ExitStatus> {
+    #[cfg(target_os = "android")]
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    child.wait().await
+}
+
 pub(super) enum ChildKind {
     Tokio(tokio::process::Child),
     #[cfg(unix)]
@@ -55,14 +72,15 @@ impl Child {
     pub async fn wait(&mut self) -> io::Result<ExitStatus> {
         self.stdin.take();
         match &mut self.inner {
-            ChildKind::Tokio(child) => child.wait().await,
+            ChildKind::Tokio(child) => wait_for_child_exit(child).await,
             #[cfg(unix)]
             ChildKind::TokioReapOnly { child, .. } => {
-                child
-                    .as_mut()
-                    .ok_or_else(|| io::Error::other("child already transferred to reaper"))?
-                    .wait()
-                    .await
+                wait_for_child_exit(
+                    child
+                        .as_mut()
+                        .ok_or_else(|| io::Error::other("child already transferred to reaper"))?,
+                )
+                .await
             }
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             ChildKind::Native(child) => child.wait().await,
@@ -104,6 +122,19 @@ impl Child {
     /// Kill the direct child and reap it. Process-tree policy belongs to the caller.
     pub async fn kill(&mut self) -> io::Result<()> {
         self.stdin.take();
+        #[cfg(target_os = "android")]
+        {
+            match &mut self.inner {
+                ChildKind::Tokio(child) => child.start_kill()?,
+                ChildKind::TokioReapOnly { child, .. } => child
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("child already transferred to reaper"))?
+                    .start_kill()?,
+            }
+            self.wait().await?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "android"))]
         match &mut self.inner {
             ChildKind::Tokio(child) => child.kill().await,
             #[cfg(unix)]

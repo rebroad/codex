@@ -9,24 +9,43 @@
 //! - `kill_process_group_by_pid` targets the whole group (children/grandchildren)
 //! - `kill_process_group` targets a known process group ID directly
 //!   instead of a single PID.
-//! - `set_parent_death_signal` (Linux only) arranges for the child to receive a
-//!   `SIGTERM` when the parent exits, and re-checks the parent PID to avoid
-//!   races during fork/exec.
+//! - `set_parent_death_signal` (Linux and Android) arranges for the child to
+//!   receive a `SIGTERM` when the parent exits, and re-checks the parent PID to
+//!   avoid races during fork/exec.
 //!
 //! On macOS, `terminate_process_group` and `kill_process_group` retry denied
 //! group signals against individual members.
 //! On non-Unix platforms these helpers are no-ops.
 
 use std::io;
+use std::process::Command;
 
 use tokio::process::Child;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Ensure the child receives SIGTERM when the original parent dies.
 ///
 /// This should run in `pre_exec` and uses `parent_pid` captured before spawn to
 /// avoid a race where the parent exits between fork and exec.
 pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
+    // Do not inherit a blocked or ignored SIGTERM from the caller: in either
+    // state the kernel may never deliver the parent-death signal below.
+    let mut signal_set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigemptyset(&mut signal_set) } == -1
+        || unsafe { libc::sigaddset(&mut signal_set, libc::SIGTERM) } == -1
+        || unsafe { libc::sigprocmask(libc::SIG_UNBLOCK, &signal_set, std::ptr::null_mut()) } == -1
+    {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut signal_action: libc::sigaction = unsafe { std::mem::zeroed() };
+    signal_action.sa_sigaction = libc::SIG_DFL;
+    if unsafe { libc::sigemptyset(&mut signal_action.sa_mask) } == -1
+        || unsafe { libc::sigaction(libc::SIGTERM, &signal_action, std::ptr::null_mut()) } == -1
+    {
+        return Err(io::Error::last_os_error());
+    }
+
     if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } == -1 {
         return Err(io::Error::last_os_error());
     }
@@ -40,10 +59,67 @@ pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-/// No-op on non-Linux platforms.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+/// No-op on platforms without Linux parent-death signals.
 pub fn set_parent_death_signal(_parent_pid: i32) -> io::Result<()> {
     Ok(())
+}
+
+/// Configure a command so its process tree is terminated when its owner exits.
+///
+/// On Linux and Android, a small shell supervisor owns a process group and
+/// receives a parent-death signal. Its trap kills the whole group, including
+/// Git's remote helpers. On other Unix platforms, only process-group isolation
+/// is applied; callers can still terminate the group during ordinary cancellation.
+pub fn supervise_process_tree_on_parent_exit(command: &mut Command) {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        #[cfg(target_os = "linux")]
+        let shell = "/bin/sh";
+        #[cfg(target_os = "android")]
+        let shell = "/system/bin/sh";
+        let original = std::mem::replace(command, Command::new(shell));
+        let program = original.get_program().to_os_string();
+        let args = original
+            .get_args()
+            .map(std::ffi::OsStr::to_os_string)
+            .collect::<Vec<_>>();
+        let envs = original
+            .get_envs()
+            .map(|(key, value)| (key.to_os_string(), value.map(std::ffi::OsStr::to_os_string)))
+            .collect::<Vec<_>>();
+        let current_dir = original.get_current_dir().map(std::path::Path::to_path_buf);
+        command
+            .args([
+                "-c",
+                "trap 'kill -KILL 0' TERM; \"$@\" & wait $!",
+                "codex-process-supervisor",
+            ])
+            .arg(program)
+            .args(args);
+        for (key, value) in envs {
+            if let Some(value) = value {
+                command.env(key, value);
+            } else {
+                command.env_remove(key);
+            }
+        }
+        if let Some(current_dir) = current_dir {
+            command.current_dir(current_dir);
+        }
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+        let parent_pid = std::process::id() as i32;
+        // SAFETY: the parent-death signal and PID check close the fork/exec race.
+        unsafe {
+            command.pre_exec(move || set_parent_death_signal(parent_pid));
+        }
+    }
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
 }
 
 #[cfg(unix)]
