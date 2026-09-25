@@ -929,7 +929,7 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
         return;
     }
 
-    let shared = tempfile::tempdir_in("/tmp").expect("shared writable test directory");
+    let shared = tempfile::tempdir().expect("shared writable test directory");
     let test_executable = std::env::current_exe().expect("integration test executable");
     let test_executable = test_executable.to_str().expect("UTF-8 executable path");
     // Libtest selectors include the module path but omit the integration crate name.

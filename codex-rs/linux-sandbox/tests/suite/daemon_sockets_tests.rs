@@ -11,7 +11,9 @@ async fn private_tmp_mount_preserves_daemon_socket_isolation() {
         return;
     }
     // The parent owns cleanup after the child's disposable mount namespace exits.
-    let private = tempfile::tempdir_in("/tmp").unwrap();
+    // Use the caller-configured temp root on the host. The fixture mounts this
+    // directory at /tmp only inside its disposable mount namespace below.
+    let private = tempfile::tempdir().unwrap();
     let test_executable = std::env::current_exe().unwrap();
     // Keep both executables available after the original /tmp is hidden.
     std::fs::copy(&test_executable, private.path().join("test")).unwrap();
@@ -94,6 +96,7 @@ fn private_tmp_fixture() {
         .current_dir("/tmp");
     let (_, test_module) = module_path!().split_once("::").unwrap();
     let client_test = format!("{test_module}::private_tmp_client");
+    // This /tmp is the private mount backed by `private`, not the host /tmp.
     command
         .args([
             "/tmp/test",
