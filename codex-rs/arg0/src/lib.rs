@@ -20,6 +20,7 @@ use tempfile::TempDir;
 
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+const CODEX_SELF_EXE_ENV: &str = "CODEX_SELF_EXE";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
@@ -29,6 +30,23 @@ const LOCK_FILENAME: &str = ".lock";
 /// runtime property rather than a reason to disable all Android locking.
 fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::Unsupported
+}
+
+fn resolve_codex_self_exe_with(
+    override_path: Option<std::ffi::OsString>,
+    current_exe: Option<PathBuf>,
+) -> Option<PathBuf> {
+    override_path
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or(current_exe)
+}
+
+fn resolve_codex_self_exe() -> Option<PathBuf> {
+    resolve_codex_self_exe_with(
+        std::env::var_os(CODEX_SELF_EXE_ENV),
+        std::env::current_exe().ok(),
+    )
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -411,7 +429,12 @@ fn prepare_path_entry_for_codex_aliases(
         #[cfg(unix)]
         EXECVE_WRAPPER_ARG0,
     ] {
-        let exe = std::env::current_exe()?;
+        let exe = resolve_codex_self_exe().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "failed to determine codex self executable",
+            )
+        })?;
 
         #[cfg(unix)]
         {
@@ -437,7 +460,7 @@ fn prepare_path_entry_for_codex_aliases(
     let updated_path_env_var = path_env_with_entry(path, existing_path);
 
     let paths = Arg0DispatchPaths {
-        codex_self_exe: std::env::current_exe().ok(),
+        codex_self_exe: resolve_codex_self_exe(),
         codex_linux_sandbox_exe: {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             {
@@ -564,6 +587,7 @@ mod tests {
     use super::is_unsupported_file_lock_error;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
+    use super::resolve_codex_self_exe_with;
     #[cfg(unix)]
     use super::run_main_with_arg0_guard;
     #[cfg(unix)]
@@ -836,6 +860,17 @@ mod tests {
     }
 
     #[test]
+    fn resolve_codex_self_exe_prefers_override() {
+        assert_eq!(
+            resolve_codex_self_exe_with(
+                Some(std::ffi::OsString::from("/override/codex")),
+                Some(PathBuf::from("/current/codex")),
+            ),
+            Some(PathBuf::from("/override/codex")),
+        );
+    }
+
+    #[test]
     fn unsupported_file_lock_errors_are_detected() {
         assert!(is_unsupported_file_lock_error(&std::io::Error::new(
             std::io::ErrorKind::Unsupported,
@@ -849,5 +884,24 @@ mod tests {
             std::io::ErrorKind::PermissionDenied,
             "permission denied",
         )));
+    }
+
+    #[test]
+    fn resolve_codex_self_exe_falls_back_to_current_exe() {
+        assert_eq!(
+            resolve_codex_self_exe_with(None, Some(PathBuf::from("/current/codex"))),
+            Some(PathBuf::from("/current/codex")),
+        );
+    }
+
+    #[test]
+    fn resolve_codex_self_exe_ignores_empty_override() {
+        assert_eq!(
+            resolve_codex_self_exe_with(
+                Some(std::ffi::OsString::new()),
+                Some(PathBuf::from("/current/codex")),
+            ),
+            Some(PathBuf::from("/current/codex")),
+        );
     }
 }
