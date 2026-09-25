@@ -28,6 +28,7 @@ use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::LocalIpcPolicy;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
+use crate::launcher::preferred_bwrap_is_available;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
@@ -175,6 +176,12 @@ pub struct LandlockCommand {
 /// 2. Apply in-process restrictions (no_new_privs + seccomp).
 /// 3. `execvp` into the final command.
 pub fn run_main() -> ! {
+    // The sandbox helper is a supervisor for the command it launches. If its
+    // caller exits unexpectedly, let the kernel terminate this supervisor so
+    // it cannot outlive the Codex process and leave a command behind.
+    let parent_pid = unsafe { libc::getppid() };
+    terminate_with_parent(parent_pid);
+
     let LandlockCommand {
         sandbox_policy_cwd,
         command_cwd,
@@ -305,6 +312,24 @@ pub fn run_main() -> ! {
             LocalIpcPolicy::Disabled,
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
+        }
+        exec_or_panic(command);
+    }
+
+    if !use_legacy_landlock && !preferred_bwrap_is_available() {
+        if allow_network_for_proxy {
+            panic!("bubblewrap is unavailable and managed proxy networking requires it");
+        }
+        ensure_legacy_landlock_mode_supports_policy(true, &file_system_sandbox_policy);
+        if let Err(e) = apply_permission_profile_to_current_thread(
+            &permission_profile,
+            &sandbox_policy_cwd,
+            /*apply_landlock_fs*/ true,
+            managed_network.as_ref(),
+            /*proxy_routed_network*/ false,
+            LocalIpcPolicy::Disabled,
+        ) {
+            panic!("error applying fallback Linux sandbox restrictions: {e:?}");
         }
         exec_or_panic(command);
     }
