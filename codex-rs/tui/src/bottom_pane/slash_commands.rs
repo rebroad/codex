@@ -332,6 +332,7 @@ mod tests {
             vec![
                 SlashCommand::Ide,
                 SlashCommand::Agents,
+                #[cfg(not(target_os = "android"))]
                 SlashCommand::Copy,
                 SlashCommand::Export,
                 SlashCommand::Raw,
