@@ -1,0 +1,69 @@
+# Rollout Inspector
+
+Local tools to inspect Codex rollout `.jsonl` files in two ways:
+
+- Browser renderer for thread-like viewing (`tools/rollout-inspector/server.js`)
+- CLI payload analyzer for large/redundant blobs (`tools/rollout-inspector/analyze-rollout.js`)
+
+## 1) Start the web inspector
+
+```bash
+node tools/rollout-inspector/server.js --port 8787 --codex-home ~/.codex
+```
+
+Open:
+
+- `http://127.0.0.1:8787`
+
+API endpoints:
+
+- `GET /api/files?root=/path/to/.codex` lists recent rollout files under `sessions/` and `archived_sessions/`
+- `GET /api/thread?file=/abs/path/rollout.jsonl` returns a simplified thread view
+- `GET /api/analyze?file=/abs/path/rollout.jsonl&top=20&largeKb=256` returns large/redundant payload analysis
+
+## 1b) One-shot CLI: open a specific rollout file in browser
+
+```bash
+node tools/rollout-inspector/view-rollout.js 019c336c-9ced-7553-a843-15c04790ca4f
+```
+
+The positional argument may be a session-id without `.jsonl`. The inspector
+searches both `~/.codex/sessions` and `~/.codex/archived_sessions`; an explicit
+rollout path remains supported.
+
+Useful options:
+
+- `--no-open`: print URL only (do not launch browser)
+- `--no-analyze`: load thread view only
+- `--port <n>`: choose a specific local port
+- `--codex-home <path>`: root used for "Recent Files"
+
+If you already have a path from `grep`/`find`, pass it directly (with or without
+the `.jsonl` suffix):
+
+```bash
+node tools/rollout-inspector/view-rollout.js "$(find ~/.codex/sessions -name 'rollout-*.jsonl' | head -n1)"
+```
+
+## 2) Run CLI analysis
+
+```bash
+node tools/rollout-inspector/analyze-rollout.js ~/.codex/sessions/2026/03/08/rollout-....jsonl
+```
+
+Options:
+
+- `--top <n>`: top list size
+- `--large-kb <n>`: threshold used for "huge payload" candidates
+- `--json`: emit structured JSON report
+
+## What “redundant” means here
+
+The analyzer reports:
+
+- Exact duplicate large payloads (same SHA-256 hash, repeated lines)
+- Near-duplicate large payloads (normalized text fingerprints)
+- Repeated tool call signatures with large outputs (`function_call` args + output size)
+- Direct prune candidates (very large `function_call_output` lines)
+
+This is designed to identify likely pruning opportunities without mutating the source files.
