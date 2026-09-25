@@ -24,7 +24,7 @@ from release_version import (  # noqa: E402
 
 PACKAGE_NAME = "openai-codex-cli-bin"
 SDK_PACKAGE_NAME = "openai-codex"
-REPO_SLUG = "openai/codex"
+REPO_SLUG = "rebroad/codex"
 
 
 class RuntimeSetupError(RuntimeError):

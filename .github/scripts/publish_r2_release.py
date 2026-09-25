@@ -31,7 +31,7 @@ from releases import is_valid_release_version, should_update_version
 
 BUCKET = "releases"
 PREFIX = "codex"
-REPOSITORY = "openai/codex"
+REPOSITORY = "rebroad/codex"
 RELEASE_METADATA_NAME = "release.json"
 PRERELEASE_CHANNEL_KEY = f"{PREFIX}/channels/prerelease"
 INSTALLER_NAMES = ("install.sh", "install.ps1")
