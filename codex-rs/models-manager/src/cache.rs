@@ -76,6 +76,12 @@ pub struct ModelsCacheEntry {
     /// Opaque provider and auth identity. Unscoped legacy entries are cache misses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<String>,
+    /// Provider and authentication identity that produced this catalog.
+    ///
+    /// Entries without an identity are rejected so a cache written before provider
+    /// partitioning cannot be reused for the current provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<String>,
     /// Models returned by the catalog endpoint.
     #[serde(
         deserialize_with = "codex_protocol::openai_models::deserialize_model_infos_with_legacy_base"
