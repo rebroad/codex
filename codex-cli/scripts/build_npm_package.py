@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @openai/codex npm module."""
+"""Stage and optionally package the @reb.ai/codex npm module."""
 
 import argparse
 import json
@@ -15,52 +15,66 @@ CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
-CODEX_NPM_NAME = "@openai/codex"
+CODEX_NPM_NAME = "@reb.ai/codex"
 CODEX_PACKAGE_COMPONENT = "codex-package"
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
-# The underlying package published to npm is always `@openai/codex`.
+# The underlying package published to npm is always `@reb.ai/codex`.
 CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "codex-linux-x64": {
-        "npm_name": "@openai/codex-linux-x64",
+        "npm_name": "@reb.ai/codex-linux-x64",
         "npm_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
         "cpu": "x64",
     },
     "codex-linux-arm64": {
-        "npm_name": "@openai/codex-linux-arm64",
+        "npm_name": "@reb.ai/codex-linux-arm64",
         "npm_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
         "cpu": "arm64",
     },
     "codex-darwin-x64": {
-        "npm_name": "@openai/codex-darwin-x64",
+        "npm_name": "@reb.ai/codex-darwin-x64",
         "npm_tag": "darwin-x64",
         "target_triple": "x86_64-apple-darwin",
         "os": "darwin",
         "cpu": "x64",
     },
     "codex-darwin-arm64": {
-        "npm_name": "@openai/codex-darwin-arm64",
+        "npm_name": "@reb.ai/codex-darwin-arm64",
         "npm_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
         "cpu": "arm64",
     },
     "codex-win32-x64": {
-        "npm_name": "@openai/codex-win32-x64",
+        "npm_name": "@reb.ai/codex-win32-x64",
         "npm_tag": "win32-x64",
         "target_triple": "x86_64-pc-windows-msvc",
         "os": "win32",
         "cpu": "x64",
     },
     "codex-win32-arm64": {
-        "npm_name": "@openai/codex-win32-arm64",
+        "npm_name": "@reb.ai/codex-win32-arm64",
         "npm_tag": "win32-arm64",
         "target_triple": "aarch64-pc-windows-msvc",
         "os": "win32",
+        "cpu": "arm64",
+    },
+    "codex-linux-armv7": {
+        "npm_name": "@reb.ai/codex-linux-armv7",
+        "npm_tag": "linux-armv7",
+        "target_triple": "armv7-unknown-linux-musleabihf",
+        "os": "linux",
+        "cpu": "arm",
+    },
+    "codex-android-arm64": {
+        "npm_name": "@reb.ai/codex-android-arm64",
+        "npm_tag": "android-arm64",
+        "target_triple": "aarch64-linux-android",
+        "os": "linux",
         "cpu": "arm64",
     },
 }
@@ -77,6 +91,8 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex-darwin-arm64": [CODEX_PACKAGE_COMPONENT],
     "codex-win32-x64": [CODEX_PACKAGE_COMPONENT],
     "codex-win32-arm64": [CODEX_PACKAGE_COMPONENT],
+    "codex-linux-armv7": [CODEX_PACKAGE_COMPONENT],
+    "codex-android-arm64": [CODEX_PACKAGE_COMPONENT],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": [],
 }
@@ -153,11 +169,19 @@ def main() -> int:
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
-        stage_sources(staging_dir, version, package)
-
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
         target_filter = PACKAGE_TARGET_FILTERS.get(package)
+
+        available_platform_packages = None
+        if package == "codex" and vendor_src is not None:
+            available_platform_packages = [
+                package_name
+                for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
+                if (vendor_src / package_config["target_triple"]).is_dir()
+            ]
+
+        stage_sources(staging_dir, version, package, available_platform_packages)
 
         if native_components:
             if vendor_src is None:
@@ -209,6 +233,7 @@ def main() -> int:
         if args.pack_output is not None:
             output_path = run_npm_pack(staging_dir, args.pack_output)
             print(f"npm pack output written to {output_path}")
+
     finally:
         if created_temp:
             # Preserve the staging directory for further inspection.
@@ -229,7 +254,12 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
-def stage_sources(staging_dir: Path, version: str, package: str) -> None:
+def stage_sources(
+    staging_dir: Path,
+    version: str,
+    package: str,
+    available_platform_packages: list[str] | None = None,
+) -> None:
     package_json: dict
     package_json_path: Path | None = None
 
@@ -298,13 +328,13 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
 
     if package == "codex":
         package_json["files"] = ["bin/codex.js"]
+        platform_packages = available_platform_packages or list(CODEX_PLATFORM_PACKAGES)
         package_json["optionalDependencies"] = {
             CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
                 f"npm:{CODEX_NPM_NAME}@"
                 f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
             )
-            for platform_package in PACKAGE_EXPANSIONS["codex"]
-            if platform_package != "codex"
+            for platform_package in platform_packages
         }
 
     elif package == "codex-sdk":
@@ -324,8 +354,8 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
 
 
 def compute_platform_package_version(version: str, platform_tag: str) -> str:
-    # npm forbids republishing the same package name/version, so each
-    # platform-specific tarball needs a unique version string.
+    # Platform payloads use the same npm package name as the root package and
+    # are selected through npm aliases, so each target needs a unique version.
     return f"{version}-{platform_tag}"
 
 
@@ -418,6 +448,7 @@ def copy_native_binaries(
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    npm_command = "npm.cmd" if os.name == "nt" else "npm"
 
     with tempfile.TemporaryDirectory(prefix="codex-npm-pack-") as pack_dir_str:
         pack_dir = Path(pack_dir_str)
@@ -429,7 +460,7 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
         env["NPM_CONFIG_CACHE"] = str(npm_cache_dir)
         env["NPM_CONFIG_LOGS_DIR"] = str(npm_logs_dir)
         stdout = subprocess.check_output(
-            ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
+            [npm_command, "pack", "--json", "--pack-destination", str(pack_dir)],
             cwd=staging_dir,
             env=env,
             text=True,
