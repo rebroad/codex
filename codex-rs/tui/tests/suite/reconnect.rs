@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::Message;
 async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     // macOS's default temporary directory leaves too little room for the control socket path.
-    let codex_home = tempfile::tempdir_in("/tmp")?;
+    let codex_home = tempfile::tempdir()?;
     write_test_config(codex_home.path(), &repo_root)?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;

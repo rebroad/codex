@@ -3169,7 +3169,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn preserving_mutable_paths_normalizes_top_level_aliases_consistently() {
-        let root = TempDir::new_in("/tmp").expect("tempdir under /tmp");
+        let root = TempDir::new().expect("tempdir");
         let logical_root =
             AbsolutePathBuf::from_absolute_path(root.path()).expect("absolute logical root");
         let canonical_root = AbsolutePathBuf::from_absolute_path(

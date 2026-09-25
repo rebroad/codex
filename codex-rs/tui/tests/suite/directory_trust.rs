@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> Result<()> {
     for trust_level in [None, Some("untrusted")] {
         let repo_root = codex_utils_cargo_bin::repo_root()?;
-        let codex_home = tempfile::tempdir_in("/tmp")?;
+        let codex_home = tempfile::tempdir()?;
         // The server's trust decision must win over the client's trusted-folder setting.
         write_test_config(codex_home.path(), &repo_root)?;
         let config_path = codex_home.path().join("config.toml");

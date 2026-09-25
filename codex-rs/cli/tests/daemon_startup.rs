@@ -70,7 +70,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
     let workspace = tempfile::tempdir()?;
     let workspace_path = workspace.path().canonicalize()?;
     #[cfg(unix)]
-    let home = tempfile::Builder::new().tempdir_in("/tmp")?;
+    let home = tempfile::tempdir()?;
     #[cfg(not(unix))]
     let home = tempfile::tempdir()?;
     // Keep cold Rosetta translation outside the timed startup assertions.

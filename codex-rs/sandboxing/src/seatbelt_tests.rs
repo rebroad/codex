@@ -268,7 +268,7 @@ fn filesystem_helper_platform_defaults_do_not_grant_applications_directory() {
 fn process_platform_defaults_allow_scratch_without_granting_it_to_filesystem_helpers() {
     let workspace = tempfile::Builder::new()
         .prefix("codex-seatbelt-approved-project-")
-        .tempdir_in("/private/tmp")
+        .tempdir()
         .expect("approved project directory");
     let approved_file = workspace.path().join("approved.txt");
     fs::write(&approved_file, "approved-project").expect("write approved project file");
@@ -2743,7 +2743,7 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
 
 #[test]
 fn workspace_write_protects_linked_worktree_gitdir_under_tmp() {
-    let tmp = TempDir::new_in("/private/tmp").expect("tempdir");
+    let tmp = TempDir::new().expect("tempdir");
     let worktree = tmp.path().join("worktree");
     let gitdir = tmp.path().join("common/.git/worktrees/worktree");
     fs::create_dir(&worktree).expect("create worktree");

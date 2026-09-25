@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn local_aliases_keep_read_only_and_deny_overrides() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir_in("/tmp")?;
+    let directory = tempfile::tempdir()?;
     let logical = PathUri::from_host_native_path(directory.path())?;
     let physical = PathUri::from_host_native_path(directory.path().canonicalize()?)?;
     let context = FileSystemSandboxPolicyContext {
@@ -47,7 +47,7 @@ fn local_aliases_keep_read_only_and_deny_overrides() -> anyhow::Result<()> {
 
 #[test]
 fn equivalent_alias_entries_keep_restrictive_precedence() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir_in("/tmp")?;
+    let directory = tempfile::tempdir()?;
     let logical = PathUri::from_host_native_path(directory.path())?;
     let physical = PathUri::from_host_native_path(directory.path().canonicalize()?)?;
     let policy = FileSystemSandboxPolicy::restricted(vec![
