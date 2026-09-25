@@ -6,6 +6,7 @@ use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+use crate::AdditionalWritableRoot;
 use crate::HooksToml;
 use crate::browser_use::BrowserUseConfigToml;
 use crate::computer_use::ComputerUseConfigToml;
@@ -232,6 +233,11 @@ pub struct ConfigToml {
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+
+    /// Additional writable roots applied across all projects. Absolute paths are
+    /// ordinary roots; entries beginning with `s/` are vi-style substitutions.
+    #[serde(default)]
+    pub additional_writable_roots: Vec<AdditionalWritableRoot>,
 
     /// Default permissions profile to apply. Names starting with `:` refer to
     /// built-in profiles; other names are resolved from the `[permissions]`
@@ -603,10 +609,14 @@ pub enum CircuitBreakAction {
     Strict,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    /// Additional writable roots applied when this project is active. Absolute
+    /// paths are ordinary roots; entries beginning with `s/` are substitutions.
+    #[serde(default)]
+    pub additional_writable_roots: Vec<AdditionalWritableRoot>,
 }
 
 impl ProjectConfig {
@@ -867,27 +877,41 @@ impl ConfigToml {
 
         let permission_profile = match effective_sandbox_mode {
             SandboxMode::ReadOnly => PermissionProfile::read_only(),
-            SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
-                Some(SandboxWorkspaceWrite {
-                    writable_roots,
-                    network_access,
+            SandboxMode::WorkspaceWrite => {
+                let settings = self.sandbox_workspace_write.as_ref();
+                let network_policy = if settings.is_some_and(|settings| settings.network_access) {
+                    NetworkSandboxPolicy::Enabled
+                } else {
+                    NetworkSandboxPolicy::Restricted
+                };
+                let exclude_tmpdir_env_var =
+                    settings.is_some_and(|settings| settings.exclude_tmpdir_env_var);
+                let exclude_slash_tmp = settings.is_some_and(|settings| settings.exclude_slash_tmp);
+                let mut writable_roots = settings
+                    .map(|settings| settings.writable_roots.clone())
+                    .unwrap_or_default();
+                writable_roots.extend(
+                    self.additional_writable_roots
+                        .iter()
+                        .filter_map(AdditionalWritableRoot::path)
+                        .cloned(),
+                );
+                if let Some(active_project) = active_project {
+                    writable_roots.extend(
+                        active_project
+                            .additional_writable_roots
+                            .iter()
+                            .filter_map(AdditionalWritableRoot::path)
+                            .cloned(),
+                    );
+                }
+                PermissionProfile::workspace_write_with(
+                    &writable_roots,
+                    network_policy,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
-                }) => {
-                    let network_policy = if *network_access {
-                        NetworkSandboxPolicy::Enabled
-                    } else {
-                        NetworkSandboxPolicy::Restricted
-                    };
-                    PermissionProfile::workspace_write_with(
-                        writable_roots,
-                        network_policy,
-                        *exclude_tmpdir_env_var,
-                        *exclude_slash_tmp,
-                    )
-                }
-                None => PermissionProfile::workspace_write(),
-            },
+                )
+            }
             SandboxMode::DangerFullAccess => PermissionProfile::Disabled,
         };
         if configured_sandbox_mode.is_none()
