@@ -111,6 +111,7 @@ requires_openai_auth = false
             parent,
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
+            /*after_ordinal*/ None,
             ForkGoalContinuation::StartIfIdle,
             /*selected_profile*/ None,
         )
