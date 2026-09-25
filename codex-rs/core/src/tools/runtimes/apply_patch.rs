@@ -142,6 +142,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         }
     }
 
+    fn should_bypass_approval(&self, _policy: AskForApproval, already_approved: bool) -> bool {
+        already_approved
+    }
+
     // apply_patch approvals are decided upstream by assess_patch_safety.
     //
     // This override ensures the orchestrator runs the patch approval flow when required instead
