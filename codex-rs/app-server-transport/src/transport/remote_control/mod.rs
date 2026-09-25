@@ -11,6 +11,7 @@ mod host_device;
 mod protocol;
 mod segment;
 mod server_api;
+mod traffic_capture;
 mod websocket;
 
 use self::auth::load_remote_control_auth;
@@ -45,6 +46,7 @@ use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use gethostname::gethostname;
 use std::error::Error;
 use std::fmt;
@@ -67,6 +69,16 @@ pub struct RemoteControlStartConfig {
     pub remote_control_url: String,
     pub installation_id: String,
     pub policy: RemoteControlPolicy,
+    pub traffic_log: Option<AbsolutePathBuf>,
+    pub traffic_log_redaction: RemoteControlTrafficLogRedaction,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteControlTrafficLogRedaction {
+    #[default]
+    Secrets,
+    Content,
+    Disabled,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
