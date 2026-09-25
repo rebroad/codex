@@ -1,0 +1,153 @@
+#!/usr/bin/env sh
+set -eu
+
+# The app-server daemon owns the single-instance lock. This wrapper recovers an
+# errored daemon and can replace it when explicitly asked to enable logging.
+home_dir="${HOME:?HOME must be set}"
+codex_home="${CODEX_HOME:-$home_dir/.codex}"
+timeout_seconds="${CODEX_REMOTE_START_TIMEOUT:-20}"
+pid_file="$codex_home/app-server-daemon/app-server.pid"
+debug_log=0
+profile_name=""
+
+usage() {
+    printf '%s\n' 'Usage: codex-remote-start [-p|--profile PROFILE] [--debug-log]'
+}
+
+codex_bin="${CODEX_BIN:-}"
+if [ -z "$codex_bin" ]; then
+    if [ -x "$home_dir/bin/codex" ]; then
+        codex_bin="$home_dir/bin/codex"
+    else
+        codex_bin=$(command -v codex) || {
+            printf '%s\n' 'Codex Remote: codex was not found on PATH.' >&2
+            exit 1
+        }
+    fi
+fi
+[ -x "$codex_bin" ] || {
+    printf 'Codex Remote: Codex executable is not usable: %s\n' "$codex_bin" >&2
+    exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --debug-log)
+            debug_log=1
+            export RUST_LOG="${CODEX_REMOTE_RUST_LOG:-codex_app_server_transport::transport::remote_control=info}"
+            export LOG_FORMAT="${CODEX_REMOTE_LOG_FORMAT:-json}"
+            ;;
+        -p|--profile)
+            [ "$#" -ge 2 ] || {
+                usage >&2
+                exit 2
+            }
+            profile_name="$2"
+            shift
+            ;;
+        --profile=*)
+            profile_name="${1#--profile=}"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+case "$profile_name" in
+    ""|*[!A-Za-z0-9._-]*)
+        [ -z "$profile_name" ] || printf 'Codex Remote: invalid profile name: %s\n' "$profile_name" >&2
+        [ -z "$profile_name" ] || exit 2
+        ;;
+esac
+
+if [ -n "$profile_name" ]; then
+    pid_file="$codex_home/app-server-daemon/$profile_name/app-server.pid"
+    export CODEX_PROFILE="$profile_name"
+fi
+
+run_remote_control() {
+    timeout "$timeout_seconds" "$codex_bin" "$@"
+}
+
+managed_daemon_pid() {
+    pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$pid_file" 2>/dev/null)"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    case "$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)" in
+        *app-server*) printf '%s\n' "$pid" ;;
+        *) return 1 ;;
+    esac
+}
+
+daemon_has_debug_log() {
+    pid="$1"
+    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null |
+        grep -Fqx "RUST_LOG=$RUST_LOG" &&
+        tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null |
+        grep -Fqx "LOG_FORMAT=$LOG_FORMAT"
+}
+
+stop_managed_daemon() {
+    stop_output=""
+    stop_status=0
+    # `remote-control stop` is supported by older Codex builds too. The
+    # app-server daemon subcommand did not accept --json in 0.147.x.
+    stop_output="$(run_remote_control remote-control stop --json 2>&1)" || stop_status=$?
+    if [ "$stop_status" -ne 0 ]; then
+        [ -z "$stop_output" ] || printf '%s\n' "$stop_output" >&2
+        return "$stop_status"
+    fi
+}
+
+if [ "$debug_log" -eq 1 ]; then
+    existing_pid="$(managed_daemon_pid || true)"
+    if [ -n "$existing_pid" ] && ! daemon_has_debug_log "$existing_pid"; then
+        printf '%s\n' 'Codex Remote: replacing backend to enable debug logging.' >&2
+        if ! stop_managed_daemon; then
+            printf '%s\n' 'Codex Remote: could not stop the existing backend.' >&2
+            exit 1
+        fi
+    fi
+fi
+
+start_output=""
+start_status=0
+start_output="$(run_remote_control remote-control start --json 2>&1)" || start_status=$?
+
+if [ "$start_status" -eq 0 ]; then
+    exit 0
+fi
+
+case "$start_output" in
+    *"connection is errored"*|*"failed to connect to "*|*"Connection refused"*|*"No such file or directory"*)
+        # Stop through Codex so it removes the managed PID/socket state, then
+        # let the daemon manager recreate exactly one app-server.
+        run_remote_control remote-control stop --json >/dev/null 2>&1 || true
+        restart_output=""
+        restart_status=0
+        restart_output="$(run_remote_control remote-control start --json 2>&1)" || restart_status=$?
+        if [ "$restart_status" -eq 0 ]; then
+            exit 0
+        fi
+        case "$restart_output" in
+            *"connection is errored"*)
+                # The local daemon is usable for pairing even when its
+                # upstream enrollment status is currently errored. Let the
+                # pairing request report the actual upstream cause.
+                exit 0
+                ;;
+        esac
+        printf '%s\n' "$restart_output" >&2
+        exit "$restart_status"
+        ;;
+esac
+
+printf '%s\n' "$start_output" >&2
+exit "$start_status"
