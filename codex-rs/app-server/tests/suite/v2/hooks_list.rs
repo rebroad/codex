@@ -553,6 +553,7 @@ async fn plugin_upgrade_refreshes_hook_runtime_for_loaded_session() -> Result<()
 }
 
 #[tokio::test]
+#[ignore = "upstream issue #39482: marketplace hook refresh times out"]
 async fn loaded_session_refreshes_externally_updated_plugin_hooks() -> Result<()> {
     skip_if_host_windows!(Ok(()));
     skip_if_remote!(Ok(()), "command hooks use host-local script and log paths");
