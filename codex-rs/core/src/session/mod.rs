@@ -94,7 +94,6 @@ use codex_network_proxy::normalize_host;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
-use codex_prompts::render_model_instructions;
 use codex_protocol::ResponseUsageMetadata;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -736,11 +735,15 @@ impl Session {
         let history_mode = conversation_history.get_history_mode(
             requested_history_mode.unwrap_or_else(|| thread_store.default_history_mode()),
         );
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| render_model_instructions(&model_info));
+        let base_instructions = if config.bare_prompt {
+            String::new()
+        } else {
+            config
+                .base_instructions
+                .clone()
+                .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
+                .unwrap_or_else(|| codex_prompts::render_model_instructions(&model_info))
+        };
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
@@ -1474,6 +1477,16 @@ impl Session {
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
+        if state
+            .session_configuration
+            .original_config_do_not_use
+            .bare_prompt
+        {
+            return BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            };
+        }
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
             provenance: state.base_instructions_provenance.clone(),
@@ -4250,6 +4263,9 @@ impl Session {
         &self,
         step_context: &StepContext,
     ) -> Vec<ResponseItem> {
+        if step_context.turn.config.bare_prompt {
+            return Vec::new();
+        }
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::new();
         let context_contributors = self.services.extensions.context_contributors().to_vec();
@@ -4284,6 +4300,9 @@ impl Session {
         world_state: &WorldState,
     ) -> Vec<ResponseItem> {
         let turn_context = step_context.turn.as_ref();
+        if turn_context.config.bare_prompt {
+            return Vec::new();
+        }
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
         let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
         let mut separate_developer_sections = Vec::<RenderedFragment>::new();

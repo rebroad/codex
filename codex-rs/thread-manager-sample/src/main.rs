@@ -262,6 +262,7 @@ async fn new_config(
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
         base_instructions: None,
+        bare_prompt: false,
         base_instructions_provenance: None,
         developer_instructions: None,
         guardian_policy_config: None,
