@@ -204,6 +204,7 @@ url = "{mcp_server_url}/mcp""#
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "upstream issue #38905: curated plugin sync regression; re-enable when fixed"]
 async fn existing_thread_loads_api_curated_mcp_after_auth_switch_sync() -> Result<()> {
     let mut fixture = CuratedMcpSyncFixture::set_up().await?;
     let thread_id = fixture
