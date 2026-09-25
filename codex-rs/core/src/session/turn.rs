@@ -1567,7 +1567,7 @@ pub(crate) fn build_prompt(
     incremental_tools: bool,
 ) -> Prompt {
     let turn_context = &step_context.turn;
-    Prompt {
+    let prompt = Prompt {
         input,
         tools: if incremental_tools {
             Arc::default()
@@ -1588,6 +1588,11 @@ pub(crate) fn build_prompt(
             &turn_context.session_source,
         ),
         cyber_access_program: turn_context.cyber_access_program,
+    };
+    if turn_context.config.bare_prompt {
+        prompt.without_scaffolding()
+    } else {
+        prompt
     }
 }
 
