@@ -87,6 +87,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
             ResponseItem::CustomToolCall { id, call_id, .. }
                 if !custom_tool_output_ids.contains(call_id.as_str()) =>
             {
+                info!("Custom tool call output is missing for call id: {call_id}");
                 // Preserved-prefix forks mark copied calls as inherited. A call still
                 // running in the parent has no output in the child's snapshot.
                 if !envelope
