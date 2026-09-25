@@ -2596,6 +2596,7 @@ dependencies = [
  "codex-core",
  "codex-http-client",
  "codex-login",
+ "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
  "hmac 0.12.1",
