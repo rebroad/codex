@@ -1,15 +1,15 @@
 name: blocking-ci
 
 # This is the single entrypoint for checks that block a PR merge. It also runs
-# after pushes to main so the same check family stays grouped in the Actions UI.
+# after pushes to stable so the same check family stays grouped in the Actions UI.
 on:
   pull_request: {}
   push:
-    branches: [main]
+    branches: [stable]
 
 jobs:
   # Keep reusable workflow calls alphabetized. The `required` job below is the
-  # version-controlled list that the main-branch ruleset should require.
+  # version-controlled list that the stable-branch ruleset should require.
   bazel:
     name: Bazel
     uses: ./.github/workflows/bazel.yml
