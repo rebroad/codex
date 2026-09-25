@@ -82,8 +82,15 @@ async fn check_negotiation(runtime: Arc<dyn webrtc::runtime::Runtime>) {
                 .map(str::to_owned)
                 .collect();
             // Normal generated UDP/TCP answers still connect at the admission boundary.
-            assert!(!candidates.is_empty() && candidates.len() <= MAX_REMOTE_CANDIDATES);
-            for _ in candidates.len()..MAX_REMOTE_CANDIDATES {
+            assert!(!candidates.is_empty(), "tcp={tcp}: no gathered candidates");
+            // A machine may expose more interfaces than the admission budget.
+            // Keep the SDP valid but within that budget; excess-candidate
+            // rejection is covered explicitly by the next test.
+            let admitted_candidates = candidates.len().min(MAX_REMOTE_CANDIDATES);
+            for candidate in candidates.iter().skip(MAX_REMOTE_CANDIDATES) {
+                answer = answer.replacen(&format!("{candidate}\r\n"), "", 1);
+            }
+            for _ in admitted_candidates..MAX_REMOTE_CANDIDATES {
                 answer.push_str(&format!("{}\r\n", candidates[0]));
             }
             let outcome = local
