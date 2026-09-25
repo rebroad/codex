@@ -183,6 +183,8 @@ fn persisted_event_msg(
         | EventMsg::ModelReroute(_)
         | EventMsg::ModelVerification(_)
         | EventMsg::TurnModerationMetadata(_)
+        | EventMsg::TurnWaitStarted(_)
+        | EventMsg::TurnWaitCompleted(_)
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::RawResponseCompleted(_)

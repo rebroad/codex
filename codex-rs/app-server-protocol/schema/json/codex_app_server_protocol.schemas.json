@@ -21252,7 +21252,8 @@
       "ThreadActiveFlag": {
         "enum": [
           "waitingOnApproval",
-          "waitingOnUserInput"
+          "waitingOnUserInput",
+          "waitingOnTool"
         ],
         "type": "string"
       },
@@ -25254,6 +25255,14 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "waitingUntilMs": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [

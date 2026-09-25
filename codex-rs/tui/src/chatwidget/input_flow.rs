@@ -77,7 +77,12 @@ impl ChatWidget {
                     self.reasoning_buffer.clear();
                     self.reasoning_header = None;
                     self.reasoning_summary_parts.clear();
-                    self.set_status_header(String::from("Working"));
+                    let header = if self.turn_lifecycle.agent_turn_running {
+                        "Awaiting model response"
+                    } else {
+                        "Working"
+                    };
+                    self.set_status_header(String::from(header));
                     self.submit_user_message(user_message);
                 } else {
                     self.queue_user_message(user_message);
