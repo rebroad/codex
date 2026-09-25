@@ -207,6 +207,7 @@ async fn compaction_retry_status_returns_to_compacting() {
         ServerNotification::Error(ErrorNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            request_id: None,
             will_retry: true,
             error: codex_app_server_protocol::TurnError {
                 message: "Reconnecting".to_string(),
