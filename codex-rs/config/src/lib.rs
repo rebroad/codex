@@ -1,3 +1,4 @@
+mod additional_writable_root;
 mod application_requirements;
 mod auth_policy;
 mod browser_computer_use_requirements;
@@ -51,6 +52,8 @@ pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
+pub use additional_writable_root::AdditionalWritableRoot;
+pub use additional_writable_root::derive_additional_writable_roots;
 pub use application_requirements::ApplicationNetworkRequirementsToml;
 pub use application_requirements::ApplicationRequirementsToml;
 pub use auth_policy::ManagedAuthPolicy;
