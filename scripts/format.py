@@ -4,20 +4,50 @@
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def configure_uv_cache() -> None:
+    """Choose a writable uv cache when the default home cache is unavailable."""
+    if os.environ.get("UV_CACHE_DIR"):
+        return
+
+    candidates = []
+    if xdg_cache_home := os.environ.get("XDG_CACHE_HOME"):
+        candidates.append(Path(xdg_cache_home) / "codex" / "uv")
+    candidates.extend(
+        [
+            Path.home() / ".cache" / "codex" / "uv",
+            REPO_ROOT.parent / f"{REPO_ROOT.name}.build" / ".uv-cache",
+            Path(tempfile.gettempdir()) / "codex-uv-cache",
+        ]
+    )
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write-test"
+            probe.touch()
+            probe.unlink()
+        except OSError:
+            continue
+        os.environ["UV_CACHE_DIR"] = str(candidate)
+        return
 
 
 @dataclass(frozen=True)
 class Command:
     args: tuple[str, ...]
     cwd: Path = REPO_ROOT
+    env: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -41,7 +71,19 @@ def just_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def rust_formatter_group(*, check: bool) -> FormatterGroup:
-    args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    if shutil.which("rustup") is not None:
+        args = ["cargo", "fmt"]
+    else:
+        encoded_paths = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "codex-rs"],
+            cwd=REPO_ROOT,
+        ).split(b"\0")
+        rust_files = [
+            str(Path(os.fsdecode(path)).relative_to("codex-rs"))
+            for path in encoded_paths
+            if path.endswith(b".rs")
+        ]
+        args = ["rustfmt", *rust_files]
     if check:
         args.append("--check")
     command = Command(tuple(args), REPO_ROOT / "codex-rs")
@@ -69,10 +111,20 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
             buildifier_files.append(path.as_posix())
     buildifier_files.sort()
 
-    # Invoke DotSlash explicitly because Windows does not honor shebangs.
+    buildifier_runner = shutil.which("dotslash")
+    if buildifier_runner is not None:
+        buildifier_command = [
+            buildifier_runner,
+            str(REPO_ROOT / "tools" / "buildifier"),
+        ]
+    else:
+        buildifier_runner = shutil.which("buildifier")
+        buildifier_command = [buildifier_runner or "dotslash"]
+        if buildifier_runner is None:
+            buildifier_command.append(str(REPO_ROOT / "tools" / "buildifier"))
+
     buildifier_args = [
-        "dotslash",
-        str(REPO_ROOT / "tools" / "buildifier"),
+        *buildifier_command,
         "-mode=check" if check else "-mode=fix",
         "-lint=off",
         *buildifier_files,
@@ -80,47 +132,75 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
     return FormatterGroup("Bazel/Starlark", (Command(tuple(buildifier_args)),))
 
 
+def formatter_build_tree() -> Path | None:
+    return next(
+        (
+            candidate
+            for suffix in (".build", ".make")
+            if (candidate := REPO_ROOT.parent / f"{REPO_ROOT.name}{suffix}").is_dir()
+        ),
+        None,
+    )
+
+
+def ruff_command(project: str, dependency_group: str | None = None) -> list[str]:
+    """Use a native Ruff when available, otherwise run the locked uv project."""
+    if ruff := shutil.which("ruff"):
+        return [ruff]
+
+    command = ["uv", "run", "--frozen", "--project", project]
+    if dependency_group is not None:
+        command.extend(["--only-group", dependency_group])
+    command.append("ruff")
+    return command
+
+
 def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
     # Each `--project` retains its local dependency and Ruff configuration context.
-    uv_run_args = [
-        "uv",
-        "run",
-        "--frozen",
-        "--project",
-        "sdk/python",
-        "--only-group",
-        "format",
-    ]
+    build_tree = formatter_build_tree()
+    sdk_env = (
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "sdk-python-venv")),)
+        if build_tree is not None
+        else ()
+    )
+    ruff_run_args = ruff_command("sdk/python", "format")
     format_args = [
-        *uv_run_args,
-        "ruff",
+        *ruff_run_args,
         "format",
     ]
     if check:
         format_args.append("--check")
         # `ruff check --diff` reports lint-driven rewrites without changing files.
         # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
-        lint_args = ["ruff", "check", "--diff"]
+        lint_args = ["check", "--diff"]
     else:
         # Ruff's lint fixer and formatter are separate passes: the first applies
         # fixable lint rewrites, while the second formats source layout.
-        lint_args = ["ruff", "check", "--fix", "--fix-only"]
+        lint_args = ["check", "--fix", "--fix-only"]
 
     return FormatterGroup(
         "Python SDK",
         (
-            Command((*uv_run_args, *lint_args, "sdk/python")),
-            Command((*format_args, "sdk/python")),
+            Command((*ruff_run_args, *lint_args, "sdk/python"), env=sdk_env),
+            Command((*format_args, "sdk/python"), env=sdk_env),
         ),
     )
 
 
 def python_scripts_formatter_group(*, check: bool) -> FormatterGroup:
-    args = ["uv", "run", "--frozen", "--project", "scripts", "ruff", "format"]
+    # The SDK and internal scripts intentionally use separate project roots so
+    # uv and Ruff retain each project's configuration context.
+    args = [*ruff_command("scripts"), "format"]
+    build_tree = formatter_build_tree()
+    scripts_env = (
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "scripts-venv")),)
+        if build_tree is not None
+        else ()
+    )
     if check:
         args.append("--check")
-    args.append(".")
-    return FormatterGroup("Python scripts", (Command(tuple(args)),))
+    args.append("scripts")
+    return FormatterGroup("Python scripts", (Command(tuple(args), env=scripts_env),))
 
 
 def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
@@ -144,6 +224,7 @@ def run_formatter_group(group: FormatterGroup) -> FormatterResult:
                 stderr=subprocess.STDOUT,
                 text=True,
                 check=False,
+                env={**os.environ, **dict(command.env)},
             )
         except OSError as error:
             output = f"$ {shlex.join(command.args)}\n{error}\n"
@@ -166,10 +247,19 @@ def main() -> int:
         help="check formatting without modifying files",
     )
     args = parser.parse_args()
-    groups = formatter_groups(check=args.check)
+    configure_uv_cache()
+    try:
+        groups = formatter_groups(check=args.check)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"Unable to configure formatters: {error}", file=sys.stderr)
+        return 1
 
     failures: list[str] = []
-    with ThreadPoolExecutor(max_workers=len(groups)) as executor:
+    try:
+        parallelism = max(1, int(os.environ.get("CODEX_FORMAT_PARALLELISM", "1")))
+    except ValueError:
+        parallelism = 1
+    with ThreadPoolExecutor(max_workers=min(parallelism, len(groups))) as executor:
         futures = [executor.submit(run_formatter_group, group) for group in groups]
         for future in as_completed(futures):
             result = future.result()
