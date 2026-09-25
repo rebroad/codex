@@ -1,9 +1,9 @@
 //! Native process identities and zombie state, independent of locale and timezone.
 //! Boot IDs prevent records surviving reboot from matching reused process identifiers.
 
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", test))]
 use anyhow::Context;
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", test))]
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
@@ -28,7 +28,7 @@ pub(super) enum ProcessIdentity {
     },
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 impl ProcessIdentity {
     pub(super) async fn matches_process(&self, pid: u32) -> Result<(bool, bool)> {
         // A different boot proves staleness even when the reused PID is inaccessible.
@@ -65,7 +65,7 @@ impl ProcessIdentity {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 impl super::PidBackend {
     pub(crate) async fn promote_legacy_identity(&self) -> Result<()> {
         let _reservation = self.acquire_reservation_lock().await?;
@@ -193,7 +193,7 @@ async fn read_boot_id() -> Result<String> {
         .to_owned())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) async fn read_process_details(pid: u32) -> Result<(bool, ProcessIdentity)> {
     let stat = tokio::fs::read(format!("/proc/{pid}/stat"))
         .await
@@ -208,7 +208,7 @@ pub(super) async fn read_process_details(pid: u32) -> Result<(bool, ProcessIdent
     ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 async fn read_boot_id() -> Result<String> {
     let boot_id = tokio::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .await
@@ -218,7 +218,7 @@ async fn read_boot_id() -> Result<String> {
     Ok(boot_id.to_owned())
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "android", test))]
 fn parse_stat(stat: &[u8]) -> Result<(String, u64)> {
     // comm (field 2) can contain spaces and closing parentheses. The final ')'
     // terminates it; splitting the whole line on whitespace miscounts fields.
