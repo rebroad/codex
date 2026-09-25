@@ -19,7 +19,7 @@ from typing import Sequence
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+GITHUB_REPO = "rebroad/codex"
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
@@ -27,7 +27,10 @@ BINARY_TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
+    "armv7-unknown-linux-musleabihf",
+    "aarch64-linux-android",
 )
+UPSTREAM_WORKFLOW_TARGETS = BINARY_TARGETS[:6]
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -107,6 +110,11 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing previously downloaded workflow artifacts.",
     )
     parser.add_argument(
+        "--vendor-src",
+        type=Path,
+        help="Use an already prepared vendor root instead of downloading workflow artifacts.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -136,10 +144,33 @@ def collect_native_component_sets(packages: list[str]) -> list[tuple[str, ...]]:
     return component_sets
 
 
-def expand_packages(packages: list[str]) -> list[str]:
+def expand_packages(packages: list[str], vendor_src: Path | None = None) -> list[str]:
     expanded: list[str] = []
     for package in packages:
-        for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
+        package_expansion = PACKAGE_EXPANSIONS.get(package, [package])
+        if package == "codex" and vendor_src is not None:
+            package_expansion = [
+                "codex",
+                *(
+                    platform_package
+                    for platform_package in CODEX_PLATFORM_PACKAGES
+                    if (
+                        vendor_src
+                        / CODEX_PLATFORM_PACKAGES[platform_package]["target_triple"]
+                    ).is_dir()
+                ),
+            ]
+        elif package == "codex":
+            package_expansion = [
+                "codex",
+                *(
+                    platform_package
+                    for platform_package in CODEX_PLATFORM_PACKAGES
+                    if CODEX_PLATFORM_PACKAGES[platform_package]["target_triple"]
+                    in UPSTREAM_WORKFLOW_TARGETS
+                ),
+            ]
+        for expanded_package in package_expansion:
             if expanded_package in expanded:
                 continue
             expanded.append(expanded_package)
@@ -219,7 +250,7 @@ def install_from_workflow_artifacts(
     components: Sequence[str],
     vendor_dir: Path,
 ) -> None:
-    artifacts = select_target_artifacts(workflow_id, components)
+    artifacts, available_targets = select_target_artifacts(workflow_id, components)
     download_artifacts(workflow_id, artifacts_dir, artifacts)
     install_from_downloaded_artifacts(artifacts_dir, components, vendor_dir)
 
@@ -230,40 +261,63 @@ def install_from_downloaded_artifacts(
     vendor_dir: Path,
 ) -> None:
     if CODEX_PACKAGE_COMPONENT in components:
-        install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
+        install_codex_package_archives(artifacts_dir, vendor_dir, available_targets)
     install_binary_components(
         artifacts_dir,
         vendor_dir,
         [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+        available_targets,
     )
 
 
 def select_target_artifacts(
     workflow_id: str,
     components: Sequence[str],
-) -> list[WorkflowArtifact]:
+) -> tuple[list[WorkflowArtifact], list[str]]:
     needs_target_artifacts = CODEX_PACKAGE_COMPONENT in components or any(
         component in BINARY_COMPONENTS for component in components
     )
     if not needs_target_artifacts:
-        return []
+        return [], []
 
     artifacts_by_name = {
         artifact.name: artifact for artifact in list_workflow_artifacts(workflow_id)
     }
     selected_artifacts: list[WorkflowArtifact] = []
+    available_targets: list[str] = []
+    include_unsigned_fallback = (
+        os.environ.get("CODEX_INCLUDE_UNSIGNED_ARTIFACTS") == "1"
+    )
     for target in BINARY_TARGETS:
-        for artifact_name in [target, f"{target}-unsigned"]:
-            artifact = artifacts_by_name.get(artifact_name)
-            if artifact is not None:
-                selected_artifacts.append(artifact)
-                break
-        else:
-            raise FileNotFoundError(
-                f"Expected workflow artifact not found for target {target}"
-            )
+        artifact = artifacts_by_name.get(target)
+        unsigned_artifact = artifacts_by_name.get(f"{target}-unsigned")
+        if artifact is not None:
+            selected_artifacts.append(artifact)
+            available_targets.append(target)
+        elif unsigned_artifact is not None:
+            selected_artifacts.append(unsigned_artifact)
+            available_targets.append(target)
+        if (
+            include_unsigned_fallback
+            and unsigned_artifact is not None
+            and artifact is not None
+        ):
+            selected_artifacts.append(unsigned_artifact)
 
-    return selected_artifacts
+    if not selected_artifacts:
+        raise FileNotFoundError(
+            "No Codex package target artifacts found in the selected workflow"
+        )
+
+    missing_targets = sorted(set(BINARY_TARGETS) - set(available_targets))
+    if missing_targets:
+        print(
+            "Workflow does not provide optional target artifacts: "
+            + ", ".join(missing_targets),
+            flush=True,
+        )
+
+    return selected_artifacts, available_targets
 
 
 def list_workflow_artifacts(workflow_id: str) -> list[WorkflowArtifact]:
@@ -378,9 +432,10 @@ def install_binary_components(
     artifacts_dir: Path,
     vendor_dir: Path,
     selected_components: Sequence[BinaryComponent],
+    targets: Sequence[str],
 ) -> None:
     for component in selected_components:
-        component_targets = list(BINARY_TARGETS)
+        component_targets = list(targets)
 
         print(
             f"Installing {component.binary_basename} binaries for targets: "
@@ -412,7 +467,10 @@ def install_single_binary(
 ) -> Path:
     artifact_subdir = artifact_dir_for_target(artifacts_dir, target)
     archive_path = binary_archive_path(
-        artifact_subdir, component.artifact_prefix, target
+        artifact_subdir,
+        component.artifact_prefix,
+        target,
+        fallback_dir=artifacts_dir / f"{target}-unsigned",
     )
 
     dest_dir = vendor_dir / target / component.dest_dir
@@ -431,17 +489,26 @@ def install_single_binary(
     return dest
 
 
-def binary_archive_path(artifact_dir: Path, artifact_prefix: str, target: str) -> Path:
+def binary_archive_path(
+    artifact_dir: Path,
+    artifact_prefix: str,
+    target: str,
+    fallback_dir: Path | None = None,
+) -> Path:
     archive_names = [archive_name_for_target(artifact_prefix, target)]
-    if artifact_dir.name == f"{target}-unsigned":
+    if artifact_dir.name == f"{target}-unsigned" or fallback_dir is not None:
         archive_names.append(
             archive_name_for_target(artifact_prefix, f"{target}-unsigned")
         )
 
-    for archive_name in archive_names:
-        archive_path = artifact_dir / archive_name
-        if archive_path.exists():
-            return archive_path
+    search_dirs = [artifact_dir]
+    if fallback_dir is not None and fallback_dir.is_dir():
+        search_dirs.append(fallback_dir)
+    for search_dir in search_dirs:
+        for archive_name in archive_names:
+            archive_path = search_dir / archive_name
+            if archive_path.exists():
+                return archive_path
 
     raise FileNotFoundError(
         f"Expected artifact not found: {artifact_dir / archive_names[0]}"
@@ -502,7 +569,8 @@ def main() -> int:
 
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
-    packages = expand_packages(list(args.packages))
+    vendor_src_override = args.vendor_src.resolve() if args.vendor_src else None
+    packages = expand_packages(list(args.packages), vendor_src_override)
     native_component_sets = collect_native_component_sets(packages)
     print("Expanded packages: " + ", ".join(packages), flush=True)
     if native_component_sets:
@@ -522,7 +590,19 @@ def main() -> int:
     staging_jobs: list[tuple[Path, list[str], str]] = []
 
     try:
-        if native_component_sets:
+        if native_component_sets and vendor_src_override is not None:
+            vendor_src = vendor_src_override
+            if not vendor_src.is_dir():
+                raise FileNotFoundError(
+                    f"Vendor source directory not found: {vendor_src}"
+                )
+            for components in native_component_sets:
+                vendor_src_by_components[components] = vendor_src
+        elif native_component_sets:
+            workflow_url, resolved_head_sha = resolve_workflow_url(
+                args.release_version, args.workflow_url
+            )
+            print(f"Using native artifacts from {workflow_url}", flush=True)
             if args.artifacts_dir is not None:
                 artifacts_temp_root = args.artifacts_dir.resolve()
                 artifacts_temp_root.mkdir(parents=True, exist_ok=True)
@@ -594,6 +674,8 @@ def main() -> int:
             vendor_src = vendor_src_by_components.get(
                 native_components_for_package(package)
             )
+            if vendor_src is None and vendor_src_override is not None:
+                vendor_src = vendor_src_override
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
 
