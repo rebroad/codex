@@ -1,1 +1,3 @@
 extend-exclude = ["sdk/python", "codex-rs/vendor"]
+# Direct Ruff commands use the user cache; repository formatting passes its build-tree cache.
+cache-dir = "~/.cache/codex/ruff"

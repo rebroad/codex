@@ -52,6 +52,9 @@ include = [
 exclude-newer = "7 days"
 index-strategy = "first-index"
 
+[tool.ruff]
+cache-dir = "~/.cache/codex/ruff"
+
 [tool.uv.pip]
 exclude-newer = "7 days"
 index-strategy = "first-index"
