@@ -12,7 +12,7 @@ if ([string]::IsNullOrWhiteSpace($Release)) {
 }
 
 $NonInteractive = $env:CODEX_NON_INTERACTIVE -match "^(?i:1|true|yes)$"
-$DefaultPreferReleasesOpenAICom = $true
+$DefaultPreferReleasesOpenAICom = $false
 $PreferReleasesOpenAICom = if ([string]::IsNullOrWhiteSpace($env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM)) {
     $DefaultPreferReleasesOpenAICom
 } else {
@@ -64,6 +64,10 @@ function Normalize-Version {
         return "latest"
     }
 
+    if ($RawVersion -eq "alpha" -or $RawVersion -eq "latest-alpha") {
+        return "latest-alpha"
+    }
+
     if ($RawVersion.StartsWith("rust-v")) {
         return $RawVersion.Substring(6)
     }
@@ -80,8 +84,8 @@ function Assert-ValidReleaseVersion {
         [string]$Version
     )
 
-    if ($Version -cne "latest" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?$") {
-        throw "Invalid Codex release version: $Version. Expected latest or x.y.z[-alpha[.N[.M]]|-beta[.N]]."
+    if ($Version -cne "latest" -and $Version -cne "latest-alpha" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?(?:\.[0-9a-f]{10}\.[0-9]{12})?$") {
+        throw "Invalid Codex release version: $Version. Expected latest, alpha, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]."
     }
 }
 
@@ -172,9 +176,9 @@ function Resolve-ReleaseAssetSelection {
     $checksumFallbackUrl = $null
     if ($ResolvedRelease.Source -eq "ReleasesOpenAICom") {
         $packageUrl = "$ReleasesBaseUri/releases/$version/$packageAsset"
-        $packageFallbackUrl = "https://github.com/openai/codex/releases/download/rust-v$version/$packageAsset"
+        $packageFallbackUrl = "https://github.com/rebroad/codex/releases/download/rust-v$version/$packageAsset"
         $checksumUrl = "$ReleasesBaseUri/releases/$version/$checksumAsset"
-        $checksumFallbackUrl = "https://github.com/openai/codex/releases/download/rust-v$version/$checksumAsset"
+        $checksumFallbackUrl = "https://github.com/rebroad/codex/releases/download/rust-v$version/$checksumAsset"
     }
 
     $packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ReleaseMetadata $releaseMetadata -Url $packageUrl -FallbackUrl $packageFallbackUrl
@@ -193,7 +197,7 @@ function Resolve-ReleaseAssetSelection {
     $packageFallbackUrl = $null
     if ($ResolvedRelease.Source -eq "ReleasesOpenAICom") {
         $packageUrl = "$ReleasesBaseUri/releases/$version/$packageAsset"
-        $packageFallbackUrl = "https://github.com/openai/codex/releases/download/rust-v$version/$packageAsset"
+        $packageFallbackUrl = "https://github.com/rebroad/codex/releases/download/rust-v$version/$packageAsset"
     }
     $packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ReleaseMetadata $releaseMetadata -Url $packageUrl -FallbackUrl $packageFallbackUrl
     if ($null -eq $packageMetadata) {
@@ -320,7 +324,8 @@ function Resolve-VersionFromReleaseMetadata {
         throw "Failed to resolve the latest Codex release version."
     }
 
-    $resolvedVersion = Normalize-Version -RawVersion $ReleaseMetadata.tag_name
+    $rawVersion = if ($ReleaseMetadata.tag_name -eq "latest-alpha") { $ReleaseMetadata.name } else { $ReleaseMetadata.tag_name }
+    $resolvedVersion = Normalize-Version -RawVersion $rawVersion
     Assert-ValidReleaseVersion -Version $resolvedVersion
     return $resolvedVersion
 }
@@ -332,11 +337,14 @@ function Resolve-ReleaseFromGitHub {
 
     if ($NormalizedVersion -eq "latest") {
         $requestedRelease = "latest"
-        $metadataUri = "https://api.github.com/repos/openai/codex/releases/latest"
+        $metadataUri = "https://api.github.com/repos/rebroad/codex/releases/latest"
+    } elseif ($NormalizedVersion -eq "latest-alpha") {
+        $requestedRelease = "latest-alpha"
+        $metadataUri = "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha"
     } else {
         $resolvedVersion = $NormalizedVersion
         $requestedRelease = $resolvedVersion
-        $metadataUri = "https://api.github.com/repos/openai/codex/releases/tags/rust-v$resolvedVersion"
+        $metadataUri = "https://api.github.com/repos/rebroad/codex/releases/tags/rust-v$resolvedVersion"
     }
 
     try {
@@ -345,7 +353,7 @@ function Resolve-ReleaseFromGitHub {
         throw "Could not fetch GitHub release metadata for Codex $requestedRelease. GitHub API may be unavailable or rate limited. $($_.Exception.Message)"
     }
 
-    if ($NormalizedVersion -eq "latest") {
+    if ($NormalizedVersion -eq "latest" -or $NormalizedVersion -eq "latest-alpha") {
         $resolvedVersion = Resolve-VersionFromReleaseMetadata -ReleaseMetadata $releaseMetadata
     }
 
@@ -389,7 +397,7 @@ function Resolve-Release {
     $normalizedVersion = Normalize-Version -RawVersion $Release
     Assert-ValidReleaseVersion -Version $normalizedVersion
 
-    if ($PreferReleasesOpenAICom) {
+    if ($PreferReleasesOpenAICom -and $normalizedVersion -ne "latest-alpha") {
         $release = Resolve-ReleaseFromReleases -NormalizedVersion $normalizedVersion
         if ($null -ne $release) {
             return $release
@@ -858,9 +866,9 @@ function Maybe-HandleConflictingInstall {
     $manager = $Conflict.Manager
 
     $uninstallArgs = if ($manager -eq "bun") {
-        @("remove", "-g", "@openai/codex")
+        @("remove", "-g", "@reb.ai/codex")
     } else {
-        @("uninstall", "-g", "@openai/codex")
+        @("uninstall", "-g", "@reb.ai/codex")
     }
     $uninstallCommand = if ($manager -eq "bun") { "bun" } else { "npm" }
 
