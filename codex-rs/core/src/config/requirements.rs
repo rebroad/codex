@@ -6,6 +6,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::FeedbackConfigToml;
 use codex_features::FeatureToml;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
+use codex_model_provider_info::ModelProviderInfoOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
@@ -37,7 +38,14 @@ pub(super) fn apply_to_config(
     apply_exact!(model_catalog_json);
     apply_exact!(model_provider);
     if let Some(providers) = &requirements.model_providers {
-        config.model_providers.extend(providers.value.clone());
+        config
+            .model_providers
+            .extend(providers.value.iter().map(|(id, provider)| {
+                (
+                    id.clone(),
+                    ModelProviderInfoOverrides::from(provider.clone()),
+                )
+            }));
     }
     apply_exact!(check_for_update_on_startup);
     apply_exact!(allow_login_shell);
