@@ -36,6 +36,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
+codex-utils-pty = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
