@@ -29,8 +29,8 @@ use std::time::Duration;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
-use crate::callback_params::LIFE_SCIENCES_OAUTH_STATE_SUFFIX;
 use crate::auth::save_auth_to_file;
+use crate::callback_params::LIFE_SCIENCES_OAUTH_STATE_SUFFIX;
 use crate::callback_params::LoginCallbackResult;
 use crate::callback_params::LoginOnboardingEntrypoint;
 use crate::default_client::originator;
@@ -585,7 +585,7 @@ fn send_response_with_disconnect(
     writer.flush()
 }
 
-fn build_authorize_url(
+pub fn build_authorize_url(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -617,6 +617,109 @@ fn build_authorize_url(
     })
     .map(String::from)
     .map_err(io::Error::other)
+}
+
+pub fn generate_oauth_state() -> String {
+    generate_state()
+}
+
+/// Complete a browser OAuth login from a pasted localhost callback URL.
+pub async fn complete_oauth_login_with_callback_url(
+    opts: &ServerOptions,
+    callback_url: &str,
+    redirect_uri: &str,
+    expected_state: &str,
+    pkce: &PkceCodes,
+) -> io::Result<()> {
+    let callback = url::Url::parse(callback_url).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid callback URL: {err}"),
+        )
+    })?;
+    let redirect = url::Url::parse(redirect_uri).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid pending redirect URI: {err}"),
+        )
+    })?;
+    let callback_origin = (
+        callback.scheme(),
+        callback.host_str(),
+        callback.port_or_known_default(),
+        callback.path(),
+    );
+    let redirect_origin = (
+        redirect.scheme(),
+        redirect.host_str(),
+        redirect.port_or_known_default(),
+        redirect.path(),
+    );
+    if callback_origin != redirect_origin {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("callback URL must target {redirect_uri}"),
+        ));
+    }
+
+    let params: std::collections::HashMap<String, String> =
+        callback.query_pairs().into_owned().collect();
+    let Some(state) = params.get("state") else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "callback URL is missing state",
+        ));
+    };
+    if state != expected_state {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "callback state mismatch",
+        ));
+    }
+    if let Some(error_code) = params.get("error") {
+        let description = params.get("error_description").map(String::as_str);
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            oauth_callback_error_message(error_code, description),
+        ));
+    }
+    let Some(code) = params.get("code").filter(|code| !code.is_empty()) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "callback URL is missing authorization code",
+        ));
+    };
+
+    let (tokens, client) = exchange_code_for_tokens(
+        &opts.issuer,
+        &opts.client_id,
+        redirect_uri,
+        pkce,
+        code,
+        &opts.auth_route_config,
+    )
+    .await
+    .map_err(|err| io::Error::other(format!("oauth callback exchange failed: {err}")))?;
+    if let Err(message) = ensure_workspace_allowed(
+        opts.forced_chatgpt_workspace_id.as_deref(),
+        &tokens.id_token,
+    ) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+    }
+    let api_key = obtain_api_key(&client, &opts.issuer, &opts.client_id, &tokens.id_token)
+        .await
+        .ok();
+    persist_tokens_async(
+        &opts.codex_home,
+        api_key,
+        tokens.id_token,
+        tokens.access_token,
+        tokens.refresh_token,
+        opts.cli_auth_credentials_store_mode,
+        opts.auth_keyring_backend_kind,
+        opts.auth_file.clone(),
+    )
+    .await
 }
 
 fn send_cancel_request(port: u16) -> io::Result<()> {
