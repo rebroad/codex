@@ -214,6 +214,13 @@ pub(crate) enum RestartMode {
 
 #[cfg(any(unix, windows))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdaterRefreshMode {
+    None,
+    ReexecIfManagedBinaryChanged,
+}
+
+#[cfg(any(unix, windows))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestartDecision {
     NotReady,
     AlreadyCurrent,
@@ -272,23 +279,20 @@ pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControl
     Box::pin(Daemon::from_environment()?.set_remote_control(mode)).await
 }
 
-pub async fn run_pid_update_loop(
-    http_client_factory: codex_http_client::HttpClientFactory,
-    restore_release: Option<String>,
-) -> Result<()> {
+pub async fn run_pid_update_loop() -> Result<()> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    update_loop::run(http_client_factory, restore_release).await
+    update_loop::run().await
 }
 
-pub async fn update(
-    http_client_factory: codex_http_client::HttpClientFactory,
-) -> Result<UpdateOutput> {
+pub async fn update() -> Result<UpdateOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    update_loop::request_manual_update(&Daemon::from_environment()?, http_client_factory).await
+    anyhow::bail!(
+        "daemon-managed updates are disabled; update the @reb.ai/codex package explicitly"
+    )
 }
 
 #[cfg(any(unix, windows))]
@@ -497,6 +501,7 @@ impl Daemon {
     pub(crate) async fn try_restart_if_running(
         &self,
         mode: RestartMode,
+        _updater_refresh_mode: UpdaterRefreshMode,
         managed_codex_bin: &Path,
     ) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
@@ -565,15 +570,6 @@ impl Daemon {
             RestartIfRunningOutcome::NotRunning
         };
 
-        if !self.is_stable_standalone_release()?
-            || managed_install::resolved_managed_codex_bin(&self.current_managed_codex_bin()?)
-                .await
-                .ok()
-                .as_deref()
-                != Some(managed_codex_bin)
-        {
-            return Ok(RestartIfRunningOutcome::AlreadyCurrent);
-        }
         Ok(outcome)
     }
 
@@ -830,13 +826,13 @@ impl Daemon {
         let backend = backend::pid_backend(managed.backend_paths(&settings));
         backend.start().await?;
         let info = self.wait_until_ready().await?;
-        let auto_update_enabled = managed.ensure_managed_updater(&settings).await?;
+        let _ = managed.ensure_managed_updater(&settings).await?;
         self.wait_until_remote_control_ready(&settings).await?;
         let managed_codex_version = managed.managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
-            auto_update_enabled,
+            auto_update_enabled: false,
             remote_control_enabled: settings.remote_control_enabled,
             managed_codex_path: managed.managed_codex_bin,
             managed_codex_version,
@@ -881,41 +877,8 @@ impl Daemon {
 
     async fn ensure_managed_updater(&self, settings: &DaemonSettings) -> Result<bool> {
         let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
-        if !settings.auto_update_enabled {
-            updater.stop().await?;
-            return Ok(false);
-        }
-        if !self.is_stable_standalone_release()? {
-            // An installer publishes current and the latest marker separately.
-            // Keep its updater alive while that publication may be in progress.
-            if !self.has_latest_selection_marker() {
-                updater.stop().await?;
-            }
-            return Ok(false);
-        }
-        let Ok(codex_bin) =
-            managed_install::resolved_managed_codex_bin(&self.managed_codex_bin).await
-        else {
-            if !self.has_latest_selection_marker() {
-                updater.stop().await?;
-            }
-            return Ok(false);
-        };
-        if !managed_install::supports_daemon_update_loop(&codex_bin).await
-            || !self.is_stable_standalone_release()?
-            || !managed_install::resolved_managed_codex_bin(&self.managed_codex_bin)
-                .await
-                .is_ok_and(|selected| selected == codex_bin)
-        {
-            if !self.has_latest_selection_marker() {
-                updater.stop().await?;
-            }
-            return Ok(false);
-        }
-        backend::pid_update_loop_backend(self.backend_paths_with_bin(settings, &codex_bin))
-            .start()
-            .await?;
-        Ok(true)
+        updater.stop().await?;
+        Ok(false)
     }
 
     fn is_stable_standalone_release(&self) -> Result<bool> {
@@ -940,26 +903,8 @@ impl Daemon {
         Ok(managed_install::managed_codex_bin(home))
     }
 
-    fn has_latest_selection_marker(&self) -> bool {
-        self.settings_file
-            .parent()
-            .and_then(Path::parent)
-            .is_some_and(|home| {
-                managed_install::package_root(home)
-                    .join("auto-update-version")
-                    .is_file()
-            })
-    }
-
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
-        if !settings.auto_update_enabled
-            || !self.is_stable_standalone_release()?
-            || !managed_install::supports_daemon_update_loop(&self.managed_codex_bin).await
-        {
-            return Ok(self.running_backend_instance(settings).await?.is_some());
-        }
-        let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
-        updater.is_starting_or_running().await
+        Ok(self.running_backend_instance(settings).await?.is_some())
     }
 
     fn ensure_managed_codex_bin(&self) -> Result<()> {
@@ -971,7 +916,11 @@ impl Daemon {
 
         let managed_codex_path = self.managed_codex_bin.display();
         Err(anyhow!(
-            "daemon executable not found at {managed_codex_path}; repair the existing installation, or run `codex app-server daemon start` to install a missing daemon"
+            "managed Codex install not found at {managed_codex_path}\n\n\
+             This command requires the install managed by the package manager, because \
+             the daemon starts app-server from that fixed path.\n\n\
+             Install it with:\n  npm install -g @reb.ai/codex\n\n\
+             Then rerun the command you just tried."
         ))
     }
 
@@ -1001,10 +950,6 @@ impl Daemon {
             remote_control_enabled: settings.remote_control_enabled,
             feature_overrides: settings.feature_overrides.clone(),
         }
-    }
-
-    fn manual_update_socket_path(&self) -> PathBuf {
-        self.update_pid_file.with_extension("sock")
     }
 
     async fn load_settings(&self) -> Result<DaemonSettings> {
@@ -1250,7 +1195,7 @@ mod tests {
         let bootstrap_output = BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
-            auto_update_enabled: true,
+            auto_update_enabled: false,
             remote_control_enabled: true,
             managed_codex_path: "codex".into(),
             managed_codex_version: Some("1.2.3".to_string()),
@@ -1265,7 +1210,7 @@ mod tests {
             serde_json::json!({
                 "status": "bootstrapped",
                 "backend": "pid",
-                "autoUpdateEnabled": true,
+                "autoUpdateEnabled": false,
                 "remoteControlEnabled": true,
                 "managedCodexPath": "codex",
                 "managedCodexVersion": "1.2.3",

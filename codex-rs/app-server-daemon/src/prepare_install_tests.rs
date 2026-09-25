@@ -376,7 +376,7 @@ async fn broken_selection_is_not_a_missing_installation() {
     assert!(
         error
             .to_string()
-            .contains("repair the existing installation")
+            .contains("managed Codex install not found")
     );
     assert_eq!(
         std::fs::read_link(current).unwrap(),
