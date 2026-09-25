@@ -48,6 +48,19 @@ impl Fixture {
     }
 }
 
+#[test]
+fn synthetic_temp_marker_roots_include_canonical_temp_ancestors() -> anyhow::Result<()> {
+    let canonical_temp_dir = std::env::temp_dir().canonicalize()?;
+    for ancestor in canonical_temp_dir.ancestors() {
+        assert!(
+            crate::loader::is_synthetic_temp_marker_root(ancestor),
+            "expected temp ancestor {} to be treated as synthetic",
+            ancestor.display()
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn project_root_lookup_preserves_cwd_fallback() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
