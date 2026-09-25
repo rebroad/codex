@@ -67,6 +67,7 @@ where
 }
 
 #[test]
+#[serial_test::serial(tracing)]
 fn emit_feedback_request_tags_records_sentry_feedback_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let event_count = Arc::new(Mutex::new(0));
@@ -170,6 +171,7 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
 }
 
 #[test]
+#[serial_test::serial(tracing)]
 fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let event_count = Arc::new(Mutex::new(0));
@@ -211,6 +213,7 @@ fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
 }
 
 #[test]
+#[serial_test::serial(tracing)]
 fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let event_count = Arc::new(Mutex::new(0));
@@ -258,6 +261,7 @@ fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
 }
 
 #[test]
+#[serial_test::serial(tracing)]
 fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let event_count = Arc::new(Mutex::new(0));
@@ -311,6 +315,7 @@ fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() 
 }
 
 #[test]
+#[serial_test::serial(tracing)]
 fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let event_count = Arc::new(Mutex::new(0));
