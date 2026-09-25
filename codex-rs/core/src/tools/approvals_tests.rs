@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::step_settings::StepSettingsUpdate;
 use crate::session::tests::make_session_and_context_with_rx;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -105,10 +106,20 @@ async fn non_utf8_cwd_preserves_approval_routing(
         }
     }
 
-    let cwd = PathUri::from_abs_path(&AbsolutePathBuf::try_from(PathBuf::from(
-        std::ffi::OsString::from_vec(b"/tmp/non-utf8-\xe9".to_vec()),
-    ))?);
+    let cwd = PathUri::from_abs_path(&AbsolutePathBuf::try_from(
+        std::env::temp_dir().join(std::ffi::OsString::from_vec(b"non-utf8-\xe9".to_vec())),
+    )?);
     let (mut session, turn, events) = make_session_and_context_with_rx().await;
+    session
+        .update_settings(crate::session::SessionSettingsUpdate {
+            step_settings: StepSettingsUpdate {
+                approvals_reviewer: Some(reviewer),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("test setup should update the live approvals reviewer");
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
     extensions.approval_review_contributor(Arc::new(Contributor {
         cwd: codex_utils_path_uri::LegacyAppPathString::from_path_uri(&cwd, PathConvention::Posix)?,
