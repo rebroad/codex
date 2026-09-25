@@ -14,6 +14,7 @@ use super::PidCommandKind;
 use super::PidFileState;
 use super::PidLogTail;
 use super::PidRecord;
+use super::parse_proc_stat_start_time;
 #[cfg(unix)]
 use super::read_process_start_time;
 use super::read_stderr_log_tail;
@@ -39,6 +40,20 @@ fn is_elevated_test_process() -> anyhow::Result<bool> {
         "False" => Ok(false),
         other => anyhow::bail!("unexpected administrator membership: {other}"),
     }
+}
+
+#[test]
+fn parses_android_proc_stat_start_time_after_process_name() {
+    let stat = "123 (codex) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22";
+    assert_eq!(
+        parse_proc_stat_start_time(stat, 123).expect("parse proc stat"),
+        "19"
+    );
+}
+
+#[test]
+fn rejects_malformed_android_proc_stat() {
+    assert!(parse_proc_stat_start_time("123 (codex", 123).is_err());
 }
 
 #[tokio::test]
