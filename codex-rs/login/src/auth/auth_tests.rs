@@ -1139,6 +1139,41 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
 }
 
 #[tokio::test]
+async fn auth_manager_logout_removes_only_custom_auth_file() -> Result<(), std::io::Error> {
+    let dir = tempdir()?;
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::ApiKey),
+        openai_api_key: Some("sk-test-key".to_string()),
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    super::save_auth(
+        dir.path(),
+        &auth_dot_json,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let backend_auth_file = get_auth_file(dir.path());
+    let custom_auth_file = dir.path().join("rc-auth.json");
+    std::fs::copy(&backend_auth_file, &custom_auth_file)?;
+
+    let mut config = build_config(dir.path(), None, None).await;
+    config.auth_file = Some(custom_auth_file.clone());
+    let manager = AuthManager::shared_from_auth_config(config, false)
+        .await
+        .map_err(std::io::Error::other)?;
+
+    assert!(manager.logout().await?);
+    assert!(backend_auth_file.exists());
+    assert!(!custom_auth_file.exists());
+    Ok(())
+}
+
+#[tokio::test]
 #[serial(codex_auth_env)]
 async fn unauthorized_recovery_reports_mode_and_step_names() {
     let dir = tempdir().unwrap();
@@ -1212,6 +1247,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     let updated_auth = CodexAuth::from_auth_dot_json(
         codex_home.path(),
         updated_auth_dot_json,
+        None,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -1834,6 +1870,7 @@ async fn build_config(
 ) -> AuthConfig {
     AuthConfig {
         codex_home: codex_home.to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method,
@@ -1929,6 +1966,7 @@ impl AuthManagerConfig for TestAuthManagerConfig {
 fn test_auth_manager_config(codex_home: &Path) -> TestAuthManagerConfig {
     TestAuthManagerConfig(AuthConfig {
         codex_home: codex_home.to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method: Some(ForcedLoginMethod::Chatgpt),
@@ -2506,6 +2544,7 @@ async fn enforce_login_restrictions_logs_out_for_personal_access_token_workspace
 
     let config = AuthConfig {
         codex_home: codex_home.path().to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::default(),
         forced_login_method: None,
@@ -2632,6 +2671,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
 
     let config = AuthConfig {
         codex_home: codex_home.path().to_path_buf(),
+        auth_file: None,
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method: None,

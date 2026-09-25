@@ -70,12 +70,13 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     .constrain_guardian_policy(&mut policy, &model.slug);
             }
             let scoring_enabled = policy.scoring_enabled();
-            let sampler_config = super::startup::sampler_config(
-                &input,
-                Arc::clone(&self.auth_manager),
-                self.thread_manager.upgrade(),
-            )
-            .await;
+            let auth_manager = input
+                .thread_store
+                .get::<AuthManager>()
+                .unwrap_or_else(|| Arc::clone(&self.auth_manager));
+            let sampler_config =
+                super::startup::sampler_config(&input, auth_manager, self.thread_manager.upgrade())
+                    .await;
 
             if scoring_enabled && guardian_config.transcript.include_images {
                 input
