@@ -437,10 +437,9 @@ fn create_filesystem_args(
     )?;
     let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
     // Bubblewrap requires bind mount targets to exist. Skip missing writable
-    // roots so mixed-platform configs can keep harmless paths for other
-    // environments without breaking Linux command startup.
+    // roots so the sandbox can still start when a configured root is absent.
     let mut writable_roots = file_system_sandbox_policy
-        .get_writable_roots_with_cwd_inheriting_root_metadata(cwd)
+        .get_writable_roots_with_cwd_preserving_mutable_paths_and_inheriting_root_metadata(cwd)
         .into_iter()
         .filter(|writable_root| writable_root.root.as_path().exists())
         .collect::<Vec<_>>();
@@ -509,6 +508,38 @@ fn create_filesystem_args(
     );
     unreadable_roots.sort();
     unreadable_roots.dedup();
+    let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
+
+    // A writable root with a protected read-only subpath behind a writable
+    // symlink cannot be mounted safely: bwrap would protect the symlink's
+    // current target, but the sandboxed process could retarget the symlink.
+    // Keep the sandbox usable by dropping write access to that root instead of
+    // aborting the entire command. The root remains subject to the policy's
+    // read mounts, so this is a conservative reduction of capability.
+    let candidate_allowed_write_paths = allowed_write_paths_for_roots(&writable_roots);
+    writable_roots.retain(|writable_root| {
+        let root = writable_root.root.as_path();
+        // A broader writable root already exposes this symlink as mutable data.
+        // Do not turn a nested grant through that symlink into a separate bind
+        // at its resolved target outside the broader root.
+        if first_writable_symlink_component_in_path(root, &candidate_allowed_write_paths).is_some()
+        {
+            return false;
+        }
+        let mount_root =
+            canonical_target_if_symlinked_path(root).unwrap_or_else(|| root.to_path_buf());
+        let read_only_subpaths = read_only_subpaths_for_writable_root(
+            writable_root,
+            root,
+            &mount_root,
+            &unreadable_paths,
+            &missing_auto_metadata_read_only_project_root_subpaths,
+        );
+        !read_only_subpaths.iter().any(|subpath| {
+            first_writable_symlink_component_in_path(subpath, &candidate_allowed_write_paths)
+                .is_some()
+        })
+    });
 
     let mut args = if file_system_sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
@@ -551,6 +582,18 @@ fn create_filesystem_args(
                 readable_roots.insert(PathBuf::from("/proc"));
             }
         }
+        if !readable_roots.iter().any(|root| root == Path::new("/")) {
+            // Install logical aliases before read-only mounts below. A read
+            // root beneath a symlinked writable root can otherwise cause
+            // bubblewrap to create the alias as a directory before this
+            // symlink is added.
+            append_writable_root_symlink_aliases(
+                &mut args,
+                &writable_roots,
+                file_system_sandbox_policy,
+                cwd,
+            );
+        }
 
         // A restricted policy can still explicitly request `/`, which is
         // the broad read baseline. Explicit unreadable carveouts are
@@ -568,22 +611,34 @@ fn create_filesystem_args(
                 if !root.exists() {
                     continue;
                 }
-                // Writable roots are rebound by real target below; mirror that
-                // for their restricted-read bootstrap mount. Plain read-only
-                // roots must stay logical because callers may execute those
-                // paths inside bwrap, such as Bazel runfiles helper binaries.
-                let mount_root = if writable_roots
+                // Writable roots are rebound at their real target below.
+                // Bubblewrap cannot mount onto a symlink destination, so keep
+                // the logical alias visible separately.
+                let writable_root = writable_roots
                     .iter()
-                    .any(|writable_root| root.starts_with(writable_root.root.as_path()))
-                {
-                    canonical_target_if_symlinked_path(&root).unwrap_or(root)
-                } else {
-                    root
-                };
+                    .filter_map(|writable_root| {
+                        let logical_root = writable_root.root.as_path();
+                        if root.starts_with(logical_root) {
+                            return Some((logical_root.to_path_buf(), path_depth(logical_root)));
+                        }
+                        let target = canonical_target_if_symlinked_path(logical_root)?;
+                        let relative = root.strip_prefix(&target).ok()?;
+                        Some((logical_root.join(relative), path_depth(&target)))
+                    })
+                    .max_by_key(|(_, depth)| *depth)
+                    .map(|(destination, _)| destination);
+                let source = writable_root
+                    .as_ref()
+                    .and_then(|_| canonical_target_if_symlinked_path(&root))
+                    .unwrap_or_else(|| root.clone());
+                let destination = &source;
+                if destination.is_file() {
+                    append_mount_target_parent_dir_args(&mut args, destination, Path::new("/"));
+                }
                 args.push("--ro-bind".to_string());
-                args.push(path_to_string(&mount_root));
-                args.push(path_to_string(&mount_root));
-                append_daemon_socket_masks(&mut args, &mount_root, &daemon_directories)?;
+                args.push(path_to_string(&source));
+                args.push(path_to_string(&source));
+                append_daemon_socket_masks(&mut args, destination, &daemon_directories)?;
             }
         }
 
@@ -598,20 +653,13 @@ fn create_filesystem_args(
         synthetic_mount_targets: Vec::new(),
         protected_create_targets: Vec::new(),
     };
-    let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
-    for writable_root in &writable_roots {
-        let root = writable_root.root.as_path();
-        allowed_write_paths.push(root.to_path_buf());
-        if let Some(target) = canonical_target_if_symlinked_path(root) {
-            allowed_write_paths.push(target);
-        }
-    }
-    let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
+    let allowed_write_paths = allowed_write_paths_for_roots(&writable_roots);
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
     let binds_file_system_root = sorted_writable_roots
         .iter()
         .any(|writable_root| writable_root.root.as_path() == Path::new("/"));
+    let mut bound_mount_roots = HashSet::new();
     // Mask only the unreadable ancestors that sit outside every writable root.
     // Unreadable paths nested under a broader writable root are applied after
     // that broader root is bound, then reopened by any deeper writable child.
@@ -653,7 +701,12 @@ fn create_filesystem_args(
         // The physical root is already writable; only the alias's carveouts remain.
         let redundant_root_alias =
             binds_file_system_root && root != Path::new("/") && mount_root == Path::new("/");
-        if !redundant_root_alias {
+        // Distinct logical roots can resolve through symlinks to the same
+        // physical mount target. Bind that target only once; the per-root
+        // carveouts below still accumulate, and later nested writable roots
+        // can reopen their own paths in the normal depth order.
+        let first_bind_for_mount_root = bound_mount_roots.insert(mount_root.to_path_buf());
+        if !redundant_root_alias && first_bind_for_mount_root {
             bwrap_args.args.push("--bind".to_string());
             bwrap_args.args.push(path_to_string(mount_root));
             bwrap_args.args.push(path_to_string(mount_root));
@@ -671,17 +724,14 @@ fn create_filesystem_args(
             append_daemon_socket_masks(&mut bwrap_args.args, mount_root, &daemon_directories)?;
         }
 
-        let mut read_only_subpaths: Vec<PathBuf> = writable_root
+        // Defer carveouts owned by a deeper writable root until that root is
+        // mounted. Keep the paths for validation, but let the child install them.
+        let deferred_read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
             .iter()
             .map(|path| path.as_path().to_path_buf())
             .filter(|path| !unreadable_paths.contains(path))
             .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
-            .collect();
-        // Remember which mounts belong to a deeper writable root without dropping
-        // their paths: every path must still be remapped and validated below.
-        let mut deferred_read_only_subpaths: Vec<PathBuf> = read_only_subpaths
-            .iter()
             .filter(|path| {
                 sorted_writable_roots.iter().any(|nested_root| {
                     let nested_path = nested_root.root.as_path();
@@ -694,25 +744,24 @@ fn create_filesystem_args(
                             .any(|nested_subpath| nested_subpath.as_path() == path.as_path())
                 })
             })
-            .cloned()
             .collect();
-        let protected_metadata_names = &writable_root.protected_metadata_names;
-        append_metadata_path_masks_for_writable_root(
-            &mut read_only_subpaths,
+        let deferred_read_only_subpaths = if let Some(target) = &symlink_target {
+            remap_paths_for_symlink_target(deferred_read_only_subpaths, root, target)
+        } else {
+            deferred_read_only_subpaths
+        };
+        let mut read_only_subpaths = read_only_subpaths_for_writable_root(
+            writable_root,
             root,
-            protected_metadata_names,
+            mount_root,
+            &unreadable_paths,
+            &missing_auto_metadata_read_only_project_root_subpaths,
         );
-        if let Some(target) = &symlink_target {
-            read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, target);
-            deferred_read_only_subpaths =
-                remap_paths_for_symlink_target(deferred_read_only_subpaths, root, target);
-        }
         append_protected_create_targets_for_writable_root(
             &mut bwrap_args,
-            protected_metadata_names,
+            &writable_root.protected_metadata_names,
             root,
             symlink_target.as_deref(),
-            &read_only_subpaths,
         );
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
@@ -725,11 +774,20 @@ fn create_filesystem_args(
                  * only protect a startup-time snapshot; the sandboxed process could
                  * replace the writable symlink before it reads through the logical path.
                  */
-                return Err(CodexErr::Fatal(format!(
-                    "cannot enforce sandbox read-only path {} because it crosses writable symlink {}",
-                    subpath.display(),
-                    symlink.display()
-                )));
+                let resolved_symlink = canonical_target_if_symlinked_path(&symlink);
+                return Err(CodexErr::Fatal(match resolved_symlink {
+                    Some(target) => format!(
+                        "cannot enforce sandbox read-only path {} because it crosses writable symlink {} (resolved to {})",
+                        subpath.display(),
+                        symlink.display(),
+                        target.display()
+                    ),
+                    None => format!(
+                        "cannot enforce sandbox read-only path {} because it crosses writable symlink {}",
+                        subpath.display(),
+                        symlink.display()
+                    ),
+                }));
             }
             // Defer only the mount, after the same validation as an immediate mount.
             if deferred_read_only_subpaths.contains(&subpath) {
@@ -762,7 +820,7 @@ fn create_filesystem_args(
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
-            .filter(|path| path.starts_with(root))
+            .filter(|path| path.starts_with(root) || path.starts_with(mount_root))
             .cloned()
             .collect();
         if let Some(target) = &symlink_target {
@@ -816,12 +874,160 @@ fn create_filesystem_args(
     Ok(bwrap_args)
 }
 
+fn allowed_write_paths_for_roots(writable_roots: &[WritableRoot]) -> Vec<PathBuf> {
+    writable_roots
+        .iter()
+        .flat_map(|writable_root| {
+            let root = writable_root.root.as_path();
+            let mut paths = vec![root.to_path_buf()];
+            if let Some(target) = canonical_target_if_symlinked_path(root) {
+                paths.push(target);
+            }
+            paths
+        })
+        .collect()
+}
+
+fn read_only_subpaths_for_writable_root(
+    writable_root: &WritableRoot,
+    root: &Path,
+    mount_root: &Path,
+    unreadable_paths: &HashSet<PathBuf>,
+    missing_auto_metadata_read_only_project_root_subpaths: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut read_only_subpaths: Vec<PathBuf> = writable_root
+        .read_only_subpaths
+        .iter()
+        .map(|path| path.as_path().to_path_buf())
+        .filter(|path| !unreadable_paths.contains(path))
+        .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
+        .map(|path| {
+            if let Ok(relative) = path.strip_prefix(root) {
+                mount_root.join(relative)
+            } else {
+                path
+            }
+        })
+        .collect();
+    append_metadata_path_masks_for_writable_root(
+        &mut read_only_subpaths,
+        root,
+        &writable_root.protected_metadata_names,
+    );
+    read_only_subpaths
+}
+
+fn remap_paths_for_symlink_target(paths: Vec<PathBuf>, root: &Path, target: &Path) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .map(|path| {
+            if let Ok(relative) = path.strip_prefix(root) {
+                target.join(relative)
+            } else {
+                path
+            }
+        })
+        .collect()
+}
+
+fn append_writable_root_symlink_aliases(
+    args: &mut Vec<String>,
+    writable_roots: &[WritableRoot],
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) {
+    let mut readable_roots: BTreeSet<PathBuf> = file_system_sandbox_policy
+        .get_readable_roots_with_cwd(cwd)
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    if file_system_sandbox_policy.include_platform_defaults() {
+        readable_roots.extend(
+            LINUX_PLATFORM_DEFAULT_READ_ROOTS
+                .iter()
+                .map(|path| PathBuf::from(*path))
+                .filter(|path| path.exists()),
+        );
+    }
+
+    let mut aliases = BTreeMap::new();
+    for writable_root in writable_roots {
+        for (alias, target) in symlink_aliases(writable_root.root.as_path()) {
+            if readable_roots
+                .iter()
+                .any(|root| alias.starts_with(root) || root == Path::new("/"))
+            {
+                continue;
+            }
+            aliases.insert(alias, target);
+        }
+    }
+
+    for (alias, target) in &aliases {
+        if let Some(parent) = alias.parent() {
+            let parent = resolve_through_symlink_aliases(parent, &aliases);
+            append_mount_target_parent_dir_args(args, &parent, Path::new("/"));
+        }
+        if !readable_roots.iter().any(|root| target.starts_with(root)) {
+            append_mount_target_parent_dir_args(args, target, Path::new("/"));
+        }
+    }
+
+    for (alias, target) in aliases {
+        args.push("--symlink".to_string());
+        args.push(path_to_string(&target));
+        args.push(path_to_string(&alias));
+    }
+
+    for writable_root in writable_roots {
+        if let Some(target) = canonical_target_if_symlinked_path(writable_root.root.as_path()) {
+            append_mount_target_parent_dir_args(args, &target, Path::new("/"));
+        }
+    }
+}
+
+fn symlink_aliases(path: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut current = PathBuf::new();
+    let mut aliases = Vec::new();
+    for component in path.components() {
+        use std::path::Component;
+        match component {
+            Component::RootDir => current.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                current.pop();
+            }
+            Component::Normal(part) => current.push(part),
+            Component::Prefix(_) => continue,
+        }
+        if let Ok(metadata) = fs::symlink_metadata(&current)
+            && metadata.file_type().is_symlink()
+            && let Ok(target) = fs::canonicalize(&current)
+        {
+            aliases.push((current.clone(), target));
+        }
+    }
+    aliases
+}
+
+fn resolve_through_symlink_aliases(path: &Path, aliases: &BTreeMap<PathBuf, PathBuf>) -> PathBuf {
+    aliases
+        .iter()
+        .filter_map(|(alias, target)| {
+            path.strip_prefix(alias)
+                .ok()
+                .map(|relative| (alias, target, relative))
+        })
+        .max_by_key(|(alias, _, _)| path_depth(alias))
+        .map(|(_, target, relative)| target.join(relative))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
 fn append_protected_create_targets_for_writable_root(
     bwrap_args: &mut BwrapArgs,
     protected_metadata_names: &[String],
     root: &Path,
     symlink_target: Option<&Path>,
-    read_only_subpaths: &[PathBuf],
 ) {
     for name in protected_metadata_names {
         let mut path = root.join(name);
@@ -830,7 +1036,7 @@ fn append_protected_create_targets_for_writable_root(
         {
             path = target.join(relative_path);
         }
-        if read_only_subpaths.iter().any(|subpath| subpath == &path) || path.exists() {
+        if path.exists() {
             continue;
         }
         bwrap_args
@@ -918,9 +1124,10 @@ fn expand_unreadable_globs_with_ripgrep(
         }
     }
 
-    // Record both the logical match and any canonical symlink target. The bwrap
+    // Record the canonical target when a match crosses a symlink. The bwrap
     // overlay needs the resolved target to prevent a readable symlink path from
-    // bypassing an unreadable glob match.
+    // bypassing an unreadable glob match, and emitting the lexical path as a
+    // second mount can fail when its parent is itself an overlaid symlink.
     let mut expanded_paths = BTreeSet::new();
     for (search_root, globs) in patterns_by_search_root {
         let paths = match &rg_path {
@@ -930,8 +1137,9 @@ fn expand_unreadable_globs_with_ripgrep(
         for path in paths {
             if let Some(target) = canonical_target_if_symlinked_path(path.as_path()) {
                 expanded_paths.insert(AbsolutePathBuf::from_absolute_path_checked(target)?);
+            } else {
+                expanded_paths.insert(path);
             }
-            expanded_paths.insert(path);
             if expanded_paths.len() > MAX_UNREADABLE_GLOB_MATCHES {
                 return Err(CodexErr::Fatal(format!(
                     "unreadable glob expansion for {} matched more than {MAX_UNREADABLE_GLOB_MATCHES} paths",
@@ -1182,19 +1390,6 @@ fn canonical_target_if_symlinked_path(path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn remap_paths_for_symlink_target(paths: Vec<PathBuf>, root: &Path, target: &Path) -> Vec<PathBuf> {
-    paths
-        .into_iter()
-        .map(|path| {
-            if let Ok(relative) = path.strip_prefix(root) {
-                target.join(relative)
-            } else {
-                path
-            }
-        })
-        .collect()
-}
-
 fn normalize_command_cwd_for_bwrap(command_cwd: &Path) -> PathBuf {
     command_cwd
         .canonicalize()
@@ -1255,8 +1450,9 @@ fn append_read_only_subpath_args(
     }
 
     if is_within_allowed_write_paths(subpath, allowed_write_paths) {
+        let source = fs::canonicalize(subpath).unwrap_or_else(|_| subpath.to_path_buf());
         bwrap_args.args.push("--ro-bind".to_string());
-        bwrap_args.args.push(path_to_string(subpath));
+        bwrap_args.args.push(path_to_string(&source));
         bwrap_args.args.push(path_to_string(subpath));
         append_daemon_socket_masks(&mut bwrap_args.args, subpath, daemon_directories)?;
     }
@@ -1264,7 +1460,8 @@ fn append_read_only_subpath_args(
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    // Bubblewrap consumes and closes the descriptor for each bind-data mount.
+    // Bubblewrap closes each `--ro-bind-data` fd after copying, so keep every
+    // descriptor open until spawn.
     let null_file = File::open("/dev/null")?;
     let null_fd = null_file.as_raw_fd().to_string();
     bwrap_args.preserved_files.push(null_file);
@@ -1285,10 +1482,9 @@ fn append_empty_directory_args(bwrap_args: &mut BwrapArgs, path: &Path) {
 
 fn append_missing_read_only_subpath_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
     if path.file_name().is_some_and(is_protected_metadata_name) {
-        append_empty_directory_args(bwrap_args, path);
-        bwrap_args
-            .synthetic_mount_targets
-            .push(SyntheticMountTarget::missing_empty_directory(path));
+        // Keep absent protected metadata absent inside the sandbox. The protected-create
+        // monitor prevents a sandboxed process from creating it, without manufacturing an
+        // empty directory that suggests the host path exists.
         return Ok(());
     }
 
@@ -1343,11 +1539,20 @@ fn append_unreadable_root_args(
          * protect the old target while the logical path could later point
          * somewhere else.
          */
-        return Err(CodexErr::Fatal(format!(
-            "cannot enforce sandbox deny-read path {} because it crosses writable symlink {}",
-            unreadable_root.display(),
-            symlink.display()
-        )));
+        let message = match canonical_target_if_symlinked_path(&symlink) {
+            Some(target) => format!(
+                "cannot enforce sandbox deny-read path {} because it crosses writable symlink {} (resolved to {})",
+                unreadable_root.display(),
+                symlink.display(),
+                target.display()
+            ),
+            None => format!(
+                "cannot enforce sandbox deny-read path {} because it crosses writable symlink {}",
+                unreadable_root.display(),
+                symlink.display()
+            ),
+        };
+        return Err(CodexErr::Fatal(message));
     }
 
     if !unreadable_root.exists() {
@@ -1477,6 +1682,7 @@ fn first_writable_symlink_component_in_path(
 
         if metadata.file_type().is_symlink()
             && is_within_allowed_write_paths(&current, allowed_write_paths)
+            && !allowed_write_paths.iter().any(|root| root == &current)
         {
             return Some(current);
         }
@@ -1532,7 +1738,6 @@ mod tests {
     use codex_protocol::protocol::FileSystemSpecialPath;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     #[test]
     fn default_unreadable_glob_scan_has_no_depth_cap() {
@@ -1660,7 +1865,7 @@ mod tests {
             return;
         }
 
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let root_env = temp_dir.path().join(".env");
         std::fs::write(&root_env, "secret").expect("write env");
         let root_alias = temp_dir.path().join("root-alias");
@@ -1732,7 +1937,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn restricted_policy_chdirs_to_canonical_command_cwd() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let real_root = temp_dir.path().join("real");
         let real_subdir = real_root.join("subdir");
         let link_root = temp_dir.path().join("link");
@@ -1812,7 +2017,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinked_writable_roots_bind_real_target_and_remap_carveouts() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let real_root = temp_dir.path().join("real");
         let link_root = temp_dir.path().join("link");
         let blocked = real_root.join("blocked");
@@ -1822,8 +2027,9 @@ mod tests {
         let link_root =
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
         let link_blocked = link_root.join("blocked");
-        let real_root_str = path_to_string(&real_root);
-        let real_blocked_str = path_to_string(&blocked);
+        let real_root_str = path_to_string(&real_root.canonicalize().expect("canonical real root"));
+        let real_blocked_str =
+            path_to_string(&blocked.canonicalize().expect("canonical blocked dir"));
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: link_root.into(),
@@ -1858,24 +2064,92 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn writable_roots_under_symlinked_ancestors_bind_real_target() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let logical_home = temp_dir.path().join("home");
-        let real_codex = temp_dir.path().join("real-codex");
-        let logical_codex = logical_home.join(".codex");
-        let real_memories = real_codex.join("memories");
-        let logical_memories = logical_codex.join("memories");
-        std::fs::create_dir_all(&logical_home).expect("create logical home");
-        std::fs::create_dir_all(&real_memories).expect("create memories dir");
-        std::os::unix::fs::symlink(&real_codex, &logical_codex)
-            .expect("create symlinked codex home");
+    fn writable_root_aliases_bind_shared_target_once_and_keep_carveouts() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let real_root = temp_dir.path().join("real");
+        let real_denied = real_root.join("real-denied");
+        let alias_denied = real_root.join("alias-denied");
+        let alias_root = temp_dir.path().join("alias");
+        std::fs::create_dir_all(&real_denied).expect("create real denied directory");
+        std::fs::create_dir_all(&alias_denied).expect("create alias denied directory");
+        std::os::unix::fs::symlink(&real_root, &alias_root).expect("create root alias");
 
-        let logical_memories_root =
-            AbsolutePathBuf::from_absolute_path(&logical_memories).expect("absolute memories");
-        let real_memories_str = path_to_string(&real_memories);
-        let logical_memories_str = path_to_string(&logical_memories);
+        let real_root = AbsolutePathBuf::from_absolute_path(&real_root).expect("real root");
+        let alias_root = AbsolutePathBuf::from_absolute_path(&alias_root).expect("alias root");
+        let mount_root = path_to_string(&real_root.canonicalize().expect("canonical real root"));
+        let real_denied =
+            path_to_string(&real_denied.canonicalize().expect("canonical denied path"));
+        let alias_denied = path_to_string(
+            &alias_denied
+                .canonicalize()
+                .expect("canonical denied alias path"),
+        );
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(real_root.clone().into(), FileSystemAccessMode::Write),
+            FileSystemSandboxEntry::new(alias_root.clone().into(), FileSystemAccessMode::Write),
+            FileSystemSandboxEntry::new(
+                real_root.join("real-denied").into(),
+                FileSystemAccessMode::Deny,
+            ),
+            FileSystemSandboxEntry::new(
+                alias_root.join("alias-denied").into(),
+                FileSystemAccessMode::Deny,
+            ),
+        ]);
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args")
+            .args;
+        let bind_args = args
+            .windows(3)
+            .filter(|window| window[0] == "--bind")
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            bind_args
+                .iter()
+                .filter(|window| **window == ["--bind", mount_root.as_str(), mount_root.as_str()])
+                .count(),
+            1,
+            "logical roots resolving to one physical path should only bind it once: {bind_args:?}"
+        );
+        for denied_path in [&real_denied, &alias_denied] {
+            assert!(
+                args.windows(6).any(|window| {
+                    window[0] == "--perms"
+                        && window[1] == "000"
+                        && window[2] == "--tmpfs"
+                        && window[3] == *denied_path
+                        && window[4] == "--remount-ro"
+                        && window[5] == *denied_path
+                }),
+                "expected directory mask for {denied_path}: {args:#?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_under_symlinked_ancestors_keep_logical_alias() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let logical_home = temp_dir.path().join("home");
+        let real_target = temp_dir.path().join("real-target");
+        let logical_alias = logical_home.join(".alias");
+        let real_child = real_target.join("child");
+        let logical_child = logical_alias.join("child");
+        std::fs::create_dir_all(&logical_home).expect("create logical home");
+        std::fs::create_dir_all(&real_child).expect("create real child");
+        std::os::unix::fs::symlink(&real_target, &logical_alias)
+            .expect("create nested symlink alias");
+
+        let logical_child_root =
+            AbsolutePathBuf::from_absolute_path(&logical_child).expect("absolute logical child");
+        let real_child_str =
+            path_to_string(&real_child.canonicalize().expect("canonical real child"));
+        let logical_child_str = path_to_string(&logical_child);
+        let real_target_str =
+            path_to_string(&real_target.canonicalize().expect("canonical real target"));
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: logical_memories_root.into(),
+            path: logical_child_root.into(),
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
@@ -1884,27 +2158,141 @@ mod tests {
             .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
-            window
-                == [
-                    "--bind",
-                    real_memories_str.as_str(),
-                    real_memories_str.as_str(),
-                ]
+            window == ["--bind", real_child_str.as_str(), real_child_str.as_str()]
         }));
         assert!(!args.args.windows(3).any(|window| {
             window
                 == [
                     "--bind",
-                    logical_memories_str.as_str(),
-                    logical_memories_str.as_str(),
+                    logical_child_str.as_str(),
+                    logical_child_str.as_str(),
+                ]
+        }));
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--symlink",
+                    real_target_str.as_str(),
+                    logical_alias.to_str().expect("utf-8 logical alias"),
                 ]
         }));
     }
 
     #[cfg(unix)]
     #[test]
-    fn protected_symlinked_directory_subpaths_fail_closed() {
-        let temp_dir = TempDir::new().expect("temp dir");
+    fn writable_symlink_alias_precedes_read_only_descendant_mounts() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let real_root = temp_dir.path().join("real");
+        let alias_root = temp_dir.path().join("alias");
+        let readable_root = alias_root.join("readable");
+        let writable_root = alias_root.join("writable");
+        std::fs::create_dir_all(real_root.join("readable")).expect("create readable root");
+        std::fs::create_dir_all(real_root.join("writable")).expect("create writable root");
+        std::os::unix::fs::symlink(&real_root, &alias_root).expect("create root alias");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path(&readable_root)
+                    .expect("absolute readable root")
+                    .into(),
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path(&writable_root)
+                    .expect("absolute writable root")
+                    .into(),
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                FileSystemAccessMode::Read,
+            ),
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args")
+            .args;
+        let alias = path_to_string(&alias_root);
+        let target = path_to_string(&real_root.canonicalize().expect("canonical real root"));
+        let readable = path_to_string(&readable_root);
+        let symlink_index = args
+            .windows(3)
+            .position(|window| window == ["--symlink", target.as_str(), alias.as_str()])
+            .expect("logical symlink alias");
+        let readable_mount_index = args
+            .windows(3)
+            .position(|window| window == ["--ro-bind", readable.as_str(), readable.as_str()])
+            .expect("read-only descendant mount");
+
+        assert!(
+            symlink_index < readable_mount_index,
+            "the logical alias must exist before a descendant mount creates its parents: {args:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_writable_root_does_not_follow_symlink_inside_writable_root() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        let external_target = temp_dir.path().join("external-target");
+        let external_child = external_target.join("nested");
+        let symlinked_child = writable_root.join("redirect").join("nested");
+        std::fs::create_dir_all(&writable_root).expect("create writable root");
+        std::fs::create_dir_all(&external_target).expect("create external target");
+        std::os::unix::fs::symlink(&external_target, writable_root.join("redirect"))
+            .expect("create nested symlink");
+
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
+        let symlinked_child =
+            AbsolutePathBuf::from_absolute_path(&symlinked_child).expect("absolute nested root");
+        let physical_writable_root = writable_root
+            .as_path()
+            .canonicalize()
+            .expect("canonical writable root");
+        let physical_external_child = external_target
+            .canonicalize()
+            .expect("canonical external target")
+            .join("nested");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(writable_root.into(), FileSystemAccessMode::Write),
+            FileSystemSandboxEntry::new(symlinked_child.into(), FileSystemAccessMode::Write),
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
+        let physical_writable_root = path_to_string(&physical_writable_root);
+        let physical_external_child = path_to_string(&physical_external_child);
+
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--bind",
+                    physical_writable_root.as_str(),
+                    physical_writable_root.as_str(),
+                ]
+        }));
+        assert!(!args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--bind",
+                    physical_external_child.as_str(),
+                    physical_external_child.as_str(),
+                ]
+        }));
+        assert!(
+            !external_child.exists(),
+            "nested writable roots must not create directories through a symlink in a writable root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_symlinked_directory_subpaths_drop_writable_root() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let root = temp_dir.path().join("root");
         let agents_target = root.join("agents-target");
         let agents_link = root.join(".agents");
@@ -1912,28 +2300,28 @@ mod tests {
         std::os::unix::fs::symlink(&agents_target, &agents_link).expect("create symlinked .agents");
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
-        let agents_link_str = path_to_string(&agents_link);
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: root.into(),
+            path: root.clone().into(),
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
 
-        let err = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
-            .expect_err("protected symlinked subpath should fail closed");
-        let message = err.to_string();
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("protected symlinked subpath should not abort sandbox construction");
 
+        let root = path_to_string(&root);
         assert!(
-            message.contains("cannot enforce sandbox read-only path"),
-            "{message}"
+            !args
+                .args
+                .windows(3)
+                .any(|window| { window == ["--bind", root.as_str(), root.as_str()] })
         );
-        assert!(message.contains(&agents_link_str), "{message}");
     }
 
     #[cfg(unix)]
     #[test]
     fn symlinked_writable_roots_nested_symlink_escape_paths_fail_closed() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let real_root = temp_dir.path().join("real");
         let link_root = temp_dir.path().join("link");
         let outside = temp_dir.path().join("outside-private");
@@ -2012,8 +2400,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_read_only_subpath_uses_empty_file_bind_data() {
-        let temp_dir = TempDir::new().expect("temp dir");
+    fn missing_read_only_subpath_masks_files_and_tracks_metadata_creation() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let workspace = temp_dir.path().join("workspace");
         let blocked = workspace.join("blocked");
         let second_blocked = workspace.join("second-blocked");
@@ -2047,16 +2435,15 @@ mod tests {
 
         assert_empty_file_bound_without_perms(&args.args, &blocked);
         assert_empty_file_bound_without_perms(&args.args, &second_blocked);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".git"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
         assert_eq!(args.preserved_files.len(), 2);
         assert_bind_data_uses_distinct_preserved_fds(&args);
         assert_eq!(
             synthetic_mount_target_paths(&args),
+            vec![blocked.clone(), second_blocked.clone()]
+        );
+        assert_eq!(
+            protected_create_target_paths(&args),
             vec![
-                blocked.clone(),
-                second_blocked.clone(),
                 workspace.join(".git"),
                 workspace.join(".agents"),
                 workspace.join(".codex"),
@@ -2067,11 +2454,18 @@ mod tests {
             !blocked.exists() && !second_blocked.exists(),
             "missing path mask should not materialize host-side metadata paths at arg construction time",
         );
+        assert!(
+            !workspace.join(".git").exists()
+                && !workspace.join(".agents").exists()
+                && !workspace.join(".codex").exists()
+                && !workspace.join(".aws").exists(),
+            "protected metadata paths should remain absent until the command creates them",
+        );
     }
 
     #[test]
     fn transient_empty_preserved_file_uses_empty_file_bind_data() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let workspace = temp_dir.path().join("workspace");
         let dot_git = workspace.join(".git");
         std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -2090,17 +2484,12 @@ mod tests {
         let dot_git_str = path_to_string(&dot_git);
 
         assert_empty_file_bound_without_perms(&args.args, &dot_git);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                dot_git.clone(),
-                workspace.join(".agents"),
-                workspace.join(".codex"),
-                workspace.join(".aws"),
-            ]
-        );
+        assert_eq!(synthetic_mount_target_paths(&args), vec![dot_git.clone()]);
+        let protected_targets = protected_create_target_paths(&args);
+        for name in [".agents", ".codex", ".aws"] {
+            assert!(protected_targets.contains(&workspace.join(name)));
+        }
+        assert_eq!(args.preserved_files.len(), 1);
         assert!(
             !args
                 .args
@@ -2116,8 +2505,58 @@ mod tests {
     }
 
     #[test]
+    fn empty_file_bind_data_uses_distinct_preserved_descriptors() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let dot_git = workspace.join(".git");
+        let blocked = workspace.join("blocked");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        File::create(&dot_git).expect("create empty .git file");
+
+        let workspace_root =
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
+        let blocked_root = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: workspace_root.into(),
+                access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
+            },
+            FileSystemSandboxEntry {
+                path: blocked_root.into(),
+                access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
+        let data_fds = args
+            .args
+            .windows(3)
+            .filter(|window| window[0] == "--ro-bind-data")
+            .map(|window| window[1].clone())
+            .collect::<Vec<_>>();
+        let preserved_fds = args
+            .preserved_files
+            .iter()
+            .map(|file| file.as_raw_fd().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(data_fds, preserved_fds);
+        assert_eq!(
+            data_fds
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            data_fds.len(),
+            "each --ro-bind-data must use a distinct still-open fd: {data_fds:?}"
+        );
+    }
+
+    #[test]
     fn missing_child_git_under_parent_repo_is_mounted_read_only() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let repo = temp_dir.path().join("repo");
         let workspace = repo.join("workspace");
         let dot_git = workspace.join(".git");
@@ -2135,28 +2574,24 @@ mod tests {
 
         let args = create_filesystem_args(&policy, &workspace, BwrapOptions::default())
             .expect("filesystem args");
-        assert_empty_directory_mounted_read_only(&args.args, &dot_git);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                workspace.join(".codex"),
-                dot_git,
-                workspace.join(".agents"),
-                workspace.join(".aws"),
-            ],
-        );
         assert!(
-            protected_create_target_paths(&args).is_empty(),
-            "missing child .git should be mount protected before command execution",
+            !args.args.iter().any(|arg| arg == &path_to_string(&dot_git)),
+            "missing child .git should remain absent inside the sandbox",
         );
+        assert_eq!(synthetic_mount_target_paths(&args), Vec::<PathBuf>::new());
+        let protected_targets = protected_create_target_paths(&args);
+        for metadata in [".git", ".agents", ".codex", ".aws"] {
+            assert!(
+                protected_targets.contains(&workspace.join(metadata)),
+                "missing metadata should be protected from creation: {metadata}",
+            );
+        }
     }
 
     #[cfg(unix)]
     #[test]
     fn symlinked_missing_child_git_under_parent_repo_mounts_effective_path_read_only() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let repo = temp_dir.path().join("repo");
         let workspace = repo.join("workspace");
         let link_repo = temp_dir.path().join("link-repo");
@@ -2177,27 +2612,23 @@ mod tests {
 
         let args = create_filesystem_args(&policy, &link_workspace, BwrapOptions::default())
             .expect("filesystem args");
-        assert_empty_directory_mounted_read_only(&args.args, &dot_git);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                workspace.join(".codex"),
-                dot_git,
-                workspace.join(".agents"),
-                workspace.join(".aws"),
-            ],
-        );
         assert!(
-            protected_create_target_paths(&args).is_empty(),
-            "symlinked missing child .git should be mount protected before command execution",
+            !args.args.iter().any(|arg| arg == &path_to_string(&dot_git)),
+            "missing child .git should remain absent inside the sandbox",
         );
+        assert_eq!(synthetic_mount_target_paths(&args), Vec::<PathBuf>::new());
+        let protected_targets = protected_create_target_paths(&args);
+        for metadata in [".git", ".agents", ".codex", ".aws"] {
+            assert!(
+                protected_targets.contains(&workspace.join(metadata)),
+                "symlinked missing metadata should be protected from creation: {metadata}",
+            );
+        }
     }
 
     #[test]
     fn ignores_missing_writable_roots() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let existing_root = temp_dir.path().join("existing");
         let missing_root = temp_dir.path().join("missing");
         std::fs::create_dir(&existing_root).expect("create existing root");
@@ -2223,14 +2654,17 @@ mod tests {
             "existing writable root should be rebound writable",
         );
         assert!(
-            !args.args.iter().any(|arg| arg == &missing_root),
+            !args.args.windows(3).any(|window| {
+                window == ["--bind", missing_root.as_str(), missing_root.as_str()]
+            }),
             "missing writable root should be skipped",
         );
+        assert!(!Path::new(&missing_root).exists());
     }
 
     #[test]
     fn missing_project_root_metadata_carveouts_use_metadata_path_masks() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -2274,25 +2708,25 @@ mod tests {
         let dot_git = path_to_string(&temp_dir.path().join(".git"));
         let dot_agents = path_to_string(&temp_dir.path().join(".agents"));
         let dot_codex = path_to_string(&temp_dir.path().join(".codex"));
+        let dot_aws = path_to_string(&temp_dir.path().join(".aws"));
 
-        assert_empty_directory_mounted_read_only(&args.args, Path::new(&dot_git));
-        assert_empty_directory_mounted_read_only(&args.args, Path::new(&dot_agents));
-        assert_empty_directory_mounted_read_only(&args.args, Path::new(&dot_codex));
         assert!(args.preserved_files.is_empty());
-        let synthetic_targets = synthetic_mount_target_paths(&args);
-        assert!(synthetic_targets.contains(&PathBuf::from(&dot_git)));
-        assert!(synthetic_targets.contains(&PathBuf::from(&dot_agents)));
-        assert!(synthetic_targets.contains(&PathBuf::from(&dot_codex)));
+        assert!(synthetic_mount_target_paths(&args).is_empty());
         assert_eq!(
             protected_create_target_paths(&args),
-            Vec::<PathBuf>::new(),
-            "missing protected metadata paths should fail at creation time through read-only mounts",
+            vec![
+                PathBuf::from(&dot_git),
+                PathBuf::from(&dot_agents),
+                PathBuf::from(&dot_codex),
+                PathBuf::from(&dot_aws),
+            ],
+            "missing protected metadata paths should remain absent and be monitored for creation",
         );
     }
 
     #[test]
     fn missing_user_project_root_subpath_rules_are_still_enforced() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -2344,19 +2778,7 @@ mod tests {
         let args = create_filesystem_args(&sandbox_policy, Path::new("/"), BwrapOptions::default())
             .expect("bwrap fs args");
         assert!(args.preserved_files.is_empty());
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                PathBuf::from("/.aws"),
-                PathBuf::from("/.git"),
-                PathBuf::from("/.agents"),
-                PathBuf::from("/.codex"),
-                PathBuf::from("/dev/.git"),
-                PathBuf::from("/dev/.agents"),
-                PathBuf::from("/dev/.codex"),
-                PathBuf::from("/dev/.aws"),
-            ]
-        );
+        assert!(synthetic_mount_target_paths(&args).is_empty());
         let dev_mounts = args
             .args
             .windows(2)
@@ -2378,6 +2800,17 @@ mod tests {
             .expect("/dev bind");
         assert!(*initial_dev_mount < root_bind && root_bind < *restored_dev_mount);
         assert!(*restored_dev_mount < dev_bind);
+        for metadata in [".git", ".agents", ".codex", ".aws"] {
+            let path = format!("/dev/{metadata}");
+            assert!(
+                !args.args.iter().any(|arg| arg == &path),
+                "missing protected metadata must not be materialized: {path}"
+            );
+            assert!(
+                protected_create_target_paths(&args).contains(&PathBuf::from(&path)),
+                "missing protected metadata must be monitored for creation: {path}"
+            );
+        }
     }
 
     #[test]
@@ -2434,7 +2867,7 @@ mod tests {
 
     #[test]
     fn restricted_read_only_uses_scoped_read_roots_instead_of_erroring() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let readable_root = temp_dir.path().join("readable");
         std::fs::create_dir(&readable_root).expect("create readable root");
 
@@ -2463,8 +2896,38 @@ mod tests {
     }
 
     #[test]
+    fn restricted_read_only_creates_parents_for_file_read_roots() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let file = temp_dir.path().join("nested").join("helper");
+        std::fs::create_dir_all(file.parent().expect("file parent")).expect("create parent");
+        std::fs::write(&file, b"helper").expect("write file");
+
+        let file = AbsolutePathBuf::from_absolute_path(&file).expect("absolute file");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: file.clone().into(),
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        }]);
+        let args = create_filesystem_args(&policy, Path::new("/"), BwrapOptions::default())
+            .expect("create filesystem args");
+        let file_path = path_to_string(file.as_path());
+        let parent_path = path_to_string(file.as_path().parent().expect("file parent"));
+
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--ro-bind", file_path.as_str(), file_path.as_str()] })
+        );
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| window == ["--dir", parent_path.as_str()])
+        );
+    }
+
+    #[test]
     fn restricted_read_only_with_platform_defaults_includes_usr_when_present() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::Minimal,
@@ -2492,7 +2955,7 @@ mod tests {
 
     #[test]
     fn split_policy_reapplies_unreadable_carveouts_after_writable_binds() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let writable_root = temp_dir.path().join("workspace");
         let blocked = writable_root.join("blocked");
         std::fs::create_dir_all(&blocked).expect("create blocked dir");
@@ -2563,7 +3026,7 @@ mod tests {
 
     #[test]
     fn split_policy_reenables_nested_writable_subpaths_after_read_only_parent() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let writable_root = temp_dir.path().join("workspace");
         let docs = writable_root.join("docs");
         let docs_public = docs.join("public");
@@ -2608,28 +3071,20 @@ mod tests {
             "expected read-only parent remount before nested writable bind: {:#?}",
             args.args
         );
+        let protected_targets = protected_create_target_paths(&args);
         for name in [".git", ".agents", ".codex", ".aws"] {
-            let metadata_path = path_to_string(docs_public.join(name).as_path());
-            let mount_indices = args
-                .args
-                .windows(2)
-                .enumerate()
-                .filter_map(|(index, window)| {
-                    (window == ["--tmpfs", metadata_path.as_str()]).then_some(index)
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(mount_indices.len(), 1, "one mount for {metadata_path}");
+            let metadata_path = docs_public.join(name);
             assert!(
-                docs_public_rw_index < mount_indices[0],
-                "metadata must be mounted after its writable root: {:#?}",
-                args.args
+                protected_targets.contains(&metadata_path.to_path_buf()),
+                "missing metadata path must be protected from creation: {}",
+                metadata_path.display()
             );
         }
     }
 
     #[test]
     fn split_policy_reenables_writable_subpaths_after_unreadable_parent() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let blocked = temp_dir.path().join("blocked");
         let allowed = blocked.join("allowed");
         std::fs::create_dir_all(&allowed).expect("create blocked/allowed");
@@ -2691,7 +3146,7 @@ mod tests {
 
     #[test]
     fn split_policy_reenables_writable_files_after_unreadable_parent() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let blocked = temp_dir.path().join("blocked");
         let allowed_dir = blocked.join("allowed");
         let allowed_file = allowed_dir.join("note.txt");
@@ -2770,7 +3225,7 @@ mod tests {
 
     #[test]
     fn split_policy_reenables_nested_writable_roots_after_unreadable_parent() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let writable_root = temp_dir.path().join("workspace");
         let blocked = writable_root.join("blocked");
         let allowed = blocked.join("allowed");
@@ -2826,7 +3281,7 @@ mod tests {
 
     #[test]
     fn split_policy_masks_root_read_directory_carveouts() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let blocked = temp_dir.path().join("blocked");
         std::fs::create_dir_all(&blocked).expect("create blocked dir");
         let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked dir");
@@ -2868,7 +3323,7 @@ mod tests {
 
     #[test]
     fn split_policy_masks_root_read_file_carveouts() {
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let blocked_file = temp_dir.path().join("blocked.txt");
         let second_blocked_file = temp_dir.path().join("second-blocked.txt");
         std::fs::write(&blocked_file, "secret").expect("create blocked file");
@@ -2936,7 +3391,7 @@ mod tests {
             return;
         }
 
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let root_env = temp_dir.path().join(".env");
         let nested_env = temp_dir.path().join("app").join(".env");
         let too_deep_env = temp_dir.path().join("app").join("deep").join(".env");
@@ -2977,7 +3432,7 @@ mod tests {
             return;
         }
 
-        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let real_root = temp_dir.path().join("real");
         let link_root = temp_dir.path().join("link");
         let real_secret = real_root.join("secret.env");
@@ -3067,20 +3522,6 @@ mod tests {
                     && window[4] == path
             }),
             "missing path bind should not set explicit file perms for {path}: {args:#?}"
-        );
-    }
-
-    fn assert_empty_directory_mounted_read_only(args: &[String], path: &Path) {
-        let path = path_to_string(path);
-        assert!(
-            args.windows(4)
-                .any(|window| window == ["--perms", "555", "--tmpfs", path.as_str()]),
-            "expected empty directory mount for {path}: {args:#?}"
-        );
-        assert!(
-            args.windows(2)
-                .any(|window| window == ["--remount-ro", path.as_str()]),
-            "expected read-only remount for {path}: {args:#?}"
         );
     }
 
