@@ -315,6 +315,7 @@ struct Daemon {
     operation_lock_file: PathBuf,
     settings_file: PathBuf,
     managed_codex_bin: PathBuf,
+    invoking_codex_bin: Option<PathBuf>,
 }
 
 impl Daemon {
@@ -344,6 +345,7 @@ impl Daemon {
             operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
             settings_file: state_dir.join(SETTINGS_FILE_NAME),
             managed_codex_bin,
+            invoking_codex_bin: std::env::current_exe().ok(),
         })
     }
 
@@ -861,7 +863,7 @@ impl Daemon {
     }
 
     async fn start_managed_backend(&self, settings: &DaemonSettings) -> Result<Option<u32>> {
-        self.start_managed_backend_with_bin(settings, &self.managed_codex_bin)
+        self.start_managed_backend_with_bin(settings, self.backend_codex_bin())
             .await
     }
 
@@ -908,9 +910,10 @@ impl Daemon {
     }
 
     fn ensure_managed_codex_bin(&self) -> Result<()> {
-        if self.managed_codex_bin.is_file() {
+        let codex_bin = self.backend_codex_bin();
+        if codex_bin.is_file() {
             #[cfg(windows)]
-            backend::windows::ensure_detached_launch(&self.managed_codex_bin)?;
+            backend::windows::ensure_detached_launch(codex_bin)?;
             return Ok(());
         }
 
@@ -924,9 +927,22 @@ impl Daemon {
         ))
     }
 
+    /// Prefer a valid managed install, but let a directly invoked CLI binary
+    /// own the daemon when no managed package is available (for example, a
+    /// Cargo-installed development build).
+    fn backend_codex_bin(&self) -> &Path {
+        if self.managed_codex_bin.is_file() {
+            return &self.managed_codex_bin;
+        }
+        self.invoking_codex_bin
+            .as_deref()
+            .filter(|codex_bin| codex_bin.is_file())
+            .unwrap_or(&self.managed_codex_bin)
+    }
+
     #[cfg(any(unix, windows))]
     async fn managed_codex_version_best_effort(&self) -> Option<String> {
-        managed_codex_version(&self.managed_codex_bin).await.ok()
+        managed_codex_version(self.backend_codex_bin()).await.ok()
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -935,7 +951,7 @@ impl Daemon {
     }
 
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
-        self.backend_paths_with_bin(settings, &self.managed_codex_bin)
+        self.backend_paths_with_bin(settings, self.backend_codex_bin())
     }
 
     fn backend_paths_with_bin(
@@ -1012,7 +1028,7 @@ impl Daemon {
             status,
             backend,
             pid,
-            managed_codex_path: self.managed_codex_bin.clone(),
+            managed_codex_path: self.backend_codex_bin().to_path_buf(),
             managed_codex_version,
             socket_path: self.socket_path.clone(),
             cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -1225,6 +1241,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn backend_uses_invoking_binary_when_managed_install_is_missing() {
+        let home = TempDir::new().expect("home");
+        let state = home.path().join("app-server-daemon");
+        let invoking_codex_bin = home.path().join(".cargo/bin/codex");
+        std::fs::create_dir_all(invoking_codex_bin.parent().expect("invoking bin parent"))
+            .expect("invoking bin directory");
+        std::fs::write(&invoking_codex_bin, b"local codex binary").expect("invoking binary");
+        let managed_codex_bin = home.path().join("packages/standalone/current/codex");
+        let daemon = Daemon {
+            socket_path: home.path().join("server.sock"),
+            pid_file: state.join(super::LEGACY_PID_FILE_NAME),
+            update_pid_file: state.join(super::LEGACY_UPDATE_PID_FILE_NAME),
+            operation_lock_file: state.join("daemon.lock"),
+            settings_file: state.join("settings.json"),
+            managed_codex_bin: managed_codex_bin.clone(),
+            invoking_codex_bin: Some(invoking_codex_bin.clone()),
+        };
+
+        assert_eq!(daemon.backend_codex_bin(), invoking_codex_bin);
+        assert!(daemon.ensure_managed_codex_bin().is_ok());
+        assert_eq!(
+            daemon.backend_paths(&DaemonSettings::default()).codex_bin,
+            invoking_codex_bin
+        );
+
+        std::fs::create_dir_all(managed_codex_bin.parent().expect("managed bin parent"))
+            .expect("managed bin directory");
+        std::fs::write(&managed_codex_bin, b"managed codex binary").expect("managed binary");
+        assert_eq!(daemon.backend_codex_bin(), managed_codex_bin);
+    }
+
     #[tokio::test]
     async fn waiting_lifecycle_command_uses_migrated_installation() {
         let home = TempDir::new().expect("home");
@@ -1238,6 +1286,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: super::managed_codex_bin(home.path()),
+            invoking_codex_bin: None,
         };
         let lock = daemon.acquire_operation_lock().await.expect("lock");
         let stop = daemon.run(super::LifecycleCommand::Stop);
@@ -1271,6 +1320,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: state.join("missing-codex"),
+            invoking_codex_bin: None,
         };
         assert_eq!(
             daemon
@@ -1296,6 +1346,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: home.path().join("codex"),
+            invoking_codex_bin: None,
         };
         codex_app_server_transport::daemon_recovery::write_candidates(
             &daemon.recovery_file().expect("recovery path"),
@@ -1352,6 +1403,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: standalone.join("current/bin/codex"),
+            invoking_codex_bin: None,
         };
         let settings = DaemonSettings::default();
         assert!(
@@ -1377,6 +1429,7 @@ mod tests {
             operation_lock_file: temp_dir.path().join("daemon.lock"),
             settings_file: temp_dir.path().join("settings.json"),
             managed_codex_bin: temp_dir.path().join("missing-codex"),
+            invoking_codex_bin: None,
         };
         let stderr_log = daemon.pid_file.with_extension("stderr.log");
         tokio::fs::write(&stderr_log, "unexpected argument")
