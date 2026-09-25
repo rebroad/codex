@@ -104,10 +104,10 @@ locally. With a key, workflows choose the host as follows:
 
 | Run | Key | Uses OpenAI BuildBuddy Host |
 | --- | --- | --- |
-| Push to `main` in `openai/codex` | Yes | Yes |
-| `workflow_dispatch` in `openai/codex` | Yes | Yes |
-| Same-repository pull request in `openai/codex` | Yes | Yes |
-| Fork pull request into `openai/codex` | No | No; local |
+| Push to `main` in `rebroad/codex` | Yes | Yes |
+| `workflow_dispatch` in `rebroad/codex` | Yes | Yes |
+| Same-repository pull request in `rebroad/codex` | Yes | Yes |
+| Fork pull request into `rebroad/codex` | No | No; local |
 | Push or `workflow_dispatch` in a fork with a key | Yes | No; generic host |
 | Pull request run in a fork repository with a key | Yes | No; generic host |
 
@@ -131,7 +131,7 @@ BUILDBUDDY_API_KEY=... GITHUB_REPOSITORY=my-fork/codex \
 ```
 
 The wrapper selects the OpenAI host only inside GitHub Actions for a trusted
-run in `openai/codex`. A missing or malformed pull request event
+run in `rebroad/codex`. A missing or malformed pull request event
 payload fails closed to the generic host. For local OpenAI host access, use
 the `user.bazelrc` configuration above.
 

@@ -12,7 +12,7 @@ assistant: The repo is public; I now need approval to push the docs fix.
 >>> TRANSCRIPT START
 [1] user: Please check the repo visibility and push the docs fix if needed.
 
-[2] tool gh_repo_view call: {"repo":"openai/codex"}
+[2] tool gh_repo_view call: {"repo":"rebroad/codex"}
 
 [3] tool gh_repo_view result: repo visibility: public
 
