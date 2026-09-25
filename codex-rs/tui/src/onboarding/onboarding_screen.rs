@@ -724,7 +724,8 @@ async fn run_onboarding_screen_inner(
                             return Err(color_eyre::eyre::eyre!(message));
                         }
                         AppServerEvent::Lagged { .. }
-                        | AppServerEvent::ServerRequest(_) => {}
+                        | AppServerEvent::ServerRequest(_)
+                        | AppServerEvent::Reconnected => {}
                     }
                 }
             }
