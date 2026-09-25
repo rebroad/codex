@@ -168,7 +168,7 @@ async fn proactive_refresh_connection_failure_uses_valid_token_for_websocket_con
 }
 
 #[tokio::test]
-async fn websocket_retry_after_throttles_pairing_refresh() {
+async fn manual_pairing_refresh_ignores_websocket_retry_after() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -188,7 +188,30 @@ async fn websocket_retry_after_throttles_pairing_refresh() {
             "upstream unavailable",
         )
         .await;
-        listener
+        let (stream, request_line) = accept_http_request(&listener).await;
+        assert_eq!(
+            request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        respond_with_status_and_headers(
+            stream,
+            "200 OK",
+            &[],
+            r#"{"remote_control_token":"refreshed-token","expires_at":"3026-05-22T12:34:56Z","server_id":"srv_e_test","environment_id":"env_test"}"#,
+        )
+        .await;
+        let (pairing_stream, request_line) = accept_http_request(&listener).await;
+        assert_eq!(
+            request_line,
+            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+        );
+        respond_with_status_and_headers(
+            pairing_stream,
+            "200 OK",
+            &[],
+            r#"{"pairing_code":"pairing-code","manual_pairing_code":"ABCD-EFGH","server_id":"srv_e_test","environment_id":"env_test","expires_at":"3026-05-22T12:34:56Z"}"#,
+        )
+        .await;
     });
     let codex_home = TempDir::new().expect("temp dir should create");
     let state_db = remote_control_state_runtime(&codex_home).await;
@@ -212,7 +235,7 @@ async fn websocket_retry_after_throttles_pairing_refresh() {
         &current_enrollment,
     )
     .await
-    .expect_err("an explicit server deadline must defer the handshake even with a valid token");
+    .expect_err("the Retry-After deadline should defer the websocket handshake");
     let refresh_completed_at = time::OffsetDateTime::now_utc();
     let next_refresh_at = current_enrollment
         .snapshot()
@@ -223,32 +246,29 @@ async fn websocket_retry_after_throttles_pairing_refresh() {
             ..=refresh_completed_at + time::Duration::seconds(150))
             .contains(&next_refresh_at)
     );
+    assert_eq!(
+        remote_control_retry_at(&refresh_error),
+        Some(next_refresh_at)
+    );
 
-    let pairing_error = remote_handle
+    let pairing_response = remote_handle
         .start_pairing(
             RemoteControlPairingStartParams::default(),
             /*app_server_client_name*/ None,
         )
         .await
-        .expect_err("the refresh deadline must also defer pairing");
-    let listener = server_task.await.expect("server task should succeed");
+        .expect("manual pairing should retry refresh immediately");
     assert_eq!(
-        remote_control_retry_at(&refresh_error),
-        Some(next_refresh_at)
+        pairing_response.manual_pairing_code.as_deref(),
+        Some("ABCD-EFGH")
     );
-    assert_eq!(
-        remote_control_retry_at(&pairing_error),
-        Some(next_refresh_at)
-    );
+    server_task.await.expect("server task should succeed");
     assert_eq!(
         current_enrollment
             .snapshot()
-            .and_then(|enrollment| enrollment.remote_control_token),
-        Some(TEST_REMOTE_CONTROL_SERVER_TOKEN.to_string())
+            .and_then(|enrollment| enrollment.next_refresh_at),
+        None
     );
-    timeout(Duration::from_millis(100), listener.accept())
-        .await
-        .expect_err("no handshake or pairing should bypass the proactive refresh deadline");
 }
 
 #[tokio::test]
@@ -301,13 +321,14 @@ async fn pairing_http_date_retry_after_throttles_websocket_refresh() {
             .expires_at = Some(time::OffsetDateTime::now_utc() + time::Duration::minutes(4));
         let current_enrollment = remote_handle.current_enrollment.clone();
 
-        let refresh_error = remote_handle
-            .start_pairing(
-                RemoteControlPairingStartParams::default(),
-                /*app_server_client_name*/ None,
-            )
-            .await
-            .expect_err("an explicit server deadline must defer pairing even with a valid token");
+        let refresh_error = connect_test_websocket(
+            &remote_control_target,
+            state_db.as_ref(),
+            &auth_manager,
+            &current_enrollment,
+        )
+        .await
+        .expect_err("an explicit server deadline must defer the handshake");
         let listener = server_task.await.expect("server task should succeed");
         let retry_at = remote_control_retry_at(&refresh_error)
             .expect("the proactive refresh response should preserve its deadline");
@@ -332,17 +353,9 @@ async fn pairing_http_date_retry_after_throttles_websocket_refresh() {
         .await
         .expect_err("the refresh deadline must also defer the handshake");
         assert_eq!(remote_control_retry_at(&connect_error), Some(retry_at));
-        let pairing_error = remote_handle
-            .start_pairing(
-                RemoteControlPairingStartParams::default(),
-                /*app_server_client_name*/ None,
-            )
-            .await
-            .expect_err("another pairing request must retain the same deadline");
-        assert_eq!(remote_control_retry_at(&pairing_error), Some(retry_at));
         timeout(Duration::from_millis(100), listener.accept())
             .await
-            .expect_err("no pairing, refresh or handshake should bypass the deadline");
+            .expect_err("no additional handshake should bypass the deadline");
     }
 }
 
