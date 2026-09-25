@@ -204,6 +204,17 @@
       ],
       "type": "string"
     },
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ]
+    },
     "TurnError": {
       "properties": {
         "additionalDetails": {
@@ -248,6 +259,16 @@
   "properties": {
     "error": {
       "$ref": "#/definitions/TurnError"
+    },
+    "requestId": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequestId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "threadId": {
       "type": "string"
