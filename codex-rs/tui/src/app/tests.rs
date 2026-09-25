@@ -237,8 +237,10 @@ use tokio::time;
 
 macro_rules! assert_app_snapshot {
     ($name:expr, $value:expr $(,)?) => {
+        let value = $value;
+        let normalized = crate::version::normalize_cli_version_for_snapshot(&value);
         insta::with_settings!({snapshot_path => "../snapshots"}, {
-            assert_snapshot!($name, $value);
+            assert_snapshot!($name, normalized);
         });
     };
 }
@@ -6693,7 +6695,9 @@ async fn app_server_thread_replacement_clears_previous_transcript_before_replay(
         .join("\n");
     assert!(!rendered.contains("Previous thread transcript"));
     assert!(!rendered.contains("Previous queued history"));
-    assert_snapshot!(rendered);
+    assert_snapshot!(crate::version::normalize_cli_version_for_snapshot(
+        &rendered
+    ));
     app_server.shutdown().await?;
     Ok(())
 }
