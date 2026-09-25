@@ -27,9 +27,11 @@ use crate::tools::sandboxing::ensure_native_sandbox;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_protocol::permissions::file_system_root;
@@ -380,8 +382,27 @@ impl ToolOrchestrator {
         };
 
         let initial_attempt_start = Instant::now();
-        let (first_result, first_deferred_network_approval) =
-            Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await;
+        let (first_result, first_deferred_network_approval) = if sandbox_requested
+            && !executor_managed_process_sandbox
+            && initial_sandbox == SandboxType::None
+        {
+            let message = "filesystem sandbox is unavailable on this executor; approval is required to run unrestricted";
+            let output = ExecToolCallOutput {
+                exit_code: 1,
+                stderr: StreamOutput::new(message.to_string()),
+                aggregated_output: StreamOutput::new(message.to_string()),
+                ..Default::default()
+            };
+            (
+                Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(output),
+                    network_policy_decision: None,
+                }))),
+                None,
+            )
+        } else {
+            Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await
+        };
         let initial_duration = initial_attempt_start.elapsed();
         match first_result {
             Ok(out) => {
@@ -461,7 +482,13 @@ impl ToolOrchestrator {
                         return Err(ToolError::Codex(err));
                     }
                 }
-                if !unsandboxed_allowed && network_approval_context.is_none() {
+                let sandbox_backend_unavailable = sandbox_requested
+                    && !executor_managed_process_sandbox
+                    && initial_sandbox == SandboxType::None;
+                if !unsandboxed_allowed
+                    && !sandbox_backend_unavailable
+                    && network_approval_context.is_none()
+                {
                     otel.sandbox_outcome(
                         &otel_tn,
                         otel_ci,
@@ -514,7 +541,8 @@ impl ToolOrchestrator {
                         .await?;
                 }
 
-                let retry_sandbox_requested = !unsandboxed_allowed
+                let retry_sandbox_requested = initial_sandbox != SandboxType::None
+                    && !unsandboxed_allowed
                     && sandbox_manager.should_sandbox(
                         initial_permissions,
                         sandbox_preference,
