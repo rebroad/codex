@@ -7,6 +7,16 @@
 use super::*;
 
 impl ChatWidget {
+    pub(super) fn set_waiting_status(&mut self, duration: Option<Duration>) {
+        self.bottom_pane.ensure_status_indicator();
+        self.set_status_header(String::from("Waiting"));
+        if let Some(duration) = duration {
+            self.bottom_pane.set_status_waiting(duration);
+        } else {
+            self.bottom_pane.clear_status_waiting();
+        }
+    }
+
     /// Update the status indicator header and details.
     ///
     /// Passing `None` clears any existing details. Returns whether the visible status indicator
