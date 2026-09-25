@@ -11,13 +11,12 @@ jobs:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     # Parallel Bazel artifacts are advisory while Cargo remains the release path.
     continue-on-error: ${{ matrix.build-system == 'bazel' }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: ${{ matrix.runner }}
     environment:
       name: bazel
       deployment: false
-    # Temporary increase from 90 minutes while Cargo and Bazel build paths coexist.
-    # Reassess after the transition using Bazel release build timings.
-    timeout-minutes: 120
+    # Keep headroom for both Cargo/Bazel builds; ARM64 primary can take longer.
+    timeout-minutes: ${{ matrix.target == 'aarch64-pc-windows-msvc' && matrix.bundle == 'primary' && 180 || 120 }}
     permissions:
       contents: read
     defaults:
@@ -36,48 +35,30 @@ jobs:
           - aarch64-pc-windows-msvc
         bundle: [primary, helpers, app-server]
         include:
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
             bundle: primary
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundle: primary
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
             bundle: app-server
             binaries: "codex-app-server codex-code-mode-host"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundle: app-server
             binaries: "codex-app-server codex-code-mode-host"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -178,7 +159,7 @@ jobs:
 
   build-windows-voice:
     name: Build Windows voice - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: windows-2022
     timeout-minutes: 120
     permissions:
       contents: read
@@ -189,15 +170,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             arch: x86_64
             python_arch: x64
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
           - target: aarch64-pc-windows-msvc
             arch: aarch64
             python_arch: arm64
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -368,7 +343,7 @@ jobs:
       - build-windows-voice
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.build-system }}
     continue-on-error: ${{ matrix.build-system == 'bazel' }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: ${{ matrix.runner }}
     environment:
       name: azure-artifact-signing
       deployment: false
@@ -376,11 +351,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      AZURE_ARTIFACT_SIGNING_ENABLED: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID != '' && secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID != '' }}
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
     defaults:
       run:
         working-directory: codex-rs
-    env:
-      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
 
     strategy:
       fail-fast: false
@@ -390,16 +366,10 @@ jobs:
           - x86_64-pc-windows-msvc
           - aarch64-pc-windows-msvc
         include:
-          - runner: windows-x64
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-x64
+          - runner: windows-2022
             target: aarch64-pc-windows-msvc
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -435,6 +405,7 @@ jobs:
           done
 
       - name: Sign Windows release files with Azure Trusted Signing
+        if: ${{ env.AZURE_ARTIFACT_SIGNING_ENABLED == 'true' }}
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}
@@ -596,11 +567,15 @@ jobs:
           PY
           stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          codex_version="${GITHUB_REF_NAME#rust-v}"
+          if [[ "${codex_version}" =~ ^(.+)\.[0-9a-f]{10}\.[0-9]{12}$ ]]; then
+            codex_version="${BASH_REMATCH[1]}"
+          fi
           python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
             "$wheel_package" \
-            --codex-version "${GITHUB_REF_NAME}" \
+            --codex-version "$codex_version" \
             --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
