@@ -165,14 +165,15 @@ async fn older_tool_projection_matches_initial_replay() {
                 .is_some_and(|cell| cell.iter_calls().count() == 2)
         })
         .expect("adjacent completed reads share one exploration group");
-    insta::assert_snapshot!(
-        "completion_only_replay_exploration_group",
-        format!(
-            "compact:\n{}\ndetailed:\n{}",
-            lines_to_single_string(&exploration.display_lines(/*width*/ 40)),
-            lines_to_single_string(&exploration.transcript_lines(/*width*/ 40)),
-        )
+    let rendered = format!(
+        "compact:\n{}\ndetailed:\n{}",
+        lines_to_single_string(&exploration.display_lines(/*width*/ 40)),
+        lines_to_single_string(&exploration.transcript_lines(/*width*/ 40)),
     );
+    let snapshot = regex_lite::Regex::new(r"(?m) • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}$")
+        .expect("valid completion timestamp regex")
+        .replace_all(&rendered, "");
+    insta::assert_snapshot!("completion_only_replay_exploration_group", snapshot);
 }
 
 #[tokio::test]
