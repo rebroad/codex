@@ -1568,7 +1568,7 @@ mod tests {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
                         origin_url: Some(Some(
-                            SanitizedGitUrl::try_from("https://github.com/openai/codex")
+                            SanitizedGitUrl::try_from("https://github.com/rebroad/codex")
                                 .expect("valid git remote URL"),
                         )),
                     }),
@@ -1588,7 +1588,7 @@ mod tests {
         assert_eq!(git_info.branch.as_deref(), Some("main"));
         assert_eq!(
             git_info.repository_url.as_deref(),
-            Some("https://github.com/openai/codex")
+            Some("https://github.com/rebroad/codex")
         );
     }
 
@@ -1672,7 +1672,7 @@ mod tests {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
                         origin_url: Some(Some(
-                            SanitizedGitUrl::try_from("https://github.com/openai/codex")
+                            SanitizedGitUrl::try_from("https://github.com/rebroad/codex")
                                 .expect("valid git remote URL"),
                         )),
                     }),
@@ -1707,7 +1707,7 @@ mod tests {
         assert_eq!(git_info.branch.as_deref(), Some("feature"));
         assert_eq!(
             git_info.repository_url.as_deref(),
-            Some("https://github.com/openai/codex")
+            Some("https://github.com/rebroad/codex")
         );
     }
 
@@ -1735,7 +1735,7 @@ mod tests {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
                         origin_url: Some(Some(
-                            SanitizedGitUrl::try_from("https://github.com/openai/codex")
+                            SanitizedGitUrl::try_from("https://github.com/rebroad/codex")
                                 .expect("valid git remote URL"),
                         )),
                     }),

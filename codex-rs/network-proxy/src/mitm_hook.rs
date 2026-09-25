@@ -664,7 +664,7 @@ mod tests {
             host: "api.github.com".to_string(),
             matcher: MitmHookMatchConfig {
                 methods: vec!["POST".to_string(), "PUT".to_string()],
-                path_prefixes: vec!["/repos/openai/".to_string()],
+                path_prefixes: vec!["/repos/rebroad/".to_string()],
                 ..MitmHookMatchConfig::default()
             },
             actions: MitmHookActionsConfig {
@@ -706,7 +706,7 @@ mod tests {
         let mut config = base_config();
         let mut hook = github_hook();
         hook.matcher.body = Some(MitmHookBodyConfig(serde_json::json!({
-            "repository": "openai/codex"
+            "repository": "rebroad/codex"
         })));
         config.mitm_hooks = vec![hook];
 
@@ -785,7 +785,7 @@ mod tests {
     fn evaluate_returns_first_matching_hook() {
         let mut config = base_config();
         let mut first = github_hook();
-        first.matcher.path_prefixes = vec!["/repos/openai/".to_string()];
+        first.matcher.path_prefixes = vec!["/repos/rebroad/".to_string()];
         let mut second = github_hook();
         second.actions.inject_request_headers[0].prefix = Some("Token ".to_string());
         config.mitm_hooks = vec![first, second];
@@ -798,7 +798,7 @@ mod tests {
         .unwrap();
         let req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues")
+            .uri("/repos/rebroad/codex/issues")
             .header("x-trace", "1")
             .body(Body::empty())
             .unwrap();
@@ -836,7 +836,7 @@ mod tests {
         .unwrap();
         let req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues?state=open&per_page=10")
+            .uri("/repos/rebroad/codex/issues?state=open&per_page=10")
             .header("x-github-api-version", "2022-11-28")
             .body(Body::empty())
             .unwrap();
@@ -870,7 +870,7 @@ mod tests {
         .unwrap();
         let req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues?state=open")
+            .uri("/repos/rebroad/codex/issues?state=open")
             .header("x-github-api-version", "2022-11-28-preview")
             .body(Body::empty())
             .unwrap();
@@ -1022,13 +1022,13 @@ mod tests {
         .unwrap();
         let exact_req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues?state=pattern%3A%2A")
+            .uri("/repos/rebroad/codex/issues?state=pattern%3A%2A")
             .header("x-github-api-version", "pattern:*")
             .body(Body::empty())
             .unwrap();
         let non_literal_req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues?state=pattern%3Aopen")
+            .uri("/repos/rebroad/codex/issues?state=pattern%3Aopen")
             .header("x-github-api-version", "pattern:preview")
             .body(Body::empty())
             .unwrap();
@@ -1060,7 +1060,7 @@ mod tests {
         .unwrap();
         let req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues?state=closed")
+            .uri("/repos/rebroad/codex/issues?state=closed")
             .body(Body::empty())
             .unwrap();
 
@@ -1074,7 +1074,7 @@ mod tests {
     fn evaluate_returns_no_hooks_for_unconfigured_host() {
         let req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues")
+            .uri("/repos/rebroad/codex/issues")
             .body(Body::empty())
             .unwrap();
 
