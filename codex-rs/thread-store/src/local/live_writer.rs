@@ -72,6 +72,11 @@ pub(super) async fn resume_thread(
             message: format!("thread {} is archived", params.thread_id),
         });
     }
+    super::rollout_duplicate_repair::repair_duplicate_ordinals(
+        params.thread_id,
+        rollout_path.as_path(),
+    )
+    .await?;
     let history = match params.history {
         Some(history)
             if !matches!(
