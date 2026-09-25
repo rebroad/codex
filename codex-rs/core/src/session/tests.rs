@@ -3357,24 +3357,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
         TokenCountEvent {
             info: Some(info1),
             rate_limits: None,
+            effective_model: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: None,
             rate_limits: None,
+            effective_model: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: Some(info2.clone()),
             rate_limits: None,
+            effective_model: None,
         },
     )));
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
         TokenCountEvent {
             info: None,
             rate_limits: None,
+            effective_model: None,
         },
     )));
 
@@ -3400,6 +3404,9 @@ fn latest_token_usage_record_stops_at_compaction_checkpoint() {
         session_id: SessionId::from(thread_id),
         root_turn_id: "turn-1".to_string(),
         response_id: "response-1".to_string(),
+        effective_model: None,
+        usage_metadata: None,
+        account_id: None,
         usage: TokenUsage::default(),
         turn_token_usage: TokenUsage::default(),
         thread_token_usage: TokenUsage::default(),
@@ -4019,6 +4026,9 @@ async fn start_new_context_window_persists_checkpoint_state() {
         session_id: SessionId::from(thread_id),
         root_turn_id: "turn-1".to_string(),
         response_id: "response-1".to_string(),
+        effective_model: None,
+        usage_metadata: None,
+        account_id: None,
         usage: TokenUsage::default(),
         turn_token_usage: TokenUsage::default(),
         thread_token_usage: TokenUsage::default(),
@@ -4911,7 +4921,7 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
         .expect("thread should have rollout path")
 }
 
-async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
+pub(crate) async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let rollout_path = open_thread_persistence(session).await;
     session
         .ensure_rollout_materialized(PersistContext::Standard)
