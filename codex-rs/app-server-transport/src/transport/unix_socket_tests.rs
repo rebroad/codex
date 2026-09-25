@@ -4,6 +4,9 @@ use super::DaemonShutdownAccess;
 use super::TransportEvent;
 use super::acquire_app_server_startup_lock;
 use super::app_server_control_socket_path;
+use super::app_server_control_socket_path_for_profile;
+use super::app_server_startup_lock_path_for_profile;
+use super::prepare_control_socket_path;
 use super::start_control_socket_acceptor;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -23,6 +26,42 @@ use tokio_tungstenite::tungstenite::Bytes;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
+
+#[test]
+fn profile_control_paths_are_namespaced_without_changing_default_path() {
+    let codex_home = Path::new("/home/test/.codex");
+    assert_eq!(
+        app_server_control_socket_path_for_profile(codex_home, None).expect("default socket path"),
+        absolute_path("/home/test/.codex/app-server-control/app-server-control.sock"),
+    );
+    assert_eq!(
+        app_server_control_socket_path_for_profile(codex_home, Some("chatgpt-window"))
+            .expect("profile socket path"),
+        absolute_path(
+            "/home/test/.codex/app-server-control/chatgpt-window/app-server-control.sock",
+        ),
+    );
+    assert_eq!(
+        app_server_startup_lock_path_for_profile(codex_home, Some("chatgpt-window"))
+            .expect("profile lock path"),
+        absolute_path(
+            "/home/test/.codex/app-server-control/chatgpt-window/app-server-startup.lock",
+        ),
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn prepare_control_socket_path_allows_missing_parent_directory() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let socket_path = temp_dir.path().join("missing").join("server.sock");
+
+    prepare_control_socket_path(&socket_path)
+        .await
+        .expect("missing socket parents should be left for the listener to create");
+
+    assert!(!socket_path.parent().expect("socket parent").exists());
+}
 
 #[test]
 fn listen_unix_socket_parses_as_unix_socket_transport() {

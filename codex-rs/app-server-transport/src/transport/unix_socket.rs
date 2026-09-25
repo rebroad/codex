@@ -256,8 +256,8 @@ pub async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
     // A crashed daemon can leave a dangling rendezvous symlink. Only recognize
     // our own deterministic alias; never remove an arbitrary symlink target.
     #[cfg(unix)]
-    if std::fs::read_link(socket_path).ok().as_deref()
-        == Some(protected_socket_path(socket_path)?.as_path())
+    if let Ok(target) = std::fs::read_link(socket_path)
+        && target == protected_socket_path(socket_path)?
     {
         return tokio::fs::remove_file(socket_path).await;
     }
