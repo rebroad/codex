@@ -109,7 +109,7 @@ impl WorkspaceRoutingResolver for AccountRequestProcessor {
         request: WorkspaceRoutingRequest,
     ) -> Pin<Box<dyn Future<Output = io::Result<Option<WorkspaceRouting>>> + Send + '_>> {
         Box::pin(async move {
-            self.read_account(Some(&request))
+            self.read_account(Some(&request), Arc::clone(&self.auth_manager))
                 .await
                 .map(|account| account.workspace_routing)
                 .map_err(|error| match error {
@@ -136,7 +136,9 @@ impl AccountRequestProcessor {
             if auth_changes.borrow().owner_generation != owner_generation {
                 return;
             }
-            if let Ok(response) = processor.read_account(/*request*/ None).await
+            if let Ok(response) = processor
+                .read_account(/*request*/ None, Arc::clone(&processor.auth_manager))
+                .await
                 && response.workspace_routing.is_some()
                 && auth_changes.borrow().owner_generation == owner_generation
             {
@@ -157,10 +159,24 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_account(
         &self,
         params: GetAccountParams,
+        use_backend_auth: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.refresh_token_if_requested(params.refresh_token).await;
+        if use_backend_auth {
+            if params.refresh_token
+                && let Err(err) = self.auth_manager.refresh_token().await
+            {
+                tracing::warn!("failed to refresh backend token while getting account: {err}");
+            }
+        } else {
+            self.refresh_token_if_requested(params.refresh_token).await;
+        }
+        let auth_manager = if use_backend_auth {
+            Arc::clone(&self.auth_manager)
+        } else {
+            self.frontend_auth_manager().await
+        };
         let read = self
-            .read_account(/*request*/ None)
+            .read_account(/*request*/ None, auth_manager)
             .await
             .map_err(|error| match error {
                 AccountReadError::InvalidAccount(error) => invalid_request(error.to_string()),
@@ -190,8 +206,9 @@ impl AccountRequestProcessor {
     pub(super) async fn read_account(
         &self,
         request: Option<&WorkspaceRoutingRequest>,
+        auth_manager: Arc<AuthManager>,
     ) -> Result<AccountRead, AccountReadError> {
-        let mut auth_changes = self.auth_manager.auth_change_state_receiver();
+        let mut auth_changes = auth_manager.auth_change_state_receiver();
         let auth_state = *auth_changes.borrow_and_update();
         let current_auth_changes = auth_changes.clone();
         let read = Box::pin(async {
@@ -212,8 +229,7 @@ impl AccountRequestProcessor {
             let config = match load_config().await {
                 Ok(config) => config,
                 Err(_)
-                    if !self
-                        .auth_manager
+                    if !auth_manager
                         .auth_cached()
                         .as_ref()
                         .is_some_and(CodexAuth::is_chatgpt_auth) =>
@@ -222,11 +238,9 @@ impl AccountRequestProcessor {
                 }
                 Err(_) => return Err(WorkspaceRoutingError::RequirementsLoad.into()),
             };
-            let auth = self.auth_manager.auth_cached();
-            let provider = create_model_provider(
-                config.model_provider.clone(),
-                Some(self.auth_manager.clone()),
-            );
+            let auth = auth_manager.auth_cached();
+            let provider =
+                create_model_provider(config.model_provider.clone(), Some(auth_manager.clone()));
             let account_state = provider
                 .account_state()
                 .map_err(AccountReadError::InvalidAccount)?;
@@ -289,7 +303,7 @@ impl AccountRequestProcessor {
                 let routing = if let Some(cached) = cached {
                     cached
                 } else {
-                    let mut recovery = self.auth_manager.unauthorized_recovery();
+                    let mut recovery = auth_manager.unauthorized_recovery();
                     let mut discovery_auth = auth.clone();
                     let mut discovery_generation = auth_state.generation;
                     let response = loop {
@@ -311,8 +325,7 @@ impl AccountRequestProcessor {
                                         return Err(WorkspaceRoutingError::AccountChanged.into());
                                     }
                                     discovery_generation = refreshed.generation;
-                                    discovery_auth = self
-                                        .auth_manager
+                                    discovery_auth = auth_manager
                                         .auth_cached()
                                         .ok_or(WorkspaceRoutingError::AccountChanged)?;
                                     continue;

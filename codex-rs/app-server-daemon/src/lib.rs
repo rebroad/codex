@@ -594,6 +594,7 @@ impl Daemon {
                     )?;
                     let started = std::time::Instant::now();
                     diagnostics::result("readiness", started, self.wait_until_ready().await)?;
+                    self.wait_until_remote_control_ready(&settings).await?;
                     RestartIfRunningOutcome::Restarted
                 }
             }
@@ -678,6 +679,29 @@ impl Daemon {
                 }
             }
         }
+    }
+
+    async fn wait_until_remote_control_ready(&self, settings: &DaemonSettings) -> Result<()> {
+        if !settings.remote_control_enabled {
+            return Ok(());
+        }
+
+        let status = remote_control_client::enable_remote_control_with_connect_retry(
+            &self.socket_path,
+            START_TIMEOUT,
+            START_POLL_INTERVAL,
+        )
+        .await?;
+        if remote_control_status_is_terminal_failure(&status) {
+            let mut context = format!(
+                "remote control did not become connected after app-server restart (status: {:?}, timed_out: {})",
+                status.status, status.timed_out
+            );
+            self.append_daemon_app_server_context(&mut context).await;
+            backend::append_stderr_log_tail_context(&self.pid_file, &mut context).await;
+            return Err(anyhow!(context));
+        }
+        Ok(())
     }
 
     async fn app_server_not_ready_context(&self) -> String {
@@ -849,6 +873,7 @@ impl Daemon {
         backend.start().await?;
         let info = self.wait_until_ready().await?;
         let auto_update_enabled = managed.ensure_managed_updater(&settings).await?;
+        self.wait_until_remote_control_ready(&settings).await?;
         let managed_codex_version = managed.managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
@@ -1110,6 +1135,13 @@ impl Daemon {
     }
 }
 
+fn remote_control_status_is_terminal_failure(status: &RemoteControlReadyStatus) -> bool {
+    matches!(
+        status.status,
+        RemoteControlConnectionStatus::Errored | RemoteControlConnectionStatus::Disabled
+    )
+}
+
 fn remote_control_status(mode: RemoteControlMode) -> RemoteControlStatus {
     match mode {
         RemoteControlMode::Enabled => RemoteControlStatus::Enabled,
@@ -1182,10 +1214,13 @@ mod tests {
     use super::Daemon;
     use super::LifecycleOutput;
     use super::LifecycleStatus;
+    use super::RemoteControlConnectionStatus;
+    use super::RemoteControlReadyStatus;
     use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
     use super::RestartDecision;
     use super::RestartMode;
+    use super::remote_control_status_is_terminal_failure;
     use super::restart_decision;
     use crate::client::ProbeInfo;
     #[cfg(unix)]
@@ -1197,6 +1232,34 @@ mod tests {
             serde_json::to_string(&RemoteControlStatus::AlreadyEnabled).expect("serialize"),
             "\"alreadyEnabled\""
         );
+    }
+
+    #[test]
+    fn remote_control_start_accepts_connecting_status() {
+        assert!(!remote_control_status_is_terminal_failure(
+            &RemoteControlReadyStatus {
+                status: RemoteControlConnectionStatus::Connecting,
+                server_name: String::new(),
+                environment_id: None,
+                timed_out: true,
+            }
+        ));
+        assert!(remote_control_status_is_terminal_failure(
+            &RemoteControlReadyStatus {
+                status: RemoteControlConnectionStatus::Errored,
+                server_name: String::new(),
+                environment_id: None,
+                timed_out: true,
+            }
+        ));
+        assert!(remote_control_status_is_terminal_failure(
+            &RemoteControlReadyStatus {
+                status: RemoteControlConnectionStatus::Disabled,
+                server_name: String::new(),
+                environment_id: None,
+                timed_out: false,
+            }
+        ));
     }
 
     #[test]

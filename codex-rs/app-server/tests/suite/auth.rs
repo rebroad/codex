@@ -115,6 +115,70 @@ async fn get_auth_status_no_auth() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_auth_status_uses_frontend_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let backend_auth_home = TempDir::new()?;
+    let frontend_auth_home = TempDir::new()?;
+    create_config_toml_custom_provider(codex_home.path(), true)?;
+    write_chatgpt_auth(
+        backend_auth_home.path(),
+        ChatGptAuthFixture::new("backend-token")
+            .email("backend@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    write_chatgpt_auth(
+        frontend_auth_home.path(),
+        ChatGptAuthFixture::new("frontend-token")
+            .email("frontend@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    std::fs::copy(
+        backend_auth_home.path().join("auth.json"),
+        codex_home.path().join("auth.json"),
+    )?;
+    std::fs::copy(
+        frontend_auth_home.path().join("auth.json"),
+        codex_home.path().join("rc-auth.json"),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(true),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let status: GetAuthStatusResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(status.auth_method, Some(AuthMode::Chatgpt));
+    assert_eq!(status.auth_token, Some("frontend-token".to_string()));
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        account.account,
+        Some(Account::Chatgpt {
+            email: Some("frontend@example.com".to_string()),
+            plan_type: AccountPlanType::Pro,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
@@ -426,7 +490,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
                 "code": "refresh_token_reused"
             }
         })))
-        .expect(2)
+        .expect(3)
         .mount(&server)
         .await;
 
@@ -489,7 +553,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
                 "code": "refresh_token_reused"
             }
         })))
-        .expect(2)
+        .expect(3)
         .mount(&server)
         .await;
 
