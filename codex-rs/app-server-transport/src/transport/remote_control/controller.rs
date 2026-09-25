@@ -2,6 +2,7 @@
 //! Replacement happens before cleanup; retired sessions cannot publish into their replacements.
 
 use super::auth::RemoteControlAuth;
+use super::traffic_capture::RemoteControlTrafficCapture;
 use super::*;
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
@@ -19,6 +20,7 @@ struct CurrentSession {
 
 pub(super) struct RemoteControl {
     config: RemoteControlStartConfig,
+    traffic_capture: Option<Arc<RemoteControlTrafficCapture>>,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
@@ -108,6 +110,7 @@ impl RemoteControl {
                 installation_id: self.config.installation_id.clone(),
                 remote_control_target: None,
                 server_name,
+                traffic_capture: self.traffic_capture.clone(),
             },
             self.state_db.clone(),
             auth_manager,
@@ -271,6 +274,11 @@ pub async fn start_remote_control(
     app_server_client_name_rx: Option<oneshot::Receiver<String>>,
     startup_mode: RemoteControlStartupMode,
 ) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
+    let traffic_capture = RemoteControlTrafficCapture::open(
+        config.traffic_log.as_ref(),
+        config.traffic_log_redaction,
+    )?
+    .map(Arc::new);
     let startup =
         if config.policy == RemoteControlPolicy::DisabledByRequirements || state_db.is_none() {
             RemoteControlDesiredState::Disabled
@@ -294,6 +302,7 @@ pub async fn start_remote_control(
     });
     let inner = Arc::new(RemoteControl {
         config,
+        traffic_capture,
         state_db,
         auth_manager,
         transport_event_tx,
