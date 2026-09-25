@@ -16,6 +16,14 @@ use tracing::warn;
 const WRITER_LOCK_DIR: &str = "thread-writer-locks";
 const COORDINATION_LOCK_FILE: &str = ".coordination.lock";
 
+/// Filesystems that do not support advisory file locking surface
+/// `ErrorKind::Unsupported` from `File::lock` and `File::try_lock`.
+/// Proceeding without the lock keeps the store usable, at the cost of losing
+/// cross-process single-writer detection on those filesystems.
+fn is_unsupported_file_lock_error(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::Unsupported
+}
+
 /// Coordinates writer ownership within one Codex home.
 pub struct WriterLockCoordinator {
     directory: PathBuf,
@@ -73,6 +81,9 @@ impl WriterLockCoordinator {
                     ),
                 ));
             }
+            Err(std::fs::TryLockError::Error(err)) if is_unsupported_file_lock_error(&err) => {
+                // Advisory locking is unavailable on some Termux filesystems.
+            }
             Err(std::fs::TryLockError::Error(err)) => {
                 return Err(io::Error::other(format!(
                     "failed to acquire thread writer lock {}: {err}",
@@ -115,6 +126,9 @@ impl WriterLockCoordinator {
             Ok(file) => match file.try_lock() {
                 Ok(()) => Ok(Some(coordination_lock)),
                 Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+                Err(std::fs::TryLockError::Error(err)) if is_unsupported_file_lock_error(&err) => {
+                    Ok(Some(coordination_lock))
+                }
                 Err(std::fs::TryLockError::Error(err)) => Err(err),
             },
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Some(coordination_lock)),
@@ -124,17 +138,21 @@ impl WriterLockCoordinator {
 
     fn lock_coordination(&self) -> io::Result<File> {
         fs::create_dir_all(&self.directory)?;
+        let path = self.directory.join(COORDINATION_LOCK_FILE);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(self.directory.join(COORDINATION_LOCK_FILE))?;
-        file.lock().map_err(|err| {
-            io::Error::other(format!(
-                "failed to acquire thread writer coordination lock: {err}"
-            ))
-        })?;
+            .open(&path)?;
+        if let Err(err) = file.lock()
+            && !is_unsupported_file_lock_error(&err)
+        {
+            return Err(io::Error::other(format!(
+                "failed to acquire thread writer coordination lock {}: {err}",
+                path.display()
+            )));
+        }
         Ok(file)
     }
 

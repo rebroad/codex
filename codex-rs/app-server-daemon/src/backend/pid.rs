@@ -640,6 +640,12 @@ fn try_lock_file(file: &fs::File) -> Result<bool> {
     if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
         return Ok(false);
     }
+    if err.kind() == std::io::ErrorKind::Unsupported
+        || err.raw_os_error() == Some(libc::ENOTSUP)
+        || err.raw_os_error() == Some(libc::EOPNOTSUPP)
+    {
+        return Ok(true);
+    }
     Err(err).context("failed to lock pid reservation")
 }
 
