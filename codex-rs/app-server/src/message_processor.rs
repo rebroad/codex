@@ -812,6 +812,7 @@ impl MessageProcessor {
         &self,
         connection_id: ConnectionId,
         request_attestation: bool,
+        can_handle_dynamic_tools: bool,
     ) {
         self.account_processor
             .notify_workspace_routing_to_connection(connection_id);
@@ -820,6 +821,7 @@ impl MessageProcessor {
                 connection_id,
                 ConnectionCapabilities {
                     request_attestation,
+                    can_handle_dynamic_tools,
                 },
             )
             .await;
@@ -946,8 +948,12 @@ impl MessageProcessor {
                 )
                 .await?;
             if connection_initialized {
-                self.connection_initialized(connection_id, session.request_attestation())
-                    .await;
+                self.connection_initialized(
+                    connection_id,
+                    session.request_attestation(),
+                    /*can_handle_dynamic_tools*/ false,
+                )
+                .await;
             }
             return Ok(());
         }
