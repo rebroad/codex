@@ -91,6 +91,7 @@ async fn make_config_for_test(
                 project_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(trust_level),
+                    ..Default::default()
                 },
             )])),
             project_root_markers,
@@ -4132,6 +4133,7 @@ async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> st
                 alias_root.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Trusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
