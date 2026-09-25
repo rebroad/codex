@@ -1,12 +1,13 @@
 ---
 source: tui/src/status/tests.rs
-expression: "format!(\"before:\\n{before}\\n\\nafter:\\n{after}\")"
+assertion_line: 1907
+expression: "format!(\"before:\\n{before}\\n\\nafter:\\n{after}\").replace(crate::version::CODEX_CLI_VERSION,\n\"<VERSION>\")"
 ---
 before:
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
 /status
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v<VERSION>)
 
   Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
@@ -38,7 +39,7 @@ after:
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
 /status
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v<VERSION>)
 
   Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
