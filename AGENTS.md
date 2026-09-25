@@ -1,5 +1,29 @@
 # Rust/codex-rs
 
+## Experimental sccache incremental dogfooding
+
+The host has an opt-in experimental launcher at
+`/usr/local/bin/sccache-incremental`. For suitable native Rust development
+builds, help dogfood it with an explicit Cargo invocation using
+`RUSTC_WRAPPER=/usr/local/bin/sccache-incremental` and
+`CARGO_INCREMENTAL=1`. This launcher enables sccache's experimental Rust
+incremental snapshots and in-process mode; cache statistics are process-local.
+Cross-checkout experiments also require the same rustc-supported
+`-Z remap-cwd-prefix=<logical-root>` setting on both builds. Do not change the
+normal `sccache` installation, global PATH, or project build configuration to
+enable this experiment. Some repository helpers intentionally disable
+sccache when incremental compilation is enabled; choose a direct Cargo build
+in the external build tree rather than changing that policy.
+
+If the experimental launcher causes a major issue, such as incorrect output,
+repeated compiler failures, hangs, or a clear severe slowdown, retry with the
+normal configured sccache (currently `/usr/bin/sccache`) and report the exact
+failure and fallback result. Record dogfooding findings in
+`~/src/sccache/DOGFOOD-REPORT.md`, including the project/revision, rustc and
+Cargo command/configuration, exact-cache and predecessor-hit evidence, reuse
+evidence, timings, and any issue/fallback. A successful build alone is not
+proof of output correctness; compare against a clean build when practical.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
