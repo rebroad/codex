@@ -163,6 +163,7 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
         ThreadStatusChangedNotification {
             thread_id: thread_id.clone(),
             status: ThreadStatus::NotLoaded,
+            waiting_until_ms: None,
         }
     );
     let loaded: ThreadLoadedListResponse = mcp
