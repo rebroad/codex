@@ -1981,6 +1981,7 @@ async fn slash_copy_status_yields_to_queued_commands_after_queued_status() {
 }
 
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn slash_copy_picker_waits_for_submission_after_typing_or_autocomplete() {
     for select_from_autocomplete in [false, true] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -2017,6 +2018,7 @@ async fn slash_copy_picker_waits_for_submission_after_typing_or_autocomplete() {
 }
 
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn slash_copy_picker_waits_for_submission_after_paste() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.transcript.last_agent_markdown = Some("Ready to copy".to_string());
@@ -2036,6 +2038,7 @@ async fn slash_copy_picker_waits_for_submission_after_paste() {
 }
 
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn slash_copy_picker_numeric_shortcuts_copy_whole_response_and_exact_code() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let markdown = "Intro\n\n```rust\nfn main() {\n    run();\n}\n```";
@@ -2155,6 +2158,7 @@ async fn slash_copy_picker_escape_dismisses_without_copying() {
 }
 
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn slash_copy_picker_remains_available_from_parent_owned_threads() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.transcript.last_agent_markdown = Some("Safe local copy".to_string());
@@ -2207,6 +2211,9 @@ async fn slash_export_opens_destination_picker() {
     complete_turn_with_message(&mut chat, "turn-1", /*message*/ None);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
+    #[cfg(target_os = "android")]
+    assert_chatwidget_snapshot!("slash_export_destination_picker_android", popup);
+    #[cfg(not(target_os = "android"))]
     assert_chatwidget_snapshot!("slash_export_destination_picker", popup);
     chat.show_transcript_export_file_prompt();
     let popup = render_bottom_popup(&chat, /*width*/ 100);
