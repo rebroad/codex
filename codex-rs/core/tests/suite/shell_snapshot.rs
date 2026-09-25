@@ -346,8 +346,10 @@ fn shell_snapshot_v2_prewarm_builder(profile_home: &Path) -> TestCodexBuilder {
                 .permissions
                 .shell_environment_policy
                 .ignore_default_excludes = false;
-            config.permissions.shell_environment_policy.r#set =
-                HashMap::from([("HOME".to_string(), configured_home)]);
+            config.permissions.shell_environment_policy.r#set = HashMap::from([
+                ("HOME".to_string(), configured_home),
+                ("BASH_ENV".to_string(), String::new()),
+            ]);
         })
 }
 
@@ -884,6 +886,7 @@ async fn shell_snapshot_v2_filters_profile_secrets_without_creating_files() -> R
                 .ignore_default_excludes = false;
             config.permissions.shell_environment_policy.r#set = HashMap::from([
                 ("HOME".to_string(), configured_home),
+                ("BASH_ENV".to_string(), String::new()),
                 ("PROFILE_ALLOWED".to_string(), "policy".to_string()),
             ]);
         });
