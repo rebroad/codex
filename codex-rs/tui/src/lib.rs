@@ -2053,6 +2053,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         session_selection,
+        cli.fork_after_ordinal,
         feedback,
         is_first_run,
         should_prompt_windows_sandbox_nux_at_startup,
