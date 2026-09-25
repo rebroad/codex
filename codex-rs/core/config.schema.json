@@ -6579,7 +6579,7 @@
       "description": "Optional policy instructions for the guardian auto-reviewer."
     },
     "background_terminal_max_timeout": {
-      "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
+      "description": "Configurable upper bound for empty background-terminal polls (`write_stdin`), in milliseconds. Defaults to `300000` (5 minutes); larger values are allowed.",
       "format": "uint64",
       "minimum": 0.0,
       "type": "integer"
@@ -7554,6 +7554,14 @@
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
+    },
+    "sandbox_log_path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Path where Linux bubblewrap sandbox diagnostics are appended."
     },
     "sandbox_mode": {
       "allOf": [
