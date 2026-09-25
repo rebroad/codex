@@ -16,10 +16,11 @@ exec and hook running:
 "                                                                                "
 "  GPT-5.6-Sol default · /tmp/project                                            "
 history after exec:
-• Ran echo done
-  └ done
 
 hook running after exec:
+"                                                                                "
+"• Ran echo done                                                                 "
+"  └ done                                                                        "
 "                                                                                "
 "• Working (0s • esc to interrupt) · checking output policy                      "
 "                                                                                "
@@ -28,6 +29,9 @@ hook running after exec:
 "                                                                                "
 "  GPT-5.6-Sol default · /tmp/project                                            "
 quiet hook completed:
+"                                                                                "
+"• Ran echo done                                                                 "
+"  └ done                                                                        "
 "                                                                                "
 "• Working (0s • esc to interrupt)                                               "
 "                                                                                "
