@@ -48,6 +48,10 @@ impl ToolOutput for CodeModeToolOutput {
         self.output.success_for_logging()
     }
 
+    fn failure_kind(&self) -> Option<&'static str> {
+        self.output.failure_kind()
+    }
+
     fn set_handler_duration_ms(&mut self, handler_duration_ms: u64) {
         let Some(host_duration) = self.host_duration else {
             return;
