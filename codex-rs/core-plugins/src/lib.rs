@@ -7,6 +7,7 @@ mod error_subtype;
 mod executor_hooks;
 mod executor_provider;
 mod git_policy;
+mod git_process;
 mod http_client_selector;
 pub mod installed_marketplaces;
 mod loaded_cache_metrics;
