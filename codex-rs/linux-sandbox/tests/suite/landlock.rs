@@ -894,6 +894,48 @@ async fn sandbox_blocks_nc() {
 }
 
 #[tokio::test]
+async fn sandbox_allows_local_tcp_ipc_in_isolated_namespace() {
+    let output = run_cmd_output(
+        &[
+            "python3",
+            "-c",
+            "import socket\nlistener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\nlistener.bind(('127.0.0.1', 0))\nlistener.listen(1)\nclient = socket.create_connection(listener.getsockname())\nserver, _ = listener.accept()\nclient.sendall(b'ok')\nassert server.recv(2) == b'ok'\n",
+        ],
+        &[],
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr.text);
+}
+
+#[tokio::test]
+async fn sandbox_allows_explicit_sccache_local_server() {
+    let cache_dir = tempfile::tempdir().expect("create sccache cache directory");
+    let cache_dir_arg = cache_dir.path().to_string_lossy();
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-c",
+            &format!(
+                "export CARGO_INCREMENTAL=0; if ! command -v sccache >/dev/null; then exit 125; fi; TMPDIR={cache_dir_arg} SCCACHE_DIR={cache_dir_arg} SCCACHE_CACHE_SIZE=1M SCCACHE_NO_DAEMON=1 SCCACHE_LOG=trace SCCACHE_ERROR_LOG={cache_dir_arg}/sccache.log SCCACHE_START_SERVER=1 sccache >/dev/null 2>{cache_dir_arg}/server.log & server=$!; sleep 1; TMPDIR={cache_dir_arg} SCCACHE_DIR={cache_dir_arg} SCCACHE_CACHE_SIZE=1M SCCACHE_LOG=trace SCCACHE_ERROR_LOG={cache_dir_arg}/sccache.log sccache rustc -vV; status=$?; kill $server 2>/dev/null; cat {cache_dir_arg}/server.log {cache_dir_arg}/sccache.log 2>/dev/null; exit $status"
+            ),
+        ],
+        &[cache_dir.path().to_path_buf()],
+        NETWORK_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ false,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    if output.exit_code == 125 {
+        return;
+    }
+    assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr.text);
+}
+
+#[tokio::test]
 async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
