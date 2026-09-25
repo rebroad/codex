@@ -5,6 +5,7 @@ use super::prepare_from_package;
 use super::validate_package;
 use crate::settings::DaemonSettings;
 use pretty_assertions::assert_eq;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -18,6 +19,7 @@ fn daemon(home: &std::path::Path) -> crate::Daemon {
         operation_lock_file: state.join("daemon.lock"),
         settings_file: state.join("settings.json"),
         managed_codex_bin: crate::managed_install::managed_codex_bin(home),
+        invoking_codex_bin: None,
     }
 }
 
@@ -100,6 +102,33 @@ async fn incomplete_source_fails_without_selecting_it() {
     .expect_err("incomplete package");
     assert!(error.to_string().contains("bin/codex-code-mode-host"));
     assert!(!home.join("packages/app-server-daemon/current").exists());
+}
+
+#[tokio::test]
+async fn direct_cli_without_package_can_start_daemon() {
+    let temp = tempfile::TempDir::new().expect("temp");
+    let home = temp.path().join("home");
+    let mut daemon = daemon(&home);
+    let invoking_cli = temp.path().join("bin/codex");
+    std::fs::create_dir_all(invoking_cli.parent().expect("CLI parent")).expect("CLI directory");
+    std::fs::write(&invoking_cli, b"development CLI").expect("CLI binary");
+    std::fs::set_permissions(&invoking_cli, std::fs::Permissions::from_mode(0o755))
+        .expect("executable permission");
+    daemon.invoking_codex_bin = Some(invoking_cli.clone());
+
+    prepare_from_package(
+        &daemon,
+        &DaemonSettings::default(),
+        InstallMode::Missing,
+        None,
+        &invoking_cli,
+        |_| Ok(true),
+    )
+    .await
+    .expect("directly invoked CLI should be able to start the daemon");
+
+    assert!(!home.join("packages/app-server-daemon").exists());
+    assert_eq!(daemon.backend_codex_bin(), invoking_cli);
 }
 
 #[cfg(target_os = "macos")]
@@ -366,7 +395,7 @@ async fn broken_selection_is_not_a_missing_installation() {
     assert!(
         error
             .to_string()
-            .contains("repair the existing installation")
+            .contains("managed Codex install not found")
     );
     assert_eq!(
         std::fs::read_link(current).unwrap(),
