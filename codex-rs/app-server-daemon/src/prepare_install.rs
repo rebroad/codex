@@ -121,6 +121,9 @@ async fn prepare_from_package(
             "no daemon package is selected; run `codex app-server daemon start` first"
         );
     }
+    if mode == InstallMode::Missing && source.is_none() && daemon.backend_codex_bin().is_file() {
+        return Ok(true);
+    }
     std::fs::create_dir_all(&root)?;
     anyhow::ensure!(
         managed_install::package_root(home) == previous_root,
