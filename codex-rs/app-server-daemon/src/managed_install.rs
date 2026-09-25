@@ -57,6 +57,10 @@ pub(crate) fn package_root(codex_home: &Path) -> PathBuf {
 
 /// Resolve both packaged and legacy binaries without requiring a valid install.
 pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
+    #[cfg(target_os = "android")]
+    if let Ok(self_exe) = std::env::var("CODEX_SELF_EXE") {
+        return PathBuf::from(self_exe);
+    }
     let root = package_root(codex_home);
     let current = root.join("current");
     let packaged = current.join("bin").join(managed_codex_file_name());
