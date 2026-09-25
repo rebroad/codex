@@ -86,9 +86,15 @@ runs:
         CURL_HOME: ${{ runner.temp }}/dotslash-curl
 
     - name: Install just
+      if: runner.os != 'Windows'
       uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
       with:
         tool: just@1.51.0
+
+    - name: Install just (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: cargo install --locked just --version 1.51.0 --force
 
     # Some integration tests spawn DotSlash from a stable system path rather
     # than inheriting the action-local PATH entry.

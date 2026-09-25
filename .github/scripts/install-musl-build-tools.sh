@@ -16,8 +16,45 @@ if [[ -n "${APT_INSTALL_ARGS:-}" ]]; then
   apt_install_args=(${APT_INSTALL_ARGS})
 fi
 
-sudo apt-get update "${apt_update_args[@]}"
-sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld xz-utils perl make
+need_apt_install=false
+for required_command in curl musl-gcc pkg-config g++ clang clang++ ld.lld xz sha256sum make tar nproc perl; do
+  if ! command -v "${required_command}" >/dev/null 2>&1; then
+    need_apt_install=true
+    break
+  fi
+done
+if [[ ! -f /usr/include/sys/capability.h ]]; then
+  need_apt_install=true
+fi
+if [[ "${need_apt_install}" == true ]]; then
+  sudo apt-get update "${apt_update_args[@]}"
+  sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld xz-utils make perl
+fi
+
+zig_bin="${ZIG_BIN:-$(command -v zig || true)}"
+if [[ "${TARGET}" == armv7-unknown-linux-musleabihf && -z "${zig_bin}" ]]; then
+  zig_version="${CODEX_ZIG_VERSION:-0.14.0}"
+  case "$(uname -m)" in
+    x86_64) zig_arch="x86_64" ;;
+    aarch64) zig_arch="aarch64" ;;
+    *)
+      echo "No automatic Zig bootstrap is available for host architecture $(uname -m)." >&2
+      exit 1
+      ;;
+  esac
+  zig_tools_root="${CODEX_BUILD_TOOLS_DIR:-${RUNNER_TEMP:-/var/tmp}/tools}"
+  zig_root="${zig_tools_root}/zig-linux-${zig_arch}-${zig_version}"
+  zig_bin="${zig_root}/zig"
+  mkdir -p "${zig_tools_root}"
+  if [[ ! -x "${zig_bin}" ]]; then
+    zig_archive="${zig_tools_root}/zig-linux-${zig_arch}-${zig_version}.tar.xz"
+    zig_url="https://ziglang.org/download/${zig_version}/zig-linux-${zig_arch}-${zig_version}.tar.xz"
+    if [[ ! -s "${zig_archive}" ]]; then
+      curl -fsSL "${zig_url}" -o "${zig_archive}"
+    fi
+    tar -xJf "${zig_archive}" -C "${zig_tools_root}"
+  fi
+fi
 
 case "${TARGET}" in
   x86_64-unknown-linux-musl)
@@ -25,6 +62,9 @@ case "${TARGET}" in
     ;;
   aarch64-unknown-linux-musl)
     arch="aarch64"
+    ;;
+  armv7-unknown-linux-musleabihf)
+    arch="armv7"
     ;;
   *)
     echo "Unexpected musl target: ${TARGET}" >&2
@@ -35,10 +75,63 @@ esac
 libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
-libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
-
+libcap_download_urls=(
+  "https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+  "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+)
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
-if command -v "${arch}-linux-musl-gcc" >/dev/null; then
+if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+  # Ubuntu does not ship an ARMv7 musl cross compiler. Use Zig's musl target
+  # while keeping the Rust target and resulting binary genuinely musl-linked.
+  if [[ -z "${zig_bin}" ]]; then
+    echo "ARMv7 musl builds require Zig; automatic bootstrap failed." >&2
+    exit 1
+  fi
+  tool_root="${RUNNER_TEMP:-/tmp}/codex-musl-tools-${TARGET}"
+  mkdir -p "${tool_root}"
+  musl_linker="${tool_root}/armv7-musl-gcc"
+  cat >"${musl_linker}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="\$(cd -- "\$(dirname -- "\${BASH_SOURCE[0]}")" && pwd)"
+export ZIG_GLOBAL_CACHE_DIR="\${ZIG_GLOBAL_CACHE_DIR:-\${script_dir}/zig-global-cache}"
+mkdir -p "\${ZIG_GLOBAL_CACHE_DIR}"
+
+args=()
+rust_libc=""
+for arg in "\$@"; do
+  if [[ "\${arg}" == */self-contained/crt1.o ]]; then
+    rust_libc="\${arg%/crt1.o}/libc.a"
+  fi
+done
+for arg in "\$@"; do
+  case "\${arg}" in
+    -fuse-ld=*|-Wl,--threads=*)
+      continue
+      ;;
+    */self-contained/crt1.o|*/self-contained/crti.o|*/self-contained/crtbegin.o|*/self-contained/crtend.o|*/self-contained/crtn.o)
+      continue
+      ;;
+  esac
+  if [[ "\${arg}" == --target=armv7-unknown-linux-musleabihf ]]; then
+    args+=("-target" "arm-linux-musleabihf")
+    continue
+  fi
+  if [[ "\${arg}" == -lc && -n "\${rust_libc}" ]]; then
+    [[ -s "\${rust_libc}" ]] || {
+      echo "Rust ARMv7 self-contained libc archive is missing: \${rust_libc}" >&2
+      exit 1
+    }
+    args+=("\${rust_libc}")
+  else
+    args+=("\${arg}")
+  fi
+done
+exec "${zig_bin}" cc -target arm-linux-musleabihf "\${args[@]}"
+EOF
+  chmod +x "${musl_linker}"
+elif command -v "${arch}-linux-musl-gcc" >/dev/null; then
   musl_linker="$(command -v "${arch}-linux-musl-gcc")"
 elif command -v musl-gcc >/dev/null; then
   musl_linker="$(command -v musl-gcc)"
@@ -50,6 +143,9 @@ fi
 OPENSSL_CC="${musl_linker}" bash "$(dirname "${BASH_SOURCE[0]}")/install-musl-openssl.sh"
 
 zig_target="${TARGET/-unknown-linux-musl/-linux-musl}"
+if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+  zig_target="arm-linux-musleabihf"
+fi
 runner_temp="${RUNNER_TEMP:-/tmp}"
 tool_root="${runner_temp}/codex-musl-tools-${TARGET}"
 mkdir -p "${tool_root}"
@@ -63,15 +159,36 @@ if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
   mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
   libcap_tarball="${libcap_root}/${libcap_tarball_name}"
 
-  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
+  downloaded=false
+  for libcap_download_url in "${libcap_download_urls[@]}"; do
+    if curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 \
+      --retry-max-time 180 --connect-timeout 20 --max-time 300 \
+      "${libcap_download_url}" -o "${libcap_tarball}.tmp"; then
+      mv "${libcap_tarball}.tmp" "${libcap_tarball}"
+      downloaded=true
+      break
+    fi
+    rm -f "${libcap_tarball}.tmp"
+    echo "libcap download failed from ${libcap_download_url}; trying the next mirror." >&2
+  done
+  [[ "${downloaded}" == true ]] || {
+    echo "Unable to download libcap ${libcap_version} from any configured mirror." >&2
+    exit 1
+  }
   echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"
   libcap_source_dir="${libcap_src_root}/libcap-${libcap_version}"
+  # A prior cross-build can leave _makenames as an ARM executable and
+  # cap_names.h as an empty redirected output file. Clean generated objects
+  # so the host build compiler recreates them before target compilation.
+  make -C "${libcap_source_dir}/libcap" clean >/dev/null 2>&1 || true
   make -C "${libcap_source_dir}/libcap" -j"$(nproc)" \
     CC="${musl_linker}" \
+    BUILD_CC="${BUILD_CC:-cc}" \
     AR=ar \
-    RANLIB=ranlib
+    RANLIB=ranlib \
+    libcap.a
 
   cp "${libcap_source_dir}/libcap/libcap.a" "${libcap_prefix}/lib/libcap.a"
   cp "${libcap_source_dir}/libcap/include/uapi/linux/capability.h" "${libcap_prefix}/include/linux/capability.h"
@@ -92,8 +209,7 @@ EOF
 fi
 
 sysroot=""
-if command -v zig >/dev/null; then
-  zig_bin="$(command -v zig)"
+if [[ -n "${zig_bin}" ]]; then
   cc="${tool_root}/zigcc"
   cxx="${tool_root}/zigcxx"
 

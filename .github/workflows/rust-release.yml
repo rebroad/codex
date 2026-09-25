@@ -13,11 +13,29 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Completed rust-release run whose build artifacts should be packaged"
+        required: true
+        type: string
+      source_tag:
+        description: "Release tag represented by source_run_id"
+        required: true
+        type: string
+      source_ref:
+        description: "Ref containing the packaging scripts"
+        required: false
+        default: alpha
+        type: string
 
 env:
   CODEX_REPO_ROOT: ${{ github.workspace }}
   CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
   CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
+  # The zsh manifest is an upstream release asset; fork-native binaries are
+  # assembled separately below.
+  CODEX_ZSH_RELEASE_REPO: openai/codex
 
 concurrency:
   group: ${{ github.workflow }}
@@ -25,6 +43,7 @@ concurrency:
 
 jobs:
   tag-check:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -50,18 +69,55 @@ jobs:
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
-          [[ "${tag_ver}" == "${cargo_ver}" ]] \
-            || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+          if [[ "${tag_ver}" != "${cargo_ver}" ]]; then
+            candidate_suffix="${tag_ver#${cargo_ver}.}"
+            [[ "${tag_ver}" == "${cargo_ver}."* && "${candidate_suffix}" =~ ^[0-9a-f]{10}\.[0-9]{12}$ ]] \
+              || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+            commit="$(git rev-parse --short=10 HEAD)"
+            [[ "${candidate_suffix%%.*}" == "${commit}" ]] \
+              || { echo "❌  Candidate tag commit does not match HEAD"; exit 1; }
+          fi
 
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
-  build:
+  release-preflight:
+    name: Release packaging preflight
     needs: tag-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate Python runtime version normalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          codex_version="${GITHUB_REF_NAME#rust-v}"
+          if [[ "${codex_version}" =~ ^(.+)\.[0-9a-f]{10}\.[0-9]{12}$ ]]; then
+            codex_version="${BASH_REMATCH[1]}"
+          fi
+          python3 - "${codex_version}" <<'PY'
+          import sys
+
+          from sdk.python.release_version import normalize_codex_version
+
+          version = normalize_codex_version(sys.argv[1])
+          print(f"✅ Python runtime version normalizes to {version}")
+          PY
+
+  build:
+    needs: [tag-check, release-preflight]
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    # Release builds can take a long time, so leave some headroom to avoid
+    # having to restart the full workflow due to a timeout.
+    # The macOS primary bundles are optional: they are the slowest builds, and
+    # their absence must not prevent the other release artifacts from shipping.
     # Linux releases also build the native voice runtime in this job.
-    timeout-minutes: 120
+    timeout-minutes: ${{ contains(matrix.target, 'apple-darwin') && matrix.bundle == 'primary' && 180 || 120 }}
+    continue-on-error: ${{ contains(matrix.target, 'apple-darwin') && matrix.bundle == 'primary' }}
     permissions:
       contents: read
       id-token: write
@@ -81,50 +137,50 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
-          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
             binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-arm64
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
             binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-arm64
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
@@ -171,9 +227,9 @@ jobs:
           set -euo pipefail
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: ./.github/actions/setup-rust-toolchain
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
@@ -354,6 +410,85 @@ jobs:
           path: codex-rs/unsigned-dist/${{ matrix.target }}/*
           if-no-files-found: error
 
+      - if: ${{ runner.os == 'macOS' && vars.CODEX_MACOS_SIGNING_ENABLED != 'true' }}
+        name: Build unsigned macOS package archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          # The unsigned fallback must not depend on the retired pinned zsh
+          # asset; the macOS runner supplies a compatible system zsh.
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle "$BUNDLE" \
+            --entrypoint-dir "target/${TARGET}/release" \
+            --archive-dir "dist/${TARGET}" \
+            --zsh-bin /bin/zsh
+
+          # npm staging consumes standalone binary archives. Keep the proxy
+          # archive beside the unsigned package archive when signing is off;
+          # the signing/package path publishes it separately below.
+          proxy="codex-responses-api-proxy-${TARGET}"
+          if [[ -f "unsigned-dist/${TARGET}/${proxy}-unsigned.zst" ]]; then
+            cp "unsigned-dist/${TARGET}/${proxy}-unsigned.tar.gz" \
+              "dist/${TARGET}/${proxy}.tar.gz"
+            cp "unsigned-dist/${TARGET}/${proxy}-unsigned.zst" \
+              "dist/${TARGET}/${proxy}.zst"
+          fi
+
+      - if: ${{ runner.os == 'macOS' && vars.CODEX_MACOS_SIGNING_ENABLED != 'true' }}
+        name: Upload unsigned macOS release artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+      - if: ${{ runner.os == 'macOS' && matrix.bundle == 'primary' }}
+        name: Build unsigned macOS npm platform package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${VERSION#rust-v}"
+          case "$TARGET" in
+            x86_64-apple-darwin)
+              PLATFORM="darwin-x64"
+              ;;
+            aarch64-apple-darwin)
+              PLATFORM="darwin-arm64"
+              ;;
+            *)
+              echo "Unexpected macOS target: $TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+          vendor_dir="${RUNNER_TEMP}/codex-npm-vendor-${TARGET}"
+          mkdir -p "${vendor_dir}/${TARGET}/bin" "${GITHUB_WORKSPACE}/dist/npm-fork"
+          cp "target/${TARGET}/release/codex" "${vendor_dir}/${TARGET}/bin/codex"
+          cp "target/${TARGET}/release/codex-code-mode-host" \
+            "${vendor_dir}/${TARGET}/bin/codex-code-mode-host"
+
+          python3 "${GITHUB_WORKSPACE}/codex-cli/scripts/build_npm_package.py" \
+            --release-version "$VERSION" \
+            --package "codex-${PLATFORM}" \
+            --vendor-src "$vendor_dir" \
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${PLATFORM}-${VERSION}.tgz"
+
+      - if: ${{ runner.os == 'macOS' && matrix.bundle == 'primary' }}
+        name: Upload unsigned macOS npm platform package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: fork-npm-${{ matrix.target == 'x86_64-apple-darwin' && 'darwin-x64' || 'darwin-arm64' }}
+          path: dist/npm-fork/*.tgz
+          if-no-files-found: error
+
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
         uses: ./.github/actions/linux-code-sign
@@ -392,7 +527,8 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            --retry 8 --retry-all-errors --retry-delay 5 --retry-max-time 180 \
+            "https://github.com/${CODEX_ZSH_RELEASE_REPO}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "${RUNNER_TEMP}/codex-zsh"
           bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
             "${RUNNER_TEMP}/codex-zsh" "$CODEX_ZSH_MANIFEST_SHA256"
@@ -451,6 +587,11 @@ jobs:
               ;;
           esac
 
+          codex_version="${GITHUB_REF_NAME#rust-v}"
+          if [[ "${codex_version}" =~ ^(.+)\.[0-9a-f]{10}\.[0-9]{12}$ ]]; then
+            codex_version="${BASH_REMATCH[1]}"
+          fi
+
           python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
           # Do not install into the runner's system Python; macOS runners mark
           # the Homebrew Python as externally managed under PEP 668.
@@ -481,7 +622,7 @@ jobs:
             stage-runtime
             "$stage_dir"
             "$wheel_archive"
-            --codex-version "${GITHUB_REF_NAME}"
+            --codex-version "$codex_version"
             --platform-tag "$platform_tag"
           )
           python3 "${stage_runtime_args[@]}"
@@ -541,9 +682,9 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
-  build-macos-voice:
-    needs: tag-check
-    name: Build voice runtime - ${{ matrix.target }}
+  build-fork-npm:
+    needs: [tag-check, release-preflight]
+    name: Build fork npm platform package - ${{ matrix.package || matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -558,17 +699,30 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-15-intel
             prefix: macos_x86_64
+          - package: linux-armv7
+            package_type: npm
+            target: armv7-unknown-linux-musleabihf
+            runner: ubuntu-24.04
+          - package: android-arm64
+            package_type: npm
+            target: aarch64-linux-android
+            runner: ubuntu-24.04
+    env:
+      ANDROID_NDK_VERSION: "28.2.13676358"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        if: startsWith(matrix.target, 'aarch64-apple-') || startsWith(matrix.target, 'x86_64-apple-')
         with:
           python-version: "3.12"
       - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        if: startsWith(matrix.target, 'aarch64-apple-') || startsWith(matrix.target, 'x86_64-apple-')
         with:
           bazelisk-version: 1.28.1
       - name: Build matching helper and native runtime
+        if: startsWith(matrix.target, 'aarch64-apple-') || startsWith(matrix.target, 'x86_64-apple-')
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -593,17 +747,116 @@ jobs:
           cp bazel-bin/codex-rs/voice-host/codex-voice-host "voice-unsigned/${TARGET}/codex-voice-host"
           tar -C "voice-unsigned/${TARGET}" -czf "voice-unsigned-${TARGET}.tar.gz" runtime codex-voice-host
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: startsWith(matrix.target, 'aarch64-apple-') || startsWith(matrix.target, 'x86_64-apple-')
         with:
           name: voice-${{ matrix.target }}-unsigned
           path: voice-unsigned-${{ matrix.target }}.tar.gz
           if-no-files-found: error
+      - uses: ./.github/actions/setup-rust-toolchain
+        with:
+          target: ${{ matrix.target }}
+      - if: matrix.target == 'armv7-unknown-linux-musleabihf'
+        name: Install Zig (ARMv7 musl)
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - name: Install Android NDK
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/cmdline-tools/bin:${PATH}"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          ndk_home="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ndk_home}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ndk_home}" >> "$GITHUB_ENV"
+      - name: Configure Rusty V8 artifacts
+        if: matrix.package_type == 'npm'
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - name: Configure Android linker
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+          builtins="$(find "${llvm}" -name libclang_rt.builtins-aarch64-android.a -print -quit)"
+          test -x "${llvm}/bin/aarch64-linux-android29-clang++"
+          test -n "${builtins}"
+          echo "CC_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${llvm}/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=${llvm}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${llvm}/bin/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}" >> "$GITHUB_ENV"
+      - name: Build and package fork npm target
+        if: matrix.package_type == 'npm'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#rust-v}"
+          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/build/fork-npm"
+          if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+            cd "${GITHUB_WORKSPACE}"
+            env -u CC -u CXX -u TARGET_CC -u TARGET_CXX \
+              -u CMAKE_C_COMPILER -u CMAKE_CXX_COMPILER -u CMAKE_ARGS \
+              -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR -u PKG_CONFIG_SYSROOT_DIR \
+              CODEX_ALLOW_SOURCE_BUILD=true \
+              bash scripts/build_armv7.sh \
+                --release --binary-only \
+                --no-deploy-remote --no-publish-github
+          else
+            cd codex-rs
+            build_args=(cargo build --target "${TARGET}" --release --timings --bin codex --bin codex-code-mode-host)
+            "${build_args[@]}"
+          fi
+          release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
+          vendor_dir="${RUNNER_TEMP}/codex-npm-vendor-${TARGET}"
+          mkdir -p "${vendor_dir}/${TARGET}/bin"
+          suffix=""
+          [[ "${TARGET}" == *-pc-windows-msvc ]] && suffix=.exe
+          cp "${release_dir}/codex${suffix}" "${vendor_dir}/${TARGET}/bin/codex${suffix}"
+          cp "${release_dir}/codex-code-mode-host${suffix}" "${vendor_dir}/${TARGET}/bin/codex-code-mode-host${suffix}"
+          if [[ "${TARGET}" == armv7-unknown-linux-musleabihf ]]; then
+            descriptions="$(file -b "${release_dir}/codex" "${release_dir}/codex-code-mode-host")"
+            if ! grep -Fq 'Requesting program interpreter: /lib/ld-musl-armhf.so.1' \
+              < <(readelf -l "${release_dir}/codex" "${release_dir}/codex-code-mode-host") \
+              && ! grep -Fq 'statically linked' <<<"${descriptions}"; then
+              echo "ARMv7 binaries are neither dynamically linked to musl nor static." >&2
+              exit 1
+            fi
+            file "${release_dir}/codex" "${release_dir}/codex-code-mode-host"
+          fi
+          if [[ "${TARGET}" == aarch64-linux-android ]]; then
+            cp "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "${vendor_dir}/${TARGET}/bin/libc++_shared.so"
+          fi
+          mkdir -p "${GITHUB_WORKSPACE}/dist/npm-fork"
+          python3 "${GITHUB_WORKSPACE}/codex-cli/scripts/build_npm_package.py" \
+            --release-version "${VERSION}" \
+            --package "codex-${{ matrix.package }}" \
+            --vendor-src "${vendor_dir}" \
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm-fork/codex-npm-${{ matrix.package }}-${VERSION}.tgz"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: matrix.package_type == 'npm'
+        with:
+          name: fork-npm-${{ matrix.package }}
+          path: dist/npm-fork/*.tgz
+          if-no-files-found: error
 
   sign-macos-binaries:
-    needs: [build, build-macos-voice]
-    if: ${{ always() && needs.build.result == 'success' && needs.build-macos-voice.result == 'success' }}
+    needs: [build, build-fork-npm]
+    # macOS packaging requires the optional Azure Key Vault signing setup.
+    # Enable it by setting the repository variable
+    # CODEX_MACOS_SIGNING_ENABLED=true once those credentials are configured.
+    if: ${{ always() && needs.build.result == 'success' && needs.build-fork-npm.result == 'success' && vars.CODEX_MACOS_SIGNING_ENABLED == 'true' }}
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
     environment:
       name: codesigning
       deployment: false
@@ -729,7 +982,8 @@ jobs:
           zsh_manifest="${RUNNER_TEMP}/codex-zsh-${TARGET}"
           mkdir -p "$signed_root"
           curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            --retry 8 --retry-all-errors --retry-delay 5 --retry-max-time 180 \
+            "https://github.com/${CODEX_ZSH_RELEASE_REPO}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "$zsh_manifest"
           bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
             "$zsh_manifest" "$CODEX_ZSH_MANIFEST_SHA256"
@@ -850,8 +1104,9 @@ jobs:
   package-macos:
     needs: sign-macos-binaries
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: macos-15-xlarge
+    runs-on: macos-15
     timeout-minutes: 45
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
     permissions:
       contents: read
     defaults:
@@ -1061,6 +1316,11 @@ jobs:
               ;;
           esac
 
+          codex_version="${GITHUB_REF_NAME#rust-v}"
+          if [[ "${codex_version}" =~ ^(.+)\.[0-9a-f]{10}\.[0-9]{12}$ ]]; then
+            codex_version="${BASH_REMATCH[1]}"
+          fi
+
           python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
@@ -1090,7 +1350,7 @@ jobs:
             stage-runtime \
             "$stage_dir" \
             "$wheel_archive" \
-            --codex-version "${GITHUB_REF_NAME}" \
+            --codex-version "$codex_version" \
             --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
@@ -1129,6 +1389,7 @@ jobs:
     name: Sign macOS DMG - ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' }}
     environment:
       name: codesigning
       deployment: false
@@ -1224,8 +1485,9 @@ jobs:
       - package-macos
       - sign-macos-dmg
     name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: macos-15-xlarge
+    runs-on: macos-15
     timeout-minutes: 30
+    continue-on-error: ${{ matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
     permissions:
       contents: read
     defaults:
@@ -1467,13 +1729,13 @@ jobs:
     secrets: inherit
 
   build-windows:
-    needs: tag-check
+    needs: [tag-check, release-preflight]
     uses: ./.github/workflows/rust-release-windows.yml
     secrets: inherit
 
   argument-comment-lint-release-assets:
     name: argument-comment-lint release assets
-    needs: tag-check
+    needs: [tag-check, release-preflight]
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
     with:
       publish: true
@@ -1534,6 +1796,7 @@ jobs:
     needs:
       - tag-check
       - build
+      - build-fork-npm
       - finalize-macos
       - build-windows
       - argument-comment-lint-release-assets
@@ -1542,15 +1805,21 @@ jobs:
     if: >-
       ${{
         always() &&
-        needs.tag-check.result == 'success' &&
-        needs.build.result == 'success' &&
-        needs.finalize-macos.result == 'success' &&
-        needs.build-windows.result == 'success' &&
-        needs.argument-comment-lint-release-assets.result == 'success' &&
-        needs.stage-npm-packages.result == 'success' &&
-        (needs.provisioned-macos-candidate.result == 'success' ||
-          (vars.CODEX_PROVISIONED_MACOS_CANDIDATE != 'true' &&
-            needs.provisioned-macos-candidate.result == 'skipped'))
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (
+            needs.tag-check.result == 'success' &&
+            needs.build.result == 'success' &&
+            needs.build-fork-npm.result == 'success' &&
+            (needs.finalize-macos.result == 'success' || needs.finalize-macos.result == 'skipped') &&
+            needs.build-windows.result == 'success' &&
+            needs.argument-comment-lint-release-assets.result == 'success' &&
+            needs.stage-npm-packages.result == 'success' &&
+            (needs.provisioned-macos-candidate.result == 'success' ||
+              (vars.CODEX_PROVISIONED_MACOS_CANDIDATE != 'true' &&
+                needs.provisioned-macos-candidate.result == 'skipped'))
+          )
+        )
       }}
     name: release
     runs-on: ubuntu-latest
@@ -1558,7 +1827,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.release_name.outputs.name }}
-      tag: ${{ github.ref_name }}
+      tag: ${{ steps.release_name.outputs.tag }}
       make_latest: ${{ steps.release_name.outputs.make_latest }}
       prerelease: ${{ steps.release_name.outputs.prerelease }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
@@ -1569,6 +1838,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
 
       - name: Generate release notes from tag commit message
         id: release_notes
@@ -1579,6 +1849,9 @@ jobs:
           # On tag pushes, GITHUB_SHA may be a tag object for annotated tags;
           # peel it to the underlying commit.
           commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            commit="$(git rev-parse "${{ inputs.source_ref }}")"
+          fi
           notes_path="${RUNNER_TEMP}/release-notes.md"
 
           # Use the commit message for the commit the tag points at (not the
@@ -1595,6 +1868,17 @@ jobs:
         with:
           path: dist
           pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc},*-symbols,argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
+          run-id: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download unsigned fallback artifacts
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: "*-unsigned"
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download verified provisioned macOS packages
         if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
@@ -1606,6 +1890,9 @@ jobs:
       - name: Remove per-architecture checksum filenames before release upload
         if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
         run: rm dist/provisioned-macos-verified-candidate-*/SHA256SUMS
+          pattern: "{*-symbols,argument-comment-lint-*,python-runtime-wheel-*}"
+          run-id: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: List
         run: ls -R dist/
@@ -1642,8 +1929,13 @@ jobs:
         run: |
           # Extract the version from the tag name, which is in the format
           # "rust-v0.1.0".
-          version="${GITHUB_REF_NAME#rust-v}"
+          release_tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            release_tag="${{ inputs.source_tag }}"
+          fi
+          version="${release_tag#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
+          echo "tag=${release_tag}" >> $GITHUB_OUTPUT
           if [[ "${version}" == *-* ]]; then
             echo "make_latest=false" >> $GITHUB_OUTPUT
             echo "prerelease=true" >> $GITHUB_OUTPUT
@@ -1663,13 +1955,68 @@ jobs:
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
-          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+(\.[0-9]+)?$ ]]; then
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+(\.[0-9]+)?(\.[0-9a-f]{10}\.[0-9]{12})?$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
           else
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+            echo "Unsupported npm release version: ${version}" >&2
+            exit 1
           fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js for npm packaging
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage npm packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
+          CODEX_INCLUDE_UNSIGNED_ARTIFACTS: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: |
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${{ inputs.source_run_id }}"
+          fi
+          ./scripts/stage_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --workflow-url "$workflow_url" \
+            --artifacts-dir "${GITHUB_WORKSPACE}/dist" \
+            --output-dir "${RUNNER_TEMP}/npm-staged" \
+            --package codex \
+            --package codex-responses-api-proxy \
+            --package codex-sdk
+
+      - name: Download fork npm artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/npm-fork
+          pattern: fork-npm-*
+          merge-multiple: true
+          run-id: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Assemble complete npm packages
+        env:
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          python3 scripts/assemble_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --upstream-artifact-dir "${RUNNER_TEMP}/npm-staged" \
+            --fork-artifact-dir dist/npm-fork \
+            --output-dir dist/npm
+          cp "${RUNNER_TEMP}/npm-staged/codex-responses-api-proxy-npm-${RELEASE_VERSION}.tgz" dist/npm/
+          cp "${RUNNER_TEMP}/npm-staged/codex-sdk-npm-${RELEASE_VERSION}.tgz" dist/npm/
 
       - name: Stage installer scripts
         run: |
@@ -1680,7 +2027,7 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           name: ${{ steps.release_name.outputs.name }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.release_name.outputs.tag }}
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           overwrite_files: true
@@ -1784,7 +2131,7 @@ jobs:
           # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-          scope: "@openai"
+          scope: "@reb.ai"
 
       - name: Download npm tarballs from release
         env:
@@ -1801,6 +2148,7 @@ jobs:
             "codex-npm-linux-*-${version}.tgz"
             "codex-npm-darwin-*-${version}.tgz"
             "codex-npm-win32-*-${version}.tgz"
+            "codex-npm-android-*-${version}.tgz"
             "codex-responses-api-proxy-npm-${version}.tgz"
             "codex-sdk-npm-${version}.tgz"
           )
@@ -1816,6 +2164,9 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+          # OIDC is preferred. NPM_TOKEN remains an optional bootstrap/fallback
+          # for packages whose trusted publisher has not been configured yet.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           prefix=""
@@ -1836,6 +2187,8 @@ jobs:
             "dist/npm/codex-npm-darwin-arm64-${VERSION}.tgz"
             "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
             "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-linux-armv7-${VERSION}.tgz"
+            "dist/npm/codex-npm-android-arm64-${VERSION}.tgz"
           )
 
           for required_tarball in "${platform_tarballs[@]}" "${root_tarball}"; do
@@ -1884,7 +2237,7 @@ jobs:
             tag=""
 
             case "${filename}" in
-              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
+              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz|codex-npm-android-*-"${VERSION}".tgz)
                 platform="${filename#codex-npm-}"
                 platform="${platform%-${VERSION}.tgz}"
                 tag="${prefix}${platform}"
@@ -1899,6 +2252,7 @@ jobs:
             esac
 
             publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            publish_cmd+=(--access public)
             if [[ -n "${tag}" ]]; then
               publish_cmd+=(--tag "${tag}")
             fi
@@ -2013,7 +2367,7 @@ jobs:
           komac cleanup --only-merged
 
   update-branch:
-    name: Update latest-alpha-cli branch
+    name: Update alpha branch
     if: >-
       ${{
         !cancelled() &&
@@ -2035,8 +2389,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Determine whether to update the GitHub canary branch
-        id: github_canary
+      - name: Determine whether to update the alpha branch
+        id: alpha_branch
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2046,18 +2400,93 @@ jobs:
           set -euo pipefail
           # Despite its name, raw+json returns raw TOML. The default response
           # is JSON metadata with the file contents encoded as base64.
-          update="$(gh api "repos/$GITHUB_REPOSITORY/contents/codex-rs/Cargo.toml?ref=latest-alpha-cli" \
+          update="$(gh api "repos/$GITHUB_REPOSITORY/contents/codex-rs/Cargo.toml?ref=alpha" \
             -H 'Accept: application/vnd.github.raw+json' \
             | python3 .github/scripts/check_github_canary.py "$RELEASE_VERSION")"
           echo "update=$update" >> "$GITHUB_OUTPUT"
-      - name: Update latest-alpha-cli branch
-        if: success() && steps.github_canary.outputs.update == 'true'
+      - name: Update alpha branch
+        if: success() && steps.alpha_branch.outputs.update == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh api \
-            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+            repos/${GITHUB_REPOSITORY}/git/refs/heads/alpha \
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
             -F force=true
+
+  update-alpha-release:
+    name: Update latest-alpha release
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.prerelease == 'true'
+      }}
+    permissions:
+      contents: write
+    needs:
+      - release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Point latest-alpha tag at this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="repos/${GITHUB_REPOSITORY}/git/refs/tags/latest-alpha"
+          if ! gh api "$ref" -X PATCH -f sha="${GITHUB_SHA}" -F force=true; then
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -X POST \
+              -f ref=refs/tags/latest-alpha \
+              -f sha="${GITHUB_SHA}"
+          fi
+
+      - name: Create or update latest-alpha release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view latest-alpha --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create latest-alpha \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${VERSION}" \
+              --prerelease \
+              --latest=false
+          else
+            gh release edit latest-alpha \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${VERSION}" \
+              --prerelease \
+              --latest=false
+          fi
+
+          mkdir -p "${RUNNER_TEMP}/latest-alpha"
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern install.sh \
+            --pattern install.ps1 \
+            --dir "${RUNNER_TEMP}/latest-alpha"
+          gh release upload latest-alpha \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            "${RUNNER_TEMP}/latest-alpha/install.sh" \
+            "${RUNNER_TEMP}/latest-alpha/install.ps1"
+
+      - name: Refresh short installer bootstrap
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # reb.ai/codex/install.sh redirects to GitHub's latest-release
+          # download URL. Keep that bootstrap current so it can resolve
+          # CODEX_RELEASE=alpha to the rolling latest-alpha release.
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          gh release upload "${latest_tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            "${RUNNER_TEMP}/latest-alpha/install.sh" \
+            "${RUNNER_TEMP}/latest-alpha/install.ps1"
