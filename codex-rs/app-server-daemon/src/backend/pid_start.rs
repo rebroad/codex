@@ -240,12 +240,12 @@ impl PidBackend {
         let started = std::time::Instant::now();
         let record = async {
             let process_start_time = read_process_start_time(pid).await?;
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
             let process_identity = super::identity::read_process_details(pid)
                 .await
                 .ok()
                 .map(|(_, identity)| identity);
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
             let process_identity = None;
             anyhow::Ok(PidRecord {
                 pid,
