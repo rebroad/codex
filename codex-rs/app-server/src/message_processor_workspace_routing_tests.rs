@@ -78,6 +78,7 @@ async fn background_routing_call_sites_skip_config(api_key: Option<&str>) -> any
         user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
             &auth_manager,
         ))),
+        frontend_auth_manager: Arc::clone(&auth_manager),
         auth_manager,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         code_mode_session_provider: None,
@@ -114,7 +115,11 @@ async fn background_routing_call_sites_skip_config(api_key: Option<&str>) -> any
     let _: InitializeResponse = read_response(&mut outgoing_rx, /*request_id*/ 1).await;
     // Complete the same post-initialize hook used by the real transports.
     processor
-        .connection_initialized(TEST_CONNECTION_ID, /*request_attestation*/ false)
+        .connection_initialized(
+            TEST_CONNECTION_ID,
+            /*request_attestation*/ false,
+            /*can_handle_dynamic_tools*/ false,
+        )
         .await;
     assert!(
         tokio::time::timeout(Duration::from_secs(/*secs*/ 1), loads_rx.recv())
