@@ -16,7 +16,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         self,
         temp_dir: str,
         *,
-        repository: str = "openai/codex",
+        repository: str = "rebroad/codex",
         fork: bool = False,
         event_name: str = "pull_request",
     ) -> dict[str, str]:
@@ -161,7 +161,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 "BUILDBUDDY_API_KEY": "token",
                 "GITHUB_ACTIONS": "true",
                 "GITHUB_EVENT_NAME": "pull_request",
-                "GITHUB_REPOSITORY": "openai/codex",
+                "GITHUB_REPOSITORY": "rebroad/codex",
             }
             if event_path is not None:
                 env["GITHUB_EVENT_PATH"] = event_path
