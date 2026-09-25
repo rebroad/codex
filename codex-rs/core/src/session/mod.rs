@@ -354,6 +354,7 @@ use codex_protocol::models::LocalImagePreparation;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AccountUpdatedEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -2381,6 +2382,36 @@ impl Session {
             };
             self.send_event_raw(legacy_event).await;
         }
+    }
+
+    pub(crate) async fn maybe_emit_backend_account_update(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<String> {
+        let account_id = turn_context
+            .auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .and_then(|auth| auth.get_account_id());
+        let changed = {
+            let mut state = self.state.lock().await;
+            if state.last_backend_account_id == account_id {
+                false
+            } else {
+                state.last_backend_account_id = account_id.clone();
+                true
+            }
+        };
+        if changed {
+            self.send_event(
+                turn_context,
+                EventMsg::AccountUpdated(AccountUpdatedEvent {
+                    account_id: account_id.clone(),
+                }),
+            )
+            .await;
+        }
+        account_id
     }
 
     /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
@@ -4717,19 +4748,27 @@ impl Session {
         response_id: &str,
         usage: Option<&TokenUsage>,
         usage_metadata: Option<&ResponseUsageMetadata>,
+        response_effective_model: Option<String>,
+        account_id: Option<String>,
     ) {
+        let (_, _, effective_model) = self.state.lock().await.token_info_and_rate_limits();
         self.send_event(
             turn_context,
             EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
                 response_id: response_id.to_string(),
                 token_usage: usage.cloned(),
                 usage_metadata: usage_metadata.cloned(),
+                effective_model,
             }),
         )
         .await;
-        let Some(usage) = usage else {
+        if usage.is_none()
+            && usage_metadata
+                .and_then(|metadata| metadata.amount.as_ref())
+                .is_none()
+        {
             return;
-        };
+        }
         let record = self.state.lock().await.record_token_usage(
             self.thread_id,
             &turn_context.sub_id,
@@ -4740,6 +4779,9 @@ impl Session {
                 .unwrap_or_else(|| turn_context.sub_id.clone()),
             response_id.to_string(),
             usage,
+            response_effective_model,
+            usage_metadata.cloned(),
+            account_id,
         );
         self.persist_rollout_items(&[RolloutItem::TokenUsageRecord(record)])
             .await;
@@ -4868,12 +4910,21 @@ impl Session {
     }
 
     pub(crate) async fn send_token_count_event(&self, turn_context: &TurnContext) {
-        let (info, rate_limits) = {
+        let (info, rate_limits, effective_model) = {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let event = EventMsg::TokenCount(TokenCountEvent {
+            info,
+            rate_limits,
+            effective_model,
+        });
         self.send_event(turn_context, event).await;
+    }
+
+    pub(crate) async fn set_effective_model(&self, model: String) {
+        let mut state = self.state.lock().await;
+        state.set_effective_model(model);
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {

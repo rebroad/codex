@@ -673,6 +673,12 @@ fn rollout_item_variants_preserve_existing_payload_shapes() -> Result<()> {
                 "session_id": "0195cda5-433d-7f9a-9d7b-a9f15b60c2e2",
                 "root_turn_id": "turn-1",
                 "response_id": "response-1",
+                "effective_model": "gpt-5.1-codex-mini",
+                "usage_metadata": {
+                    "amount": "0.12500000000000000001",
+                    "metadata": null,
+                },
+                "account_id": "acct-test",
                 "usage": {
                     "input_tokens": 10,
                     "cached_input_tokens": 2,
@@ -741,6 +747,51 @@ fn rollout_item_variants_preserve_existing_payload_shapes() -> Result<()> {
         let item = serde_json::from_value::<RolloutItem>(expected.clone())?;
         assert_eq!(serde_json::to_value(item)?, expected);
     }
+    Ok(())
+}
+
+#[test]
+fn token_usage_record_deserializes_legacy_payloads_without_attribution_metadata() -> Result<()> {
+    let item: RolloutItem = serde_json::from_value(json!({
+        "type": "token_usage_record",
+        "payload": {
+            "thread_id": "0195cda5-433d-7f9a-9d7b-a9f15b60c2e2",
+            "turn_id": "turn-1",
+            "session_id": "0195cda5-433d-7f9a-9d7b-a9f15b60c2e2",
+            "root_turn_id": "turn-1",
+            "response_id": "response-1",
+            "usage": {
+                "input_tokens": 10,
+                "cached_input_tokens": 2,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 13,
+            },
+            "turn_token_usage": {
+                "input_tokens": 10,
+                "cached_input_tokens": 2,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 13,
+            },
+            "thread_token_usage": {
+                "input_tokens": 10,
+                "cached_input_tokens": 2,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 13,
+            },
+        },
+    }))?;
+    let RolloutItem::TokenUsageRecord(record) = item else {
+        panic!("expected token usage record");
+    };
+    assert_eq!(record.effective_model, None);
+    assert_eq!(record.usage_metadata, None);
+    assert_eq!(record.account_id, None);
     Ok(())
 }
 

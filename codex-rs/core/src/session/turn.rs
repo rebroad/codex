@@ -2067,6 +2067,8 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
+        | EventMsg::TurnWaitStarted(_)
+        | EventMsg::TurnWaitCompleted(_)
         | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
@@ -2098,6 +2100,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
         | EventMsg::DynamicToolCallRequest(_)
         | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::GuardianAssessment(_)
+        | EventMsg::AccountUpdated(_)
         | EventMsg::DeprecationNotice(_)
         | EventMsg::StreamError(_)
         | EventMsg::TurnDiff(_)
@@ -2528,6 +2531,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
+    let mut response_effective_model = None;
     const MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE: usize = 256;
     let mut analytics_tool_call_ids = Vec::new();
     let reasoning_effort = step_context
@@ -2800,6 +2804,8 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
+                response_effective_model = Some(server_model.clone());
+                sess.set_effective_model(server_model.clone()).await;
                 if !turn_context
                     .server_model_warning_emitted
                     .load(Ordering::Relaxed)
@@ -2811,6 +2817,10 @@ async fn try_run_sampling_request(
                         .server_model_warning_emitted
                         .store(true, Ordering::Relaxed);
                 }
+            }
+            ResponseEvent::EffectiveModel(model) => {
+                response_effective_model = Some(model.clone());
+                sess.set_effective_model(model).await;
             }
             ResponseEvent::ModelVerifications(verifications) => {
                 if !turn_context
@@ -2860,6 +2870,7 @@ async fn try_run_sampling_request(
                 usage_metadata,
                 end_turn,
             } => {
+                let account_id = sess.maybe_emit_backend_account_update(&turn_context).await;
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -2882,6 +2893,8 @@ async fn try_run_sampling_request(
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
+                    response_effective_model.take(),
+                    account_id,
                 )
                 .await;
                 let budget_result = sess

@@ -445,10 +445,15 @@ async fn collect_compaction_output(
     let mut output_item_count = 0usize;
     let mut compaction_count = 0usize;
     let mut compaction_output = None;
+    let mut response_effective_model = None;
     let mut completed_response_id = None;
     let mut completed_token_usage = None;
     while let Some(event) = stream.next().await {
         match event? {
+            ResponseEvent::ServerModel(model) | ResponseEvent::EffectiveModel(model) => {
+                response_effective_model = Some(model.clone());
+                sess.set_effective_model(model).await;
+            }
             ResponseEvent::OutputItemDone(item) => {
                 output_item_count += 1;
                 if let ResponseItem::Compaction { .. } = item {
@@ -464,11 +469,14 @@ async fn collect_compaction_output(
                 usage_metadata,
                 ..
             } => {
+                let account_id = sess.maybe_emit_backend_account_update(turn_context).await;
                 sess.record_observed_response_completed(
                     turn_context,
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
+                    response_effective_model.take(),
+                    account_id,
                 )
                 .await;
                 completed_response_id = Some(response_id);
@@ -1210,6 +1218,7 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         };
         let stream = response_stream(vec![
+            Ok(ResponseEvent::EffectiveModel("routed-model".to_string())),
             Ok(ResponseEvent::OutputItemDone(message(
                 "assistant",
                 "IGNORED_COMPACT_REPLY",
@@ -1235,8 +1244,12 @@ mod tests {
             }),
         ]);
 
-        let (sess, turn_context, rx) =
+        let (mut sess, turn_context, rx) =
             crate::session::tests::make_session_and_context_with_rx().await;
+        let rollout_path = crate::session::tests::attach_thread_persistence(
+            Arc::get_mut(&mut sess).expect("session should be uniquely owned"),
+        )
+        .await;
         let output = collect_compaction_output(&sess, &turn_context, stream)
             .await
             .expect("compaction should be collected");
@@ -1266,6 +1279,29 @@ mod tests {
                 total_tokens: 123_498,
                 codex_rollout_budget_units: None,
             })
+        );
+        sess.flush_rollout()
+            .await
+            .expect("persist compaction usage record");
+        let persisted_record = std::fs::read_to_string(rollout_path)
+            .expect("read compaction rollout")
+            .lines()
+            .filter_map(|line| codex_rollout::parse_rollout_line(line).ok())
+            .find_map(|line| match line.item {
+                codex_history::RolloutItem::TokenUsageRecord(record) => Some(record),
+                _ => None,
+            })
+            .expect("compaction usage record should persist");
+        assert_eq!(
+            persisted_record.effective_model.as_deref(),
+            Some("routed-model")
+        );
+        assert_eq!(
+            persisted_record
+                .usage_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.amount.as_deref()),
+            Some("0.125")
         );
     }
 }

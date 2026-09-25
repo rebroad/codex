@@ -1938,6 +1938,9 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
         session_id: parent_thread.session.session_id(),
         root_turn_id: "parent-turn".to_string(),
         response_id: "parent-response".to_string(),
+        effective_model: None,
+        usage_metadata: None,
+        account_id: None,
         usage: parent_usage.clone(),
         turn_token_usage: parent_usage.clone(),
         thread_token_usage: parent_usage,
@@ -1994,14 +1997,30 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
             .user_messages_complete(),
         "V1 forks lack complete retained authorization in both context modes"
     );
-    let turn_context = child_thread.session.new_default_turn().await;
+    let mut turn_context = child_thread.session.new_default_turn().await;
+    Arc::get_mut(&mut turn_context)
+        .expect("new turn context should be uniquely owned")
+        .auth_manager = Some(AuthManager::from_auth_for_testing(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    let account_id = child_thread
+        .session
+        .maybe_emit_backend_account_update(&turn_context)
+        .await;
+    assert_eq!(account_id.as_deref(), Some("account_id"));
     child_thread
         .session
         .record_observed_response_completed(
             turn_context.as_ref(),
             "child-response",
             Some(&child_usage),
-            /*usage_metadata*/ None,
+            /*usage_metadata*/
+            Some(&codex_protocol::ResponseUsageMetadata {
+                amount: Some("0.12345678901234567890".to_string()),
+                metadata: None,
+            }),
+            Some("routed-model".to_string()),
+            account_id.clone(),
         )
         .await;
     child_thread
@@ -2061,10 +2080,59 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
             session_id: child_thread.session.session_id(),
             root_turn_id: turn_context.sub_id.clone(),
             response_id: "child-response".to_string(),
+            effective_model: Some("routed-model".to_string()),
+            usage_metadata: Some(codex_protocol::ResponseUsageMetadata {
+                amount: Some("0.12345678901234567890".to_string()),
+                metadata: None,
+            }),
+            account_id: Some("account_id".to_string()),
             usage: child_usage.clone(),
             turn_token_usage: child_usage.clone(),
             thread_token_usage: child_usage,
         })
+    );
+
+    child_thread
+        .session
+        .record_observed_response_completed(
+            turn_context.as_ref(),
+            "child-response-metadata-only",
+            None,
+            /*usage_metadata*/
+            Some(&codex_protocol::ResponseUsageMetadata {
+                amount: Some("0.00000000000000000001".to_string()),
+                metadata: None,
+            }),
+            Some("routed-model".to_string()),
+            account_id,
+        )
+        .await;
+    child_thread
+        .flush_rollout()
+        .await
+        .expect("metadata-only response should flush");
+    let persisted_records = std::fs::read_to_string(&rollout_path)
+        .expect("read child rollout after metadata-only response")
+        .lines()
+        .filter_map(|line| codex_rollout::parse_rollout_line(line).ok())
+        .filter_map(|line| match line.item {
+            RolloutItem::TokenUsageRecord(record) => Some(record),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted_records.len(), 2);
+    assert_eq!(
+        persisted_records[1].response_id,
+        "child-response-metadata-only"
+    );
+    assert_eq!(persisted_records[1].usage, TokenUsage::default());
+    assert_eq!(persisted_records[1].turn_token_usage.total_tokens, 80);
+    assert_eq!(
+        persisted_records[1]
+            .usage_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.amount.as_deref()),
+        Some("0.00000000000000000001")
     );
 }
 

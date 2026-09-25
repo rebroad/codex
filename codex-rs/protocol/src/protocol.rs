@@ -1349,6 +1349,11 @@ pub struct EnvironmentConnectionEvent {
     pub environment_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct AccountUpdatedEvent {
+    pub account_id: Option<String>,
+}
+
 /// Response event from the agent
 /// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, JsonSchema, TS)]
@@ -1356,6 +1361,9 @@ pub struct EnvironmentConnectionEvent {
 #[ts(tag = "type")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
+    /// Backend account used by subsequent model requests changed.
+    AccountUpdated(AccountUpdatedEvent),
+
     /// Error while executing a submission
     Error(ErrorEvent),
 
@@ -1407,6 +1415,12 @@ pub enum EventMsg {
     /// v1 wire format uses `task_started`; accept `turn_started` for v2 interop.
     #[serde(rename = "task_started", alias = "turn_started")]
     TurnStarted(TurnStartedEvent),
+
+    /// Agent execution has begun waiting for a yielded tool result.
+    TurnWaitStarted(TurnWaitStartedEvent),
+
+    /// Agent execution has finished waiting for a yielded tool result.
+    TurnWaitCompleted(TurnWaitCompletedEvent),
 
     /// Persistent thread-settings overrides from the correlated submission have
     /// been applied to the session configuration.
@@ -1932,6 +1946,11 @@ pub struct RawResponseCompletedEvent {
     pub response_id: String,
     pub token_usage: Option<TokenUsage>,
     pub usage_metadata: Option<crate::ResponseUsageMetadata>,
+    /// Model identifier reported by the backend response, if present. This
+    /// may differ from the requested/catalog model after server-side routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effective_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -2194,6 +2213,15 @@ pub struct TurnStartedEvent {
     pub collaboration_mode_kind: ModeKind,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TurnWaitStartedEvent {
+    /// Requested wait duration in milliseconds.
+    pub yield_time_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TurnWaitCompletedEvent;
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ThreadSettingsAppliedEvent {
     /// Logical task that owns this snapshot, independent of the physical rollout file.
@@ -2265,6 +2293,12 @@ pub struct TokenUsageRecord {
     pub session_id: SessionId,
     pub root_turn_id: String,
     pub response_id: String,
+    /// Backend-reported model used for this response, when available.
+    pub effective_model: Option<String>,
+    /// Provider-reported usage metadata, including exact amount strings.
+    pub usage_metadata: Option<crate::ResponseUsageMetadata>,
+    /// Backend account that produced this response, when available.
+    pub account_id: Option<String>,
     pub usage: TokenUsage,
     pub turn_token_usage: TokenUsage,
     pub thread_token_usage: TokenUsage,
@@ -2341,6 +2375,11 @@ impl TokenUsageInfo {
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
+    /// The model reported by the backend for the latest response, when it
+    /// differs from the requested model alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effective_model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
