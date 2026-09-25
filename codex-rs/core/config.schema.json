@@ -2788,74 +2788,32 @@
       },
       "type": "object"
     },
-    "ModelProviderCapabilities": {
+    "ModelProviderInfoOverrides": {
       "additionalProperties": false,
-      "description": "Overrides for the optional API features supported by a custom provider.",
-      "properties": {
-        "external_web_access": {
-          "description": "Whether hosted web search may access the live web.",
-          "type": "boolean"
-        },
-        "remote_compaction": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/RemoteCompactionSupport"
-            }
-          ],
-          "description": "Remote context-compaction protocol; omission preserves provider defaults."
-        }
-      },
-      "type": "object"
-    },
-    "ModelProviderInfo": {
-      "additionalProperties": false,
-      "description": "Serializable representation of a provider definition.",
+      "description": "Fields supplied for a provider in `config.toml`.\n\nThis intentionally keeps scalar fields optional so an entry for a built-in provider can inherit every setting that it does not explicitly override.",
       "properties": {
         "auth": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelProviderAuthInfo"
-            }
-          ],
-          "description": "Command-backed bearer-token configuration for this provider."
+          "$ref": "#/definitions/ModelProviderAuthInfo"
         },
         "aws": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelProviderAwsAuthInfo"
-            }
-          ],
-          "description": "AWS SigV4 auth configuration for this provider."
+          "$ref": "#/definitions/ModelProviderAwsAuthInfo"
         },
         "base_url": {
-          "description": "Base URL for the provider's OpenAI-compatible API.",
           "type": "string"
-        },
-        "capabilities": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelProviderCapabilities"
-            }
-          ],
-          "description": "Optional API capability overrides for a custom Responses-compatible provider. Unspecified capabilities retain their existing provider defaults."
         },
         "env_http_headers": {
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Optional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and _environment variable_ whose value should be used. If the environment variable is not set, or the value is empty, the header will not be included in the request.",
           "type": "object"
         },
         "env_key": {
-          "description": "Environment variable that stores the user's API key for this provider.",
           "type": "string"
         },
         "env_key_instructions": {
-          "description": "Optional instructions to help the user get a valid value for the variable and set it.",
           "type": "string"
         },
         "experimental_bearer_token": {
-          "description": "Value to use with `Authorization: Bearer <token>` header. Use of this config is discouraged in favor of `env_key` for security reasons, but this may be necessary when using this programmatically.",
           "type": "string"
         },
         "gateway_oauth": {
@@ -2870,7 +2828,6 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
         },
         "model_catalog_url": {
@@ -2878,64 +2835,45 @@
           "type": "string"
         },
         "name": {
-          "default": "",
-          "description": "Friendly display name.",
           "type": "string"
         },
         "query_params": {
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Optional query parameters to append to the base URL.",
           "type": "object"
         },
         "request_max_retries": {
-          "description": "Maximum number of times to retry a failed HTTP request to this provider.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
         },
         "requires_openai_auth": {
-          "default": false,
-          "description": "Does this provider require an OpenAI API key or ChatGPT login token? If true, the user is presented with a login screen on first run, and credentials are stored using the backend selected by `cli_auth_credentials_store`. If false (the default), the login screen is skipped, and the API key (if needed) comes from the environment variable specified by `env_key`.",
           "type": "boolean"
         },
         "stream_idle_timeout_ms": {
-          "description": "Idle timeout (in milliseconds) to wait for activity on a streaming response before treating the connection as lost.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
         },
         "stream_max_retries": {
-          "description": "Number of times to retry reconnecting a dropped streaming response before failing.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
         },
         "supports_standalone_web_search": {
-          "default": false,
-          "description": "Whether this provider supports the standalone web-search endpoint.",
           "type": "boolean"
         },
         "supports_websockets": {
-          "default": false,
-          "description": "Whether this provider supports the Responses API WebSocket transport.",
           "type": "boolean"
         },
         "websocket_connect_timeout_ms": {
-          "description": "Maximum time (in milliseconds) to wait for a websocket connection attempt before treating it as failed.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
         },
         "wire_api": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WireApi"
-            }
-          ],
-          "default": "responses",
-          "description": "Which wire protocol this provider expects."
+          "$ref": "#/definitions/WireApi"
         }
       },
       "type": "object"
@@ -4100,25 +4038,6 @@
           "description": "Option to disable reasoning summaries.",
           "enum": [
             "none"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "RemoteCompactionSupport": {
-      "description": "Remote context-compaction protocols supported by a model provider.",
-      "oneOf": [
-        {
-          "description": "Use local compaction instead of a provider compaction protocol.",
-          "enum": [
-            "unsupported"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Send `compaction_trigger` items over the Responses endpoint.",
-          "enum": [
-            "v2"
           ],
           "type": "string"
         }
@@ -7886,10 +7805,10 @@
     },
     "model_providers": {
       "additionalProperties": {
-        "$ref": "#/definitions/ModelProviderInfo"
+        "$ref": "#/definitions/ModelProviderInfoOverrides"
       },
       "default": {},
-      "description": "User-defined provider entries that extend the built-in list. Built-in IDs cannot be overridden.",
+      "description": "Provider entries that extend or override the built-in provider list.",
       "type": "object"
     },
     "model_reasoning_effort": {
