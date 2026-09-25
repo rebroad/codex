@@ -189,12 +189,13 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
         .map(|line| {
-            if let Some((prefix, value)) = line.split_once("Directory:") {
+            let line = if let Some((prefix, value)) = line.split_once("Directory:") {
                 let padding = &value[..value.len() - value.trim_start().len()];
                 format!("{prefix}Directory:{padding}[[workspace]]")
             } else {
                 line
-            }
+            };
+            crate::version::normalize_cli_version_for_snapshot(&line)
         })
         .collect()
 }
@@ -1912,7 +1913,9 @@ async fn transcript_overlay_remeasures_status_after_rate_limit_refresh() {
     );
     insta::assert_snapshot!(
         "transcript_overlay_status_rate_limit_refresh",
-        format!("before:\n{before}\n\nafter:\n{after}")
+        crate::version::normalize_cli_version_for_snapshot(&format!(
+            "before:\n{before}\n\nafter:\n{after}"
+        ))
     );
 }
 
