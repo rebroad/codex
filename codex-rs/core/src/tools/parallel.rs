@@ -511,6 +511,7 @@ mod tests {
     use tracing_test::internal::MockWriter;
 
     #[test]
+    #[serial_test::serial(tracing)]
     fn tool_call_timing_guard_ignores_code_mode_source() {
         let buffer: &'static std::sync::Mutex<Vec<u8>> =
             Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
@@ -606,6 +607,7 @@ mod tests {
     #[test_case::test_case(false; "ordinary_handler")]
     #[test_case::test_case(true; "dynamic_handler")]
     #[tokio::test]
+    #[serial_test::serial(tracing)]
     async fn cancellation_before_dispatch_admission_logs_dispatch_only_timing(
         dynamic: bool,
     ) -> anyhow::Result<()> {
