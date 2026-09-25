@@ -151,6 +151,83 @@ pub(super) async fn history_base_at_boundary(
                     .map_err(|_| invalid_turn_position(turn_id.as_str()))?,
             }
         }
+        ForkBoundary::AfterOrdinal(ordinal) => {
+            let end_ordinal_exclusive =
+                ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                        message: "fork ordinal overflows the supported range".to_string(),
+                    })?;
+            if end_ordinal_exclusive > latest_position.end_ordinal_exclusive {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: format!("fork ordinal {ordinal} exceeds inherited source history"),
+                });
+            }
+            let Some(segment_index) = lineage.segments().iter().position(|segment| {
+                end_ordinal_exclusive <= segment.end_ordinal().unwrap_or(u64::MAX)
+            }) else {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: format!("fork ordinal {ordinal} exceeds inherited source history"),
+                });
+            };
+            if end_ordinal_exclusive <= lineage.segments()[segment_index].start_ordinal() {
+                return Ok(segment_index
+                    .checked_sub(1)
+                    .and_then(|index| lineage.segments()[index].end));
+            }
+            let segment = &lineage.segments()[segment_index];
+            let mut reader =
+                codex_rollout::open_rollout_line_reader(segment.rollout_path.as_path())
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!("failed to read fork source rollout: {err}"),
+                    })?;
+            let mut byte_offset = 0_u64;
+            let end_byte_offset = loop {
+                let Some(line) =
+                    reader
+                        .next_line()
+                        .await
+                        .map_err(|err| ThreadStoreError::Internal {
+                            message: format!("failed to read fork source rollout: {err}"),
+                        })?
+                else {
+                    break None;
+                };
+                let line_start = byte_offset;
+                byte_offset = byte_offset
+                    .checked_add(u64::try_from(line.len()).map_err(|_| {
+                        ThreadStoreError::Internal {
+                            message: "fork source rollout line is too long".to_string(),
+                        }
+                    })?)
+                    .and_then(|offset| offset.checked_add(1))
+                    .ok_or_else(|| ThreadStoreError::Internal {
+                        message: "fork source rollout byte offset overflow".to_string(),
+                    })?;
+                let ordinal = codex_rollout::decode_rollout_line(
+                    serde_json::from_str::<serde_json::Value>(&line).map_err(|err| {
+                        ThreadStoreError::Internal {
+                            message: format!("failed to decode fork source rollout: {err}"),
+                        }
+                    })?,
+                )
+                .map_err(|err| ThreadStoreError::Internal {
+                    message: format!("failed to decode fork source rollout: {err}"),
+                })?
+                .ordinal;
+                if ordinal.is_some_and(|value| value >= end_ordinal_exclusive) {
+                    break Some(line_start);
+                }
+            };
+            let end_byte_offset = end_byte_offset
+                .unwrap_or_else(|| segment.end.map_or(byte_offset, |end| end.end_byte_offset));
+            HistoryPosition {
+                thread_id: segment.rollout_id,
+                end_ordinal_exclusive,
+                end_byte_offset,
+            }
+        }
     };
     let segment_index = lineage
         .segments()
