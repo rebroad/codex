@@ -509,6 +509,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                 user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
                     &auth_manager,
                 ))),
+                frontend_auth_manager: Arc::clone(&auth_manager),
                 auth_manager,
                 installation_id,
                 code_mode_session_provider: None,
