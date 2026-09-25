@@ -328,6 +328,8 @@ async fn new_config(
         memories: MemoriesConfig::default(),
         sqlite: SqliteConfig::from_sqlite_home(codex_home.clone()),
         log_dir: codex_home.join("log").to_path_buf(),
+        remote_control_traffic_log: None,
+        remote_control_traffic_log_redaction: Default::default(),
         codex_home,
         history: History::default(),
         ephemeral: true,
