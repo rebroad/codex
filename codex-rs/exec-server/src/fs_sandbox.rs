@@ -52,6 +52,7 @@ const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
 const FS_HELPER_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 #[cfg(any(windows, test))]
 const MAX_FS_HELPER_STDERR_BYTES: u64 = 4096;
+const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 #[cfg(debug_assertions)]
 const FS_HELPER_BAZEL_BWRAP_ENV_ALLOWLIST: &[&str] = &[
     "CARGO_BIN_EXE_bwrap",
@@ -185,7 +186,10 @@ impl FileSystemSandboxRunner {
             program: helper.as_path().as_os_str().to_owned(),
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
             cwd: PathUri::from_abs_path(&helper_cwd),
-            env: self.helper_env.clone(),
+            env: helper_env_with_debug_log_id(
+                &self.helper_env,
+                sandbox_context.debug_log_id.as_deref(),
+            ),
             managed_network: None,
             additional_permissions: None,
         };
@@ -223,6 +227,22 @@ fn find_linux_sandbox_executable() -> Option<AbsolutePathBuf> {
         .map(|directory| directory.join(CODEX_LINUX_SANDBOX_ARG0))
         .find(|path| path.is_file())
         .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+}
+
+fn helper_env_with_debug_log_id(
+    helper_env: &HashMap<String, String>,
+    debug_log_id: Option<&str>,
+) -> HashMap<String, String> {
+    let Some(debug_log_id) = debug_log_id else {
+        return helper_env.clone();
+    };
+
+    let mut env = helper_env.clone();
+    env.insert(
+        CODEX_THREAD_ID_ENV_VAR.to_string(),
+        debug_log_id.to_string(),
+    );
+    env
 }
 
 fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<SandboxCwd, JSONRPCErrorError> {
@@ -638,6 +658,7 @@ mod tests {
 
     use crate::ExecServerRuntimePaths;
 
+    use super::CODEX_THREAD_ID_ENV_VAR;
     #[cfg(not(target_os = "android"))]
     use super::FileSystemSandboxRunner;
     use super::SandboxCwd;
@@ -646,6 +667,7 @@ mod tests {
     use super::helper_env;
     use super::helper_env_from_vars;
     use super::helper_env_key_is_allowed;
+    use super::helper_env_with_debug_log_id;
     use super::helper_read_roots;
     use super::sandbox_cwd;
 
@@ -1092,6 +1114,25 @@ mod tests {
         assert!(policy.can_read_local_path_with_cwd(alias.as_path(), cwd.as_path()));
         assert!(!policy.can_read_local_path_with_cwd(codex_parent.as_path(), cwd.as_path()));
         assert!(!policy.can_read_local_path_with_cwd(alias_parent.as_path(), cwd.as_path()));
+    }
+
+    #[test]
+    fn helper_env_adds_explicit_debug_log_id() {
+        let helper_env = HashMap::from([(String::from("PATH"), String::from("/bin"))]);
+        let env = helper_env_with_debug_log_id(&helper_env, Some("thread-1"));
+
+        assert_eq!(env.get("PATH"), Some(&String::from("/bin")));
+        assert_eq!(
+            env.get(CODEX_THREAD_ID_ENV_VAR),
+            Some(&String::from("thread-1"))
+        );
+    }
+
+    #[test]
+    fn helper_env_does_not_add_missing_debug_log_id() {
+        let helper_env = HashMap::from([(String::from("PATH"), String::from("/bin"))]);
+
+        assert_eq!(helper_env_with_debug_log_id(&helper_env, None), helper_env);
     }
 
     fn restricted_policy(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxPolicy {

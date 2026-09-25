@@ -251,6 +251,8 @@ pub struct ConfigToml {
     /// they change between commands or lie outside CODEX_HOME.
     /// This setting has no effect on Linux or Windows.
     pub allow_symlinked_codex_home: Option<bool>,
+    /// Path where Linux bubblewrap sandbox diagnostics are appended.
+    pub sandbox_log_path: Option<AbsolutePathBuf>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
