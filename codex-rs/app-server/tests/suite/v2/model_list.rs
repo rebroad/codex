@@ -195,7 +195,8 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
             .collect(),
         default_reasoning_effort: preset.default_reasoning_effort.clone(),
         input_modalities: preset.input_modalities.clone(),
-        supports_personality: false,
+        // Bundled metadata is preserved when the cache does not carry personality placeholders.
+        supports_personality: preset.supports_personality,
         multi_agent_version: preset.multi_agent_version.map(Into::into),
         additional_speed_tiers: preset.additional_speed_tiers.clone(),
         service_tiers: preset
