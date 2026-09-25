@@ -3627,6 +3627,7 @@ impl ThreadRequestProcessor {
         client_mcp_extensions: ClientMcpExtensions,
         prepared_config: &mut Option<PreparedResumeConfig>,
     ) -> Result<ControlFlow<()>, JSONRPCErrorError> {
+        let resume_started_at = std::time::Instant::now();
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -3704,6 +3705,7 @@ impl ThreadRequestProcessor {
         } = params.clone();
         let include_turns = !exclude_turns;
 
+        let history_load_started_at = std::time::Instant::now();
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
                 .await
@@ -3741,6 +3743,13 @@ impl ThreadRequestProcessor {
                 resumed.conversation_id
             )));
         }
+        tracing::info!(
+            thread_id = %thread_id,
+            history_load_ms = history_load_started_at.elapsed().as_millis(),
+            history_items = thread_history.get_rollout_items().len(),
+            exclude_turns,
+            "resume persisted history loaded"
+        );
         let paginated_thread_id = resume_source_thread.as_ref().and_then(|thread| {
             matches!(thread.history_mode, ThreadHistoryMode::Paginated).then_some(thread.thread_id)
         });
@@ -3928,6 +3937,7 @@ impl ThreadRequestProcessor {
         let mut config = match prepared_config.take() {
             Some(prepared) if prepared.state == config_state => prepared.config,
             _ => {
+                let config_started_at = std::time::Instant::now();
                 // Config loading can call back into Desktop; release the permit during host work.
                 drop(_thread_list_state_permit);
                 let config = self
@@ -3935,6 +3945,11 @@ impl ThreadRequestProcessor {
                     .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
                     .await
                     .map_err(|err| config_load_error(&err))?;
+                tracing::info!(
+                    thread_id = %thread_id,
+                    config_ms = config_started_at.elapsed().as_millis(),
+                    "resume configuration loaded"
+                );
                 *prepared_config = Some(PreparedResumeConfig {
                     state: config_state,
                     config,
@@ -3949,6 +3964,7 @@ impl ThreadRequestProcessor {
 
         let response_history = thread_history.clone();
 
+        let thread_create_started_at = std::time::Instant::now();
         match self
             .thread_manager
             .resume_thread_with_history(
@@ -3990,6 +4006,13 @@ impl ThreadRequestProcessor {
                     return Ok(ControlFlow::Break(()));
                 };
                 let request_id = request_id.clone();
+                tracing::info!(
+                    thread_id = %thread_id,
+                    thread_create_ms = thread_create_started_at.elapsed().as_millis(),
+                    paginated = paginated_resume,
+                    include_turns,
+                    "resume thread created"
+                );
                 if let Err(err) = Self::set_app_server_client_info(
                     codex_thread.as_ref(),
                     app_server_client_name,
@@ -4175,6 +4198,11 @@ impl ThreadRequestProcessor {
                 self.outgoing
                     .send_response_with_thread_originator(request_id, response, thread_originator)
                     .await;
+                tracing::info!(
+                    thread_id = %thread_id,
+                    total_ms = resume_started_at.elapsed().as_millis(),
+                    "resume response sent"
+                );
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_turn_id) = token_usage_turn_id {
