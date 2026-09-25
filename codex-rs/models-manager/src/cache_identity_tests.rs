@@ -13,6 +13,7 @@ async fn mismatched_and_legacy_cache_entries_fetch_the_current_catalog() {
             etag: Some("old-etag".into()),
             client_version: Some(crate::client_version_to_whole()),
             identity,
+            provider_identity: Some("test-provider|Some(Chatgpt)".into()),
             models: vec![stale],
         });
         let endpoint = TestModelsEndpoint::new(vec![vec![current.clone()]]);
@@ -46,6 +47,7 @@ async fn matching_etag_cannot_renew_a_different_identity_or_catalog() {
         etag: Some("etag".into()),
         client_version: Some(crate::client_version_to_whole()),
         identity: Some("first-account".into()),
+        provider_identity: Some("test-provider|Some(Chatgpt)".into()),
         models: vec![remote_model("model", "Model", /*priority*/ 0)],
     };
     for (key, etag, version) in [

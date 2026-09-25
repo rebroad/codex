@@ -366,14 +366,24 @@ async fn auth_and_provider_switches_do_not_reuse_chatgpt_catalog() -> Result<()>
     .await;
     let other = test_codex()
         .with_home(home)
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(CodexAuth::from_api_key("second-api-key"))
         .with_model("gpt-5.5")
         .with_config(|config| {
             config.model_provider_id = "second".into();
             config.model_provider.name = "Second".into();
+            config.model_provider.model_catalog_url = config
+                .model_provider
+                .base_url
+                .as_ref()
+                .map(|base_url| format!("{base_url}/models").into());
+            config
+                .features
+                .enable(codex_features::Feature::ApiKeyModelDiscovery)
+                .expect("enable API-key model discovery");
         })
         .build_with_auto_env(&other_server)
         .await?;
+    assert_eq!(other_models.requests().len(), 1);
     assert_eq!(
         other
             .thread_manager
@@ -382,6 +392,5 @@ async fn auth_and_provider_switches_do_not_reuse_chatgpt_catalog() -> Result<()>
             .await,
         vec![model]
     );
-    assert_eq!(other_models.requests().len(), 1);
     Ok(())
 }
