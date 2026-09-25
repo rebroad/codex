@@ -1,0 +1,239 @@
+#!/usr/bin/env sh
+set -eu
+
+home_dir="${HOME:?HOME must be set}"
+codex_home="${CODEX_HOME:-$home_dir/.codex}"
+codex_bin="${CODEX_BIN:-}"
+timeout_seconds="${CODEX_REMOTE_PAIR_TIMEOUT:-20}"
+max_attempts="${CODEX_REMOTE_PAIR_ATTEMPTS:-10}"
+retry_delay="${CODEX_REMOTE_PAIR_RETRY_DELAY:-3}"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+control_socket="$codex_home/app-server-control/app-server-control.sock"
+lock_dir="$codex_home/app-server-control/pairing-code.lock"
+start_option=""
+profile_name=""
+
+usage() {
+    printf '%s\n' 'Usage: codex-pairing-code [-p|--profile PROFILE] [--debug-log]'
+}
+
+if [ -z "$codex_bin" ]; then
+    if [ -x "$home_dir/bin/codex" ]; then
+        codex_bin="$home_dir/bin/codex"
+    else
+        codex_bin=$(command -v codex) || {
+            printf '%s\n' 'Codex Remote: codex was not found; set CODEX_BIN to its path.' >&2
+            exit 1
+        }
+    fi
+fi
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --debug-log)
+            start_option="--debug-log"
+            ;;
+        -p|--profile)
+            [ "$#" -ge 2 ] || {
+                usage >&2
+                exit 2
+            }
+            profile_name="$2"
+            shift
+            ;;
+        --profile=*)
+            profile_name="${1#--profile=}"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+case "$profile_name" in
+    ""|*[!A-Za-z0-9._-]*)
+        [ -z "$profile_name" ] || printf 'Codex Remote: invalid profile name: %s\n' "$profile_name" >&2
+        [ -z "$profile_name" ] || exit 2
+        ;;
+esac
+
+if [ -n "$profile_name" ]; then
+    control_socket="$codex_home/app-server-control/$profile_name/app-server-control.sock"
+    lock_dir="$codex_home/app-server-control/$profile_name/pairing-code.lock"
+    export CODEX_PROFILE="$profile_name"
+fi
+
+start_remote_server() {
+    start_status=0
+    remote_start="$script_dir/codex-remote-start"
+    if [ ! -x "$remote_start" ]; then
+        printf 'Codex Remote: companion script is not executable: %s\n' "$remote_start" >&2
+        return 1
+    fi
+    if [ -n "$profile_name" ]; then
+        start_output="$($remote_start --profile "$profile_name" "$@" 2>&1)" || start_status=$?
+    else
+        start_output="$($remote_start "$@" 2>&1)" || start_status=$?
+    fi
+    if [ "${start_status:-0}" -ne 0 ]; then
+        [ -z "$start_output" ] || printf '%s\n' "$start_output" >&2
+        return "${start_status:-1}"
+    fi
+}
+
+mkdir -p "$(dirname "$lock_dir")"
+lock_owner_file="$lock_dir/pid"
+
+process_start_time() {
+    process_stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    process_stat=${process_stat##*) }
+    set -- $process_stat
+    shift 19
+    [ -n "${1:-}" ] || return 1
+    printf '%s\n' "$1"
+}
+
+pairing_process_exists() {
+    for proc_cmdline in /proc/[0-9]*/cmdline; do
+        [ -r "$proc_cmdline" ] || continue
+        proc_pid=${proc_cmdline#/proc/}
+        proc_pid=${proc_pid%/cmdline}
+        [ "$proc_pid" = "$$" ] && continue
+        proc_args=$(tr '\000' ' ' < "$proc_cmdline" 2>/dev/null || true)
+        case "$proc_args" in
+            *codex-pairing-code*|*"remote-control pair"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+lock_owner_is_live() {
+    owner_pid=$1
+    owner_start_time=$2
+    case "$owner_pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    if ! kill -0 "$owner_pid" 2>/dev/null; then
+        return 1
+    fi
+    current_start_time=$(process_start_time "$owner_pid" 2>/dev/null || true)
+    if [ -n "$current_start_time" ] && [ -n "$owner_start_time" ]; then
+        [ "$current_start_time" = "$owner_start_time" ]
+        return $?
+    fi
+    owner_cmdline="/proc/$owner_pid/cmdline"
+    if [ -r "$owner_cmdline" ]; then
+        owner_args=$(tr '\000' ' ' < "$owner_cmdline" 2>/dev/null || true)
+        case "$owner_args" in
+            *codex-pairing-code*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    # If Android denies /proc access, keep the lock rather than risk stealing it.
+    return 0
+}
+
+if ! mkdir "$lock_dir" 2>/dev/null; then
+    stale_lock=0
+    if [ -f "$lock_owner_file" ]; then
+        existing_owner=""
+        existing_start_time=""
+        read existing_owner existing_start_time < "$lock_owner_file" || true
+        if ! lock_owner_is_live "$existing_owner" "$existing_start_time"; then
+            stale_lock=1
+        fi
+    else
+        # Older helper versions left an empty directory. Allow a just-created
+        # lock time to receive its owner PID before classifying it as stale.
+        sleep 1
+        if [ -d "$lock_dir" ] && [ ! -e "$lock_owner_file" ] && ! pairing_process_exists; then
+            lock_contents=$(find "$lock_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)
+            [ -z "$lock_contents" ] && stale_lock=1
+        fi
+    fi
+
+    if [ "$stale_lock" -eq 1 ]; then
+        rm -f "$lock_owner_file"
+        if rmdir "$lock_dir" 2>/dev/null && mkdir "$lock_dir" 2>/dev/null; then
+            :
+        else
+            printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
+            exit 1
+        fi
+    else
+        printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
+        exit 1
+    fi
+fi
+
+own_start_time=$(process_start_time "$$" 2>/dev/null || true)
+printf '%s %s\n' "$$" "$own_start_time" > "$lock_owner_file"
+cleanup_pairing_lock() {
+    rm -f "$lock_owner_file"
+    rmdir "$lock_dir" 2>/dev/null || true
+}
+trap cleanup_pairing_lock EXIT HUP INT TERM
+
+if [ ! -S "$control_socket" ] || [ -n "$start_option" ]; then
+    start_status=0
+    if [ -n "$start_option" ]; then
+        start_remote_server "$start_option" || exit $?
+    else
+        start_remote_server || exit $?
+    fi
+fi
+
+pairing_json=""
+pairing_status=1
+attempt=1
+recovery_attempted=0
+while [ "$attempt" -le "$max_attempts" ]; do
+    pairing_status=0
+    pairing_json="$(timeout "$timeout_seconds" "$codex_bin" remote-control pair --json 2>&1)" || pairing_status=$?
+    [ "$pairing_status" -eq 0 ] && break
+
+    case "$pairing_json" in
+        *"timed out waiting for remoteControl/pairing/start response"*|*"deadline has elapsed"*)
+            sleep 2
+            ;;
+        *"failed to connect to "*|*"Connection refused"*|*"No such file or directory"*)
+            if [ "$recovery_attempted" -eq 0 ]; then
+                recovery_attempted=1
+                start_status=0
+                if start_remote_server; then
+                    attempt=$((attempt + 1))
+                    continue
+                fi
+            fi
+            break
+            ;;
+        *"remote control authentication changed"*|*"token_expired"*|*"remote control server refresh failed"*|*"remote control server enrollment failed"*|*"pairing is unavailable until enrollment completes"*)
+            sleep "$retry_delay"
+            ;;
+        *)
+            break
+            ;;
+    esac
+    attempt=$((attempt + 1))
+done
+
+if [ "$pairing_status" -ne 0 ]; then
+    printf 'Codex Remote: could not create a pairing code (%s).\n' "$pairing_json" >&2
+    exit "$pairing_status"
+fi
+
+manual_code="$(printf '%s' "$pairing_json" | sed -n \
+    's/.*"manualPairingCode"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')"
+if [ -z "$manual_code" ]; then
+    printf '%s\n' 'Codex Remote: pairing response did not contain a manual code.' >&2
+    exit 1
+fi
+
+printf '\nCodex Remote pairing code: %s\n' "$manual_code"
+printf '%s\n\n' 'ChatGPT/Codex app → Remote → Add or pair device'
