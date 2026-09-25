@@ -242,6 +242,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
         self.original.fallback_token_limit_override()
     }
 
+    fn failure_kind(&self) -> Option<&'static str> {
+        self.original.failure_kind()
+    }
+
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         self.model_visible.to_response_item(call_id, payload)
     }
@@ -679,12 +683,16 @@ impl ToolRegistry {
         let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
 
         let result = otel
-            .log_tool_result_with_tags(
+            .log_tool_result_with_failure_kind(
                 &tool_name,
                 &call_id_owned,
                 log_payload.as_ref(),
                 &tool_result_tags,
                 &extra_trace_fields,
+                |result: &Result<AnyToolResult, FunctionCallError>| match result {
+                    Ok(result) => result.result.failure_kind(),
+                    Err(error) => error.failure_kind(),
+                },
                 || handle_any_tool(tool.as_ref(), invocation.clone(), call_state.as_deref()),
                 |result| {
                     (
