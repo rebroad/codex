@@ -1,0 +1,45 @@
+name: setup-rust-toolchain
+description: Install the pinned Rust toolchain with retries for transient Rust CDN failures.
+inputs:
+  target:
+    description: Optional Rust target to install.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Rust toolchain
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/codex-rs"
+        toolchain="$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml | head -n 1)"
+        test -n "${toolchain}"
+        for attempt in 1 2 3 4 5; do
+          if rustup toolchain install "${toolchain}" --profile minimal --no-self-update; then
+            break
+          fi
+          if [[ "${attempt}" == 5 ]]; then
+            echo "Unable to install Rust toolchain ${toolchain} after ${attempt} attempts" >&2
+            exit 1
+          fi
+          delay=$((attempt * 10))
+          echo "Rust toolchain installation failed; retrying in ${delay}s" >&2
+          sleep "${delay}"
+        done
+        if [[ -n "${TARGET}" ]]; then
+          for attempt in 1 2 3 4 5; do
+            if rustup target add --toolchain "${toolchain}" "${TARGET}"; then
+              break
+            fi
+            if [[ "${attempt}" == 5 ]]; then
+              echo "Unable to install Rust target ${TARGET} after ${attempt} attempts" >&2
+              exit 1
+            fi
+            delay=$((attempt * 10))
+            echo "Rust target installation failed; retrying in ${delay}s" >&2
+            sleep "${delay}"
+          done
+        fi
