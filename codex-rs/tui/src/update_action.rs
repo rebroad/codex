@@ -10,20 +10,26 @@ use codex_install_context::StandalonePlatform;
 pub enum UpdateAction {
     /// Replace the local daemon after restoring the terminal.
     Daemon(DaemonUpdateSource),
-    /// Update via `npm install -g @openai/codex@latest`.
+    /// Update via `npm install -g @reb.ai/codex@latest`.
     NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
+    /// Update via `bun install -g @reb.ai/codex@latest`.
     BunGlobalLatest,
-    /// Update via `vp install -g @openai/codex@latest`.
+    /// Update via `vp install -g @reb.ai/codex@latest`.
     VitePlusGlobalLatest,
-    /// Update via `pnpm add -g @openai/codex@latest`.
+    /// Update via `pnpm add -g @reb.ai/codex@latest`.
     PnpmGlobalLatest,
-    /// Update via `brew upgrade codex`.
+    /// Update a legacy Homebrew-detected installation via the fork npm package.
     BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh`.
+    /// Update a legacy Homebrew-detected alpha installation via the fork npm package.
+    BrewUpgradeAlpha,
+    /// Update via the fork standalone installer.
     StandaloneUnix,
-    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
+    /// Update via the fork standalone installer.
     StandaloneWindows,
+    /// Update via the fork alpha standalone installer.
+    StandaloneUnixAlpha,
+    /// Update via the fork alpha standalone installer.
+    StandaloneWindowsAlpha,
 }
 
 impl UpdateAction {
@@ -47,16 +53,16 @@ impl UpdateAction {
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
             UpdateAction::Daemon(source) => ("codex", source.command_args()),
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
-            UpdateAction::VitePlusGlobalLatest => ("vp", &["install", "-g", "@openai/codex"]),
-            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@openai/codex"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@reb.ai/codex"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@reb.ai/codex"]),
+            UpdateAction::VitePlusGlobalLatest => ("vp", &["install", "-g", "@reb.ai/codex"]),
+            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@reb.ai/codex"]),
+            UpdateAction::BrewUpgrade => ("npm", &["install", "-g", "@reb.ai/codex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
                 ],
             ),
             UpdateAction::StandaloneWindows => (
@@ -65,7 +71,24 @@ impl UpdateAction {
                     "-ExecutionPolicy",
                     "Bypass",
                     "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
+                ],
+            ),
+            UpdateAction::BrewUpgradeAlpha => ("npm", &["install", "-g", "@reb.ai/codex@alpha"]),
+            UpdateAction::StandaloneUnixAlpha => (
+                "sh",
+                &[
+                    "-c",
+                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_RELEASE=alpha CODEX_NON_INTERACTIVE=1 sh",
+                ],
+            ),
+            UpdateAction::StandaloneWindowsAlpha => (
+                "powershell",
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_RELEASE='alpha'; $env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
                 ],
             ),
         }
@@ -77,11 +100,45 @@ impl UpdateAction {
         shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
             .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
     }
+
+    /// Returns the npm command shown to users for Unix update actions.
+    pub fn display_command_str(self) -> String {
+        let (command, args) = match self {
+            UpdateAction::BrewUpgrade | UpdateAction::StandaloneUnix => {
+                ("npm", &["install", "-g", "@reb.ai/codex"][..])
+            }
+            UpdateAction::BrewUpgradeAlpha | UpdateAction::StandaloneUnixAlpha => {
+                ("npm", &["install", "-g", "@reb.ai/codex@alpha"][..])
+            }
+            UpdateAction::VitePlusGlobalLatest => {
+                return self.command_str();
+            }
+            UpdateAction::Daemon(_) => {
+                return self.command_str();
+            }
+            UpdateAction::NpmGlobalLatest
+            | UpdateAction::BunGlobalLatest
+            | UpdateAction::PnpmGlobalLatest
+            | UpdateAction::StandaloneWindows
+            | UpdateAction::StandaloneWindowsAlpha => return self.command_str(),
+        };
+        shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
+            .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
+    }
 }
 
 #[cfg(not(debug_assertions))]
 pub fn get_update_action() -> Option<UpdateAction> {
-    UpdateAction::from_install_context(InstallContext::current())
+    let action = UpdateAction::from_install_context(InstallContext::current())?;
+    if crate::version::CODEX_CLI_VERSION.contains("-alpha") {
+        return Some(match action {
+            UpdateAction::BrewUpgrade => UpdateAction::BrewUpgradeAlpha,
+            UpdateAction::StandaloneUnix => UpdateAction::StandaloneUnixAlpha,
+            UpdateAction::StandaloneWindows => UpdateAction::StandaloneWindowsAlpha,
+            action => action,
+        });
+    }
+    Some(action)
 }
 
 #[cfg(test)]
@@ -156,15 +213,15 @@ mod tests {
     }
 
     #[test]
-    fn standalone_update_commands_rerun_latest_installer() {
+    fn standalone_update_commands_use_fork_installer() {
         assert_eq!(
             UpdateAction::StandaloneUnix.command_args(),
             (
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
-                ][..],
+                    "curl -fsSL https://reb.ai/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+                ][..]
             )
         );
         assert_eq!(
@@ -175,9 +232,38 @@ mod tests {
                     "-ExecutionPolicy",
                     "Bypass",
                     "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex"
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn alpha_standalone_update_commands_select_alpha_channel() {
+        assert!(
+            UpdateAction::StandaloneUnixAlpha
+                .command_str()
+                .contains("CODEX_RELEASE=alpha")
+        );
+        assert_eq!(
+            UpdateAction::BrewUpgradeAlpha.command_args(),
+            ("npm", &["install", "-g", "@reb.ai/codex@alpha"][..])
+        );
+        assert_eq!(
+            UpdateAction::StandaloneWindowsAlpha.command_args(),
+            (
+                "powershell",
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_RELEASE='alpha'; $env:CODEX_NON_INTERACTIVE=1; irm https://reb.ai/codex/install.ps1 | iex",
                 ][..],
             )
+        );
+        assert_eq!(
+            UpdateAction::StandaloneUnixAlpha.display_command_str(),
+            "npm install -g @reb.ai/codex@alpha"
         );
     }
 }

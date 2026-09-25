@@ -5,7 +5,7 @@ set -eu
 RELEASE="${CODEX_RELEASE:-latest}"
 NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"
 DAEMON_ONLY="${CODEX_INSTALL_DAEMON_ONLY:-0}"
-DEFAULT_PREFER_RELEASES_OPENAI_COM="true"
+DEFAULT_PREFER_RELEASES_OPENAI_COM="false"
 PREFER_RELEASES_OPENAI_COM="${CODEX_INSTALLER_USE_RELEASES_OPENAI_COM:-$DEFAULT_PREFER_RELEASES_OPENAI_COM}"
 RELEASES_BASE_URL="https://releases.openai.com/codex"
 RELEASES_CONNECT_TIMEOUT=10
@@ -36,7 +36,6 @@ LOCK_DIR="$STANDALONE_ROOT/install.lock.d"
 LOCK_STALE_AFTER_SECS=600
 
 path_action="already"
-path_profile=""
 conflict_manager=""
 conflict_path=""
 lock_kind=""
@@ -55,6 +54,9 @@ normalize_version() {
     "" | latest)
       printf 'latest\n'
       ;;
+    alpha | latest-alpha)
+      printf 'latest-alpha\n'
+      ;;
     rust-v*)
       printf '%s\n' "${1#rust-v}"
       ;;
@@ -70,12 +72,12 @@ normalize_version() {
 validate_version() {
   version="$1"
 
-  if [ "$version" = "latest" ]; then
+  if [ "$version" = "latest" ] || [ "$version" = "latest-alpha" ]; then
     return
   fi
 
-  if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-alpha(\.[0-9]+){0,2}|-beta(\.[0-9]+)?)?$'; then
-    echo "Invalid Codex release version: $version. Expected latest or x.y.z[-alpha[.N[.M]]|-beta[.N]]." >&2
+  if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-alpha(\.[0-9]+){0,2}|-beta(\.[0-9]+)?)?(\.[0-9a-f]{10}\.[0-9]{12})?$'; then
+    echo "Invalid Codex release version: $version. Expected latest, alpha, latest-alpha, or x.y.z[-alpha[.N[.M]]|-beta[.N]]." >&2
     return 1
   fi
 }
@@ -216,6 +218,8 @@ parse_release_metadata() {
     function finish_string(value) {
       if (object_depth == 1 && key == "tag_name") {
         print "tag_name\t" value
+      } else if (object_depth == 1 && key == "name") {
+        print "release_name\t" value
       } else if (object_depth == asset_object_depth) {
         if (key == "name") {
           asset_name = value
@@ -319,7 +323,7 @@ release_url_for_asset() {
   asset="$1"
   resolved_version="$2"
 
-  printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
+  printf 'https://github.com/rebroad/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
 }
 
 releases_url_for_asset() {
@@ -332,7 +336,7 @@ releases_url_for_asset() {
 release_metadata_url() {
   resolved_version="$1"
 
-  printf 'https://api.github.com/repos/openai/codex/releases/tags/rust-v%s\n' "$resolved_version"
+  printf 'https://api.github.com/repos/rebroad/codex/releases/tags/rust-v%s\n' "$resolved_version"
 }
 
 parse_downloaded_release_metadata() {
@@ -348,6 +352,7 @@ resolve_metadata_version() {
   release_tag="$(printf '%s\n' "$release_metadata" | awk -F '\t' '$1 == "tag_name" { print $2; exit }')"
   case "$release_tag" in
     rust-v*) metadata_version="${release_tag#rust-v}" ;;
+    latest-alpha) metadata_version="$(printf '%s\n' "$release_metadata" | awk -F '\t' '$1 == "release_name" { print $2; exit }')" ;;
     *) metadata_version="" ;;
   esac
   if [ -z "$metadata_version" ]; then
@@ -361,7 +366,10 @@ resolve_release_from_github() {
   normalized_version="$1"
   if [ "$normalized_version" = "latest" ]; then
     requested_release="latest"
-    metadata_url="https://api.github.com/repos/openai/codex/releases/latest"
+    metadata_url="https://api.github.com/repos/rebroad/codex/releases/latest"
+  elif [ "$normalized_version" = "latest-alpha" ]; then
+    requested_release="latest-alpha"
+    metadata_url="https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha"
   else
     resolved_version="$normalized_version"
     requested_release="$resolved_version"
@@ -375,9 +383,19 @@ resolve_release_from_github() {
 
   parse_downloaded_release_metadata "$requested_release" "GitHub"
 
-  if [ "$normalized_version" = "latest" ]; then
+  if [ "$normalized_version" = "latest" ] || [ "$normalized_version" = "latest-alpha" ]; then
     resolve_metadata_version
     resolved_version="$metadata_version"
+    # Channel alias releases contain only bootstrap assets. Once the alias
+    # resolves to an immutable version, select the real release's assets.
+    if [ "$normalized_version" = "latest-alpha" ]; then
+      metadata_url="$(release_metadata_url "$resolved_version")"
+      if ! release_json="$(download_text "$metadata_url")"; then
+        echo "Could not fetch GitHub release metadata for Codex $resolved_version." >&2
+        exit 1
+      fi
+      parse_downloaded_release_metadata "$resolved_version" "GitHub"
+    fi
   fi
 
   release_source="github"
@@ -418,6 +436,11 @@ resolve_release() {
 
   case "$PREFER_RELEASES_OPENAI_COM" in
     1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss])
+      if [ "$normalized_version" = "latest-alpha" ]; then
+        resolve_release_from_github "$normalized_version"
+        select_release_assets
+        return
+      fi
       if resolve_release_from_releases "$normalized_version" &&
         select_release_assets; then
         return
@@ -572,31 +595,19 @@ require_command() {
   fi
 }
 
-pick_profile() {
-  # Use the same shell-specific split Homebrew documents because there is no
-  # universal startup file across macOS/Linux login and interactive shells.
-  case "$os:${SHELL:-}" in
-    darwin:*/zsh)
-      printf '%s\n' "$HOME/.zprofile"
-      ;;
-    darwin:*/bash)
-      printf '%s\n' "$HOME/.bash_profile"
-      ;;
-    linux:*/zsh)
-      printf '%s\n' "$HOME/.zshrc"
-      ;;
-    linux:*/bash)
-      printf '%s\n' "$HOME/.bashrc"
-      ;;
-    *)
-      printf '%s\n' "$HOME/.profile"
-      ;;
-  esac
-}
-
 add_to_path() {
   path_action="already"
-  path_profile=""
+
+  npm_global_bin="$(resolve_npm_global_bin || true)"
+  if [ -n "$npm_global_bin" ]; then
+    case "$PATH:" in
+      "$npm_global_bin:"*) ;;
+      *)
+        path_action="manual"
+        return
+        ;;
+    esac
+  fi
 
   case ":$PATH:" in
     *":$BIN_DIR:"*)
@@ -606,80 +617,15 @@ add_to_path() {
       ;;
   esac
 
-  profile="$(pick_profile)"
-  path_profile="$profile"
-  begin_marker="# >>> Codex installer >>>"
-  end_marker="# <<< Codex installer <<<"
-  path_line="export PATH=\"$BIN_DIR:\$PATH\""
-
-  if [ -f "$profile" ] && grep -F "$begin_marker" "$profile" >/dev/null 2>&1; then
-    if grep -F "$path_line" "$profile" >/dev/null 2>&1; then
-      path_action="configured"
-      return
-    fi
-
-    if grep -F "$end_marker" "$profile" >/dev/null 2>&1; then
-      rewrite_path_block "$profile" "$begin_marker" "$end_marker" "$path_line"
-      path_action="updated"
-      return
-    fi
-  fi
-
-  append_path_block "$profile" "$begin_marker" "$end_marker" "$path_line"
-  path_action="added"
+  path_action="manual"
 }
 
-append_path_block() {
-  profile="$1"
-  begin_marker="$2"
-  end_marker="$3"
-  path_line="$4"
-
-  {
-    printf '\n%s\n' "$begin_marker"
-    printf '%s\n' "$path_line"
-    printf '%s\n' "$end_marker"
-  } >>"$profile"
-}
-
-rewrite_path_block() {
-  profile="$1"
-  begin_marker="$2"
-  end_marker="$3"
-  path_line="$4"
-  tmp_profile="$tmp_dir/profile.$$.tmp"
-
-  awk -v begin="$begin_marker" -v end="$end_marker" -v line="$path_line" '
-    BEGIN {
-      in_block = 0
-      replaced = 0
-    }
-    $0 == begin {
-      if (!replaced) {
-        print begin
-        print line
-        print end
-        replaced = 1
-      }
-      in_block = 1
-      next
-    }
-    in_block {
-      if ($0 == end) {
-        in_block = 0
-      }
-      next
-    }
-    {
-      print
-    }
-    END {
-      if (in_block != 0) {
-        exit 1
-      }
-    }
-  ' "$profile" >"$tmp_profile"
-  mv "$tmp_profile" "$profile"
+resolve_npm_global_bin() {
+  command -v npm >/dev/null 2>&1 || return 1
+  npm_global_prefix="$(npm prefix -g 2>/dev/null || true)"
+  npm_global_root="$(npm root -g 2>/dev/null || true)"
+  [ -n "$npm_global_prefix" ] && [ -d "$npm_global_root/@reb.ai/codex" ] || return 1
+  printf '%s/bin\n' "$npm_global_prefix"
 }
 
 mkdir_lock_is_stale() {
@@ -719,9 +665,11 @@ acquire_install_lock() {
 
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCK_FILE"
-    flock 9
-    lock_kind="flock"
-    return
+    if flock 9; then
+      lock_kind="flock"
+      return
+    fi
+    exec 9>&- 2>/dev/null || true
   fi
 
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
@@ -873,21 +821,17 @@ prompt_yes_no() {
 }
 
 print_launch_instructions() {
+  npm_global_bin="$(resolve_npm_global_bin || true)"
+
+  launch_path="$BIN_DIR"
+  if [ -n "$npm_global_bin" ]; then
+    launch_path="$npm_global_bin:$launch_path"
+  fi
+
   case "$path_action" in
-    added)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
-      step "PATH was added to $path_profile"
-      ;;
-    updated)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
-      step "PATH was updated in $path_profile"
-      ;;
-    configured)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
-      step "PATH is already configured in $path_profile"
+    manual)
+      step "Current terminal: export PATH=\"$launch_path:\$PATH\" && codex"
+      step "PATH was not modified automatically; add $launch_path to PATH manually if desired"
       ;;
     *)
       step "Current terminal: codex"
@@ -927,10 +871,10 @@ handle_conflicting_install() {
       uninstall_cmd="brew uninstall --cask codex"
       ;;
     bun)
-      uninstall_cmd="bun remove -g @openai/codex"
+      uninstall_cmd="bun remove -g @reb.ai/codex"
       ;;
     *)
-      uninstall_cmd="npm uninstall -g @openai/codex"
+      uninstall_cmd="npm uninstall -g @reb.ai/codex"
       ;;
   esac
 
@@ -975,18 +919,33 @@ install_legacy_platform_npm_release() {
   stage_release="$RELEASES_DIR/.staging.$(basename "$release_dir").$$"
   extract_dir="$tmp_dir/extract"
   vendor_root="$extract_dir/package/vendor/$target"
+  modern_platform_package=false
 
   mkdir -p "$RELEASES_DIR"
   rm -rf "$stage_release" "$extract_dir"
-  mkdir -p "$stage_release/codex-resources" "$extract_dir"
+  mkdir -p "$stage_release/bin" "$stage_release/codex-resources" "$extract_dir"
   tar -xzf "$archive_path" -C "$extract_dir"
 
-  cp "$vendor_root/codex/codex" "$stage_release/codex"
-  cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
-  chmod 0755 "$stage_release/codex" "$stage_release/codex-resources/rg"
-  if [ -f "$vendor_root/codex-resources/bwrap" ]; then
-    cp "$vendor_root/codex-resources/bwrap" "$stage_release/codex-resources/bwrap"
-    chmod 0755 "$stage_release/codex-resources/bwrap"
+  if [ -x "$vendor_root/bin/codex" ]; then
+    # Current fork platform packages contain the package-layout payload.
+    modern_platform_package=true
+    cp "$vendor_root/bin/codex" "$stage_release/bin/codex"
+    cp "$vendor_root/bin/codex-code-mode-host" \
+      "$stage_release/bin/codex-code-mode-host"
+    chmod 0755 "$stage_release/bin/codex" "$stage_release/bin/codex-code-mode-host"
+  else
+    # Retain compatibility with the older platform-package layout.
+    cp "$vendor_root/codex/codex" "$stage_release/codex"
+    cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
+    chmod 0755 "$stage_release/codex" "$stage_release/codex-resources/rg"
+    if [ -f "$vendor_root/codex-resources/bwrap" ]; then
+      cp "$vendor_root/codex-resources/bwrap" "$stage_release/codex-resources/bwrap"
+      chmod 0755 "$stage_release/codex-resources/bwrap"
+    fi
+  fi
+
+  if [ "$modern_platform_package" = true ]; then
+    ln -sf bin/codex "$stage_release/codex"
   fi
 
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
@@ -1015,9 +974,18 @@ release_dir_is_complete() {
         return 1
       ;;
     legacy-platform-npm)
-      [ -x "$release_dir/codex" ] &&
-        [ -x "$release_dir/codex-resources/rg" ] ||
-        return 1
+      case "$expected_target" in
+        armv7-unknown-linux-musleabihf | aarch64-linux-android)
+          [ -x "$release_dir/bin/codex" ] &&
+            [ -x "$release_dir/bin/codex-code-mode-host" ] ||
+            return 1
+          ;;
+        *)
+          [ -x "$release_dir/codex" ] &&
+            [ -x "$release_dir/codex-resources/rg" ] ||
+            return 1
+          ;;
+      esac
       ;;
     *)
       return 1
@@ -1026,12 +994,28 @@ release_dir_is_complete() {
 
   case "$layout:$expected_target" in
     package:*linux* | legacy-platform-npm:*linux*)
-      [ -x "$release_dir/codex-resources/bwrap" ] || return 1
+      case "$expected_target" in
+        aarch64-linux-android) ;;
+        armv7-unknown-linux-musleabihf)
+          [ -x "$release_dir/codex-resources/bwrap" ] || return 1
+          ;;
+        *) [ -x "$release_dir/codex-resources/bwrap" ] || return 1 ;;
+      esac
       ;;
   esac
 
   installed_version="$(version_from_binary "$release_dir/bin/codex" || version_from_binary "$release_dir/codex" || true)"
-  [ "$installed_version" = "$expected_version" ]
+  if [ "$installed_version" = "$expected_version" ]; then
+    return 0
+  fi
+
+  # Candidate release tags carry a commit and timestamp, while Cargo embeds
+  # the package version plus the build timestamp placeholder in the binary.
+  # Compare their stable package-version portions in that case.
+  expected_base="$(printf '%s\n' "$expected_version" | sed -E 's/\.[0-9a-f]{10}\.[0-9]{12}$//')"
+  installed_base="$(printf '%s\n' "$installed_version" | sed -E 's/-[0-9]{12}-[0-9]{12}$//')"
+  [ "$expected_base" != "$expected_version" ] &&
+    [ "$installed_base" = "$expected_base" ]
 }
 
 update_current_link() {
@@ -1088,6 +1072,10 @@ case "$(uname -s)" in
     ;;
   Linux)
     os="linux"
+    if command -v getprop >/dev/null 2>&1 &&
+      [ -n "$(getprop ro.build.version.sdk 2>/dev/null || true)" ]; then
+      os="android"
+    fi
     ;;
   *)
     echo "install.sh supports macOS and Linux. Use install.ps1 on Windows." >&2
@@ -1101,6 +1089,9 @@ case "$(uname -m)" in
     ;;
   arm64 | aarch64)
     arch="aarch64"
+    ;;
+  armv7* | armv8l)
+    arch="armv7"
     ;;
   *)
     echo "Unsupported architecture: $(uname -m)" >&2
@@ -1124,11 +1115,23 @@ if [ "$os" = "darwin" ]; then
     vendor_target="x86_64-apple-darwin"
     platform_label="macOS (Intel)"
   fi
+elif [ "$os" = "android" ]; then
+  if [ "$arch" != "aarch64" ]; then
+    echo "Unsupported Android architecture: $(uname -m)" >&2
+    exit 1
+  fi
+  npm_tag="android-arm64"
+  vendor_target="aarch64-linux-android"
+  platform_label="Android (ARM64)"
 else
   if [ "$arch" = "aarch64" ]; then
     npm_tag="linux-arm64"
     vendor_target="aarch64-unknown-linux-musl"
     platform_label="Linux (ARM64)"
+  elif [ "$arch" = "armv7" ]; then
+    npm_tag="linux-armv7"
+    vendor_target="armv7-unknown-linux-musleabihf"
+    platform_label="Linux (ARMv7)"
   else
     npm_tag="linux-x64"
     vendor_target="x86_64-unknown-linux-musl"
@@ -1234,7 +1237,7 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
     warn "Found incomplete existing release at $release_dir; reinstalling."
   fi
 
-  archive_path="$tmp_dir/$asset"
+  archive_download_path="$tmp_dir/$asset"
   checksum_path="$tmp_dir/$checksum_asset"
 
   step "Downloading Codex CLI"
@@ -1245,13 +1248,13 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   else
     expected_digest="$(release_asset_digest "$asset")"
   fi
-  download_file_with_fallback "$download_url" "$download_fallback_url" "$archive_path" "$expected_digest" "$asset"
+  download_file_with_fallback "$download_url" "$download_fallback_url" "$archive_download_path" "$expected_digest" "$asset"
 
   step "Installing standalone package to $release_dir"
   if [ "$install_layout" = "package" ]; then
-    install_package_release "$release_dir" "$archive_path"
+    install_package_release "$release_dir" "$archive_download_path"
   else
-    install_legacy_platform_npm_release "$release_dir" "$archive_path" "$vendor_target"
+    install_legacy_platform_npm_release "$release_dir" "$archive_download_path" "$vendor_target"
   fi
 fi
 if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target" "$install_layout"; then
@@ -1285,21 +1288,7 @@ verify_visible_command
 release_install_lock
 handle_conflicting_install
 
-case "$path_action" in
-  added)
-    print_launch_instructions
-    ;;
-  updated)
-    print_launch_instructions
-    ;;
-  configured)
-    print_launch_instructions
-    ;;
-  *)
-    step "$BIN_DIR is already on PATH"
-    print_launch_instructions
-    ;;
-esac
+print_launch_instructions
 
 printf 'Codex CLI %s installed successfully.\n' "$resolved_version"
 maybe_launch_codex_now

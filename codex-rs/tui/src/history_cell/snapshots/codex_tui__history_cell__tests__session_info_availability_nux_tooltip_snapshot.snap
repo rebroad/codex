@@ -1,10 +1,10 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 778
+assertion_line: 777
 expression: rendered
 ---
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v<VERSION>)
      /tmp/project
 
   Tip: Model just became available
