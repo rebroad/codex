@@ -38,6 +38,7 @@ use crate::shell_snapshot::ShellSnapshotFile;
 
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
 const REMOTE_OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(5);
+const TERMINATION_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Output pending model polling and the retained completion transcript.
 /// Append both under the same lock so cancellation cannot split an update.
@@ -254,6 +255,7 @@ impl UnifiedExecProcess {
     }
 
     pub(super) async fn terminate_confirmed(&self) -> Result<(), UnifiedExecError> {
+        let wait_for_local_exit = matches!(&self.process_handle, ProcessHandle::Local(_));
         match &self.process_handle {
             ProcessHandle::Local(process_handle) => process_handle.terminate(),
             ProcessHandle::ExecServer(process_handle) => {
@@ -262,6 +264,19 @@ impl UnifiedExecProcess {
                     .await
                     .map_err(|err| UnifiedExecError::process_failed(err.to_string()))?;
             }
+        }
+        if wait_for_local_exit {
+            tokio::time::timeout(TERMINATION_WAIT_TIMEOUT, async {
+                while !self.has_exited() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| {
+                UnifiedExecError::process_failed(
+                    "process did not exit after termination".to_string(),
+                )
+            })?;
         }
         self.signal_exit(self.exit_code());
         self.finish_termination();
