@@ -318,6 +318,7 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
             status: ThreadStatus::Active {
                 active_flags: Vec::new(),
             },
+            waiting_until_ms: None,
         },
     ));
     app.track_agents_overview_notification(&ServerNotification::ThreadClosed(

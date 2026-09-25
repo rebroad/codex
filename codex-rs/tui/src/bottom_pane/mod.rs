@@ -1198,6 +1198,9 @@ impl BottomPane {
         details_max_lines: usize,
     ) -> bool {
         if let Some(status) = self.status.as_mut() {
+            if header != "Waiting" {
+                status.clear_waiting();
+            }
             status.update_header(header);
             status.update_details(details, details_capitalization, details_max_lines.max(1));
             self.request_redraw();
@@ -1364,6 +1367,27 @@ impl BottomPane {
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         if let Some(status) = self.status.as_mut() {
             status.set_interrupt_hint_visible(visible);
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_status_waiting(&mut self, duration: Duration) {
+        if let Some(status) = self.status.as_mut() {
+            status.set_waiting(duration);
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn clear_status_waiting(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.clear_waiting();
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn increment_status_poll_count(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.increment_poll_count();
             self.request_redraw();
         }
     }
