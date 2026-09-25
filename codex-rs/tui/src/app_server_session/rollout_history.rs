@@ -15,8 +15,10 @@ use crate::legacy_core::config::Config;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
@@ -24,6 +26,9 @@ use codex_app_server_protocol::TurnItemsView;
 use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
+use std::sync::atomic::Ordering;
+use uuid::Uuid;
 
 // Bound recovery to recent messages when item paging is unavailable.
 const READ_ONLY_HISTORY_TURN_LIMIT: u32 = 100;
@@ -108,6 +113,25 @@ impl AppServerSession {
             },
             history_notice,
         ))
+    }
+
+    pub(crate) async fn reattach_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadResumeResponse> {
+        let request_id = RequestId::String(format!("reconnect-thread-{}", Uuid::new_v4()));
+        let response: ThreadResumeResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadResume {
+                request_id,
+                params: ThreadResumeParams {
+                    thread_id: thread_id.to_string(),
+                    ..ThreadResumeParams::default()
+                },
+            })
+            .await
+            .map_err(|err| bootstrap_request_error("thread/resume failed after reconnect", err))?;
+        Ok(response)
     }
 
     pub(crate) fn with_local_codex_home(mut self, codex_home: &AbsolutePathBuf) -> Self {
