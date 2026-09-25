@@ -186,7 +186,7 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
-    lines
+    let lines = lines
         .into_iter()
         .map(|line| {
             if let Some((prefix, value)) = line.split_once("Directory:") {
@@ -196,6 +196,11 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
                 line
             }
         })
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::version::normalize_cli_version_for_snapshot(&lines)
+        .split('\n')
+        .map(str::to_owned)
         .collect()
 }
 
@@ -1913,7 +1918,9 @@ async fn transcript_overlay_remeasures_status_after_rate_limit_refresh() {
     );
     insta::assert_snapshot!(
         "transcript_overlay_status_rate_limit_refresh",
-        format!("before:\n{before}\n\nafter:\n{after}")
+        crate::version::normalize_cli_version_for_snapshot(&format!(
+            "before:\n{before}\n\nafter:\n{after}"
+        ))
     );
 }
 
