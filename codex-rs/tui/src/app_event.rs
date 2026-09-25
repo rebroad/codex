@@ -63,7 +63,6 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::models::ActivePermissionProfile;
 use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::history_cell::HistoryCell;
@@ -1273,6 +1272,13 @@ pub(crate) enum AppEvent {
         selection: PermissionProfileSelection,
     },
 
+    /// Apply a permission preset from the permissions popup to the active thread.
+    ///
+    /// Unlike the keyboard shortcut, the popup also persists the selected reviewer
+    /// as the user's default configuration.
+    ApplyPermissionPreset {
+        selection: PermissionProfileSelection,
+    },
     /// Refresh server-owned Windows state after selecting a thread or project.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     RefreshWindowsSandbox {
@@ -1322,12 +1328,14 @@ pub(crate) enum AppEvent {
     UpdateAskForApprovalPolicy(AskForApproval),
 
     /// Update the current built-in active permission profile in the running app and widget.
+    #[cfg(target_os = "windows")]
     UpdateActivePermissionProfile(ActivePermissionProfile),
 
     /// Select a named permission profile, optionally applying built-in mode settings too.
     SelectPermissionProfile(PermissionProfileSelection),
 
     /// Update the current approvals reviewer in the running app and widget.
+    #[cfg(test)]
     UpdateApprovalsReviewer(ApprovalsReviewer),
 
     /// Discover experimental features for the requesting popup only.
@@ -1607,7 +1615,7 @@ pub(crate) enum AppEvent {
 }
 
 /// Named profile selection to apply after any required UI guardrails complete.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PermissionProfileSelection {
     pub profile_id: String,
     pub approval_policy: Option<AskForApproval>,

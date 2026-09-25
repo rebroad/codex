@@ -6714,6 +6714,7 @@ async fn closing_fullscreen_inline_overlay_restores_history_once() -> Result<()>
 }
 
 #[tokio::test]
+#[cfg(not(target_os = "android"))]
 async fn copy_picker_opening_preserves_terminal_scrollback_without_reflow() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let response = "Existing response\n\n```rust\nkeep_scrollback();\n```";

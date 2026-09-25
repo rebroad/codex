@@ -8,6 +8,7 @@ use super::rate_limit_refresh::RateLimitRefreshOutcome;
 use super::resize_reflow::trailing_run_start;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::app::permission_shortcuts::PermissionChangePersistence;
 use crate::app_event::RecapTrigger;
 use crate::app_event::ThreadTitleDestination;
 use crate::app_server_session::ForkGoalContinuation;
@@ -2109,7 +2110,29 @@ impl App {
                 );
             }
             AppEvent::ApplyPermissionShortcut { thread_id, selection } => {
-                self.apply_permission_shortcut(app_server, thread_id, selection).await;
+                self.apply_permission_shortcut(
+                    app_server,
+                    tui,
+                    thread_id,
+                    selection,
+                    PermissionChangePersistence::SessionOnly,
+                )
+                .await;
+            }
+            AppEvent::ApplyPermissionPreset { selection } => {
+                let Some(thread_id) = self.active_thread_id else {
+                    self.chat_widget
+                        .add_error_message("No active thread is available.".to_string());
+                    return Ok(AppRunControl::Continue);
+                };
+                self.apply_permission_shortcut(
+                    app_server,
+                    tui,
+                    thread_id,
+                    selection,
+                    PermissionChangePersistence::PersistReviewer,
+                )
+                .await;
             }
             AppEvent::OpenFeedbackNote {
                 category,
@@ -2406,6 +2429,7 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
             }
+            #[cfg(target_os = "windows")]
             AppEvent::UpdateActivePermissionProfile(active_permission_profile) => {
                 if self.reject_pending_permission_change() {
                     return Ok(AppRunControl::Continue);
@@ -2447,6 +2471,7 @@ impl App {
             AppEvent::SelectPermissionProfile(selection) => {
                 self.select_permission_profile(app_server, selection).await;
             }
+            #[cfg(test)]
             AppEvent::UpdateApprovalsReviewer(policy) => {
                 if self.reject_pending_permission_change() {
                     return Ok(AppRunControl::Continue);
