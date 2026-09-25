@@ -220,6 +220,13 @@ pub(crate) enum RestartMode {
 
 #[cfg(any(unix, windows))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdaterRefreshMode {
+    None,
+    ReexecIfManagedBinaryChanged,
+}
+
+#[cfg(any(unix, windows))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestartDecision {
     NotReady,
     AlreadyCurrent,
@@ -278,23 +285,20 @@ pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControl
     Box::pin(Daemon::from_environment()?.set_remote_control(mode)).await
 }
 
-pub async fn run_pid_update_loop(
-    http_client_factory: codex_http_client::HttpClientFactory,
-    restore_release: Option<String>,
-) -> Result<()> {
+pub async fn run_pid_update_loop() -> Result<()> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    update_loop::run(http_client_factory, restore_release).await
+    update_loop::run().await
 }
 
-pub async fn update(
-    http_client_factory: codex_http_client::HttpClientFactory,
-) -> Result<UpdateOutput> {
+pub async fn update() -> Result<UpdateOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    update_loop::request_manual_update(&Daemon::from_environment()?, http_client_factory).await
+    anyhow::bail!(
+        "daemon-managed updates are disabled; update the @reb.ai/codex package explicitly"
+    )
 }
 
 #[cfg(any(unix, windows))]
@@ -320,6 +324,7 @@ struct Daemon {
     operation_lock_file: PathBuf,
     settings_file: PathBuf,
     managed_codex_bin: PathBuf,
+    invoking_codex_bin: Option<PathBuf>,
 }
 
 impl Daemon {
@@ -350,6 +355,7 @@ impl Daemon {
             operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
             settings_file: state_dir.join(SETTINGS_FILE_NAME),
             managed_codex_bin,
+            invoking_codex_bin: std::env::current_exe().ok(),
         })
     }
 
@@ -519,6 +525,7 @@ impl Daemon {
     pub(crate) async fn try_restart_if_running(
         &self,
         mode: RestartMode,
+        _updater_refresh_mode: UpdaterRefreshMode,
         managed_codex_bin: &Path,
     ) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
@@ -607,15 +614,6 @@ impl Daemon {
             RestartIfRunningOutcome::NotRunning
         };
 
-        if !self.is_stable_standalone_release()?
-            || managed_install::resolved_managed_codex_bin(&self.current_managed_codex_bin()?)
-                .await
-                .ok()
-                .as_deref()
-                != Some(managed_codex_bin)
-        {
-            return Ok(RestartIfRunningOutcome::AlreadyCurrent);
-        }
         Ok(outcome)
     }
 
@@ -872,13 +870,13 @@ impl Daemon {
         let backend = backend::pid_backend(managed.backend_paths(&settings));
         backend.start().await?;
         let info = self.wait_until_ready().await?;
-        let auto_update_enabled = managed.ensure_managed_updater(&settings).await?;
+        let _ = managed.ensure_managed_updater(&settings).await?;
         self.wait_until_remote_control_ready(&settings).await?;
         let managed_codex_version = managed.managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
-            auto_update_enabled,
+            auto_update_enabled: false,
             remote_control_enabled: settings.remote_control_enabled,
             managed_codex_path: managed.managed_codex_bin,
             managed_codex_version,
@@ -907,7 +905,7 @@ impl Daemon {
     }
 
     async fn start_managed_backend(&self, settings: &DaemonSettings) -> Result<Option<u32>> {
-        self.start_managed_backend_with_bin(settings, &self.managed_codex_bin)
+        self.start_managed_backend_with_bin(settings, self.backend_codex_bin())
             .await
     }
 
@@ -923,41 +921,8 @@ impl Daemon {
 
     async fn ensure_managed_updater(&self, settings: &DaemonSettings) -> Result<bool> {
         let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
-        if !settings.auto_update_enabled {
-            updater.stop().await?;
-            return Ok(false);
-        }
-        if !self.is_stable_standalone_release()? {
-            // An installer publishes current and the latest marker separately.
-            // Keep its updater alive while that publication may be in progress.
-            if !self.has_latest_selection_marker() {
-                updater.stop().await?;
-            }
-            return Ok(false);
-        }
-        let Ok(codex_bin) =
-            managed_install::resolved_managed_codex_bin(&self.managed_codex_bin).await
-        else {
-            if !self.has_latest_selection_marker() {
-                updater.stop().await?;
-            }
-            return Ok(false);
-        };
-        if !managed_install::supports_daemon_update_loop(&codex_bin).await
-            || !self.is_stable_standalone_release()?
-            || !managed_install::resolved_managed_codex_bin(&self.managed_codex_bin)
-                .await
-                .is_ok_and(|selected| selected == codex_bin)
-        {
-            if !self.has_latest_selection_marker() {
-                updater.stop().await?;
-            }
-            return Ok(false);
-        }
-        backend::pid_update_loop_backend(self.backend_paths_with_bin(settings, &codex_bin))
-            .start()
-            .await?;
-        Ok(true)
+        updater.stop().await?;
+        Ok(false)
     }
 
     fn is_stable_standalone_release(&self) -> Result<bool> {
@@ -982,44 +947,54 @@ impl Daemon {
         Ok(managed_install::managed_codex_bin(home))
     }
 
-    fn has_latest_selection_marker(&self) -> bool {
-        self.settings_file
-            .parent()
-            .and_then(Path::parent)
-            .is_some_and(|home| {
-                managed_install::package_root(home)
-                    .join("auto-update-version")
-                    .is_file()
-            })
-    }
-
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
-        if !settings.auto_update_enabled
-            || !self.is_stable_standalone_release()?
-            || !managed_install::supports_daemon_update_loop(&self.managed_codex_bin).await
-        {
-            return Ok(self.running_backend_instance(settings).await?.is_some());
-        }
-        let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
-        updater.is_starting_or_running().await
+        Ok(self.running_backend_instance(settings).await?.is_some())
     }
 
     fn ensure_managed_codex_bin(&self) -> Result<()> {
-        if self.managed_codex_bin.is_file() {
+        let codex_bin = self.backend_codex_bin();
+        if codex_bin.is_file() {
             #[cfg(windows)]
-            backend::windows::ensure_detached_launch(&self.managed_codex_bin)?;
+            backend::windows::ensure_detached_launch(codex_bin)?;
             return Ok(());
         }
 
         let managed_codex_path = self.managed_codex_bin.display();
         Err(anyhow!(
-            "daemon executable not found at {managed_codex_path}; repair the existing installation, or run `codex app-server daemon start` to install a missing daemon"
+            "managed Codex install not found at {managed_codex_path}\n\n\
+             This command requires the install managed by the package manager, because \
+             the daemon starts app-server from that fixed path.\n\n\
+             Install it with:\n  npm install -g @reb.ai/codex\n\n\
+             Then rerun the command you just tried."
         ))
+    }
+
+    /// Prefer a valid managed install, but let a directly invoked CLI binary
+    /// own the daemon when no managed package is available (for example, a
+    /// Cargo-installed development build).
+    fn backend_codex_bin(&self) -> &Path {
+        if self.managed_codex_bin.is_file() {
+            return &self.managed_codex_bin;
+        }
+        self.invoking_codex_bin
+            .as_deref()
+            .filter(|codex_bin| {
+                let file_stem = codex_bin.file_stem().and_then(std::ffi::OsStr::to_str);
+                codex_bin.is_file()
+                    && file_stem.is_some_and(|file_stem| {
+                        file_stem == "codex"
+                            || file_stem
+                                .strip_prefix("codex-")
+                                .and_then(|suffix| suffix.chars().next())
+                                .is_some_and(|first| first.is_ascii_digit())
+                    })
+            })
+            .unwrap_or(&self.managed_codex_bin)
     }
 
     #[cfg(any(unix, windows))]
     async fn managed_codex_version_best_effort(&self) -> Option<String> {
-        managed_codex_version(&self.managed_codex_bin).await.ok()
+        managed_codex_version(self.backend_codex_bin()).await.ok()
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -1028,7 +1003,7 @@ impl Daemon {
     }
 
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
-        self.backend_paths_with_bin(settings, &self.managed_codex_bin)
+        self.backend_paths_with_bin(settings, self.backend_codex_bin())
     }
 
     fn backend_paths_with_bin(
@@ -1043,10 +1018,6 @@ impl Daemon {
             remote_control_enabled: settings.remote_control_enabled,
             feature_overrides: settings.feature_overrides.clone(),
         }
-    }
-
-    fn manual_update_socket_path(&self) -> PathBuf {
-        self.update_pid_file.with_extension("sock")
     }
 
     async fn load_settings(&self) -> Result<DaemonSettings> {
@@ -1109,7 +1080,7 @@ impl Daemon {
             status,
             backend,
             pid,
-            managed_codex_path: self.managed_codex_bin.clone(),
+            managed_codex_path: self.backend_codex_bin().to_path_buf(),
             managed_codex_version,
             socket_path: self.socket_path.clone(),
             cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -1330,7 +1301,7 @@ mod tests {
         let bootstrap_output = BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
-            auto_update_enabled: true,
+            auto_update_enabled: false,
             remote_control_enabled: true,
             managed_codex_path: "codex".into(),
             managed_codex_version: Some("1.2.3".to_string()),
@@ -1345,7 +1316,7 @@ mod tests {
             serde_json::json!({
                 "status": "bootstrapped",
                 "backend": "pid",
-                "autoUpdateEnabled": true,
+                "autoUpdateEnabled": false,
                 "remoteControlEnabled": true,
                 "managedCodexPath": "codex",
                 "managedCodexVersion": "1.2.3",
@@ -1358,6 +1329,60 @@ mod tests {
             serde_json::to_value(output).expect("serialize"),
             serde_json::to_value(bootstrap_output).expect("serialize")
         );
+    }
+
+    #[test]
+    fn backend_uses_invoking_binary_when_managed_install_is_missing() {
+        let home = TempDir::new().expect("home");
+        let state = home.path().join("app-server-daemon");
+        let invoking_codex_bin = home.path().join(".cargo/bin/codex");
+        std::fs::create_dir_all(invoking_codex_bin.parent().expect("invoking bin parent"))
+            .expect("invoking bin directory");
+        std::fs::write(&invoking_codex_bin, b"local codex binary").expect("invoking binary");
+        let managed_codex_bin = home.path().join("packages/standalone/current/codex");
+        let mut daemon = Daemon {
+            log_diagnostics: false,
+            socket_path: home.path().join("server.sock"),
+            pid_file: state.join(super::LEGACY_PID_FILE_NAME),
+            update_pid_file: state.join(super::LEGACY_UPDATE_PID_FILE_NAME),
+            operation_lock_file: state.join("daemon.lock"),
+            settings_file: state.join("settings.json"),
+            managed_codex_bin: managed_codex_bin.clone(),
+            invoking_codex_bin: Some(invoking_codex_bin.clone()),
+        };
+
+        assert_eq!(daemon.backend_codex_bin(), invoking_codex_bin);
+        assert!(daemon.ensure_managed_codex_bin().is_ok());
+        assert_eq!(
+            daemon.backend_paths(&DaemonSettings::default()).codex_bin,
+            invoking_codex_bin
+        );
+
+        let versioned_codex_bin = home.path().join(".cargo/bin/codex-0.161.0-alpha.10-build");
+        std::fs::write(&versioned_codex_bin, b"versioned local codex binary")
+            .expect("versioned invoking binary");
+        daemon.invoking_codex_bin = Some(versioned_codex_bin.clone());
+        assert_eq!(daemon.backend_codex_bin(), versioned_codex_bin);
+
+        let invoking_tui_bin = home.path().join("target/debug/codex-tui");
+        std::fs::create_dir_all(invoking_tui_bin.parent().expect("invoking TUI parent"))
+            .expect("invoking TUI directory");
+        std::fs::write(&invoking_tui_bin, b"TUI-only binary").expect("invoking TUI binary");
+        daemon.invoking_codex_bin = Some(invoking_tui_bin);
+        assert_eq!(daemon.backend_codex_bin(), managed_codex_bin);
+        let error = daemon
+            .ensure_managed_codex_bin()
+            .expect_err("a TUI-only executable cannot own an app server");
+        assert!(
+            error
+                .to_string()
+                .contains("managed Codex install not found")
+        );
+
+        std::fs::create_dir_all(managed_codex_bin.parent().expect("managed bin parent"))
+            .expect("managed bin directory");
+        std::fs::write(&managed_codex_bin, b"managed codex binary").expect("managed binary");
+        assert_eq!(daemon.backend_codex_bin(), managed_codex_bin);
     }
 
     #[tokio::test]
@@ -1374,6 +1399,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: super::managed_codex_bin(home.path()),
+            invoking_codex_bin: None,
         };
         let lock = daemon.acquire_operation_lock().await.expect("lock");
         let stop = daemon.run(super::LifecycleCommand::Stop);
@@ -1408,6 +1434,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: state.join("missing-codex"),
+            invoking_codex_bin: None,
         };
         assert_eq!(
             daemon
@@ -1434,6 +1461,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: home.path().join("codex"),
+            invoking_codex_bin: None,
         };
         codex_app_server_transport::daemon_recovery::write_candidates(
             &daemon.recovery_file().expect("recovery path"),
@@ -1486,6 +1514,7 @@ mod tests {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: standalone.join("current/bin/codex"),
+            invoking_codex_bin: None,
         };
         let settings = DaemonSettings::default();
         assert!(
@@ -1512,6 +1541,7 @@ mod tests {
             operation_lock_file: temp_dir.path().join("daemon.lock"),
             settings_file: temp_dir.path().join("settings.json"),
             managed_codex_bin: temp_dir.path().join("missing-codex"),
+            invoking_codex_bin: None,
         };
         let stderr_log = daemon.pid_file.with_extension("stderr.log");
         tokio::fs::write(&stderr_log, "unexpected argument")
