@@ -273,8 +273,14 @@ async fn viewing_thread_reads_history_without_resuming_it() -> Result<()> {
 #[test]
 fn only_active_writer_failures_offer_read_only_view() {
     let conflict = color_eyre::eyre::eyre!("thread already has an active writer (code -32600)");
+    let same_process_conflict = color_eyre::eyre::eyre!(
+        "failed to take over the active session: the active writer belongs to this process"
+    );
     let unrelated = color_eyre::eyre::eyre!("thread not found (code -32600)");
     assert!(crate::app_server_session::is_active_writer_error(&conflict));
+    assert!(crate::app_server_session::is_active_writer_error(
+        &same_process_conflict
+    ));
     assert!(!crate::app_server_session::is_active_writer_error(
         &unrelated
     ));
@@ -415,6 +421,9 @@ async fn rollout_maintenance_contention_disables_cached_legacy_resume_shortcut()
         )
         .await?;
 
+    #[cfg(target_os = "android")]
+    assert_eq!(app_server.next_request_id, next_request_id + 4);
+    #[cfg(not(target_os = "android"))]
     assert_eq!(app_server.next_request_id, next_request_id + 3);
     assert_eq!(resumed.session.thread_id, thread_id);
     assert_eq!(
