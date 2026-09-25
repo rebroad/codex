@@ -36,9 +36,12 @@ codex-git-utils = { workspace = true }
 codex-history = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
+codex-rollout-trace = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-oss = { workspace = true }
@@ -49,6 +52,7 @@ owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+futures = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

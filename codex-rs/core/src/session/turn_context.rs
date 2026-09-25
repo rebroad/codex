@@ -1278,13 +1278,19 @@ impl Session {
             .map(TurnEnvironment::permission_profile)
             .cloned()
             .unwrap_or_else(|| session_configuration.permission_profile());
-        let model_info = session_configuration
+        let mut model_info = session_configuration
             .step_settings
             .resolve_model_info(
                 self.services.models_manager.as_ref(),
                 &session_configuration.model_info_overrides,
             )
             .await;
+        // Bare-prompt exec bypasses the Responses Lite server-managed context so
+        // the request contains only the explicitly supplied prompt, as in
+        // `exec --direct`.
+        if per_turn_config.bare_prompt {
+            model_info.use_responses_lite = false;
+        }
         let multi_agent_version = match build_mode {
             TurnContextBuildMode::Full => {
                 // Only execution and initial context creation publish model metadata.

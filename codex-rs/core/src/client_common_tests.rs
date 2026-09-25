@@ -4,9 +4,11 @@ use codex_api::TextControls;
 use codex_api::create_text_param_for_request;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
 use serde_json::value::RawValue;
 use std::sync::Arc;
@@ -69,6 +71,78 @@ fn prompt_with_image_outputs(detail: Option<ImageDetail>) -> Prompt {
         ],
         ..Default::default()
     }
+}
+
+#[test]
+fn without_scaffolding_keeps_explicit_developer_instructions_only() {
+    let prompt = Prompt {
+        input: vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "ambient scaffolding".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "explicit instruction".to_string(),
+                    },
+                ],
+                phase: None,
+                internal_chat_message_metadata_passthrough: Some(
+                    InternalChatMessageMetadataPassthrough {
+                        content_item_kinds: Some(vec![
+                            ContentItemKind("host_skills.instructions".to_string()),
+                            ContentItemKind("generic.developer_instructions".to_string()),
+                        ]),
+                        ..Default::default()
+                    },
+                ),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "say hi".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let prompt = prompt.without_scaffolding();
+    assert_eq!(
+        prompt.input,
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "explicit instruction".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: Some(
+                    InternalChatMessageMetadataPassthrough {
+                        content_item_kinds: Some(vec![ContentItemKind(
+                            "generic.developer_instructions".to_string(),
+                        )]),
+                        ..Default::default()
+                    },
+                ),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "say hi".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ]
+    );
 }
 
 #[test_case::test_case(Some(ImageDetail::Original), Some(ImageDetail::High); "original")]
