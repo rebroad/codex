@@ -687,6 +687,45 @@ async fn test_writable_root() {
     .await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn writable_symlink_root_allows_writes_through_logical_path() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    use std::os::unix::fs::symlink;
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let real_root = tempdir.path().join("real-root");
+    let logical_root = tempdir.path().join("logical-root");
+    let target = logical_root.join("written-through-link");
+    std::fs::create_dir(&real_root).expect("create real root");
+    symlink(&real_root, &logical_root).expect("create symlinked root");
+
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-lc",
+            &format!("printf symlink-ok > {}", target.to_string_lossy()),
+        ],
+        &[logical_root],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(
+        std::fs::read_to_string(real_root.join("written-through-link"))
+            .expect("read file written through symlink"),
+        "symlink-ok"
+    );
+}
+
 #[tokio::test]
 async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
     if should_skip_bwrap_tests().await {
@@ -1023,7 +1062,7 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
 }
 
 #[tokio::test]
-async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
+async fn sandbox_runs_when_codex_symlink_is_under_writable_root() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
@@ -1038,7 +1077,7 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
     let dot_codex = tmpdir.path().join(".codex");
     symlink(&decoy, &dot_codex).expect("create .codex symlink");
 
-    let output = match run_cmd_result_with_writable_roots(
+    let output = run_cmd_result_with_writable_roots(
         &["bash", "-lc", "true"],
         &[tmpdir.path().to_path_buf()],
         LONG_TIMEOUT_MS,
@@ -1046,38 +1085,9 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
         /*network_access*/ true,
     )
     .await
-    {
-        Err(err) => match err.details() {
-            CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
-                output.as_ref().clone()
-            }
-            details => panic!(".codex symlink build failure should deny: {details:?}"),
-        },
-        Ok(output) => panic!(".codex symlink build failure should deny: {output:?}"),
-    };
+    .expect("a protected symlink should not abort sandbox construction");
 
-    assert_eq!(output.exit_code, 1);
-    assert!(
-        output
-            .stderr
-            .text
-            .contains("error building bubblewrap command:"),
-        "stderr: {}",
-        output.stderr.text
-    );
-    assert!(
-        output
-            .stderr
-            .text
-            .contains("cannot enforce sandbox read-only path"),
-        "stderr: {}",
-        output.stderr.text
-    );
-    assert!(
-        !output.stderr.text.contains("panicked at"),
-        "stderr: {}",
-        output.stderr.text
-    );
+    assert_eq!(output.exit_code, 0);
 }
 
 #[tokio::test]
