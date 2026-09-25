@@ -158,6 +158,27 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
         .await
         .expect("listener should bind");
     let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let mut stale_auth = remote_control_auth_dot_json(Some("account_id"));
+    stale_auth
+        .tokens
+        .as_mut()
+        .expect("stale auth should include tokens")
+        .access_token = "stale-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &stale_auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+    .expect("stale auth should save");
+    let fresh_auth_home = codex_home.path().to_path_buf();
+    let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
+    fresh_auth
+        .tokens
+        .as_mut()
+        .expect("fresh auth should include tokens")
+        .access_token = "fresh-token".to_string();
     let server_task = tokio::spawn(async move {
         let stale_request = accept_http_request(&listener).await;
         assert_eq!(
@@ -170,6 +191,13 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
                 .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
             vec!["account_id"]
         );
+        save_auth(
+            &fresh_auth_home,
+            &fresh_auth,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("fresh auth should save after the stale request arrives");
         respond_with_status(stale_request.stream, "401 Unauthorized", "").await;
 
         let recovered_request = accept_http_request(&listener).await;
@@ -185,20 +213,6 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
         );
         respond_with_json(recovered_request.stream, empty_client_list()).await;
     });
-    let codex_home = TempDir::new().expect("temp dir should create");
-    let mut stale_auth = remote_control_auth_dot_json(Some("account_id"));
-    stale_auth
-        .tokens
-        .as_mut()
-        .expect("stale auth should include tokens")
-        .access_token = "stale-token".to_string();
-    save_auth(
-        codex_home.path(),
-        &stale_auth,
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )
-    .expect("stale auth should save");
     let auth_manager = AuthManager::shared(
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -209,19 +223,6 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
         codex_login::test_support::transport_default_auth_route_config(),
     )
     .await;
-    let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
-    fresh_auth
-        .tokens
-        .as_mut()
-        .expect("fresh auth should include tokens")
-        .access_token = "fresh-token".to_string();
-    save_auth(
-        codex_home.path(),
-        &fresh_auth,
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )
-    .expect("fresh auth should save");
 
     let response = list_remote_control_clients(
         &remote_control_url,
@@ -250,6 +251,27 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
         .await
         .expect("listener should bind");
     let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let mut stale_auth = remote_control_auth_dot_json(Some("account_id"));
+    stale_auth
+        .tokens
+        .as_mut()
+        .expect("stale auth should include tokens")
+        .access_token = "stale-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &stale_auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+    .expect("stale auth should save");
+    let fresh_auth_home = codex_home.path().to_path_buf();
+    let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
+    fresh_auth
+        .tokens
+        .as_mut()
+        .expect("fresh auth should include tokens")
+        .access_token = "fresh-token".to_string();
     let server_task = tokio::spawn(async move {
         let stale_request = accept_http_request(&listener).await;
         assert_eq!(
@@ -262,6 +284,13 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
                 .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
             vec!["account_id"]
         );
+        save_auth(
+            &fresh_auth_home,
+            &fresh_auth,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("fresh auth should save after the stale request arrives");
         respond_with_status(stale_request.stream, "401 Unauthorized", "").await;
 
         let recovered_request = accept_http_request(&listener).await;
@@ -283,20 +312,6 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
                 .is_err()
         );
     });
-    let codex_home = TempDir::new().expect("temp dir should create");
-    let mut stale_auth = remote_control_auth_dot_json(Some("account_id"));
-    stale_auth
-        .tokens
-        .as_mut()
-        .expect("stale auth should include tokens")
-        .access_token = "stale-token".to_string();
-    save_auth(
-        codex_home.path(),
-        &stale_auth,
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )
-    .expect("stale auth should save");
     let auth_manager = AuthManager::shared(
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -307,19 +322,6 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
         codex_login::test_support::transport_default_auth_route_config(),
     )
     .await;
-    let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
-    fresh_auth
-        .tokens
-        .as_mut()
-        .expect("fresh auth should include tokens")
-        .access_token = "fresh-token".to_string();
-    save_auth(
-        codex_home.path(),
-        &fresh_auth,
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )
-    .expect("fresh auth should save");
 
     let err = list_remote_control_clients(
         &remote_control_url,
