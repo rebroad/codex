@@ -49,6 +49,7 @@ async fn assert_conflict_recovery(subscribe_cursor: Option<&str>) {
             remote_control_target: Some(remote_control_target),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             server_name: "test-server".to_string(),
+            traffic_capture: None,
         },
         Some(state_db),
         RemoteControlAuth::capture(remote_control_auth_manager()).0,
