@@ -67,6 +67,7 @@ impl ProcessIdentity {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl super::PidBackend {
+    #[cfg(test)]
     pub(crate) async fn promote_legacy_identity(&self) -> Result<()> {
         let _reservation = self.acquire_reservation_lock().await?;
         let super::PidFileState::Running(mut record) =

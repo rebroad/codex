@@ -2218,7 +2218,6 @@ dependencies = [
  "blake3",
  "codex-app-server-protocol",
  "codex-app-server-transport",
- "codex-http-client",
  "codex-install-context",
  "codex-uds",
  "codex-utils-cargo-bin",

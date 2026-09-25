@@ -1,422 +1,54 @@
-use std::sync::Mutex;
+use super::install_latest_standalone;
+use super::update_modes_for_identities;
+#[cfg(unix)]
+use crate::Daemon;
+use crate::RestartMode;
+use crate::UpdaterRefreshMode;
+use crate::managed_install::executable_identity_from_reader;
+use pretty_assertions::assert_eq;
 #[cfg(unix)]
 use std::time::Duration;
-
-use pretty_assertions::assert_eq;
 #[cfg(unix)]
 use tempfile::TempDir;
 
-use super::INSTALL_URL;
-use super::InstallerHttp;
-use super::InstallerResponse;
-use super::fetch_installer_script;
-#[cfg(unix)]
-use super::manual_update::run as manual_update_once;
-#[cfg(unix)]
-use crate::Daemon;
-#[cfg(unix)]
-use crate::UpdateOutput;
-#[cfg(unix)]
-use crate::UpdateStatus;
-#[cfg(unix)]
-use crate::managed_install::executable_identity;
-#[cfg(unix)]
-use crate::managed_install::executable_identity_from_reader;
-
-#[tokio::test]
-async fn installer_fetch_uses_exact_url_and_preserves_bytes() {
-    let script = b"#!/bin/sh\nprintf 'update bytes'\n".to_vec();
-    let http = FakeInstallerHttp::new(InstallerResponse::Success(script.clone()));
-
+#[test]
+fn unchanged_updater_uses_version_based_restart() -> std::io::Result<()> {
     assert_eq!(
-        fetch_installer_script(&http)
-            .await
-            .expect("installer fetch should succeed"),
-        script
-    );
-    assert_eq!(http.requested_urls(), vec![INSTALL_URL.to_string()]);
-}
-
-#[tokio::test]
-async fn installer_fetch_rejects_non_success_status() {
-    let http = FakeInstallerHttp::new(InstallerResponse::Unsuccessful { status: 503 });
-
-    let error = fetch_installer_script(&http)
-        .await
-        .expect_err("non-success response should fail");
-
-    assert!(error.to_string().contains("503"));
-    assert_eq!(http.requested_urls(), vec![INSTALL_URL.to_string()]);
-}
-
-#[cfg(unix)]
-#[test]
-fn updater_reexec_preserves_paths_and_recovers_deleted_working_directory() {
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::PermissionsExt;
-
-    for (delete_cwd, home_name) in [
-        (false, "home"),
-        (true, "home"),
-        (false, "alias"),
-        (true, "alias"),
-        // macOS filesystems reject non-Unicode names.
-        #[cfg(target_os = "linux")]
-        (false, "link/../home"),
-    ] {
-        let home = TempDir::new().expect("home");
-        let project = home.path().join("project");
-        let state = home.path().join("state");
-        let codex_home = home.path().join("home");
-        std::fs::create_dir(&project).expect("project");
-        std::fs::create_dir(&state).expect("state");
-        std::fs::create_dir(&codex_home).expect("codex home");
-        std::os::unix::fs::symlink(&codex_home, home.path().join("alias")).expect("home alias");
-        if home_name == "link/../home" {
-            let non_unicode = home.path().join(std::ffi::OsStr::from_bytes(b"home-\xff"));
-            std::fs::create_dir_all(non_unicode.join("child")).expect("non-Unicode parent");
-            std::fs::create_dir(non_unicode.join("home")).expect("non-Unicode home");
-            std::os::unix::fs::symlink(non_unicode.join("child"), home.path().join("link"))
-                .expect("Unicode alias");
-        }
-        let executable = home.path().join("updater");
-        std::fs::write(
-        &executable,
-        b"#!/bin/sh\ntest -d \"$CODEX_HOME\" || exit 1\n{ pwd -P; printf '%s\\n' \"$CODEX_HOME\" \"$CODEX_SQLITE_HOME\" \"$AWS_CONFIG_FILE\" \"$SSL_CERT_DIR\" \"$NPM_CONFIG_CAFILE\"; } > \"$CODEX_TEST_UPDATER_OUTPUT\"\n",
-    )
-    .expect("updater shim");
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
-            .expect("executable");
-        let output = state.join("output");
-        let project_path = project.canonicalize().expect("project path");
-        let ca_file = if delete_cwd {
-            project_path.join("ca.pem").into_os_string()
-        } else {
-            " ca.pem ".into()
-        };
-        let cert_dir = if delete_cwd {
-            project_path.join("certs")
-        } else {
-            std::path::PathBuf::from("certs")
-        };
-        let result = std::process::Command::new(std::env::current_exe().expect("test binary"))
-            .args(["--exact", "update_loop::tests::updater_reexec_child"])
-            .current_dir(&project)
-            .env("CODEX_TEST_UPDATER_EXECUTABLE", &executable)
-            .env("CODEX_TEST_UPDATER_STATE", &state)
-            .env("CODEX_TEST_UPDATER_OUTPUT", &output)
-            .env("CODEX_TEST_UPDATER_DELETE_CWD", delete_cwd.to_string())
-            .env("CODEX_HOME", format!("../{home_name}"))
-            .env("CODEX_SQLITE_HOME", " sqlite ")
-            .env("AWS_CONFIG_FILE", "~/config")
-            .env("NPM_CONFIG_CAFILE", ca_file)
-            .env(
-                "SSL_CERT_DIR",
-                std::env::join_paths([&cert_dir, &state]).unwrap(),
-            )
-            .output()
-            .expect("spawn updater test");
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let state = state.canonicalize().expect("state path");
-        let expected = [
-            if delete_cwd { &state } else { &project_path }
-                .display()
-                .to_string(),
-            if home_name == "link/../home" {
-                project_path.join(format!("../{home_name}"))
-            } else {
-                home.path()
-                    .canonicalize()
-                    .expect("parent path")
-                    .join(home_name)
-            }
-            .display()
-            .to_string(),
-            " sqlite ".to_string(),
-            "~/config".to_string(),
-            std::env::join_paths([project_path.join("certs"), home.path().join("state")])
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
-            project_path.join("ca.pem").display().to_string(),
-        ]
-        .join("\n")
-            + "\n";
-        assert_eq!(
-            std::fs::read_to_string(output).expect("updater output"),
-            expected
-        );
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn updater_reexec_child() {
-    use std::os::unix::process::CommandExt;
-
-    let Some(executable) = std::env::var_os("CODEX_TEST_UPDATER_EXECUTABLE") else {
-        return;
-    };
-    let state = std::env::var_os("CODEX_TEST_UPDATER_STATE").expect("state path");
-    if std::env::var("CODEX_TEST_UPDATER_DELETE_CWD").as_deref() == Ok("true") {
-        // Model the initial background launch while the relative home is resolvable.
-        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
-        command
-            .args(["--exact", "update_loop::tests::updater_reexec_child"])
-            .env("CODEX_TEST_UPDATER_DELETE_CWD", "prepared");
-        crate::background_command::set_working_directory(
-            &mut command,
-            std::path::Path::new(&state),
-        )
-        .expect("prepare background launch");
-        panic!("failed to launch prepared updater: {}", command.exec());
-    }
-    if std::env::var("CODEX_TEST_UPDATER_DELETE_CWD").as_deref() == Ok("prepared") {
-        std::fs::remove_dir(std::env::current_dir().expect("project cwd"))
-            .expect("delete updater cwd");
-    }
-    super::reexec_managed_updater(
-        std::path::Path::new(&executable),
-        std::path::Path::new(&state),
-    )
-    .expect("reexec updater");
-    panic!("successful exec does not return");
-}
-
-struct FakeInstallerHttp {
-    response: InstallerResponse,
-    requested_urls: Mutex<Vec<String>>,
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn explicit_update_migrates_running_and_stopped_installations() {
-    for (running, local) in [(false, false), (true, false), (false, true), (true, true)] {
-        let home = TempDir::new().unwrap();
-        let (legacy, release) = manual_update_daemon(&home);
-        let root = home.path().join("packages/standalone");
-        if local {
-            let package = root.join("releases/local-development");
-            std::fs::create_dir(&package).unwrap();
-            codex_utils_cargo_bin::copy_executable(
-                &legacy.managed_codex_bin,
-                &package.join("codex"),
-            )
-            .unwrap();
-            std::fs::remove_file(root.join("current")).unwrap();
-            std::os::unix::fs::symlink(&package, root.join("current")).unwrap();
-            std::fs::remove_file(root.join("auto-update-version")).unwrap();
-        }
-        let previous = root.join("current").canonicalize().unwrap();
-        let scheduled = FakeInstallerHttp::new(InstallerResponse::Success(
-        b"# CODEX_INSTALL_IF_LATEST\ntest \"$CODEX_INSTALL_DEFER_SELECTION\" = 0 && test \"$CODEX_INSTALL_DAEMON_ONLY\" = 0\n".to_vec(),
-    ));
-        super::update_once(
-            &scheduled,
-            &legacy,
-            &executable_identity(&legacy.managed_codex_bin)
-                .await
-                .unwrap(),
-            &mut test_terminate(),
-            super::UpdateTrigger::Scheduled,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            scheduled.requested_urls(),
-            if local {
-                vec![]
-            } else {
-                vec![INSTALL_URL.to_string()]
-            }
-        );
-        assert_eq!(
-            crate::managed_install::package_root(home.path()),
-            home.path().join("packages/standalone")
-        );
-        let settings = format!(
-            r#"{{"updater":{{"autoUpdateEnabled":{running}}},"remoteControlEnabled":true}}"#
-        );
-        std::fs::write(&legacy.settings_file, &settings).unwrap();
-        let daemon_settings = legacy.load_settings().await.unwrap();
-        let old_backend = crate::backend::pid_backend(legacy.backend_paths(&daemon_settings));
-        let old_updater =
-            crate::backend::pid_update_loop_backend(legacy.backend_paths(&daemon_settings));
-        let server = if running {
-            old_backend.start().await.unwrap();
-            old_updater.start().await.unwrap();
-            Some(test_control_server(&legacy, home.path()).await)
-        } else {
-            None
-        };
-        let legacy_bin = std::fs::read(&legacy.managed_codex_bin).unwrap();
-        let dedicated = home.path().join("packages/app-server-daemon");
-        let old_installer = FakeInstallerHttp::new(InstallerResponse::Success(b"exit 99".to_vec()));
-        assert!(
-            super::migration::run(&old_installer, &legacy)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("does not support daemon migration")
-        );
-
-        let script = format!(
-            r#"# CODEX_INSTALL_DEFER_SELECTION
-set -eu
-test "$CODEX_INSTALL_DEFER_SELECTION" = 1
-test "$CODEX_INSTALL_IF_CURRENT" = 0
-test "$CODEX_INSTALL_DAEMON_ONLY" = 1
-test "$CODEX_INSTALL_IF_LATEST" = 0
-root="$CODEX_HOME/packages/app-server-daemon"
-mkdir -p "$root/releases/{release}/bin"
-printf '#!/bin/sh\nif [ "$1" = --version ]; then echo codex 1.0.0; else exit 2; fi\n' > "$root/releases/{release}/bin/codex"
-chmod +x "$root/releases/{release}/bin/codex"
-ln -sfn 'releases/{release}' "$root/.migration-current"
-printf '{release}' > "$root/auto-update-version"
-"#
-        );
-        let http = FakeInstallerHttp::new(InstallerResponse::Success(script.as_bytes().to_vec()));
-        let error = super::migration::run(&http, &legacy).await.unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("production release does not support daemon migration")
-        );
-        assert!(!dedicated.join("current").exists());
-        assert_eq!(
-            crate::managed_install::package_root(home.path()),
-            home.path().join("packages/standalone")
-        );
-        assert_eq!(
-            (
-                old_backend.is_starting_or_running().await.unwrap(),
-                old_updater.is_starting_or_running().await.unwrap()
-            ),
-            (running, running)
-        );
-        let compatible = FakeInstallerHttp::new(InstallerResponse::Success(script.replace("else exit 2", "elif [ \"$4\" = --check-package-ownership ] || [ \"$4\" = --help ]; then exit 0; else exec sleep 30").into_bytes()));
-        let output = super::migration::run(&compatible, &legacy).await.unwrap();
-        assert_eq!(output, UpdateOutput {
-        status: UpdateStatus::Updated,
-        installed_version: Some("1.0.0".to_string()),
-        running_version: (running).then(|| "1.0.0".to_string()),
-        managed_codex_path: dedicated.join("current/bin/codex"),
-        message: "The daemon was updated and moved to its dedicated package. The legacy CLI package was left unchanged.".to_string(),
-    });
-        assert_eq!(
-            crate::managed_install::package_root(home.path()),
-            dedicated.clone()
-        );
-        assert!(!dedicated.join(".migration-current").exists());
-        assert_eq!(root.join("current").canonicalize().unwrap(), previous);
-        assert_eq!(
-            std::fs::read(&legacy.managed_codex_bin).unwrap(),
-            legacy_bin
-        );
-        assert_eq!(
-            std::fs::read_to_string(&legacy.settings_file).unwrap(),
-            settings
-        );
-        let selected = Daemon {
-            pid_file: legacy.pid_file.with_file_name(crate::DAEMON_PID_FILE_NAME),
-            update_pid_file: legacy
-                .update_pid_file
-                .with_file_name(crate::DAEMON_UPDATE_PID_FILE_NAME),
-            managed_codex_bin: dedicated.join("current/bin/codex"),
-            ..legacy.clone()
-        };
-        let new_backend = crate::backend::pid_backend(selected.backend_paths(&daemon_settings));
-        assert_eq!(new_backend.is_starting_or_running().await.unwrap(), running);
-        assert!(!old_backend.is_starting_or_running().await.unwrap());
-        assert!(!old_updater.is_starting_or_running().await.unwrap());
-        let new_updater =
-            crate::backend::pid_update_loop_backend(selected.backend_paths(&daemon_settings));
-        assert_eq!(new_updater.is_starting_or_running().await.unwrap(), running);
-        new_updater.stop().await.unwrap();
-        new_backend.stop().await.unwrap();
-        if let Some(server) = server {
-            server.abort();
-        }
-    }
-}
-
-impl FakeInstallerHttp {
-    fn new(response: InstallerResponse) -> Self {
-        Self {
-            response,
-            requested_urls: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn requested_urls(&self) -> Vec<String> {
-        self.requested_urls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl InstallerHttp for FakeInstallerHttp {
-    async fn get(&self, url: &str) -> anyhow::Result<InstallerResponse> {
-        self.requested_urls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(url.to_string());
-        Ok(self.response.clone())
-    }
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn cancelling_installer_stops_children_and_releases_fallback_lock() {
-    let home = tempfile::TempDir::new().expect("home");
-    let ready = home.path().join("ready");
-    let delayed = home.path().join("delayed");
-    let lock = home.path().join("packages/standalone/install.lock.d");
-    let script = format!(
-        "mkdir -p '{lock}'\necho $$ > '{lock}/pid'\n(trap '' TERM; echo ready > '{ready}'; sleep 4; echo late > '{delayed}') &\nwait\n",
-        lock = lock.display(),
-        ready = ready.display(),
-        delayed = delayed.display(),
-    );
-    let (cancel, cancelled) = tokio::sync::oneshot::channel();
-    let ready_for_signal = ready.clone();
-    let signal_sender = tokio::spawn(async move {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !ready_for_signal.exists() {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "installer did not start"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        cancel.send(()).expect("cancel installer");
-    });
-    let result = tokio::time::timeout(
-        Duration::from_secs(10),
-        super::run_installer_script(
-            script.as_bytes(),
-            super::InstallerMode::Update("0.150.0-test"),
-            &home.path().join("packages/standalone"),
-            async { cancelled.await.ok() },
+        update_modes_for_identities(
+            &executable_identity_from_reader(&b"same"[..])?,
+            &executable_identity_from_reader(&b"same"[..])?,
         ),
-    )
-    .await
-    .expect("installer cancellation timed out")
-    .expect("installer cancellation failed");
-    signal_sender.await.expect("signal sender");
-    assert!(matches!(result, super::UpdateLoopControl::Stop));
-    assert!(!lock.exists());
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(!delayed.exists());
+        (RestartMode::IfVersionChanged, UpdaterRefreshMode::None)
+    );
+    Ok(())
+}
+
+#[test]
+fn changed_updater_forces_refresh_even_when_version_may_match() -> std::io::Result<()> {
+    assert_eq!(
+        update_modes_for_identities(
+            &executable_identity_from_reader(&b"old"[..])?,
+            &executable_identity_from_reader(&b"new"[..])?,
+        ),
+        (
+            RestartMode::Always,
+            UpdaterRefreshMode::ReexecIfManagedBinaryChanged,
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn standalone_installer_is_intentionally_a_noop() {
+    // Termux packages update through the fork-owned release channel. The
+    // upstream standalone installer must never fetch or execute here.
+    install_latest_standalone()
+        .await
+        .expect("Termux standalone updater must fail closed as a no-op");
 }
 
 #[cfg(unix)]
-fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
+fn test_daemon_with_managed_install(home: &TempDir) -> (Daemon, String) {
     let target = if cfg!(target_os = "macos") {
         format!("{}-apple-darwin", std::env::consts::ARCH)
     } else {
@@ -433,7 +65,6 @@ fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
     .expect("managed binary");
     std::os::unix::fs::symlink(format!("releases/{release}"), standalone.join("current"))
         .expect("current release");
-    std::fs::write(standalone.join("auto-update-version"), &release).expect("latest marker");
     let state = home.path().join("app-server-daemon");
     std::fs::create_dir(&state).unwrap();
     std::fs::write(state.join("app-server.stderr.log"), b"").unwrap();
@@ -446,183 +77,10 @@ fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
             managed_codex_bin: standalone.join("current/codex"),
+            invoking_codex_bin: None,
         },
         release,
     )
-}
-
-#[cfg(unix)]
-fn test_terminate() -> tokio::signal::unix::Signal {
-    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("install test signal handler")
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn manual_request_retries_after_updater_replacement() {
-    use tokio::io::AsyncReadExt;
-    use tokio::io::AsyncWriteExt;
-
-    let home = TempDir::new().expect("home");
-    let (daemon, _) = manual_update_daemon(&home);
-    let socket_path = daemon.manual_update_socket_path();
-    codex_uds::prepare_private_socket_directory(socket_path.parent().expect("socket parent"))
-        .await
-        .expect("socket directory");
-    let mut listener = codex_uds::UnixListener::bind(&socket_path)
-        .await
-        .expect("old updater socket");
-    let expected = UpdateOutput {
-        status: UpdateStatus::NoUpdate,
-        managed_codex_path: daemon.managed_codex_bin.clone(),
-        installed_version: None,
-        running_version: None,
-        message: "already current".to_string(),
-    };
-    let reply = expected.clone();
-    let server = tokio::spawn(async move {
-        let mut old = listener.accept().await.expect("first connection");
-        let mut request = [0; 7];
-        old.read_exact(&mut request).await.expect("first request");
-        drop(old);
-        drop(listener);
-        tokio::fs::remove_file(&socket_path)
-            .await
-            .expect("remove old socket");
-        let mut successor = codex_uds::UnixListener::bind(&socket_path)
-            .await
-            .expect("successor socket");
-        let mut connection = successor.accept().await.expect("retried connection");
-        connection
-            .read_exact(&mut request)
-            .await
-            .expect("retried request");
-        connection
-            .write_all(&serde_json::to_vec(&Ok::<_, String>(reply)).expect("serialize response"))
-            .await
-            .expect("send response");
-    });
-    assert_eq!(
-        super::manual_update::request(&daemon)
-            .await
-            .expect("request survives handoff"),
-        expected
-    );
-    server.await.expect("replacement task");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn manual_request_recovers_when_one_shot_updater_exits() {
-    use tokio::io::AsyncReadExt;
-
-    let home = TempDir::new().expect("home");
-    let (daemon, _) = manual_update_daemon(&home);
-    let socket_path = daemon.manual_update_socket_path();
-    codex_uds::prepare_private_socket_directory(socket_path.parent().expect("socket parent"))
-        .await
-        .expect("socket directory");
-    let mut listener = codex_uds::UnixListener::bind(&socket_path)
-        .await
-        .expect("one-shot updater socket");
-    let server = tokio::spawn(async move {
-        let mut connection = listener.accept().await.expect("request connection");
-        let mut request = [0; 7];
-        connection.read_exact(&mut request).await.expect("request");
-        drop(connection);
-        drop(listener);
-        tokio::fs::remove_file(socket_path)
-            .await
-            .expect("remove exited updater socket");
-    });
-    // Without the selected executable, the startup path reports unsupported. A
-    // retry that only waits for a successor would time out instead.
-    std::fs::remove_file(&daemon.managed_codex_bin).expect("remove selected binary");
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        super::manual_update::request(&daemon),
-    )
-    .await
-    .expect("retry should return to normal startup")
-    .expect("unsupported response");
-    assert_eq!(result.status, UpdateStatus::Unsupported);
-    server.await.expect("updater task");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn unsupported_request_preserves_updater_schedule() {
-    use tokio::io::AsyncReadExt;
-    use tokio::io::AsyncWriteExt;
-
-    let home = TempDir::new().expect("home");
-    let (daemon, _) = manual_update_daemon(&home);
-    let daemon = std::sync::Arc::new(daemon);
-    let identity = executable_identity(&daemon.managed_codex_bin)
-        .await
-        .expect("updater identity");
-    let socket_path = daemon.manual_update_socket_path();
-    let http = FakeInstallerHttp::new(InstallerResponse::Success(Vec::new()));
-    let updater_daemon = std::sync::Arc::clone(&daemon);
-    let worker = tokio::spawn(async move {
-        super::run_with_http(
-            &http,
-            &updater_daemon,
-            &identity,
-            /*restore_release*/ None,
-        )
-        .await
-    });
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !socket_path.exists() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "updater did not listen"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    // An external installer can pin while this ordinary worker still listens.
-    // Raw IPC must not gain the manual CLI's authority to restore production.
-    let marker = super::selected_release(&daemon)
-        .unwrap()
-        .0
-        .join("auto-update-version");
-    let previous_marker = std::fs::read(&marker).unwrap();
-    std::fs::remove_file(&marker).unwrap();
-    let mut pinned = codex_uds::UnixStream::connect(&socket_path).await.unwrap();
-    pinned.write_all(b"update\n").await.unwrap();
-    let mut response = Vec::new();
-    pinned.read_to_end(&mut response).await.unwrap();
-    let response: Result<UpdateOutput, String> = serde_json::from_slice(&response).unwrap();
-    assert_eq!(response.unwrap().status, UpdateStatus::Unsupported);
-    assert!(!marker.exists());
-    std::fs::write(&marker, previous_marker).unwrap();
-    std::fs::remove_file(&daemon.managed_codex_bin).expect("remove selected binary");
-    let mut malformed = codex_uds::UnixStream::connect(&socket_path)
-        .await
-        .expect("connect malformed request");
-    malformed
-        .write_all(b"upd")
-        .await
-        .expect("send partial request");
-    malformed.shutdown().await.expect("disconnect request");
-    let mut discarded = Vec::new();
-    malformed
-        .read_to_end(&mut discarded)
-        .await
-        .expect("rejected request");
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!worker.is_finished(), "malformed request stopped updater");
-    assert_eq!(
-        super::manual_update::request(&daemon)
-            .await
-            .expect("unsupported response")
-            .status,
-        UpdateStatus::Unsupported
-    );
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!worker.is_finished(), "unsupported request stopped updater");
-    worker.abort();
 }
 
 #[cfg(unix)]
@@ -676,12 +134,6 @@ async fn test_control_server(
 
 #[cfg(unix)]
 #[tokio::test]
-async fn manual_update_restarts_managed_daemon_with_automatic_updates_disabled() {
-    check_manual_update_restart("standalone").await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
 async fn daemon_start_and_restart_preserve_launch_features() {
     for features in [
         std::collections::BTreeMap::new(),
@@ -691,13 +143,13 @@ async fn daemon_start_and_restart_preserve_launch_features() {
         ]),
     ] {
         let home = TempDir::new().unwrap();
-        let (daemon, _) = manual_update_daemon(&home);
+        let (daemon, _) = test_daemon_with_managed_install(&home);
         let args_path = home.path().join("launch-args");
         std::fs::write(
-        &daemon.settings_file,
-        r#"{"featureOverrides":{"auth_elicitation":true},"updater":{"autoUpdateEnabled":false}}"#,
-    )
-    .unwrap();
+            &daemon.settings_file,
+            r#"{"featureOverrides":{"auth_elicitation":true},"shutdownGraceSeconds":0}"#,
+        )
+        .unwrap();
         codex_utils_cargo_bin::write_executable(&daemon.managed_codex_bin, &format!(
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex 1.0.0; exit; fi\nif [ \"$3\" = --help ]; then exit; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
         args_path.display(),
@@ -764,9 +216,9 @@ async fn confirmed_feature_restart_preserves_ownership_and_skips_matching_settin
 
     for managed in [true, false] {
         let home = TempDir::new().unwrap();
-        let (daemon, _) = manual_update_daemon(&home);
+        let (daemon, _) = test_daemon_with_managed_install(&home);
         std::fs::write(&daemon.settings_file,
-            r#"{"featureOverrides":{"auth_elicitation":true,"api_key_model_discovery":true},"updater":{"autoUpdateEnabled":false},"shutdownGraceSeconds":0}"#
+            r#"{"featureOverrides":{"auth_elicitation":true,"api_key_model_discovery":true},"shutdownGraceSeconds":0}"#
         ).unwrap();
         let original = daemon.load_settings().await.unwrap();
         if managed {
@@ -789,7 +241,9 @@ async fn confirmed_feature_restart_preserves_ownership_and_skips_matching_settin
                 .unwrap_err();
             std::fs::rename(saved_package, selected_package).unwrap();
             assert!(
-                error.to_string().contains("daemon executable not found"),
+                error
+                    .to_string()
+                    .contains("managed Codex install not found"),
                 "{error:#}"
             );
             assert_eq!(daemon.load_settings().await.unwrap(), original);
@@ -821,352 +275,5 @@ async fn confirmed_feature_restart_preserves_ownership_and_skips_matching_settin
             assert_eq!(daemon.load_settings().await.unwrap(), original);
         }
         server.abort();
-    }
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn manual_update_restarts_local_daemon_with_automatic_updates_disabled() {
-    check_manual_update_restart("app-server-daemon").await;
-}
-
-#[cfg(unix)]
-async fn check_manual_update_restart(package_directory: &str) {
-    use tokio::io::AsyncReadExt;
-    use tokio::io::AsyncWriteExt;
-
-    let local_package = package_directory == "app-server-daemon";
-    let home = TempDir::new().expect("home");
-    let (mut daemon, mut release) = manual_update_daemon(&home);
-    let standalone = home.path().join("packages").join(package_directory);
-    if local_package {
-        std::fs::rename(home.path().join("packages/standalone"), &standalone).unwrap();
-        let local = format!("local-development-{release}");
-        std::fs::rename(
-            standalone.join("releases").join(&release),
-            standalone.join("releases").join(&local),
-        )
-        .unwrap();
-        std::fs::remove_file(standalone.join("current")).unwrap();
-        std::os::unix::fs::symlink(format!("releases/{local}"), standalone.join("current"))
-            .unwrap();
-        std::fs::remove_file(standalone.join("auto-update-version")).unwrap();
-        daemon.managed_codex_bin = standalone.join("current/codex");
-        release = local;
-    }
-    let daemon = std::sync::Arc::new(daemon);
-    std::fs::create_dir_all(daemon.settings_file.parent().expect("state directory"))
-        .expect("state directory");
-    std::fs::write(
-        &daemon.settings_file,
-        r#"{"updater":{"autoUpdateEnabled":false}}"#,
-    )
-    .expect("disabled updater");
-    let server = test_control_server(&daemon, home.path()).await;
-    let settings = crate::settings::DaemonSettings::default();
-    let backend = crate::backend::pid_backend(daemon.backend_paths(&settings));
-    backend.start().await.expect("start daemon");
-    let current_pid = || {
-        serde_json::from_slice::<serde_json::Value>(
-            &std::fs::read(&daemon.pid_file).expect("daemon PID record"),
-        )
-        .expect("PID JSON")["pid"]
-            .as_u64()
-            .expect("PID")
-    };
-    let before = current_pid();
-    let version = if local_package { "1.0.0" } else { "1.1.0" };
-    let next = release
-        .trim_start_matches("local-development-")
-        .replacen("1.0.0", version, 1);
-    let guard = if local_package {
-        "CODEX_INSTALL_IF_CURRENT"
-    } else {
-        "CODEX_INSTALL_IF_LATEST"
-    };
-    let install_binary = if local_package {
-        // Same binary and version, but a different package: it must still restart.
-        format!(
-            "cp '{root}/releases/{release}/codex' '{root}/releases/{next}/bin/codex'",
-            root = standalone.display()
-        )
-    } else {
-        format!(
-            r#"printf '#!/bin/sh\nif [ "$1" = --version ]; then echo codex 1.1.0; else exec sleep 30; fi\n' > '{root}/releases/{next}/bin/codex'"#,
-            root = standalone.display()
-        )
-    };
-    let ready = home.path().join("installer-ready");
-    let proceed = home.path().join("installer-proceed");
-    let script = format!(
-        "#!/bin/sh\n# CODEX_INSTALL_IF_LATEST CODEX_INSTALL_IF_CURRENT CODEX_INSTALL_DAEMON_ONLY\nif [ \"$CODEX_UPDATE_FROM_RELEASE\" = '{next}' ]; then exit 0; fi\ntest \"${guard}\" = 1 || exit 4\ntest \"$CODEX_UPDATE_FROM_RELEASE\" = '{release}' || exit 5\ntouch '{ready}'\nwhile [ ! -e '{proceed}' ]; do sleep .05; done\nmkdir -p '{root}/releases/{next}/bin'\n{install_binary}\nchmod +x '{root}/releases/{next}/bin/codex'\nln -sfn 'releases/{next}' '{root}/current'\nprintf '{next}' > '{root}/auto-update-version'\n",
-        root = standalone.display(),
-        ready = ready.display(),
-        proceed = proceed.display(),
-    );
-    let http = FakeInstallerHttp::new(InstallerResponse::Success(script.into_bytes()));
-    let updater_daemon = std::sync::Arc::clone(&daemon);
-    let restore_release = local_package.then(|| release.clone());
-    let worker = tokio::spawn(async move {
-        super::run_with_http(
-            &http,
-            &updater_daemon,
-            &executable_identity_from_reader(&b"updater"[..]).expect("updater identity"),
-            restore_release,
-        )
-        .await
-    });
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !daemon.manual_update_socket_path().exists() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "updater did not listen"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let request_daemon = std::sync::Arc::clone(&daemon);
-    let request = tokio::spawn(async move { super::manual_update::request(&request_daemon).await });
-    while !ready.exists() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "installer did not start"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let mut queued = codex_uds::UnixStream::connect(&daemon.manual_update_socket_path())
-        .await
-        .expect("queue a second update");
-    queued
-        .write_all(b"update\n")
-        .await
-        .expect("send second update");
-    std::fs::write(proceed, b"go").expect("release installer");
-    let output = request
-        .await
-        .expect("first request task")
-        .expect("manual update");
-    assert_eq!(output.status, UpdateStatus::Updated);
-    assert_eq!(output.installed_version.as_deref(), Some(version));
-    assert_eq!(output.running_version.as_deref(), Some(version));
-    assert_eq!(
-        output.managed_codex_path,
-        standalone.join("current/bin/codex")
-    );
-    let restarted = current_pid();
-    assert_ne!(restarted, before);
-    let mut response = Vec::new();
-    queued
-        .read_to_end(&mut response)
-        .await
-        .expect("second response");
-    let second: Result<crate::UpdateOutput, String> =
-        serde_json::from_slice(&response).expect("valid second response");
-    assert_eq!(
-        second.expect("second update").status,
-        UpdateStatus::NoUpdate
-    );
-    assert_eq!(current_pid(), restarted);
-    tokio::time::timeout(Duration::from_secs(5), worker)
-        .await
-        .expect("one-shot updater did not exit")
-        .expect("updater task")
-        .expect("updater loop");
-    let no_op = FakeInstallerHttp::new(InstallerResponse::Success(
-        b"#!/bin/sh\n# CODEX_INSTALL_IF_LATEST CODEX_INSTALL_DAEMON_ONLY\nexit 0\n".to_vec(),
-    ));
-    let bin = daemon
-        .current_managed_codex_bin()
-        .expect("current executable");
-    let contents = std::fs::read_to_string(&bin).expect("managed executable");
-    codex_utils_cargo_bin::write_executable(
-        &bin,
-        &format!("{contents}\n# same-version replacement\n"),
-    )
-    .expect("replace binary bytes");
-    let output = manual_update_once(
-        &no_op,
-        &daemon,
-        &executable_identity_from_reader(&b"updater"[..]).expect("updater identity"),
-        &mut test_terminate(),
-        super::UpdateTrigger::Manual,
-    )
-    .await
-    .expect("retry with stale running binary");
-    assert_eq!(output.status, UpdateStatus::NoUpdate);
-    assert_ne!(current_pid(), restarted);
-    backend.stop().await.expect("stop daemon");
-    server.abort();
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn powershell_installer_is_noninteractive_and_reports_script_failure() {
-    let valid = FakeInstallerHttp::new(InstallerResponse::Success(
-        br#"
-function Test-Installer {
-    if ($env:CODEX_NON_INTERACTIVE -ne '1') { throw 'interactive installer' }
-    if ($env:CODEX_INSTALL_DAEMON_ONLY -ne '1') { throw 'wrong package destination' }
-    if ($env:CODEX_INSTALL_IF_CURRENT -ne '1' -or $env:CODEX_INSTALL_IF_LATEST -ne '0') { throw 'wrong update guard' }
-}
-Test-Installer
-"#
-        .to_vec(),
-    ));
-    let script = super::fetch_installer_script(&valid)
-        .await
-        .expect("fetch installer");
-    super::run_installer_script(
-        &script,
-        super::InstallerMode::RestoreProduction("0.150.0-x86_64-pc-windows-msvc"),
-        std::path::Path::new("packages/app-server-daemon"),
-    )
-    .await
-    .expect("installer succeeds");
-    let failing = FakeInstallerHttp::new(InstallerResponse::Success(
-        b"throw 'installer failed'".to_vec(),
-    ));
-    let script = super::fetch_installer_script(&failing)
-        .await
-        .expect("fetch failing installer");
-    assert!(
-        super::run_installer_script(
-            &script,
-            super::InstallerMode::RestoreProduction("0.150.0-x86_64-pc-windows-msvc"),
-            std::path::Path::new("packages/app-server-daemon")
-        )
-        .await
-        .is_err()
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn update_rejects_a_package_root_change_during_download() {
-    struct ChangingRoot<'a>(&'a std::path::Path);
-    impl InstallerHttp for ChangingRoot<'_> {
-        async fn get(&self, _url: &str) -> anyhow::Result<InstallerResponse> {
-            std::os::unix::fs::symlink(
-                self.0.join("packages/standalone"),
-                self.0.join("packages/app-server-daemon"),
-            )?;
-            Ok(InstallerResponse::Success(
-                b"# CODEX_INSTALL_IF_LATEST\nexit 99\n".to_vec(),
-            ))
-        }
-    }
-    let home = TempDir::new().unwrap();
-    let (daemon, _) = manual_update_daemon(&home);
-    let identity = executable_identity(&daemon.managed_codex_bin)
-        .await
-        .unwrap();
-    let error = manual_update_once(
-        &ChangingRoot(home.path()),
-        &daemon,
-        &identity,
-        &mut test_terminate(),
-        super::UpdateTrigger::Manual,
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("package root changed"));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn daemon_owned_updates_require_and_request_an_isolated_installer() {
-    let home = TempDir::new().unwrap();
-    let (mut daemon, release) = manual_update_daemon(&home);
-    let root = home.path().join("packages/app-server-daemon");
-    std::fs::rename(home.path().join("packages/standalone"), &root).unwrap();
-    daemon.managed_codex_bin = root.join("current/codex");
-    let identity = executable_identity(&daemon.managed_codex_bin)
-        .await
-        .unwrap();
-    let old = FakeInstallerHttp::new(InstallerResponse::Success(
-        b"# CODEX_INSTALL_IF_LATEST\nexit 0\n".to_vec(),
-    ));
-    let error = manual_update_once(
-        &old,
-        &daemon,
-        &identity,
-        &mut test_terminate(),
-        super::UpdateTrigger::Manual,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("does not support daemon-owned packages")
-    );
-    let current = FakeInstallerHttp::new(InstallerResponse::Success(
-        b"# CODEX_INSTALL_IF_LATEST\ntest \"$CODEX_INSTALL_IF_LATEST\" = 1 && test \"$CODEX_INSTALL_DAEMON_ONLY\" = 1\n".to_vec(),
-    ));
-    let output = manual_update_once(
-        &current,
-        &daemon,
-        &identity,
-        &mut test_terminate(),
-        super::UpdateTrigger::Manual,
-    )
-    .await
-    .unwrap();
-    assert_eq!(output.status, UpdateStatus::NoUpdate);
-    assert!(!home.path().join("packages/standalone").exists());
-
-    // Reuse the stopped daemon to verify explicit unpinning with either preference.
-    let marker = root.join("auto-update-version");
-    let no_op = FakeInstallerHttp::new(InstallerResponse::Success(
-        b"# CODEX_INSTALL_IF_CURRENT CODEX_INSTALL_DAEMON_ONLY\nexit 0\n".to_vec(),
-    ));
-    let script = format!(
-        r#"# CODEX_INSTALL_IF_CURRENT CODEX_INSTALL_DAEMON_ONLY
-set -eu
-test "$CODEX_INSTALL_IF_CURRENT" = 1
-test "$CODEX_INSTALL_IF_LATEST" = 0
-test "$CODEX_INSTALL_DAEMON_ONLY" = 1
-test "$CODEX_RELEASE" = latest
-test "$CODEX_UPDATE_FROM_RELEASE" = '{release}'
-printf '%s' '{release}' > '{marker}'
-"#,
-        marker = marker.display()
-    );
-    let restore = FakeInstallerHttp::new(InstallerResponse::Success(script.into_bytes()));
-    for auto_update_enabled in [false, true] {
-        let settings = format!(r#"{{"updater":{{"autoUpdateEnabled":{auto_update_enabled}}}}}"#);
-        std::fs::write(&daemon.settings_file, &settings).unwrap();
-        std::fs::remove_file(&marker).unwrap();
-        let error = manual_update_once(
-            &no_op,
-            &daemon,
-            &identity,
-            &mut test_terminate(),
-            super::UpdateTrigger::RestoreProduction(&release),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("did not select a stable latest release")
-        );
-        assert!(!marker.exists());
-        let restored = manual_update_once(
-            &restore,
-            &daemon,
-            &identity,
-            &mut test_terminate(),
-            super::UpdateTrigger::RestoreProduction(&release),
-        )
-        .await
-        .unwrap();
-        // Restoring eligibility for the same package still reports noUpdate.
-        assert_eq!(restored, output);
-        assert!(!daemon.pid_file.exists());
-        assert!(daemon.is_stable_standalone_release().unwrap());
-        assert_eq!(
-            std::fs::read_to_string(&daemon.settings_file).unwrap(),
-            settings
-        );
     }
 }
