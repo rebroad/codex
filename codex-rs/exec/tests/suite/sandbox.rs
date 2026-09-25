@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 use codex_core::spawn::StdioPolicy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
