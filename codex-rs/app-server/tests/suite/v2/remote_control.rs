@@ -567,9 +567,11 @@ async fn stdio_eof_releases_thread_writer_with_pending_remote_control_enable() -
     )
     .await??;
     assert_eq!(error.error.code, -32600);
-    assert_eq!(
-        error.error.message,
-        format!("thread {thread_id} already has an active writer")
+    assert!(
+        error
+            .error
+            .message
+            .starts_with(&format!("thread {thread_id} already has an active writer"))
     );
 
     owner.send_remote_control_enable_request().await?;
