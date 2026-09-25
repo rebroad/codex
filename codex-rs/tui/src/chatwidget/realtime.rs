@@ -949,6 +949,7 @@ impl ChatWidget {
                 item.clone(),
                 turn_id.to_string(),
                 super::ThreadItemRenderSource::Live,
+                None,
             );
             return;
         }
@@ -1116,7 +1117,7 @@ impl ChatWidget {
         item: ThreadItem,
     ) {
         if self.thread_id() == Some(thread_id) {
-            self.handle_thread_item(item, turn_id, super::ThreadItemRenderSource::Live);
+            self.handle_thread_item(item, turn_id, super::ThreadItemRenderSource::Live, None);
         }
     }
 
@@ -1165,6 +1166,7 @@ impl ChatWidget {
             delivery.item,
             delivery.turn_id,
             super::ThreadItemRenderSource::Live,
+            None,
         );
     }
 

@@ -433,6 +433,7 @@ async fn identical_steer_receipts_only_acknowledge_the_matching_submission() {
             },
             "turn-1".to_string(),
             ThreadItemRenderSource::Live,
+            /*completed_at*/ None,
         );
         assert_eq!(chat.input_queue.pending_steers, expected);
     }

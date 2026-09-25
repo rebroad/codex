@@ -406,21 +406,26 @@ async fn replayed_commands_preserve_individual_output_and_failure_status() {
         .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
         .collect::<Vec<_>>()
         .join("\n");
+    let transcript = regex_lite::Regex::new(
+        r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)(?: • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2})?$",
+    )
+    .expect("valid completion timestamp regex")
+    .replace_all(&transcript, " • <duration>");
     insta::assert_snapshot!(transcript, @r"$ printf first
 first
-✓ • 5ms
+✓ • <duration>
 
 $ printf second
 second
-✓ • 5ms
+✓ • <duration>
 
 $ printf failure
 failure
-✗ (7) • 5ms
+✗ (7) • <duration>
 
 $ printf declined
 declined
-✗ (1) • 5ms
+✗ (1) • <duration>
 ");
 }
 

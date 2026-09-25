@@ -14,6 +14,8 @@ use std::time::Instant;
 use super::live_output::LiveCommandOutput;
 const MAX_GROUPED_COMMANDS: usize = 32;
 use crate::history_cell::ActivityGroup;
+use chrono::DateTime;
+use chrono::Local;
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Either;
@@ -79,6 +81,9 @@ pub(crate) struct ExecCall {
 #[derive(Debug)]
 pub(crate) struct ExecCell {
     pub(crate) group: ActivityGroup<ExecCall>,
+    // Kept parallel with `calls` so the wall-clock timestamp does not affect the monotonic
+    // duration used for elapsed-time measurement.
+    completion_times: Vec<Option<DateTime<Local>>>,
     animations_enabled: bool,
 }
 
@@ -86,6 +91,7 @@ impl ExecCell {
     pub(crate) fn new(call: ExecCall, animations_enabled: bool) -> Self {
         Self {
             group: ActivityGroup::new(vec![call]),
+            completion_times: vec![None],
             animations_enabled,
         }
     }
@@ -142,6 +148,7 @@ impl ExecCell {
         });
         if continues_exploration || continues_compact_group {
             self.group.calls.push(call);
+            self.completion_times.push(None);
             true
         } else {
             false
@@ -159,11 +166,15 @@ impl ExecCell {
         );
         self.group.details = newer.group.details;
         self.group.calls.append(&mut newer.group.calls);
+        self.completion_times.append(&mut newer.completion_times);
         Ok(())
     }
 
     /// Preserve live clocks and pending output when a validated older page extends exploration.
     pub(crate) fn prepend(&mut self, older: Self) {
+        let mut completion_times = older.completion_times;
+        completion_times.append(&mut self.completion_times);
+        self.completion_times = completion_times;
         self.group.prepend(older.group);
     }
 
@@ -190,6 +201,14 @@ impl ExecCell {
         call.output = Some(output);
         call.duration = Some(duration);
         call.start_time = None;
+        if let Some(index) = self
+            .group
+            .calls
+            .iter()
+            .rposition(|call| call.call_id == call_id)
+        {
+            self.completion_times[index].get_or_insert_with(Local::now);
+        }
         true
     }
 
@@ -224,7 +243,7 @@ impl ExecCell {
     }
 
     pub(crate) fn mark_failed(&mut self) {
-        for call in self.group.calls.iter_mut() {
+        for (index, call) in self.group.calls.iter_mut().enumerate() {
             if call.duration.is_none() {
                 let elapsed = call
                     .start_time
@@ -235,6 +254,7 @@ impl ExecCell {
                 call.output
                     .get_or_insert_with(CommandOutput::default)
                     .exit_code = 1;
+                self.completion_times[index] = Some(Local::now());
             }
         }
     }
@@ -265,6 +285,22 @@ impl ExecCell {
 
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {
         self.group.calls.iter()
+    }
+
+    pub(crate) fn completion_time(&self, index: usize) -> Option<DateTime<Local>> {
+        self.completion_times.get(index).copied().flatten()
+    }
+
+    pub(crate) fn set_completion_time(&mut self, call_id: &str, completed_at: DateTime<Local>) {
+        let Some(index) = self
+            .group
+            .calls
+            .iter()
+            .rposition(|call| call.call_id == call_id)
+        else {
+            return;
+        };
+        self.completion_times[index] = Some(completed_at);
     }
 
     pub(crate) fn append_output(&mut self, call_id: &str, chunk: &str) -> bool {
