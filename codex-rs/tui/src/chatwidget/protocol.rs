@@ -476,6 +476,7 @@ impl ChatWidget {
                         notification.turn.id.clone(),
                         replay_kind
                             .map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                        None,
                     );
                 }
                 if replay_kind.is_none()
@@ -688,6 +689,7 @@ impl ChatWidget {
                 item,
                 notification.turn_id,
                 replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                None,
             ),
         }
     }

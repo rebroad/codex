@@ -170,6 +170,9 @@ impl ChatWidget {
                 if hidden_nested_review_turn && matches!(item, ThreadItem::UserMessage { .. }) {
                     continue;
                 }
+                let completed_at = completed_at
+                    .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+                    .map(|timestamp| timestamp.with_timezone(&chrono::Local));
                 if trailing_reasoning_id.as_deref() == Some(item.id())
                     && let ThreadItem::Reasoning {
                         id,
@@ -191,7 +194,7 @@ impl ChatWidget {
                         Some((summary, content)),
                     );
                 } else {
-                    self.replay_thread_item(item, turn_id.clone(), replay_kind);
+                    self.replay_thread_item_at(item, turn_id.clone(), replay_kind, completed_at);
                 }
             }
             let status = if hidden_nested_review_turn {
@@ -241,11 +244,22 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn replay_thread_item(
         &mut self,
         item: ThreadItem,
         turn_id: String,
         replay_kind: ReplayKind,
+    ) {
+        self.replay_thread_item_at(item, turn_id, replay_kind, None);
+    }
+
+    fn replay_thread_item_at(
+        &mut self,
+        item: ThreadItem,
+        turn_id: String,
+        replay_kind: ReplayKind,
+        completed_at: Option<chrono::DateTime<chrono::Local>>,
     ) {
         match item {
             // Snapshots contain the completed item, without the live start that renders its diff.
@@ -259,7 +273,12 @@ impl ChatWidget {
                 }
             }
             item => {
-                self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+                self.handle_thread_item(
+                    item,
+                    turn_id,
+                    ThreadItemRenderSource::Replay(replay_kind),
+                    completed_at,
+                );
             }
         }
     }
@@ -269,6 +288,7 @@ impl ChatWidget {
         item: ThreadItem,
         turn_id: String,
         render_source: ThreadItemRenderSource,
+        completed_at: Option<chrono::DateTime<chrono::Local>>,
     ) {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
@@ -388,7 +408,34 @@ impl ChatWidget {
                     codex_app_server_protocol::CommandExecutionStatus::Completed
                     | codex_app_server_protocol::CommandExecutionStatus::Failed,
                 ..
-            } if from_replay => self.handle_command_execution_completed_now(item),
+            } if from_replay => {
+                if matches!(
+                    &item,
+                    ThreadItem::CommandExecution {
+                        status: codex_app_server_protocol::CommandExecutionStatus::Failed,
+                        ..
+                    }
+                ) && self.transcript.active_cell.as_ref().is_some_and(|cell| {
+                    cell.as_any()
+                        .downcast_ref::<ExecCell>()
+                        .is_some_and(|exec| !exec.is_active() && !exec.is_exploring_cell())
+                        || cell
+                            .as_any()
+                            .downcast_ref::<history_cell::ComputerActivityCell>()
+                            .is_some_and(|cell| !cell.is_active())
+                }) {
+                    self.flush_active_cell();
+                }
+                if !self.transcript.active_cell.as_ref().is_some_and(|cell| {
+                    cell.as_any()
+                        .downcast_ref::<ExecCell>()
+                        .is_some_and(ExecCell::is_active)
+                        || cell.as_any().is::<McpToolCallCell>()
+                }) {
+                    self.handle_command_execution_started_now(item.clone());
+                }
+                self.handle_command_execution_completed_now_at(item, completed_at);
+            }
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
             ThreadItem::FileChange {
                 status: codex_app_server_protocol::PatchApplyStatus::InProgress,
