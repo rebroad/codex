@@ -14,6 +14,7 @@ fn config_with_projects(entries: &[(&str, Option<TrustLevel>)]) -> ConfigToml {
                         key.to_string(),
                         ProjectConfig {
                             trust_level: *trust_level,
+                            ..Default::default()
                         },
                     )
                 })
@@ -29,7 +30,8 @@ fn assert_lookup_order(lookup: &ProjectTrustLookup, entries: &[(&str, Option<Tru
         assert_eq!(
             config.get_active_project_for_lookup(lookup),
             Some(ProjectConfig {
-                trust_level: *trust_level
+                trust_level: *trust_level,
+                ..Default::default()
             }),
         );
         config.projects.as_mut().unwrap().remove(*key);
