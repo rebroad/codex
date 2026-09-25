@@ -807,6 +807,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
     );
 }
 
+#[cfg_attr(target_os = "android", ignore)]
 #[tokio::test]
 async fn snapshot_wrapper_preserves_readonly_dummy_credentials() -> anyhow::Result<()> {
     let proxy = test_credential_broker_network_proxy().await?;

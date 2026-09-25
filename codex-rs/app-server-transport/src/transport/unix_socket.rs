@@ -288,6 +288,17 @@ pub async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
 
 #[cfg(unix)]
 fn protected_socket_path(rendezvous_path: &Path) -> IoResult<std::path::PathBuf> {
+    protected_socket_path_in(
+        &codex_uds::shared_daemon_socket_directory()?,
+        rendezvous_path,
+    )
+}
+
+#[cfg(unix)]
+fn protected_socket_path_in(
+    socket_directory: &Path,
+    rendezvous_path: &Path,
+) -> IoResult<std::path::PathBuf> {
     use sha2::Digest;
     use sha2::Sha256;
     use std::os::unix::ffi::OsStrExt;
@@ -300,8 +311,12 @@ fn protected_socket_path(rendezvous_path: &Path) -> IoResult<std::path::PathBuf>
     })?;
     let path = std::fs::canonicalize(parent)?.join(name);
     let hash = Sha256::digest(path.as_os_str().as_bytes());
-    Ok(codex_uds::shared_daemon_socket_directory()?.join(format!("{hash:x}")))
+    Ok(socket_directory.join(format!("{hash:x}")))
 }
+
+#[cfg(all(test, unix))]
+#[path = "protected_socket_path_tests.rs"]
+mod protected_socket_path_tests;
 
 pub struct AppServerStartupLock {
     _file: std::fs::File,
