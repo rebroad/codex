@@ -1458,6 +1458,11 @@ pub struct EnvironmentConnectionEvent {
     pub environment_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct AccountUpdatedEvent {
+    pub account_id: Option<String>,
+}
+
 /// Response event from the agent
 /// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, JsonSchema, TS)]
@@ -1465,6 +1470,9 @@ pub struct EnvironmentConnectionEvent {
 #[ts(tag = "type")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
+    /// Backend account used by subsequent model requests changed.
+    AccountUpdated(AccountUpdatedEvent),
+
     /// Error while executing a submission
     Error(ErrorEvent),
 
@@ -2046,6 +2054,11 @@ pub struct RawResponseCompletedEvent {
     pub response_id: String,
     pub token_usage: Option<TokenUsage>,
     pub usage_metadata: Option<crate::ResponseUsageMetadata>,
+    /// Model identifier reported by the backend response, if present. This
+    /// may differ from the requested/catalog model after server-side routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effective_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -2392,6 +2405,12 @@ pub struct TokenUsageRecord {
     pub session_id: SessionId,
     pub root_turn_id: String,
     pub response_id: String,
+    /// Backend-reported model used for this response, when available.
+    pub effective_model: Option<String>,
+    /// Provider-reported usage metadata, including exact amount strings.
+    pub usage_metadata: Option<crate::ResponseUsageMetadata>,
+    /// Backend account that produced this response, when available.
+    pub account_id: Option<String>,
     pub usage: TokenUsage,
     pub turn_token_usage: TokenUsage,
     pub thread_token_usage: TokenUsage,
@@ -2468,6 +2487,11 @@ impl TokenUsageInfo {
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
+    /// The model reported by the backend for the latest response, when it
+    /// differs from the requested model alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effective_model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]

@@ -3,7 +3,7 @@
 use anyhow::Result;
 use codex_history::RolloutItem;
 use codex_protocol::SessionId;
-use codex_protocol::protocol::TokenUsageRecord;
+use codex_protocol::protocol::{EventMsg, TokenUsageRecord};
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
@@ -68,6 +68,23 @@ async fn observed_response_usage_accumulates_per_turn_and_thread() -> Result<()>
                     }
                 }),
             ]),
+            sse(vec![
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "response-metadata-only",
+                        "headers": { "OpenAI-Model": "routed-model" }
+                    }
+                }),
+                ev_assistant_message("message-e", "amount without tokens"),
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "response-metadata-only",
+                        "usage_metadata": { "amount": "0.12345678901234567890" }
+                    }
+                }),
+            ]),
         ],
     )
     .await;
@@ -86,8 +103,47 @@ async fn observed_response_usage_accumulates_per_turn_and_thread() -> Result<()>
     }
     resumed.codex.shutdown_and_wait().await?;
 
+    let rollout_lines = std::fs::read_to_string(&rollout_path)
+        .expect("read rollout")
+        .lines()
+        .map(|line| codex_rollout::parse_rollout_line(line).expect("parse rollout line"))
+        .collect::<Vec<_>>();
+    let metadata_only_record_line = rollout_lines
+        .iter()
+        .find(|line| {
+            matches!(
+                &line.item,
+                RolloutItem::TokenUsageRecord(record)
+                    if record.response_id == "response-metadata-only"
+            )
+        })
+        .expect("metadata-only response usage record");
+    assert!(!metadata_only_record_line.timestamp.is_empty());
+    assert!(rollout_lines.iter().any(|line| {
+        matches!(
+            &line.item,
+            RolloutItem::EventMsg(EventMsg::RawResponseCompleted(event))
+                if event.response_id == "response-metadata-only"
+                    && event.usage_metadata.as_ref()
+                        .and_then(|metadata| metadata.amount.as_deref())
+                        == Some("0.12345678901234567890")
+        )
+    }));
+
     let records = token_usage_records(&rollout_path);
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[3].response_id, "response-metadata-only");
+    assert_eq!(records[3].usage, Default::default());
+    assert_eq!(records[3].turn_token_usage.total_tokens, 0);
+    assert_eq!(records[3].thread_token_usage.total_tokens, 230);
+    assert_eq!(records[3].effective_model.as_deref(), Some("routed-model"));
+    assert_eq!(
+        records[3]
+            .usage_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.amount.as_deref()),
+        Some("0.12345678901234567890")
+    );
     assert_eq!(
         records
             .iter()
