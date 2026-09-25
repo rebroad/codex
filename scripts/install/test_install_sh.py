@@ -24,7 +24,7 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/tags/"
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
                 f"rust-v{VERSION}"
             ],
         )
@@ -41,9 +41,9 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/tags/"
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
                 f"rust-v{VERSION}",
-                "https://github.com/openai/codex/releases/download/"
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
@@ -57,9 +57,9 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/tags/"
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
                 f"rust-v{version}",
-                "https://github.com/openai/codex/releases/download/"
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{version}/codex-package_SHA256SUMS",
             ],
         )
@@ -72,12 +72,50 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/latest",
-                "https://github.com/openai/codex/releases/download/"
+                "https://api.github.com/repos/rebroad/codex/releases/latest",
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
         self.assertIn(f"Resolved version: {VERSION}", result.stdout)
+
+    def test_alpha_alias_resolves_latest_alpha_release(self) -> None:
+        alpha_version = "0.145.0-alpha.1"
+        result, requests = run_installer(
+            "alpha", metadata_json=alpha_release_metadata(alpha_version)
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha",
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
+                f"rust-v{alpha_version}",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{alpha_version}/codex-package_SHA256SUMS",
+            ],
+        )
+        self.assertIn(f"Resolved version: {alpha_version}", result.stdout)
+
+    def test_latest_alpha_alias_resolves_latest_alpha_release(self) -> None:
+        alpha_version = "0.145.0-alpha.1"
+        result, requests = run_installer(
+            "latest-alpha", metadata_json=alpha_release_metadata(alpha_version)
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/rebroad/codex/releases/tags/latest-alpha",
+                "https://api.github.com/repos/rebroad/codex/releases/tags/"
+                f"rust-v{alpha_version}",
+                "https://github.com/rebroad/codex/releases/download/"
+                f"rust-v{alpha_version}/codex-package_SHA256SUMS",
+            ],
+        )
+        self.assertIn(f"Resolved version: {alpha_version}", result.stdout)
 
     def test_compact_metadata_is_independent_of_field_order(self) -> None:
         result, requests = run_installer(
@@ -88,8 +126,8 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/openai/codex/releases/latest",
-                "https://github.com/openai/codex/releases/download/"
+                "https://api.github.com/repos/rebroad/codex/releases/latest",
+                "https://github.com/rebroad/codex/releases/download/"
                 f"rust-v{VERSION}/codex-package_SHA256SUMS",
             ],
         )
@@ -130,6 +168,60 @@ class InstallShTest(unittest.TestCase):
                 str(current / "bin" / "codex-code-mode-host"),
             )
             self.assertTrue(os.access(host_path, os.X_OK))
+
+    def test_armv7_install_uses_current_platform_npm_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, metadata_json = create_current_platform_release(
+                root, "armv7-unknown-linux-musleabihf", "linux-armv7"
+            )
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                legacy_archive_path=archive_path,
+                force_platform="armv7",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(
+                (root / "codex-home/packages/standalone/current/bin/codex").is_file()
+            )
+
+    def test_android_install_uses_current_platform_npm_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, metadata_json = create_current_platform_release(
+                root, "aarch64-linux-android", "android-arm64"
+            )
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                legacy_archive_path=archive_path,
+                force_platform="android-arm64",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(
+                (root / "codex-home/packages/standalone/current/bin/codex").is_file()
+            )
+
+    def test_install_does_not_modify_shell_startup_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(root)
+
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_macos=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / "home" / ".bashrc").exists())
+            self.assertFalse((root / "home" / ".profile").exists())
 
     def test_releases_latest_installs_verified_package_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -345,6 +437,28 @@ class InstallShTest(unittest.TestCase):
                 (root / "codex-home/packages/standalone/auto-update-version").exists()
             )
 
+    def test_candidate_release_accepts_cargo_build_version(self) -> None:
+        candidate_version = "0.142.5.0123456789.202608202030"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(
+                root,
+                metadata_version=candidate_version,
+                binary_version="0.142.5-000000000000-000000000000",
+            )
+
+            result, _ = run_installer_in(
+                root,
+                candidate_version,
+                metadata_json=metadata_json,
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_macos=True,
+                use_mirror=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_releases_unusable_metadata_falls_back_to_github(self) -> None:
         unusable_metadata = {
             "html": "<html>proxy error</html>",
@@ -396,10 +510,10 @@ class InstallShTest(unittest.TestCase):
                         requests,
                         [
                             "https://releases.openai.com/codex/channels/latest",
-                            "https://api.github.com/repos/openai/codex/releases/latest",
-                            "https://github.com/openai/codex/releases/download/"
+                            "https://api.github.com/repos/rebroad/codex/releases/latest",
+                            "https://github.com/rebroad/codex/releases/download/"
                             f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                            "https://github.com/openai/codex/releases/download/"
+                            "https://github.com/rebroad/codex/releases/download/"
                             f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                         ],
                     )
@@ -430,11 +544,11 @@ class InstallShTest(unittest.TestCase):
                 requests,
                 [
                     f"https://releases.openai.com/codex/releases/{VERSION}/release.json",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
             )
@@ -462,10 +576,10 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
             )
@@ -493,10 +607,10 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
             )
@@ -529,9 +643,9 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
@@ -573,9 +687,9 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package-aarch64-apple-darwin.tar.gz",
                 ],
@@ -604,9 +718,9 @@ class InstallShTest(unittest.TestCase):
                 [
                     "https://releases.openai.com/codex/channels/latest",
                     f"https://releases.openai.com/codex/releases/{VERSION}/codex-package_SHA256SUMS",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-package_SHA256SUMS",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                 ],
             )
@@ -665,9 +779,9 @@ class InstallShTest(unittest.TestCase):
                 first_requests,
                 [
                     f"https://releases.openai.com/codex/releases/{VERSION}/release.json",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
-                    "https://github.com/openai/codex/releases/download/"
+                    "https://github.com/rebroad/codex/releases/download/"
                     f"rust-v{VERSION}/codex-npm-darwin-arm64-{VERSION}.tgz",
                 ],
             )
@@ -687,7 +801,7 @@ class InstallShTest(unittest.TestCase):
                 second_requests,
                 [
                     f"https://releases.openai.com/codex/releases/{VERSION}/release.json",
-                    "https://api.github.com/repos/openai/codex/releases/tags/"
+                    "https://api.github.com/repos/rebroad/codex/releases/tags/"
                     f"rust-v{VERSION}",
                 ],
             )
@@ -723,6 +837,7 @@ def run_installer_in(
     releases_checksum_path: Path | None = None,
     legacy_archive_path: Path | None = None,
     force_macos: bool = False,
+    force_platform: str | None = None,
     use_mirror: bool | None = False,
     releases_mode: str = "",
     update_guard_from_release: str | None = None,
@@ -796,7 +911,7 @@ def run_installer_in(
                   exit 22
                 fi
                 ;;
-              https://github.com/openai/codex/releases/download/*/codex-package_SHA256SUMS)
+              https://github.com/rebroad/codex/releases/download/*/codex-package_SHA256SUMS)
                 if [ "$CODEX_TEST_RELEASES_MODE" = "corrupt_checksum_and_github" ]; then
                   printf '<html>proxy error</html>\n' >"$output"
                   exit 0
@@ -807,14 +922,14 @@ def run_installer_in(
                   exit 22
                 fi
                 ;;
-              https://github.com/openai/codex/releases/download/*/codex-package-*.tar.gz)
+              https://github.com/rebroad/codex/releases/download/*/codex-package-*.tar.gz)
                 if [ -n "$CODEX_TEST_ARCHIVE_PATH" ]; then
                   cp "$CODEX_TEST_ARCHIVE_PATH" "$output"
                 else
                   exit 22
                 fi
                 ;;
-              https://github.com/openai/codex/releases/download/*/codex-npm-*.tgz)
+              https://github.com/rebroad/codex/releases/download/*/codex-npm-*.tgz)
                 if [ -n "$CODEX_TEST_LEGACY_ARCHIVE_PATH" ]; then
                   cp "$CODEX_TEST_LEGACY_ARCHIVE_PATH" "$output"
                 else
@@ -830,16 +945,36 @@ def run_installer_in(
         encoding="utf-8",
     )
     fake_curl.chmod(0o755)
-    if force_macos:
+    if force_macos or force_platform is not None:
         fake_uname = bin_dir / "uname"
-        fake_uname.write_text(
-            "#!/bin/sh\n"
-            'case "$1" in\n'
-            "  -s) printf 'Darwin\\n' ;;\n"
-            "  -m) printf 'arm64\\n' ;;\n"
-            "esac\n",
-            encoding="utf-8",
-        )
+        if force_platform == "armv7":
+            uname_script = (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  -s) printf 'Linux\\n' ;;\n"
+                "  -m) printf 'armv7l\\n' ;;\n"
+                "esac\n"
+            )
+        elif force_platform == "android-arm64":
+            uname_script = (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  -s) printf 'Linux\\n' ;;\n"
+                "  -m) printf 'aarch64\\n' ;;\n"
+                "esac\n"
+            )
+            fake_getprop = bin_dir / "getprop"
+            fake_getprop.write_text("#!/bin/sh\nprintf '35\\n'\n", encoding="utf-8")
+            fake_getprop.chmod(0o755)
+        else:
+            uname_script = (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  -s) printf 'Darwin\\n' ;;\n"
+                "  -m) printf 'arm64\\n' ;;\n"
+                "esac\n"
+            )
+        fake_uname.write_text(uname_script, encoding="utf-8")
         fake_uname.chmod(0o755)
     if old_updater_parent_pid is not None:
         fake_ps = bin_dir / "ps"
@@ -931,6 +1066,7 @@ def create_package_release(
     root: Path,
     *,
     metadata_version: str = VERSION,
+    binary_version: str = VERSION,
 ) -> tuple[Path, Path, str]:
     package_dir = root / "package"
     (package_dir / "bin").mkdir(parents=True)
@@ -938,7 +1074,7 @@ def create_package_release(
     (package_dir / "codex-package.json").write_text("{}\n", encoding="utf-8")
     write_executable(
         package_dir / "bin" / "codex",
-        f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
+        f"#!/bin/sh\nprintf 'codex-cli {binary_version}\\n'\n",
     )
     write_executable(
         package_dir / "bin" / "codex-code-mode-host",
@@ -999,6 +1135,33 @@ def create_legacy_release(root: Path) -> tuple[Path, str]:
     return archive_path, metadata_json
 
 
+def create_current_platform_release(
+    root: Path, target: str, npm_tag: str
+) -> tuple[Path, str]:
+    vendor_dir = root / "platform-package" / "package" / "vendor" / target / "bin"
+    vendor_dir.mkdir(parents=True)
+    write_executable(
+        vendor_dir / "codex",
+        f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
+    )
+    write_executable(vendor_dir / "codex-code-mode-host", "#!/bin/sh\nexit 0\n")
+
+    asset = f"codex-npm-{npm_tag}-{VERSION}.tgz"
+    archive_path = root / asset
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(root / "platform-package" / "package", arcname="package")
+
+    archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    metadata_json = json.dumps(
+        {
+            "assets": [{"name": asset, "digest": f"sha256:{archive_digest}"}],
+            "tag_name": f"rust-v{VERSION}",
+        },
+        indent=2,
+    )
+    return archive_path, metadata_json
+
+
 def write_executable(path: Path, contents: str) -> None:
     path.write_text(contents, encoding="utf-8")
     path.chmod(0o755)
@@ -1031,6 +1194,13 @@ def release_metadata(*, compact: bool = False, reorder: bool = False) -> str:
         indent=None if compact else 2,
         separators=separators,
     )
+
+
+def alpha_release_metadata(version: str) -> str:
+    metadata = json.loads(release_metadata())
+    metadata["tag_name"] = "latest-alpha"
+    metadata["name"] = version
+    return json.dumps(metadata)
 
 
 def asset_metadata(name: str, digest: str, *, reorder: bool) -> dict[str, str]:
