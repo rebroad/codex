@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -105,24 +104,12 @@ fn validate_shutdown_grace(seconds: u32) -> Result<()> {
 }
 
 impl UpdaterSettings {
-    pub(crate) async fn load(settings_file: &Path) -> Result<Self> {
-        let settings: StoredSettings = read_settings(settings_file).await?;
-        validate_shutdown_grace(settings.shutdown_grace_seconds)?;
-        let settings = settings.updater;
-        settings.validate()?;
-        Ok(settings)
-    }
-
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             self.update_interval_minutes > 0,
             "update interval must be positive"
         );
         Ok(())
-    }
-
-    pub(crate) fn update_interval(&self, minute: Duration) -> Duration {
-        minute * self.update_interval_minutes
     }
 }
 
