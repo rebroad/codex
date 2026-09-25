@@ -131,8 +131,8 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
                     .to_string()
             })
             .collect::<Vec<_>>()
-            .join("\n")
-            .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>");
+            .join("\n");
+        let frame = crate::version::normalize_cli_version_for_snapshot(&frame);
 
         assert!(
             cursor.1 >= pump.header.desired_height(width),
@@ -195,9 +195,7 @@ fn terminal_app_ssh_fallback_renders_inline_startup() {
     }
     insta::assert_snapshot!(
         "terminal_app_ssh_startup",
-        frames
-            .join("\n---\n")
-            .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>")
+        crate::version::normalize_cli_version_for_snapshot(&frames.join("\n---\n"))
     );
 }
 
@@ -216,7 +214,7 @@ async fn startup_draft_clears_loading_status_when_starting_fresh() {
         );
         let mut buffer = Buffer::empty(area);
         renderable.render(area, &mut buffer);
-        (0..area.height)
+        let rendered = (0..area.height)
             .map(|row| {
                 (0..area.width)
                     .map(|column| buffer[(column, row)].symbol())
@@ -225,8 +223,8 @@ async fn startup_draft_clears_loading_status_when_starting_fresh() {
                     .to_string()
             })
             .collect::<Vec<_>>()
-            .join("\n")
-            .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>")
+            .join("\n");
+        crate::version::normalize_cli_version_for_snapshot(&rendered)
     };
 
     for (label, initial_screen, session_action) in [
@@ -796,8 +794,8 @@ async fn startup_draft_waits_for_onboarding_before_accepting_input() {
                 .to_string()
         })
         .collect::<Vec<_>>()
-        .join("\n")
-        .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>");
+        .join("\n");
+    let visible_frame = crate::version::normalize_cli_version_for_snapshot(&visible_frame);
     drop(renderable);
     frames.push_str(&format!("\n---\nafter onboarding:\n{visible_frame}"));
     insta::assert_snapshot!("startup_draft_onboarding_transition", frames);
