@@ -110,7 +110,9 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
                         if item.kind == SubAgentActivityKind::Completed
                 )
         }
-        EventMsg::TokenCount(_)
+        EventMsg::AccountUpdated(_)
+        | EventMsg::TokenCount(_)
+        | EventMsg::RawResponseCompleted(_)
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnAborted(_)
@@ -163,9 +165,10 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         | EventMsg::ModelReroute(_)
         | EventMsg::ModelVerification(_)
         | EventMsg::TurnModerationMetadata(_)
+        | EventMsg::TurnWaitStarted(_)
+        | EventMsg::TurnWaitCompleted(_)
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::RawResponseItem(_)
-        | EventMsg::RawResponseCompleted(_)
         | EventMsg::SessionConfigured(_)
         | EventMsg::EnvironmentConnected(_)
         | EventMsg::EnvironmentDisconnected(_)
@@ -202,5 +205,29 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_persist_event_msg;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RawResponseCompletedEvent;
+    use codex_protocol::protocol::ThreadHistoryMode;
+
+    #[test]
+    fn raw_response_completed_is_persisted_for_usage_consumers() {
+        let event = EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
+            response_id: "response-1".to_string(),
+            token_usage: None,
+            usage_metadata: None,
+            effective_model: Some("gpt-5.6-luna".to_string()),
+        });
+
+        assert!(should_persist_event_msg(
+            &event,
+            ThreadHistoryMode::Paginated
+        ));
+        assert!(should_persist_event_msg(&event, ThreadHistoryMode::Legacy));
     }
 }
