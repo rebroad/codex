@@ -2253,6 +2253,22 @@ async fn answer_phase_controls_working_status_snapshot() {
 }
 
 #[tokio::test]
+async fn reconnect_snapshot_reconciles_task_running_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.reconcile_turn_running_state(Some("active-turn"));
+    assert!(chat.turn_lifecycle.agent_turn_running);
+    assert_eq!(
+        chat.turn_lifecycle.last_turn_id.as_deref(),
+        Some("active-turn")
+    );
+
+    chat.reconcile_turn_running_state(None);
+    assert!(!chat.turn_lifecycle.agent_turn_running);
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn ctrl_c_interrupt_pauses_active_goal_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = start_active_goal_turn(&mut chat);
