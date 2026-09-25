@@ -171,10 +171,63 @@ pub async fn verify_apply_patch_args(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
 ) -> MaybeApplyPatchVerified {
-    match try_verify_apply_patch_args(args, cwd, fs, sandbox).await {
+    match try_verify_apply_patch_args(args.clone(), cwd, fs, sandbox).await {
         Ok(action) => MaybeApplyPatchVerified::Body(action),
+        Err(err) if sandbox.is_some() && err.is_sandbox_verification_unavailable() => {
+            match unverified_apply_patch_action(args, cwd) {
+                Ok(action) => MaybeApplyPatchVerified::SandboxDenied(action),
+                Err(err) => MaybeApplyPatchVerified::CorrectnessError(err),
+            }
+        }
         Err(err) => MaybeApplyPatchVerified::CorrectnessError(err),
     }
+}
+
+fn unverified_apply_patch_action(
+    args: ApplyPatchArgs,
+    cwd: &PathUri,
+) -> Result<ApplyPatchAction, ApplyPatchError> {
+    let ApplyPatchArgs {
+        patch,
+        hunks,
+        workdir,
+        ..
+    } = args;
+    let effective_cwd = workdir
+        .as_ref()
+        .map(|dir| cwd.join(dir))
+        .transpose()?
+        .unwrap_or_else(|| cwd.clone());
+    let mut changes = HashMap::new();
+    for hunk in hunks {
+        let path = hunk.resolve_path(&effective_cwd)?;
+        if changes.contains_key(&path) {
+            return Err(ParseError::InvalidPatchError(format!(
+                "multiple operations target {}",
+                path.inferred_native_path_string()
+            ))
+            .into());
+        }
+        let change = match hunk {
+            Hunk::AddFile { contents, .. } => ApplyPatchFileChange::Add { content: contents },
+            Hunk::DeleteFile { .. } => ApplyPatchFileChange::Delete {
+                content: String::new(),
+            },
+            Hunk::UpdateFile { move_path, .. } => ApplyPatchFileChange::Update {
+                unified_diff: String::new(),
+                move_path: move_path
+                    .map(|path| effective_cwd.join(&path.to_string_lossy()))
+                    .transpose()?,
+                new_content: String::new(),
+            },
+        };
+        changes.insert(path, change);
+    }
+    Ok(ApplyPatchAction {
+        changes,
+        patch,
+        cwd: effective_cwd,
+    })
 }
 
 async fn try_verify_apply_patch_args(
