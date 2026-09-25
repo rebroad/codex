@@ -4,6 +4,7 @@ use super::*;
 use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::encode_id_token;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::ServerRequest;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -94,6 +95,41 @@ async fn login(app: &mut TestAppServer, user: &str, account: &str, revision: &st
     wait_for_response(app, id).await
 }
 
+async fn login_remote_control(
+    app: &mut TestAppServer,
+    codex_home: &std::path::Path,
+    user: &str,
+    account: &str,
+    revision: &str,
+) -> Result<()> {
+    let auth_home = TempDir::new_in(codex_home)?;
+    write_chatgpt_auth(
+        auth_home.path(),
+        ChatGptAuthFixture::new(format!("{revision}-remote-token"))
+            .account_id(account)
+            .chatgpt_account_id(account)
+            .chatgpt_user_id(user)
+            .email(format!("{revision}@example.com"))
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let remote_control_auth_file = codex_home.join("rc-auth.json");
+    if remote_control_auth_file.exists() {
+        std::fs::remove_file(&remote_control_auth_file)?;
+    }
+    std::fs::rename(
+        auth_home.path().join("auth.json"),
+        &remote_control_auth_file,
+    )?;
+    let request_id = app
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let _: Value = timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+    Ok(())
+}
+
 async fn open_relay(app: &mut TestAppServer, listener: &TcpListener) -> Result<RelayClient> {
     let id = app.send_remote_control_ephemeral_enable_request().await?;
     wait_for_response(app, id).await?;
@@ -178,8 +214,9 @@ async fn same_owner_refresh_preserves_live_relay() -> Result<()> {
         .build_initialized()
         .await?;
     login(&mut app, "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
     let mut relay = open_relay(&mut app, &listener).await?;
-    login(&mut app, "user-a", "account-a", "refreshed").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "refreshed").await?;
     relay.assert_account(&mut app).await
 }
 
@@ -194,9 +231,10 @@ async fn owner_change_retires_live_relay() -> Result<()> {
             .build_initialized()
             .await?;
         login(&mut app, "user-a", "account-a", "initial").await?;
+        login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
         let mut old = open_relay(&mut app, &listener).await?;
         old.assert_account(&mut app).await?;
-        login(&mut app, user, account, "replacement").await?;
+        login_remote_control(&mut app, home.path(), user, account, "replacement").await?;
         old.closed().await?;
         let id = app.send_remote_control_status_read_request().await?;
         let status: RemoteControlStatusReadResponse =
@@ -218,6 +256,7 @@ async fn owner_change_discards_pending_and_queued_pairing() -> Result<()> {
         .build_initialized()
         .await?;
     login(&mut app, "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
     let mut old = open_relay(&mut app, &listener).await?;
     let pending = app
         .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
@@ -232,7 +271,7 @@ async fn owner_change_discards_pending_and_queued_pairing() -> Result<()> {
     .await?;
     // account/read uses another queue. Its response proves the prior pairing RPC was received.
     old.assert_account(&mut app).await?;
-    login(&mut app, "user-b", "account-a", "replacement").await?;
+    login_remote_control(&mut app, home.path(), "user-b", "account-a", "replacement").await?;
     let mut fresh = open_relay(&mut app, &listener).await?;
     let sentinel = app
         .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
@@ -273,6 +312,8 @@ async fn client_revoke_retry_stays_with_original_owner() -> Result<()> {
     for refreshed_user in ["user-a", "user-b"] {
         let home = TempDir::new()?;
         let listener = configured_remote_control_listener(home.path()).await?;
+        // This case covers the intentional backend-auth fallback when rc-auth.json is absent.
+        std::fs::remove_file(home.path().join("rc-auth.json"))?;
         let mut app = TestAppServer::builder()
             .with_codex_home(home.path())
             .without_auto_env()
@@ -343,9 +384,14 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
     let mut app = TestAppServer::builder()
         .with_codex_home(home.path())
         .without_auto_env()
+        .with_env_overrides(&[(
+            "RUST_LOG",
+            Some("codex_login=info,codex_app_server=info,codex_app_server_transport::transport::remote_control=info"),
+        )])
         .build_initialized()
         .await?;
     login(&mut app, "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
     let mut relay = open_relay(&mut app, &listener).await?;
     let pending = app
         .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
@@ -362,7 +408,7 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
         )
         .await?;
     relay.assert_account(&mut app).await?;
-    login(&mut app, "user-b", "account-a", "replacement").await?;
+    login_remote_control(&mut app, home.path(), "user-b", "account-a", "replacement").await?;
     let sentinel = app
         .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
             environment_id: "environment-id".to_string(),
@@ -390,6 +436,8 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
 async fn logout_login_enable_recovers_first_unauthorized_enrollment() -> Result<()> {
     let home = TempDir::new()?;
     let listener = configured_remote_control_listener(home.path()).await?;
+    // This case covers the intentional backend-auth fallback when rc-auth.json is absent.
+    std::fs::remove_file(home.path().join("rc-auth.json"))?;
     let oauth = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::path("/oauth/revoke"))
         .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200))
