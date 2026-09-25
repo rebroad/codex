@@ -5,6 +5,7 @@ use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoadErrorCode;
 use codex_config::compose_requirements;
 use codex_config::config_toml::validate_model_providers;
+use codex_model_provider_info::ModelProviderInfoOverrides;
 
 pub(crate) fn validate_bundle(
     bundle: &CloudConfigBundle,
@@ -31,6 +32,15 @@ pub(crate) fn validate_bundle(
         )
     })?;
     if let Some(providers) = requirements.and_then(|requirements| requirements.model_providers) {
+        let providers = providers
+            .iter()
+            .map(|(id, provider)| {
+                (
+                    id.clone(),
+                    ModelProviderInfoOverrides::from(provider.clone()),
+                )
+            })
+            .collect();
         validate_model_providers(&providers).map_err(|err| {
             CloudConfigBundleLoadError::new(
                 CloudConfigBundleLoadErrorCode::InvalidBundle,

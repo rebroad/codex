@@ -8,6 +8,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -65,7 +66,9 @@ refresh_interval_ms = 12345
 cwd = {cwd}
 "#
     ))?;
-    assert_eq!(config.model_provider, expected.model_providers["gateway"]);
+    let mut expected_provider = ModelProviderInfo::default();
+    expected.model_providers["gateway"].apply_to(&mut expected_provider);
+    assert_eq!(config.model_provider, expected_provider);
     Ok(())
 }
 
