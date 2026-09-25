@@ -4288,6 +4288,7 @@ mod tests {
             ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
                 thread_id: "thr_123".to_string(),
                 status: v2::ThreadStatus::Idle,
+                waiting_until_ms: None,
             });
         assert_eq!(
             json!({
@@ -4297,6 +4298,7 @@ mod tests {
                     "status": {
                         "type": "idle"
                     },
+                    "waitingUntilMs": null,
                 }
             }),
             serde_json::to_value(&notification)?,
