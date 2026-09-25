@@ -258,12 +258,7 @@ async fn resolve_native_and_portable_trust_roots(
         // Opaque URI components cannot provide ancestry, but native lookup still can.
         assert_eq!(portable, None);
     } else {
-        assert_eq!(
-            portable.map(|path| path.to_url()),
-            native
-                .as_ref()
-                .map(|path| PathUri::from_abs_path(path).to_url()),
-        );
+        assert_eq!(portable.and_then(|path| path.to_abs_path().ok()), native,);
     }
     native
 }

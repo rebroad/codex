@@ -10,6 +10,7 @@ use futures::future::BoxFuture;
 use futures::future::WeakShared;
 
 use crate::info::detect_local_fsmonitor_override;
+use crate::info::git_repo_is_filesystem_root;
 use crate::info::run_git_command_with_timeout_from;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -27,6 +28,10 @@ fn git_status_runs() -> &'static Mutex<HashMap<GitStatusKey, WeakShared<GitStatu
 }
 
 pub async fn get_has_changes_in_repo(cwd: &Path, repo_root: &Path) -> Option<bool> {
+    if git_repo_is_filesystem_root(cwd).await {
+        return None;
+    }
+
     let git = PathBuf::from("git");
     let cwd = cwd.to_path_buf();
     let key = git_status_key(git.clone(), repo_root).await;
