@@ -15,14 +15,14 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
 
     - Pipes: |
     - Logical operators: &&, ||
-    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
-    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
-
-    ### Examples
+    <OMITTED 47 LINES; ~812 TOKENS; hash=035ff6687b0303fa>
     Good examples of prefixes:
     - ["npm", "run", "dev"]
     - ["gh", "pr", "check"]
     - ["cargo", "test"]
+
+
+    If an approval request is rejected, proceed only with a materially safer alternative, or inform the user of the risk and ask for approval.
     </permissions instructions>
 01:message/user[2]:
     [01] # AGENTS.md instructions
@@ -77,14 +77,14 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
 
     - Pipes: |
     - Logical operators: &&, ||
-    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
-    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
-
-    ### Examples
+    <OMITTED 47 LINES; ~812 TOKENS; hash=035ff6687b0303fa>
     Good examples of prefixes:
     - ["npm", "run", "dev"]
     - ["gh", "pr", "check"]
     - ["cargo", "test"]
+
+
+    If an approval request is rejected, proceed only with a materially safer alternative, or inform the user of the risk and ask for approval.
     </permissions instructions>
 01:message/user[2]:
     [01] # AGENTS.md instructions
