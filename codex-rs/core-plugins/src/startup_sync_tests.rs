@@ -1103,6 +1103,108 @@ exit 1
 
 #[cfg(unix)]
 #[test]
+fn git_timeout_kills_descendant_processes() {
+    let tmp = tempdir().expect("tempdir");
+    let child_pid_path = tmp.path().join("child.pid");
+    let mut command = std::process::Command::new("/bin/sh");
+    command.args([
+        "-c",
+        &format!(
+            "sleep 30 & printf '%s\n' $! > '{}' ; wait",
+            child_pid_path.display()
+        ),
+    ]);
+
+    let err =
+        run_git_command_with_timeout(&mut command, "hanging git test", Duration::from_millis(100))
+            .expect_err("hanging Git command should time out");
+    assert!(err.contains("hanging git test timed out"));
+
+    let child_pid = std::fs::read_to_string(&child_pid_path)
+        .expect("hanging child should have written its PID")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("child PID should be numeric");
+    for _ in 0..50 {
+        if unsafe { libc::kill(child_pid, 0) } == -1 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("descendant process {child_pid} survived Git timeout");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn git_process_dies_when_owner_exits() {
+    const MARKER_ENV: &str = "CODEX_TEST_GIT_PARENT_DEATH_MARKER";
+    if let Some(marker_path) = std::env::var_os(MARKER_ENV) {
+        let marker_path = std::path::PathBuf::from(marker_path);
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args([
+            "-c",
+            &format!(
+                "printf '%s\\n' $$ > '{}'; exec /bin/sleep 30",
+                marker_path.display()
+            ),
+        ]);
+        let _ = run_git_command_with_timeout(
+            &mut command,
+            "parent-death git test",
+            Duration::from_secs(60),
+        );
+        return;
+    }
+
+    let tmp = tempdir().expect("tempdir");
+    let marker_path = tmp.path().join("git.pid");
+    let test_name = std::thread::current()
+        .name()
+        .expect("test thread name")
+        .to_string();
+    let mut owner = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", &test_name])
+        .env(MARKER_ENV, &marker_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn owner process");
+
+    let mut git_pid = None;
+    for _ in 0..200 {
+        if let Ok(pid) = std::fs::read_to_string(&marker_path).and_then(|pid| {
+            pid.trim()
+                .parse::<libc::pid_t>()
+                .map_err(std::io::Error::other)
+        }) {
+            git_pid = Some(pid);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let git_pid = git_pid.expect("Git child should report its PID");
+
+    owner.kill().expect("kill owner process");
+    owner.wait().expect("wait for owner process");
+    for _ in 0..200 {
+        let is_terminated = std::fs::read_to_string(format!("/proc/{git_pid}/stat"))
+            .map(|stat| {
+                stat.rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().next())
+                    == Some("Z")
+            })
+            .unwrap_or(true);
+        if is_terminated {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("Git child process {git_pid} survived its owner");
+}
+
+#[cfg(unix)]
+#[test]
 fn sync_openai_plugins_repo_via_git_cleans_up_staged_dir_on_fetch_failure() {
     let tmp = tempdir().expect("tempdir");
     let bin_dir = tempfile::Builder::new()
