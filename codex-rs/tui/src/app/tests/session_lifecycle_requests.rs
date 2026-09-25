@@ -3286,6 +3286,7 @@ async fn agents_overview_seeds_loaded_threads_when_recent_listing_is_unavailable
                             codex_app_server_protocol::ThreadStatusChangedNotification {
                                 thread_id: started.session.thread_id.to_string(),
                                 status: codex_app_server_protocol::ThreadStatus::Idle,
+                                waiting_until_ms: None,
                             },
                         ),
                     )),
