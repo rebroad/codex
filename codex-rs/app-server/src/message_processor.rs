@@ -260,6 +260,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) user_verification: Arc<crate::user_verification::Service>,
+    pub(crate) frontend_auth_manager: Arc<AuthManager>,
     pub(crate) installation_id: String,
     pub(crate) code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>>,
     pub(crate) rpc_transport: AppServerRpcTransport,
@@ -286,6 +287,7 @@ impl MessageProcessor {
             session_source,
             auth_manager,
             user_verification,
+            frontend_auth_manager,
             installation_id,
             code_mode_session_provider,
             rpc_transport,
@@ -416,6 +418,7 @@ impl MessageProcessor {
             );
         let account_processor = AccountRequestProcessor::new(
             auth_manager.clone(),
+            frontend_auth_manager,
             Arc::clone(&thread_manager),
             outgoing.clone(),
             Arc::clone(&config),
@@ -1798,7 +1801,12 @@ impl MessageProcessor {
                 self.account_processor.cancel_login_account(params).await
             }
             ClientRequest::GetAccount { params, .. } => {
-                self.account_processor.get_account(params).await
+                self.account_processor
+                    .get_account(
+                        params,
+                        session.app_server_client_name() == Some("codex-tui"),
+                    )
+                    .await
             }
             ClientRequest::GetAuthStatus { params, .. } => {
                 self.account_processor.get_auth_status(params).await

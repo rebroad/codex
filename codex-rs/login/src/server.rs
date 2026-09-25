@@ -29,6 +29,7 @@ use std::time::Duration;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
+use crate::auth::save_auth_to_file;
 use crate::callback_params::LIFE_SCIENCES_OAUTH_STATE_SUFFIX;
 use crate::callback_params::LoginCallbackResult;
 use crate::callback_params::LoginOnboardingEntrypoint;
@@ -87,6 +88,7 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub codex_home: PathBuf,
+    pub auth_file: Option<PathBuf>,
     pub client_id: String,
     pub issuer: String,
     pub port: u16,
@@ -112,6 +114,7 @@ impl ServerOptions {
     ) -> Self {
         Self {
             codex_home,
+            auth_file: None,
             client_id,
             issuer: DEFAULT_ISSUER.to_string(),
             port: DEFAULT_PORT,
@@ -452,6 +455,7 @@ async fn process_request(
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
                         opts.auth_keyring_backend_kind,
+                        opts.auth_file.clone(),
                     )
                     .await
                     {
@@ -830,6 +834,7 @@ async fn send_code_exchange_request(
 }
 
 /// Persists exchanged credentials using the configured local auth store.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
@@ -838,6 +843,7 @@ pub(crate) async fn persist_tokens_async(
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
+    auth_file: Option<PathBuf>,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -869,12 +875,15 @@ pub(crate) async fn persist_tokens_async(
                 bedrock_api_key: None,
                 bedrock_access_keys: None,
             };
-            save_auth(
-                &codex_home,
-                &auth,
-                auth_credentials_store_mode,
-                keyring_backend_kind,
-            )
+            match auth_file {
+                Some(auth_file) => save_auth_to_file(&codex_home, &auth_file, &auth),
+                None => save_auth(
+                    &codex_home,
+                    &auth,
+                    auth_credentials_store_mode,
+                    keyring_backend_kind,
+                ),
+            }
         })
     });
 

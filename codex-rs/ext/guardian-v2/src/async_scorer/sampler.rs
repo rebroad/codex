@@ -21,6 +21,8 @@ use codex_extension_api::ExtensionMetrics;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
+#[cfg(test)]
+use codex_login::AuthManager;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::WorkspaceRoutingContext;
 use codex_protocol::ResponseItemId;
@@ -149,6 +151,11 @@ impl LunaSampler {
             config,
             active_requests: Mutex::new(VecDeque::with_capacity(MAX_CONCURRENT_REQUESTS)),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.config.provider.auth_manager()
     }
 
     pub(super) async fn prewarm(&self) {
