@@ -110,5 +110,50 @@ commands that would enter the bubblewrap path.
   Filesystem, user, IPC, network, seccomp, and existing container `/proc` masks
   remain in force. The default `isolate` mode retains PID isolation.
 
+**How the Linux sandbox command is assembled (developer notes)**
+
+The `codex-linux-sandbox` invocation and the `bwrap` invocation are separate
+layers. The first passes policy and command data to Codex's helper; it is not
+the final mount list. The construction path is:
+
+1. The caller resolves the active permission profile into runtime filesystem
+   and network policies. When Codex constructs a profile from configuration,
+   `additional_writable_roots` rewrite rules are applied to the original roots
+   at this stage; their results must be absolute, concrete paths. A profile
+   supplied as an explicit runtime override bypasses that construction path,
+   so its producer must supply concrete roots. Rewrite expressions are not
+   permission-profile paths or bwrap paths.
+2. `codex-rs/sandboxing/src/landlock.rs` serializes the runtime permission
+   profile as JSON and passes it to the helper with `--permission-profile`,
+   together with the policy cwd, command cwd, and command after `--`.
+3. `codex-rs/linux-sandbox/src/linux_run_main.rs` parses that input, obtains
+   the filesystem and network policies, selects the bwrap options, and
+   assembles the inner command that reapplies seccomp after bwrap has created
+   the filesystem view.
+4. `codex-rs/linux-sandbox/src/bwrap.rs` turns the concrete filesystem policy
+   into ordered mounts. In broad terms it establishes a read-only filesystem
+   baseline (or a minimal tmpfs baseline), mounts readable roots, binds
+   writable roots, and then reapplies protected metadata and denied-path
+   masks. Distinct logical writable roots that resolve through symlinks to the
+   same physical target share one writable bind; each root's carveouts are
+   still applied, and separate nested writable roots retain their normal
+   ordering. It adds namespace, proc, cwd, and command arguments around that
+   mount plan.
+5. The helper executes the selected system or bundled `bwrap` with that argv.
+   Synthetic mount-target preparation and cleanup are helper-side setup; they
+   are not permission roots or additional command-line grants.
+
+When diagnosing a captured command, inspect the two argv layers separately:
+the inner `codex-linux-sandbox --permission-profile <JSON> ...` arguments show
+the runtime policy input, while the outer `bwrap ...` arguments show the
+concrete filesystem view. A rewrite expression appearing as a literal path in
+the runtime profile indicates it was not expanded by the profile's producer;
+the bwrap builder does not interpret rewrite syntax. Exact duplicate profile
+entries may be redundant input, while logical aliases can be distinct policy
+entries that map to one bind target. Repeated daemon-socket mask mounts can be
+intentional: the helper reapplies a mask after each bind that would otherwise
+expose that directory again (for example, binding `/tmp` after masking a
+socket directory beneath it).
+
 **Notes**
 - The CLI surface is `codex sandbox`; the host OS selects the sandbox backend.
