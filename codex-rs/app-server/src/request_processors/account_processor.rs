@@ -16,6 +16,7 @@ use codex_model_provider::is_supported_amazon_bedrock_region;
 use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_rmcp_client::EnterpriseOAuthCredentialGuard;
 
+mod backend_auth;
 mod bedrock_gov_cloud;
 mod bedrock_setup;
 mod enterprise_login;
@@ -97,6 +98,7 @@ impl Drop for ActiveLogin {
 #[derive(Clone)]
 pub(crate) struct AccountRequestProcessor {
     auth_manager: Arc<AuthManager>,
+    frontend_auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
@@ -114,6 +116,7 @@ pub(crate) struct AccountRequestProcessor {
 impl AccountRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
+        frontend_auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
@@ -132,6 +135,7 @@ impl AccountRequestProcessor {
         let processor = Arc::new(Self {
             _gateway_notifications: Arc::new(gateway_notifications),
             auth_manager,
+            frontend_auth_manager,
             thread_manager,
             outgoing,
             config,
@@ -150,7 +154,9 @@ impl AccountRequestProcessor {
             .set_workspace_routing_resolver(Arc::downgrade(&resolver));
         let startup = processor.clone();
         tokio::spawn(async move {
-            let _ = startup.read_account(/*request*/ None).await;
+            let _ = startup
+                .read_account(/*request*/ None, Arc::clone(&startup.auth_manager))
+                .await;
         });
         processor
     }
@@ -925,7 +931,9 @@ impl AccountRequestProcessor {
         let auth_changes = self.auth_manager.auth_change_state_receiver();
         let owner_generation = auth_changes.borrow().owner_generation;
         if payload.success
-            && let Err(error) = self.read_account(/*request*/ None).await
+            && let Err(error) = self
+                .read_account(/*request*/ None, Arc::clone(&self.auth_manager))
+                .await
         {
             payload.success = false;
             payload.error = Some(error.to_string());
@@ -1099,18 +1107,37 @@ impl AccountRequestProcessor {
     }
 
     async fn refresh_token_if_requested(&self, do_refresh: bool) -> RefreshTokenRequestOutcome {
-        if self.auth_manager.is_external_chatgpt_auth_active() {
+        if self.frontend_auth_manager.is_external_chatgpt_auth_active() {
             return RefreshTokenRequestOutcome::NotAttemptedOrSucceeded;
         }
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+        if do_refresh && let Err(err) = self.frontend_auth_manager.refresh_token().await {
             let failed_reason = err.failed_reason();
             if failed_reason.is_none() {
-                tracing::warn!("failed to refresh token while getting account: {err}");
+                tracing::warn!("failed to refresh frontend token while getting account: {err}");
+                return RefreshTokenRequestOutcome::FailedTransiently;
+            }
+            return RefreshTokenRequestOutcome::FailedPermanently;
+        }
+        if self.frontend_auth_manager.auth_cached().is_none()
+            && do_refresh
+            && let Err(err) = self.auth_manager.refresh_token().await
+        {
+            let failed_reason = err.failed_reason();
+            if failed_reason.is_none() {
+                tracing::warn!("failed to refresh backend token while getting account: {err}");
                 return RefreshTokenRequestOutcome::FailedTransiently;
             }
             return RefreshTokenRequestOutcome::FailedPermanently;
         }
         RefreshTokenRequestOutcome::NotAttemptedOrSucceeded
+    }
+
+    async fn frontend_auth_manager(&self) -> Arc<AuthManager> {
+        if self.frontend_auth_manager.auth().await.is_some() {
+            Arc::clone(&self.frontend_auth_manager)
+        } else {
+            Arc::clone(&self.auth_manager)
+        }
     }
 
     async fn get_auth_status_response(
@@ -1135,41 +1162,42 @@ impl AccountRequestProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
+            let auth_manager = self.frontend_auth_manager().await;
             let auth = if do_refresh {
-                self.auth_manager.auth_cached()
+                auth_manager.auth_cached()
             } else {
-                self.auth_manager.auth().await
+                auth_manager.auth().await
             };
             match auth {
                 Some(auth) => {
                     let permanent_refresh_failure =
-                        self.auth_manager.refresh_failure_for_auth(&auth).is_some();
+                        auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = auth_mode_to_api(auth.api_auth_mode());
-                    let (reported_auth_method, token_opt) =
-                        if self.auth_manager.is_workload_identity_selected()
-                            || matches!(
-                                auth,
-                                CodexAuth::Headers(_)
-                                    | CodexAuth::AgentIdentity(_)
-                                    | CodexAuth::PersonalAccessToken(_)
-                            )
-                            || include_token && permanent_refresh_failure
-                        {
-                            // Host-owned and metadata-bearing credentials are never exported.
-                            (Some(auth_mode), None)
-                        } else {
-                            match auth.get_token() {
-                                Ok(token) if !token.is_empty() => {
-                                    let tok = if include_token { Some(token) } else { None };
-                                    (Some(auth_mode), tok)
-                                }
-                                Ok(_) => (None, None),
-                                Err(err) => {
-                                    tracing::warn!("failed to get token for auth status: {err}");
-                                    (None, None)
-                                }
+                    let (reported_auth_method, token_opt) = if auth_manager
+                        .is_workload_identity_selected()
+                        || matches!(
+                            auth,
+                            CodexAuth::Headers(_)
+                                | CodexAuth::AgentIdentity(_)
+                                | CodexAuth::PersonalAccessToken(_)
+                        )
+                        || include_token && permanent_refresh_failure
+                    {
+                        // Host-owned and metadata-bearing credentials are never exported.
+                        (Some(auth_mode), None)
+                    } else {
+                        match auth.get_token() {
+                            Ok(token) if !token.is_empty() => {
+                                let tok = if include_token { Some(token) } else { None };
+                                (Some(auth_mode), tok)
                             }
-                        };
+                            Ok(_) => (None, None),
+                            Err(err) => {
+                                tracing::warn!("failed to get token for auth status: {err}");
+                                (None, None)
+                            }
+                        }
+                    };
                     GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,
@@ -1191,9 +1219,7 @@ impl AccountRequestProcessor {
         &self,
         params: GetAccountRateLimitsParams,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        let Some((auth, http_client_factory)) =
-            self.auth_manager.auth_with_http_client_factory().await
-        else {
+        let Some((auth, http_client_factory)) = self.backend_auth().await? else {
             return Err(invalid_request(
                 "codex account authentication required to read rate limits",
             ));
@@ -1308,9 +1334,7 @@ impl AccountRequestProcessor {
             })
             .transpose()?;
 
-        let Some((auth, http_client_factory)) =
-            self.auth_manager.auth_with_http_client_factory().await
-        else {
+        let Some((auth, http_client_factory)) = self.backend_auth().await? else {
             return Err(invalid_request(
                 "codex account authentication required to read token usage",
             ));
@@ -1395,9 +1419,7 @@ impl AccountRequestProcessor {
     async fn get_workspace_messages_response(
         &self,
     ) -> Result<GetWorkspaceMessagesResponse, JSONRPCErrorError> {
-        let Some((auth, http_client_factory)) =
-            self.auth_manager.auth_with_http_client_factory().await
-        else {
+        let Some((auth, http_client_factory)) = self.backend_auth().await? else {
             return Err(invalid_request(
                 "codex account authentication required to read workspace messages",
             ));
@@ -1489,9 +1511,7 @@ impl AccountRequestProcessor {
         &self,
         params: SendAddCreditsNudgeEmailParams,
     ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
-        let Some((auth, http_client_factory)) =
-            self.auth_manager.auth_with_http_client_factory().await
-        else {
+        let Some((auth, http_client_factory)) = self.backend_auth().await? else {
             return Err(invalid_request(
                 "codex account authentication required to notify workspace owner",
             ));
