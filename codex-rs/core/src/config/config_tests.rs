@@ -5,6 +5,7 @@ use crate::context::ContextualUserFragment;
 use crate::plugins::plugins_manager_for_config;
 use crate::session::multi_agents::resolve_usage_hints;
 use assert_matches::assert_matches;
+use codex_config::AdditionalWritableRoot;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
@@ -2673,6 +2674,7 @@ async fn missing_persisted_permission_profile_id_uses_configured_default() -> st
                     project_key.clone(),
                     ProjectConfig {
                         trust_level: Some(TrustLevel::Trusted),
+                        ..Default::default()
                     },
                 )])),
                 ..Default::default()
@@ -3241,7 +3243,8 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     let cwd = temp_dir.path().join("frontend");
     let runtime_root = temp_dir.path().join("backend");
     let profile_root = temp_dir.path().join("shared");
-    for root in [&cwd, &runtime_root, &profile_root] {
+    let global_root = temp_dir.path().join("global");
+    for root in [&cwd, &runtime_root, &profile_root, &global_root] {
         std::fs::create_dir_all(root.join(".git"))?;
         std::fs::create_dir_all(root.join(".codex"))?;
     }
@@ -3249,6 +3252,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             default_permissions: Some("dev".to_string()),
+            additional_writable_roots: vec![AdditionalWritableRoot::Path(global_root.abs())],
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
                     "dev".to_string(),
@@ -3290,25 +3294,40 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     let cwd_abs = cwd.abs();
     let runtime_root_abs = runtime_root.abs();
     let profile_root_abs = profile_root.abs();
+    let global_root_abs = global_root.abs();
     assert_eq!(
         config.workspace_roots,
-        vec![cwd_abs.clone(), runtime_root_abs.clone()]
+        vec![
+            cwd_abs.clone(),
+            runtime_root_abs.clone(),
+            global_root_abs.clone()
+        ]
     );
     assert_eq!(
         config.permissions.workspace_roots(),
-        &[cwd_abs.clone(), runtime_root_abs.clone()]
+        &[
+            cwd_abs.clone(),
+            runtime_root_abs.clone(),
+            global_root_abs.clone()
+        ]
     );
     assert_eq!(
         config.effective_workspace_roots(),
         vec![
             PathUri::from_abs_path(&cwd_abs),
             PathUri::from_abs_path(&runtime_root_abs),
+            PathUri::from_abs_path(&global_root_abs),
             PathUri::from_abs_path(&profile_root_abs),
         ]
     );
 
     let policy = config.permissions.file_system_sandbox_policy();
-    for root in [cwd_abs, runtime_root_abs, profile_root_abs.clone()] {
+    for root in [
+        cwd_abs,
+        runtime_root_abs,
+        global_root_abs.clone(),
+        profile_root_abs.clone(),
+    ] {
         assert!(
             policy.can_write_local_path_with_cwd(root.as_path(), cwd.as_path()),
             "expected workspace root to be writable, policy: {policy:?}"
@@ -3324,7 +3343,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     }
     assert_eq!(
         config.permissions.profile_workspace_roots(),
-        &[profile_root_abs.into()]
+        &[profile_root_abs.into(), global_root_abs.into()]
     );
     assert_eq!(
         config.permissions.active_permission_profile(),
@@ -3553,6 +3572,7 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project(
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Trusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
@@ -3609,6 +3629,7 @@ async fn empty_config_defaults_to_builtin_profile_for_untrusted_project() -> std
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
@@ -3671,6 +3692,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Trusted),
+                    ..Default::default()
                 },
             )])),
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
@@ -3741,6 +3763,7 @@ async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts
                 project_key,
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Trusted),
+                    ..Default::default()
                 },
             )])),
             windows: Some(WindowsToml {
@@ -5981,6 +6004,210 @@ enabled = true
             })
         ))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_additional_writable_roots_extend_workspace_writable_roots() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let cwd = temp_dir.path().join("project");
+    let additional_root = temp_dir.path().join("shared");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&additional_root)?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            additional_writable_roots: vec![AdditionalWritableRoot::Path(additional_root.abs())],
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        temp_dir.path().abs(),
+    )
+    .await?;
+
+    let additional_root = additional_root.abs();
+    assert!(config.workspace_roots.contains(&additional_root));
+    if !cfg!(target_os = "windows") {
+        assert!(
+            config
+                .permissions
+                .file_system_sandbox_policy()
+                .can_write_local_path_with_cwd(&additional_root, cwd.as_path())
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn additional_writable_root_rewrite_derives_root_from_legacy_workspace_root()
+-> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let cwd = temp_dir.path().join("src/project.release.git");
+    let derived_root = temp_dir.path().join("builds/project.build");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&derived_root)?;
+    let prefix = temp_dir.path().to_string_lossy();
+    let pattern = format!(r"^{}/src/([^/.]+)\.[^/]*$", regex_lite::escape(&prefix));
+    let replacement = format!(r"{prefix}/builds/$1.build");
+    let substitution = format!(
+        "s/{}/{}",
+        pattern.replace('/', r"\/"),
+        replacement.replace('/', r"\/")
+    );
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            additional_writable_roots: vec![AdditionalWritableRoot::Rewrite(substitution.clone())],
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        temp_dir.path().abs(),
+    )
+    .await?;
+
+    let derived_root = derived_root.abs();
+    assert!(config.workspace_roots.contains(&derived_root));
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_local_path_with_cwd(&derived_root, cwd.as_path())
+    );
+    let helper_profile = serde_json::to_string(&config.permissions.effective_permission_profile())
+        .expect("serialize runtime permission profile");
+    assert!(helper_profile.contains(&derived_root.to_string_lossy().to_string()));
+    assert!(!helper_profile.contains(&substitution));
+    Ok(())
+}
+
+#[tokio::test]
+async fn additional_writable_root_rewrite_applies_to_permission_profile_roots()
+-> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let cwd = temp_dir.path().join("project");
+    let profile_root = temp_dir.path().join("profile-root");
+    let derived_root = temp_dir.path().join("derived-profile-root");
+    for root in [&cwd, &profile_root, &derived_root] {
+        std::fs::create_dir_all(root.join(".git"))?;
+    }
+    let prefix = temp_dir.path().to_string_lossy();
+    let pattern = format!(r"^{}/profile-root$", regex_lite::escape(&prefix));
+    let replacement = format!(r"{prefix}/derived-profile-root");
+    let substitution = format!(
+        "s/{}/{}",
+        pattern.replace('/', r"\/"),
+        replacement.replace('/', r"\/")
+    );
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            additional_writable_roots: vec![AdditionalWritableRoot::Rewrite(substitution.clone())],
+            default_permissions: Some("dev".to_owned()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "dev".to_owned(),
+                    PermissionProfileToml {
+                        description: None,
+                        extends: None,
+                        workspace_roots: Some(WorkspaceRootsToml {
+                            entries: BTreeMap::from([(
+                                profile_root.to_string_lossy().into_owned(),
+                                true,
+                            )]),
+                        }),
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":workspace_roots".to_string(),
+                                FilesystemPermissionToml::Scoped(BTreeMap::from([(
+                                    ".".to_string(),
+                                    FileSystemAccessMode::Write,
+                                )])),
+                            )]),
+                        }),
+                        network: None,
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let derived_root = derived_root.abs();
+    assert!(
+        config
+            .effective_workspace_roots()
+            .contains(&PathUri::from_abs_path(&derived_root))
+    );
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_local_path_with_cwd(&derived_root, cwd.as_path())
+    );
+    let helper_profile = serde_json::to_string(&config.permissions.effective_permission_profile())
+        .expect("serialize runtime permission profile");
+    assert!(helper_profile.contains(&derived_root.to_string_lossy().to_string()));
+    assert!(!helper_profile.contains(&substitution));
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_additional_writable_roots_extend_workspace_writable_roots() -> std::io::Result<()>
+{
+    let temp_dir = TempDir::new()?;
+    let cwd = temp_dir.path().join("project");
+    let additional_root = temp_dir.path().join("shared");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&additional_root)?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                cwd.to_string_lossy().into_owned(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                    additional_writable_roots: vec![AdditionalWritableRoot::Path(
+                        additional_root.abs(),
+                    )],
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        temp_dir.path().abs(),
+    )
+    .await?;
+
+    let additional_root = additional_root.abs();
+    assert!(config.workspace_roots.contains(&additional_root));
+    if !cfg!(target_os = "windows") {
+        assert!(
+            config
+                .permissions
+                .file_system_sandbox_policy()
+                .can_write_local_path_with_cwd(&additional_root, cwd.as_path())
+        );
+    }
     Ok(())
 }
 
@@ -10465,6 +10692,7 @@ async fn active_project_preserves_cwd_alias_and_repo_root_precedence() -> anyhow
             alias_root.to_string_lossy().to_string(),
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
@@ -10477,6 +10705,7 @@ async fn active_project_preserves_cwd_alias_and_repo_root_precedence() -> anyhow
 
     let trusted_root = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
+        ..Default::default()
     };
     config.projects.as_mut().unwrap().insert(
         tmp.path().to_string_lossy().into_owned(),
@@ -10487,7 +10716,10 @@ async fn active_project_preserves_cwd_alias_and_repo_root_precedence() -> anyhow
         Some(trusted_root)
     );
 
-    let empty_cwd = ProjectConfig { trust_level: None };
+    let empty_cwd = ProjectConfig {
+        trust_level: None,
+        ..Default::default()
+    };
     config.projects.as_mut().unwrap().insert(
         project_root.to_string_lossy().into_owned(),
         empty_cwd.clone(),
@@ -10591,6 +10823,7 @@ trust_level = "untrusted"
         .expect("TOML deserialization should succeed");
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Untrusted),
+        ..Default::default()
     };
 
     let resolution = derive_legacy_sandbox_policy_for_test(
@@ -10629,12 +10862,14 @@ async fn derive_sandbox_policy_falls_back_to_read_only_for_implicit_defaults() -
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
     };
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
+        ..Default::default()
     };
     let constrained = Constrained::new(PermissionProfile::read_only(), |candidate| {
         if candidate == &PermissionProfile::read_only() {
@@ -10673,12 +10908,14 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
             project_key,
             ProjectConfig {
                 trust_level: Some(TrustLevel::Trusted),
+                ..Default::default()
             },
         )])),
         ..Default::default()
     };
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
+        ..Default::default()
     };
     let constrained = Constrained::new(PermissionProfile::workspace_write(), |candidate| {
         if matches!(
@@ -10950,6 +11187,7 @@ async fn untrusted_parent_repo_with_incomplete_child_git_keeps_unless_trusted_ap
                 repo.path().to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()
@@ -10981,6 +11219,7 @@ async fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow:
                 test_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(TrustLevel::Untrusted),
+                    ..Default::default()
                 },
             )])),
             ..Default::default()

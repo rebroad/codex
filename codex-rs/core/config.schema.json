@@ -6,6 +6,9 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AdditionalWritableRoot": {
+      "type": "string"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -3657,6 +3660,14 @@
     "ProjectConfig": {
       "additionalProperties": false,
       "properties": {
+        "additional_writable_roots": {
+          "default": [],
+          "description": "Additional writable roots applied when this project is active. Absolute paths are ordinary roots; entries beginning with `s/` are substitutions.",
+          "items": {
+            "$ref": "#/definitions/AdditionalWritableRoot"
+          },
+          "type": "array"
+        },
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
         }
@@ -6692,6 +6703,14 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "additional_writable_roots": {
+      "default": [],
+      "description": "Additional writable roots applied across all projects. Absolute paths are ordinary roots; entries beginning with `s/` are vi-style substitutions.",
+      "items": {
+        "$ref": "#/definitions/AdditionalWritableRoot"
+      },
+      "type": "array"
+    },
     "agents": {
       "allOf": [
         {
