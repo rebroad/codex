@@ -840,12 +840,31 @@ impl AppServerSession {
         thread_id: ThreadId,
         permission_mode: ForkPermissionMode,
     ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at_with_permission_mode(
+            local_settings,
+            config,
+            thread_id,
+            /*after_ordinal*/ None,
+            permission_mode,
+        )
+        .await
+    }
+
+    pub(crate) async fn fork_thread_at_with_permission_mode(
+        &mut self,
+        local_settings: &LocalSettings,
+        config: Config,
+        thread_id: ThreadId,
+        after_ordinal: Option<u64>,
+        permission_mode: ForkPermissionMode,
+    ) -> Result<AppServerStartedThread> {
         self.fork_thread_at_with_presentation(
             local_settings,
             config,
             thread_id,
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
+            after_ordinal,
             ForkGoalContinuation::StartIfIdle,
             ForkPresentation::Regular,
             /*selected_profile*/ None,
@@ -866,6 +885,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         last_turn_id: Option<String>,
         before_turn_id: Option<String>,
+        after_ordinal: Option<u64>,
         goal_continuation: ForkGoalContinuation,
         selected_profile: Option<&PermissionProfileSelection>,
     ) -> Result<AppServerStartedThread> {
@@ -875,6 +895,7 @@ impl AppServerSession {
             thread_id,
             last_turn_id,
             before_turn_id,
+            after_ordinal,
             goal_continuation,
             ForkPresentation::Regular,
             selected_profile,
@@ -896,6 +917,7 @@ impl AppServerSession {
             thread_id,
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
+            /*after_ordinal*/ None,
             ForkGoalContinuation::StartIfIdle,
             ForkPresentation::SideConversation,
             /*selected_profile*/ None,
@@ -916,6 +938,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         last_turn_id: Option<String>,
         before_turn_id: Option<String>,
+        after_ordinal: Option<u64>,
         goal_continuation: ForkGoalContinuation,
         presentation: ForkPresentation,
         selected_profile: Option<&PermissionProfileSelection>,
@@ -944,6 +967,7 @@ impl AppServerSession {
         let mut params = ThreadForkParams {
             last_turn_id,
             before_turn_id,
+            after_ordinal,
             defer_goal_continuation: goal_continuation == ForkGoalContinuation::DeferUntilNextTurn,
             exclude_turns,
             ..thread_fork_params_from_config(
