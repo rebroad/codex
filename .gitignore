@@ -12,6 +12,7 @@ dist/
 bazel-*
 user.bazelrc
 build/
+codex-rs/target/
 out/
 storybook-static/
 
