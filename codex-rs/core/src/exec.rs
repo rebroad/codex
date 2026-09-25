@@ -59,6 +59,7 @@ use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
 use codex_utils_pty::process_group::kill_process_group;
 use codex_utils_pty::process_group::terminate_process_group;
+use codex_utils_pty::wait_for_child_exit;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
 
@@ -1025,7 +1026,7 @@ async fn consume_output(
     let process_group_id = child.id();
     let mut expiration_resolved = false;
     let (mut exit_status, mut timed_out) = tokio::select! {
-        status_result = child.wait() => {
+        status_result = wait_for_child_exit(&mut child) => {
             let exit_status = status_result?;
             (exit_status, false)
         }
@@ -1051,7 +1052,7 @@ async fn consume_output(
                     };
                     match tokio::time::timeout(
                         CANCELLATION_TERMINATION_GRACE_PERIOD,
-                        child.wait(),
+                        wait_for_child_exit(&mut child),
                     )
                     .await
                     {

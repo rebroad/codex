@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -29,6 +31,19 @@ use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+
+#[cfg(target_os = "android")]
+fn test_shell_path() -> String {
+    let prefix = std::env::var_os("PREFIX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/data/data/com.termux/files/usr"));
+    prefix.join("bin/sh").display().to_string()
+}
+
+#[cfg(not(target_os = "android"))]
+fn test_shell_path() -> String {
+    "/bin/sh".to_owned()
+}
 
 // These tests exercise real sockets, not keepalive deadlines. The shared unit-test
 // Pong timeout is only 100 ms and can expire during Noise handshakes under load.
@@ -427,7 +442,7 @@ async fn registration_renewal_recovers_the_session_and_running_process() -> Resu
                     metadata: Default::default(),
                     process_id: ProcessId::from("renewed-process"),
                     argv: vec![
-                        "/bin/sh".to_owned(),
+                        test_shell_path(),
                         "-c".to_owned(),
                         "IFS= read line; printf 'from-stdin:%s\\n' \"$line\"".to_owned(),
                     ],
@@ -467,6 +482,10 @@ async fn registration_renewal_recovers_the_session_and_running_process() -> Resu
     assert!(Arc::ptr_eq(&original.inner, &recovered.inner));
     assert_eq!(recovered.session_id(), session_id);
     assert_eq!(environment.executor_session_id().await?, session_id);
+    // Android polls child status instead of depending on Tokio's SIGCHLD waiter.
+    // Keep real timer progress available for that poll loop after socket-handshake
+    // timing has been isolated above.
+    tokio::time::resume();
     assert_eq!(
         process.write(b"after-renewal\n".to_vec()).await?.status,
         crate::protocol::WriteStatus::Accepted

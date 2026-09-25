@@ -81,7 +81,7 @@ pub struct Command {
     pub(crate) drop_policy: ChildDropPolicy,
     #[cfg(unix)]
     pub(crate) inherited_fds: Vec<std::os::fd::RawFd>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     parent_pid: Option<libc::pid_t>,
     #[cfg(unix)]
     pub(crate) stdout_file: Option<std::os::fd::OwnedFd>,
@@ -114,7 +114,7 @@ impl Command {
             drop_policy: ChildDropPolicy::KillAndReap,
             #[cfg(unix)]
             inherited_fds: Vec::new(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             parent_pid: None,
             #[cfg(unix)]
             stdout_file: None,
@@ -222,8 +222,8 @@ impl Command {
         self
     }
 
-    /// Keep the existing Linux pipe behavior when the spawning parent exits.
-    #[cfg(target_os = "linux")]
+    /// Terminate the child when the spawning parent exits on Linux and Android.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn terminate_on_parent_death(&mut self) -> &mut Self {
         // SAFETY: getpid has no preconditions.
         self.parent_pid = Some(unsafe { libc::getpid() });
@@ -295,14 +295,14 @@ impl Command {
             let new_session = matches!(self.process_mode, ProcessMode::NewSession);
             let explicit_fds = self.descriptor_policy == DescriptorPolicy::Explicit;
             let targets = self.inherited_fds;
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             let parent_pid = self.parent_pid;
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
             let parent_pid: Option<i32> = None;
             if new_session || explicit_fds || !targets.is_empty() || parent_pid.is_some() {
                 // SAFETY: The caller keeps the selected descriptors open. Session
-                // and parent-death setup use system calls; Linux and macOS cleanup
-                // avoid allocation after fork. Other Unix targets have an
+                // and parent-death setup use system calls; Linux, Android, and
+                // macOS cleanup avoid allocation after fork. Other Unix targets have an
                 // allocation-after-fork risk documented on close_inherited_fds_except.
                 unsafe {
                     self.inner.pre_exec(move || {

@@ -1911,6 +1911,7 @@ fn run_git_output(
         None
     };
 
+    crate::git_process::supervise_git_command(&mut command);
     let output = command
         .output()
         .map_err(|err| format!("failed to run git {}: {err}", args.join(" ")))?;

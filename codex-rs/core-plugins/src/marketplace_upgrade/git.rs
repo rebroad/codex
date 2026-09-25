@@ -185,6 +185,7 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
+    crate::git_process::supervise_git_command(command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -204,6 +205,9 @@ fn run_git_command_with_timeout(
         }
 
         if start.elapsed() >= timeout {
+            #[cfg(unix)]
+            let _ = codex_utils_pty::process_group::kill_process_group(child.id());
+            #[cfg(not(unix))]
             let _ = child.kill();
             let output = child
                 .wait_with_output()
@@ -295,6 +299,72 @@ mod tests {
     #[test]
     fn leaves_non_verbatim_path_without_rewrite() {
         assert_eq!(strip_windows_verbatim_path_prefix(r"C:\Users\alice"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn git_descendant_dies_when_owner_exits() {
+        const MARKER_ENV: &str = "CODEX_TEST_MARKETPLACE_GIT_PARENT_DEATH_MARKER";
+        if let Some(marker_path) = std::env::var_os(MARKER_ENV) {
+            let marker_path = std::path::PathBuf::from(marker_path);
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args([
+                "-c",
+                &format!("sleep 30 & echo $! > '{}'; wait", marker_path.display()),
+            ]);
+            let _ = super::run_git_command_with_timeout(
+                &mut command,
+                "marketplace parent-death test",
+                std::time::Duration::from_secs(60),
+            );
+            return;
+        }
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let marker_path = tmp.path().join("git.pid");
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread name")
+            .to_string();
+        let mut owner = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", &test_name])
+            .env(MARKER_ENV, &marker_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn owner process");
+
+        let mut descendant_pid = None;
+        for _ in 0..200 {
+            if let Ok(pid) = std::fs::read_to_string(&marker_path).and_then(|pid| {
+                pid.trim()
+                    .parse::<libc::pid_t>()
+                    .map_err(std::io::Error::other)
+            }) {
+                descendant_pid = Some(pid);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let descendant_pid = descendant_pid.expect("Git descendant should report its PID");
+
+        owner.kill().expect("kill owner process");
+        owner.wait().expect("wait for owner process");
+        for _ in 0..200 {
+            let is_terminated = std::fs::read_to_string(format!("/proc/{descendant_pid}/stat"))
+                .map(|stat| {
+                    stat.rsplit_once(')')
+                        .and_then(|(_, rest)| rest.split_whitespace().next())
+                        == Some("Z")
+                })
+                .unwrap_or(true);
+            if is_terminated {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("Git descendant process {descendant_pid} survived its owner");
     }
 
     fn command_env<'a>(
