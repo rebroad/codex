@@ -25,6 +25,15 @@ use crate::protocol::ShellInfo;
 use crate::protocol::ShellSnapshotRequest;
 use crate::telemetry::ExecServerTelemetry;
 
+fn test_bash_path() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        return "/data/data/com.termux/files/usr/bin/bash";
+    }
+    #[cfg(not(target_os = "android"))]
+    "/bin/bash"
+}
+
 #[test_case(1, CapturePurpose::Execution; "succeeds_on_first_attempt")]
 #[test_case(2, CapturePurpose::Execution; "recovers_on_second_attempt")]
 #[test_case(3, CapturePurpose::Execution; "recovers_on_last_attempt")]
@@ -45,7 +54,7 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
         metadata: Default::default(),
         process_id: ProcessId::from("snapshot-retry"),
         argv: vec![
-            "/bin/bash".to_string(),
+            test_bash_path().to_string(),
             "-lc".to_string(),
             "true".to_string(),
         ],
@@ -62,7 +71,7 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
             scope_id: "attachment-1".to_string(),
             shell: ShellInfo {
                 name: "bash".to_string(),
-                path: "/bin/bash".to_string(),
+                path: test_bash_path().to_string(),
             },
         }),
         tty: false,
