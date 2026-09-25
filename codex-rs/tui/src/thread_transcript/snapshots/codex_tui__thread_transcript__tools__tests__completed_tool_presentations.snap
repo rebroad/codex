@@ -23,7 +23,7 @@ output line 9
 output line 10
 output line 11
 output line 12
-✓ • 0ms
+✓ • <duration>
 
 MCP: compact
 • Called example.js({"title":"Inspect page mcp","code":"await cua.getState()"})
