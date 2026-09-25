@@ -32,6 +32,7 @@ use crate::transport::remote_control::enroll::preview_remote_control_response_bo
 use crate::transport::remote_control::host_device::REMOTE_CONTROL_HOST_DEVICE_KIND_HEADER;
 use crate::transport::remote_control::host_device::host_device_kind;
 use crate::transport::remote_control::server_api::RemoteControlServerRequestError;
+use crate::transport::remote_control::server_api::RemoteControlServerTokenRefreshMode;
 use crate::transport::remote_control::server_api::enroll_remote_control_server;
 use crate::transport::remote_control::server_api::refresh_remote_control_server;
 use crate::transport::remote_control::server_api::remote_control_retry_delay;
@@ -1532,7 +1533,22 @@ pub(super) async fn connect_remote_control_websocket(
             status_publisher,
         )
         .await;
-        let auth = current_enrollment.record_retry_after(auth_result)?;
+        let auth = match auth_result {
+            Ok(auth) => current_enrollment.record_refresh_retry_after(Ok(auth), None)?,
+            Err(err) => {
+                let refresh_retry_at = lease
+                    .as_ref()
+                    .and_then(|enrollment| enrollment.next_refresh_at)
+                    .filter(|retry_at| {
+                        super::server_api::remote_control_retry_at(&err) == Some(*retry_at)
+                    });
+                if let Some(retry_at) = refresh_retry_at {
+                    current_enrollment.record_refresh_retry_after(Err(err), Some(retry_at))?
+                } else {
+                    current_enrollment.record_retry_after(Err(err))?
+                }
+            }
+        };
         let enrollment = lease.as_ref().cloned().ok_or_else(|| {
             io::Error::other("missing remote control enrollment after enrollment step")
         })?;
@@ -1765,10 +1781,15 @@ async fn prepare_remote_control_enrollment(
         let enrollment_ref = enrollment.as_mut().ok_or_else(|| {
             io::Error::other("missing remote control enrollment before server refresh")
         })?;
-        match refresh_remote_control_server(&auth, connect_options.installation_id, enrollment_ref)
-            .await
+        match refresh_remote_control_server(
+            &auth,
+            connect_options.installation_id,
+            enrollment_ref,
+            RemoteControlServerTokenRefreshMode::Automatic,
+        )
+        .await
         {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 info!(
                     "remote control server refresh returned HTTP 404; replacing stale enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
@@ -1789,18 +1810,36 @@ async fn prepare_remote_control_enrollment(
                 .await?;
             }
             Err(err) if super::auth::is_auth_error(&err) => {
-                if recover_remote_control_auth(
-                    auth_context.auth_recovery,
-                    auth_context.auth_change_rx,
+                enrollment_ref.clear_server_token();
+                let reenroll_result = enroll_and_persist_remote_control_server(
+                    remote_control_target,
+                    state_db,
+                    RemoteControlEnrollmentAuthContext {
+                        auth: &auth,
+                        recovery: auth_context,
+                    },
+                    enrollment,
+                    connect_options,
+                    status_publisher,
+                    RemoteControlEnrollmentSelection::ReplaceExisting,
                 )
-                .await
-                {
+                .await;
+                if let Err(reenroll_err) = reenroll_result {
+                    if recover_remote_control_auth(
+                        auth_context.auth_recovery,
+                        auth_context.auth_change_rx,
+                    )
+                    .await
+                    {
+                        let _ = reenroll_err;
+                        return Err(io::Error::other(format!(
+                            "{err}; retrying after auth recovery"
+                        )));
+                    }
                     return Err(io::Error::other(format!(
-                        "{err}; retrying after auth recovery"
+                        "{err}; remote control re-enrollment failed: {reenroll_err}"
                     )));
                 }
-                enrollment_ref.clear_server_token();
-                return Err(err);
             }
             Err(err) => return Err(err),
         }
@@ -2415,14 +2454,6 @@ mod tests {
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let enroll_url = remote_control_target.enroll_url.clone();
-        let server_task = tokio::spawn(async move {
-            let (stream, request_line) = accept_http_request(&listener).await;
-            assert_eq!(
-                request_line,
-                "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
-            );
-            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
-        });
         let codex_home = TempDir::new().expect("temp dir should create");
         save_auth(
             codex_home.path(),
@@ -2431,6 +2462,23 @@ mod tests {
             AuthKeyringBackendKind::default(),
         )
         .expect("stale auth should save");
+        let fresh_auth_home = codex_home.path().to_path_buf();
+        let fresh_auth = remote_control_auth_dot_json("fresh-token");
+        let server_task = tokio::spawn(async move {
+            let (stream, request_line) = accept_http_request(&listener).await;
+            assert_eq!(
+                request_line,
+                "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+            );
+            save_auth(
+                &fresh_auth_home,
+                &fresh_auth,
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )
+            .expect("fresh auth should save after the stale request arrives");
+            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
+        });
         let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
@@ -2442,19 +2490,20 @@ mod tests {
             codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
+        assert_eq!(
+            auth_manager
+                .auth()
+                .await
+                .expect("stale auth should load")
+                .get_token()
+                .expect("stale token should be available"),
+            "stale-token"
+        );
         let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let current_enrollment = test_current_enrollment(/*enrollment*/ None);
         let (status_publisher, status_rx) = remote_control_status_channel();
-        save_auth(
-            codex_home.path(),
-            &remote_control_auth_dot_json("fresh-token"),
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-        )
-        .expect("fresh auth should save");
-
         let err = connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),
@@ -2515,14 +2564,6 @@ mod tests {
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let refresh_url = remote_control_target.refresh_url.clone();
-        let server_task = tokio::spawn(async move {
-            let (stream, request_line) = accept_http_request(&listener).await;
-            assert_eq!(
-                request_line,
-                "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
-            );
-            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
-        });
         let codex_home = TempDir::new().expect("temp dir should create");
         save_auth(
             codex_home.path(),
@@ -2531,6 +2572,23 @@ mod tests {
             AuthKeyringBackendKind::default(),
         )
         .expect("stale auth should save");
+        let fresh_auth_home = codex_home.path().to_path_buf();
+        let fresh_auth = remote_control_auth_dot_json("fresh-token");
+        let server_task = tokio::spawn(async move {
+            let (stream, request_line) = accept_http_request(&listener).await;
+            assert_eq!(
+                request_line,
+                "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+            );
+            save_auth(
+                &fresh_auth_home,
+                &fresh_auth,
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )
+            .expect("fresh auth should save after the stale request arrives");
+            respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
+        });
         let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
@@ -2542,6 +2600,15 @@ mod tests {
             codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
+        assert_eq!(
+            auth_manager
+                .auth()
+                .await
+                .expect("stale auth should load")
+                .get_token()
+                .expect("stale token should be available"),
+            "stale-token"
+        );
         let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
@@ -2550,16 +2617,10 @@ mod tests {
         expected_enrollment.remote_control_target = remote_control_target.clone();
         expected_enrollment.expires_at =
             Some(time::OffsetDateTime::now_utc() + time::Duration::minutes(4));
+        let mut expected_enrollment_after_refresh_failure = expected_enrollment.clone();
+        expected_enrollment_after_refresh_failure.clear_server_token();
         let current_enrollment = test_current_enrollment(Some(expected_enrollment.clone()));
         let (status_publisher, status_rx) = remote_control_status_channel();
-        save_auth(
-            codex_home.path(),
-            &remote_control_auth_dot_json("fresh-token"),
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-        )
-        .expect("fresh auth should save");
-
         let err = connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),
@@ -2607,7 +2668,10 @@ mod tests {
                 .expect("token should be readable"),
             "fresh-token"
         );
-        assert_eq!(current_enrollment.snapshot(), Some(expected_enrollment));
+        assert_eq!(
+            current_enrollment.snapshot(),
+            Some(expected_enrollment_after_refresh_failure)
+        );
         assert!(
             !auth_change_rx
                 .has_changed()
