@@ -582,6 +582,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
             permission_profile: &permission_profile,
             managed_network: Some(managed_network.clone()),
             proxy_route_spec: Some("{\"routes\":[]}".to_string()),
+            allow_isolated_local_ipc: false,
             command: vec!["/bin/true".to_string()],
         });
 
@@ -635,6 +636,7 @@ fn inner_command_includes_permission_profile_flag() {
         permission_profile: &permission_profile,
         managed_network: None,
         proxy_route_spec: None,
+        allow_isolated_local_ipc: false,
         command: vec!["/bin/true".to_string()],
     });
 
@@ -654,6 +656,7 @@ fn non_managed_inner_command_omits_route_spec() {
         permission_profile: &permission_profile,
         managed_network: None,
         proxy_route_spec: None,
+        allow_isolated_local_ipc: false,
         command: vec!["/bin/true".to_string()],
     });
 
@@ -661,6 +664,22 @@ fn non_managed_inner_command_omits_route_spec() {
     let parsed = LandlockCommand::try_parse_from(args)
         .expect("unmanaged inner command should preserve ordinary sandbox mode");
     assert_eq!(parsed.managed_network, None);
+}
+
+#[test]
+fn isolated_local_ipc_inner_command_includes_flag() {
+    let permission_profile = read_only_permission_profile();
+    let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
+        sandbox_policy_cwd: Path::new("/tmp"),
+        command_cwd: Some(Path::new("/tmp/link")),
+        permission_profile: &permission_profile,
+        managed_network: None,
+        proxy_route_spec: None,
+        allow_isolated_local_ipc: true,
+        command: vec!["/bin/true".to_string()],
+    });
+
+    assert!(args.iter().any(|arg| arg == "--allow-isolated-local-ipc"));
 }
 
 #[test]
@@ -673,6 +692,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
             permission_profile: &permission_profile,
             managed_network: Some(ManagedNetworkSandboxContext::default()),
             proxy_route_spec: None,
+            allow_isolated_local_ipc: false,
             command: vec!["/bin/true".to_string()],
         })
     });
