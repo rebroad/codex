@@ -106,7 +106,6 @@ impl CoreToolRuntime for PlanHandler {
 }
 
 fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
-    serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {
-        FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
-    })
+    serde_json::from_str::<UpdatePlanArgs>(arguments)
+        .map_err(|e| FunctionCallError::MalformedArguments(e.to_string()))
 }
