@@ -68,6 +68,9 @@ async fn replayed_command_completion_preserves_tracking_without_duplicate_starts
 
     assert!(chat.running_commands.is_empty());
     assert!(chat.unified_exec_processes.is_empty());
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("• Ran cat replay"));
+    chat.flush_active_cell();
     let history = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -221,7 +224,11 @@ async fn exploration_reasoning_during_followup_command_stays_ordered() {
     assert!(drain_insert_history(&mut rx).is_empty());
     end_exec(&mut chat, second, "contents\n", "", /*exit_code*/ 0);
     let transcript = chat.active_cell_transcript_lines(/*width*/ 80).unwrap();
-    insta::assert_snapshot!(lines_to_single_string(&transcript));
+    let rendered = lines_to_single_string(&transcript);
+    let snapshot = regex_lite::Regex::new(r"(?m) • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}$")
+        .expect("valid completion timestamp regex")
+        .replace_all(&rendered, "");
+    insta::assert_snapshot!(snapshot);
 }
 
 #[tokio::test]
@@ -322,6 +329,10 @@ async fn adjacent_exploration_groups_across_reasoning_live_and_replayed() {
                 render.push('\n');
             }
         }
+        let render = regex_lite::Regex::new(r"(?m) • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}$")
+            .expect("valid completion timestamp regex")
+            .replace_all(&render, "")
+            .into_owned();
         renders.push(render);
     }
     assert_eq!(renders[0], renders[1]);
@@ -396,27 +407,36 @@ async fn replayed_commands_preserve_individual_output_and_failure_status() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(cells.len(), 4);
+    assert_eq!(cells.len(), 3);
+    assert_eq!(
+        lines_to_single_string(&cells[0].display_lines(/*width*/ 80)),
+        "• Ran 2 commands · ctrl + t to view transcript\n"
+    );
     let transcript = cells
         .iter()
         .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
         .collect::<Vec<_>>()
         .join("\n");
+    let transcript = regex_lite::Regex::new(
+        r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)(?: • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2})?$",
+    )
+    .expect("valid completion timestamp regex")
+    .replace_all(&transcript, " • <duration>");
     insta::assert_snapshot!(transcript, @r"$ printf first
 first
-✓ • 5ms
+✓ • <duration>
 
 $ printf second
 second
-✓ • 5ms
+✓ • <duration>
 
 $ printf failure
 failure
-✗ (7) • 5ms
+✗ (7) • <duration>
 
 $ printf declined
 declined
-✗ (1) • 5ms
+✗ (1) • <duration>
 ");
 }
 
@@ -474,8 +494,11 @@ async fn exec_history_cell_shows_working_then_completed() {
     // End command successfully
     end_exec(&mut chat, begin, "done", "", /*exit_code*/ 0);
 
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("• Ran echo done"));
+    chat.flush_active_cell();
     let cells = drain_insert_history(&mut rx);
-    // Exec end now finalizes and flushes the exec cell immediately.
+    // Successful commands remain available for grouping until a boundary commits the cell.
     assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
     // Inspect the flushed exec cell rendering.
     let lines = &cells[0];
@@ -548,6 +571,9 @@ async fn exec_end_without_begin_uses_event_command() {
         },
     );
 
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("• Ran echo orphaned"));
+    chat.flush_active_cell();
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
     let blob = lines_to_single_string(&cells[0]);
@@ -617,7 +643,15 @@ async fn exec_end_without_begin_flushes_completed_unrelated_exploring_cell() {
     let orphan = begin_unified_exec_startup(&mut chat, "call-after", "proc-1", "echo after");
     end_exec(&mut chat, orphan, "after\n", "", /*exit_code*/ 0);
 
-    let cells = drain_insert_history(&mut rx);
+    let mut cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "completed exploration should flush at the command boundary"
+    );
+    assert!(active_blob(&chat).contains("• Ran echo after"));
+    chat.flush_active_cell();
+    cells.extend(drain_insert_history(&mut rx));
     assert_eq!(
         cells.len(),
         2,
@@ -699,6 +733,9 @@ async fn exec_history_shows_unified_exec_startup_commands() {
         /*exit_code*/ 0,
     );
 
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("• Ran echo unified exec startup"));
+    chat.flush_active_cell();
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
     let blob = lines_to_single_string(&cells[0]);
