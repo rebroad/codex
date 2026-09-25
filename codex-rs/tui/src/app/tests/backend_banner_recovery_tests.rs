@@ -192,6 +192,7 @@ async fn backend_banner_limit_error_refreshes_again_after_intervening_rolling_ha
             will_retry: false,
             thread_id: "thread-a".into(),
             turn_id: "turn-a".into(),
+            request_id: None,
         }),
         /*replay_kind*/ None,
     );
