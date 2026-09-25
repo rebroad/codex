@@ -709,7 +709,7 @@ mod tests {
     fn windows_sandbox_exec_request() -> ExecRequest {
         let cwd = AbsolutePathBuf::current_dir().expect("current dir");
         ExecRequest::new(
-            vec!["cmd".to_string()],
+            vec!["cmd.exe".to_string()],
             cwd.clone(),
             HashMap::new(),
             /*network*/ None,
