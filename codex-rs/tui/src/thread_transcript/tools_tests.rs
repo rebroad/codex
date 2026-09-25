@@ -93,6 +93,11 @@ fn completed_tools_keep_compact_and_detailed_presentations() {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
+    let rendered = regex_lite::Regex::new(
+        r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)(?: • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2})?$",
+    )
+    .expect("valid completion timestamp regex")
+    .replace_all(&rendered, " • <duration>");
     insta::assert_snapshot!("completed_tool_presentations", rendered);
 }
 
