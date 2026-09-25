@@ -9,6 +9,7 @@ pub const MODEL_TAG: &str = "model";
 pub const ORIGINATOR_TAG: &str = "originator";
 pub const SERVICE_NAME_TAG: &str = "service_name";
 pub const SESSION_SOURCE_TAG: &str = "session_source";
+pub const TOOL_FAILURE_KIND_TAG: &str = "failure_kind";
 
 const OTHER_ORIGINATOR_TAG_VALUE: &str = "other";
 const KNOWN_ORIGINATOR_TAG_VALUES: &[&str] = &[
