@@ -69,6 +69,19 @@ pub struct Cli {
     )]
     pub json: bool,
 
+    /// Send one direct model request without starting an app-server session.
+    #[arg(long = "direct", default_value_t = false)]
+    pub direct: bool,
+
+    /// Send only the user prompt text without Codex prompt scaffolding.
+    #[arg(
+        long = "bare-prompt",
+        alias = "bareprompt",
+        default_value_t = false,
+        global = true
+    )]
+    pub bare_prompt: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(
         long = "output-last-message",

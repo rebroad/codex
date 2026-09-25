@@ -4,6 +4,7 @@ mod agents_md;
 mod apply_patch;
 mod approval_policy;
 mod auth_env;
+mod bare_prompt;
 #[path = "completion_backfill_tests.rs"]
 mod completion_backfill;
 #[path = "cyber_access_program_tests.rs"]
