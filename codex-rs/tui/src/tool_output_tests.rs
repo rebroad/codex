@@ -158,7 +158,7 @@ fn command_preview_matches_streamed_and_completed_output() {
     );
     let completed = cell.display_lines(/*width*/ 80);
     assert_eq!(&live[1..], &completed[1..]);
-    insta::assert_snapshot!(format!(
+    let snapshot = format!(
         "history:\n{}\n\ncompact:\n{}\n\ntranscript:\n{}",
         completed
             .iter()
@@ -175,5 +175,11 @@ fn command_preview_matches_streamed_and_completed_output() {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n"),
-    ));
+    );
+    let snapshot = regex_lite::Regex::new(
+        r"(?m) • (?:\d+ms|\d+\.\d+s|\d+m \d+s)(?: • (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2})?$",
+    )
+    .expect("valid completion timestamp regex")
+    .replace_all(&snapshot, " • <duration>");
+    insta::assert_snapshot!(snapshot);
 }
