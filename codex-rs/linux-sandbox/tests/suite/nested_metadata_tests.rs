@@ -87,7 +87,9 @@ if (touch "$workspace/.codex/forbidden.txt") 2>/dev/null; then
     exit 11
 fi
 for name in .git .agents .codex .aws; do
-    test -d "$visualization/$name"
+    test ! -e "$visualization/$name"
+done
+for name in .git .agents .codex .aws; do
     if (touch "$visualization/$name/forbidden.txt") 2>/dev/null; then
         exit 12
     fi
