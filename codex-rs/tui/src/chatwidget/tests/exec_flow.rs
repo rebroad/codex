@@ -396,7 +396,11 @@ async fn replayed_commands_preserve_individual_output_and_failure_status() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(cells.len(), 4);
+    assert_eq!(cells.len(), 3);
+    assert_eq!(
+        lines_to_single_string(&cells[0].display_lines(/*width*/ 80)),
+        "• Ran 2 commands · ctrl + t to view transcript\n"
+    );
     let transcript = cells
         .iter()
         .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))

@@ -12,6 +12,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use super::live_output::LiveCommandOutput;
+const MAX_GROUPED_COMMANDS: usize = 32;
 use crate::history_cell::ActivityGroup;
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
@@ -107,7 +108,39 @@ impl ExecCell {
             duration: None,
             interaction_input,
         };
-        if self.is_exploring_cell() && Self::is_exploring_call(&call) {
+        let has_failed_call = self.group.calls.iter().any(|existing| {
+            existing
+                .output
+                .as_ref()
+                .is_some_and(|output| output.exit_code != 0)
+        });
+        if (self.group.calls.len() >= MAX_GROUPED_COMMANDS && !self.is_active())
+            || (!Self::is_groupable_source(call.source) && !self.is_active())
+            || (has_failed_call && !self.is_active())
+        {
+            return false;
+        }
+
+        let continues_exploration = Self::is_exploring_call(&call)
+            && (self.is_exploring_cell()
+                || self.group.calls.last().is_some_and(|existing| {
+                    existing.duration.is_none() && Self::is_exploring_call(existing)
+                }))
+            && (self.is_active()
+                || self
+                    .group
+                    .calls
+                    .iter()
+                    .all(|existing| Self::is_groupable_source(existing.source)));
+        let continues_compact_group = self.group.calls.iter().all(|existing| {
+            Self::is_groupable_source(existing.source)
+                && existing.duration.is_some()
+                && existing
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| output.exit_code == 0)
+        });
+        if continues_exploration || continues_compact_group {
             self.group.calls.push(call);
             true
         } else {
@@ -161,6 +194,31 @@ impl ExecCell {
     }
 
     pub(crate) fn should_flush(&self) -> bool {
+        if self.group.calls.iter().any(|call| {
+            !Self::is_groupable_source(call.source)
+                || call
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| output.exit_code != 0)
+        }) {
+            return !self.is_active();
+        }
+
+        if self.group.calls.len() >= MAX_GROUPED_COMMANDS {
+            return !self.is_active();
+        }
+
+        if self.group.calls.iter().all(|call| {
+            Self::is_groupable_source(call.source)
+                && call.duration.is_some()
+                && call
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| output.exit_code == 0)
+        }) {
+            return false;
+        }
+
         // Exploration stays open for adjacent calls, including after a failed read/list/search.
         !self.is_exploring_cell() && self.group.calls.iter().all(|c| c.duration.is_some())
     }
@@ -241,6 +299,13 @@ impl ExecCell {
                         | ParsedCommand::Search { .. }
                 )
             })
+    }
+
+    fn is_groupable_source(source: ExecCommandSource) -> bool {
+        matches!(
+            source,
+            ExecCommandSource::Agent | ExecCommandSource::UnifiedExecStartup
+        )
     }
 }
 

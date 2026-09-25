@@ -450,6 +450,26 @@ impl ExecCell {
     }
 
     fn command_display_lines_with_hidden_details(&self, width: u16) -> CommandDisplay {
+        if self.group.calls.len() > 1 {
+            let bullet = if self.is_active() {
+                activity_marker(self.active_start_time(), self.animations_enabled())
+            } else {
+                "•".green().bold()
+            };
+            let title = if self.is_active() { "Running" } else { "Ran" };
+            return CommandDisplay {
+                lines: vec![
+                    Line::from(vec![
+                        bullet,
+                        " ".into(),
+                        format!("{title} {} commands", self.group.calls.len()).bold(),
+                        " · ctrl + t to view transcript".dim(),
+                    ])
+                    .into(),
+                ],
+                hidden_details: true,
+            };
+        }
         let [call] = &self.group.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
