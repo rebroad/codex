@@ -131,6 +131,36 @@ pub async fn detached_memory_responses_metadata(
     permission_profile: &PermissionProfile,
     sandbox: Option<&str>,
 ) -> CodexResponsesMetadata {
+    let workspaces = memory_workspaces(
+        cwd,
+        thread_manager.git_root_discovery().discover(cwd.clone()),
+    )
+    .await;
+    detached_memory_responses_metadata_with_workspaces(
+        installation_id,
+        session_id,
+        thread_id,
+        window_id,
+        session_source,
+        cwd,
+        permission_profile,
+        sandbox,
+        workspaces,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn detached_memory_responses_metadata_with_workspaces(
+    installation_id: String,
+    session_id: String,
+    thread_id: String,
+    window_id: String,
+    session_source: &SessionSource,
+    cwd: &AbsolutePathBuf,
+    permission_profile: &PermissionProfile,
+    sandbox: Option<&str>,
+    workspaces: BTreeMap<String, TurnMetadataWorkspace>,
+) -> CodexResponsesMetadata {
     let turn_id = uuid::Uuid::now_v7().to_string();
     let mut metadata = CodexResponsesMetadata {
         turn_id: Some(turn_id.clone()),
@@ -140,11 +170,7 @@ pub async fn detached_memory_responses_metadata(
         turn_trigger: Some("memory_consolidation".to_owned()),
         subagent_header: subagent_header_value(session_source),
         sandbox: sandbox.map(ToString::to_string),
-        workspaces: memory_workspaces(
-            cwd,
-            thread_manager.git_root_discovery().discover(cwd.clone()),
-        )
-        .await,
+        workspaces,
         ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     };
     record_policy_metadata(permission_profile, cwd.as_path(), &mut metadata);
@@ -507,6 +533,11 @@ impl TurnMetadataState {
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspaces);
             }
 
+            state
+                .enrichment_task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
             state.git_enrichment_complete.send_replace(/*value*/ true);
         })));
     }

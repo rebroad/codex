@@ -212,18 +212,12 @@ async fn detached_memory_responses_metadata_starts_an_independent_root_turn() {
     );
 }
 
-#[tokio::test]
-async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
+#[test]
+fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
 
-    let thread_manager = crate::ThreadManager::with_models_provider_for_tests(
-        codex_login::CodexAuth::from_api_key("test"),
-        crate::config::test_config().await.model_provider,
-    );
-
-    let header = detached_memory_responses_metadata(
-        &thread_manager,
+    let header = detached_memory_responses_metadata_with_workspaces(
         String::new(),
         String::new(),
         String::new(),
@@ -232,8 +226,8 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
         &cwd,
         &PermissionProfile::read_only(),
         /*sandbox*/ None,
+        std::collections::BTreeMap::new(),
     )
-    .await
     .turn_metadata_json()
     .expect("detached memory should emit its request kind");
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
@@ -1354,7 +1348,11 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
     );
 
     let invalid_repo = TempDir::new().expect("invalid repo");
-    std::fs::create_dir(invalid_repo.path().join(".git")).expect("invalid git directory");
+    std::fs::create_dir_all(invalid_repo.path().join(".git/objects"))
+        .expect("invalid git objects directory");
+    std::fs::create_dir(invalid_repo.path().join(".git/refs")).expect("invalid git refs directory");
+    std::fs::write(invalid_repo.path().join(".git/config"), "[invalid\n")
+        .expect("invalid git config");
     std::fs::write(
         invalid_repo.path().join(".git/HEAD"),
         "ref: refs/heads/main\n",
@@ -1382,5 +1380,12 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
     )
     .await
     .expect("failed git enrichment should complete");
+    assert!(
+        invalid_state
+            .enrichment_task
+            .lock()
+            .expect("enrichment task lock")
+            .is_none()
+    );
     assert!(invalid_state.current_workspaces().is_empty());
 }

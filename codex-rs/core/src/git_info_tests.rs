@@ -43,12 +43,13 @@ use tempfile::TempDir;
 use tokio::process::Command;
 
 #[derive(Default)]
-struct MetadataOverrideFileSystem {
+pub(crate) struct MetadataOverrideFileSystem {
     path: Option<PathUri>,
     replacement: Option<PathBuf>,
     canonical_overrides: Vec<(PathUri, PathUri)>,
     // Optional virtual filesystem; entries without contents are directories.
     entries: Option<HashMap<String, Option<String>>>,
+    hidden_paths: Vec<PathUri>,
 }
 
 impl MetadataOverrideFileSystem {
@@ -77,6 +78,29 @@ impl MetadataOverrideFileSystem {
             io::ErrorKind::Unsupported,
             "operation is not used by Git root discovery",
         ))
+    }
+    pub(crate) fn hiding_ancestor_git_markers(path: &Path) -> Self {
+        Self::with_hidden_git_markers(path, None)
+    }
+
+    pub(crate) fn hiding_git_markers_above(path: &Path, boundary: &Path) -> Self {
+        Self::with_hidden_git_markers(path, Some(boundary))
+    }
+
+    fn with_hidden_git_markers(path: &Path, boundary: Option<&Path>) -> Self {
+        let hidden_paths = std::iter::successors(Some(path.to_path_buf()), |path| {
+            path.parent().map(Path::to_path_buf)
+        })
+        .filter(|path| boundary.is_none_or(|boundary| path != boundary))
+        .map(|path| PathUri::from_abs_path(&path.join(".git").abs()))
+        .collect();
+        Self {
+            path: Some(PathUri::from_abs_path(&path.join("unused").abs())),
+            replacement: None,
+            canonical_overrides: Vec::new(),
+            hidden_paths,
+            ..Default::default()
+        }
     }
 }
 
@@ -160,6 +184,10 @@ impl ExecutorFileSystem for MetadataOverrideFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {
+            if self.hidden_paths.iter().any(|hidden| hidden == path) {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "hidden test path"));
+            }
+
             if let Some(entry) = self.entry(path) {
                 let contents = entry?;
                 return Ok(FileMetadata {
@@ -614,7 +642,8 @@ async fn test_get_has_changes_ignores_configured_hooks_path() {
         .await
         .expect("configure hooks path");
 
-    fs::write(repo_path.join("test.txt"), "test content").expect("refresh tracked file");
+    let tracked_contents = fs::read(repo_path.join("test.txt")).expect("read tracked file");
+    fs::write(repo_path.join("test.txt"), tracked_contents).expect("refresh tracked file");
 
     assert_eq!(
         get_has_changes_in_repo(&repo_path, &repo_path).await,
@@ -722,8 +751,20 @@ async fn test_get_git_working_tree_state_branch_fallback() {
 #[tokio::test]
 async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
     let tmp = TempDir::new().expect("tempdir");
+    let hidden_paths = std::iter::successors(Some(tmp.path().to_path_buf()), |path| {
+        path.parent().map(Path::to_path_buf)
+    })
+    .map(|path| PathUri::from_abs_path(&path.join(".git").abs()))
+    .collect();
+    let fs = MetadataOverrideFileSystem {
+        path: Some(PathUri::from_abs_path(&tmp.path().join("unused").abs())),
+        replacement: None,
+        canonical_overrides: Vec::new(),
+        hidden_paths,
+        ..Default::default()
+    };
     assert!(
-        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &tmp.path().abs())
+        resolve_root_git_project_for_trust(&fs, &tmp.path().abs())
             .await
             .is_none()
     );
