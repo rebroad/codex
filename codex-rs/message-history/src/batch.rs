@@ -14,6 +14,7 @@ use super::HistoryEntry;
 use super::MAX_RETRIES;
 use super::RETRY_SLEEP;
 use super::history_filepath;
+use super::is_unsupported_file_lock_error;
 use super::log_identity;
 
 const MAX_BATCH_ROWS: usize = 128;
@@ -124,6 +125,11 @@ pub fn lookup_batch(
         match file.try_lock_shared() {
             Ok(()) => return scan_batch(&mut file, cursor, config),
             Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(RETRY_SLEEP),
+            Err(std::fs::TryLockError::Error(ref error))
+                if is_unsupported_file_lock_error(error) =>
+            {
+                return scan_batch(&mut file, cursor, config);
+            }
             Err(error) => return Err(error.into()),
         }
     }

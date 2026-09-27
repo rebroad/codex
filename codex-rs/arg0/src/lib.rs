@@ -24,6 +24,16 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 
+/// Filesystems that do not support advisory file locking (observed on
+/// Termux storage backends under `/data/data/com.termux/files`) surface
+/// `ErrorKind::Unsupported` from `File::try_lock`. Detect this on every
+/// target instead of gating on `cfg!(target_os = "android")`: support for
+/// the affected filesystem behavior is a runtime property, and keeping the
+/// helper target-independent also covers older Termux package lines.
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
     /// Stable path to the current Codex executable for child re-execs.
@@ -387,7 +397,12 @@ fn prepare_path_entry_for_codex_aliases(
         .create(true)
         .truncate(false)
         .open(&lock_path)?;
-    lock_file.try_lock()?;
+    if let Err(err) = lock_file.try_lock() {
+        let io_err: std::io::Error = err.into();
+        if !is_unsupported_file_lock_error(&io_err) {
+            return Err(io_err);
+        }
+    }
 
     for filename in &[
         APPLY_PATCH_ARG0,
@@ -531,7 +546,14 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
     match lock_file.try_lock() {
         Ok(()) => Ok(Some(lock_file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(err) => Err(err.into()),
+        Err(err) => {
+            let io_err: std::io::Error = err.into();
+            if is_unsupported_file_lock_error(&io_err) {
+                Ok(None)
+            } else {
+                Err(io_err)
+            }
+        }
     }
 }
 
@@ -540,6 +562,7 @@ mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::is_unsupported_file_lock_error;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
     #[cfg(unix)]
@@ -811,5 +834,21 @@ mod tests {
 
         assert!(!dir.exists());
         Ok(())
+    }
+
+    #[test]
+    fn unsupported_file_lock_errors_are_detected() {
+        assert!(is_unsupported_file_lock_error(&std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "unsupported",
+        )));
+    }
+
+    #[test]
+    fn other_file_lock_errors_are_not_treated_as_unsupported() {
+        assert!(!is_unsupported_file_lock_error(&std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )));
     }
 }
