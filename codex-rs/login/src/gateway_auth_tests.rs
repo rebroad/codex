@@ -214,7 +214,7 @@ async fn different_configurations_refresh_under_the_same_store_lock() {
             .await
             .expect("store lock"),
     );
-    contender.unlock().expect("release store lock");
+    codex_utils_file_lock::unlock(&contender).expect("release store lock");
     for (client_id, refresh_token, access_token) in [
         ("codex-test", "refresh-a", "access-a"),
         ("other-client", "refresh-b", "access-b"),
@@ -227,7 +227,7 @@ async fn different_configurations_refresh_under_the_same_store_lock() {
             )))
             .respond_with(move |_: &wiremock::Request| {
                 assert!(matches!(
-                    contender.try_lock(),
+                    codex_utils_file_lock::try_lock(&contender),
                     Err(std::fs::TryLockError::WouldBlock)
                 ));
                 ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
@@ -531,7 +531,7 @@ async fn browser_authorization_exchanges_and_persists_under_the_store_lock() {
     let contender = super::storage::lock_credentials(home.path())
         .await
         .expect("store lock");
-    contender.unlock().expect("release store lock");
+    codex_utils_file_lock::unlock(&contender).expect("release store lock");
     Mock::given(method("POST"))
         .and(path("/token"))
         .and(body_string_contains("grant_type=authorization_code"))
@@ -541,7 +541,7 @@ async fn browser_authorization_exchanges_and_persists_under_the_store_lock() {
         .and(body_string_contains("redirect_uri="))
         .respond_with(move |_: &wiremock::Request| {
             assert!(matches!(
-                contender.try_lock(),
+                codex_utils_file_lock::try_lock(&contender),
                 Err(std::fs::TryLockError::WouldBlock)
             ));
             ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
