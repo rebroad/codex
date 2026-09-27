@@ -124,8 +124,8 @@ impl OAuthStoreLock {
 
         loop {
             let result = match mode {
-                OAuthStoreLockMode::Shared => file.try_lock_shared(),
-                OAuthStoreLockMode::Exclusive => file.try_lock(),
+                OAuthStoreLockMode::Shared => codex_utils_file_lock::try_lock_shared(&file),
+                OAuthStoreLockMode::Exclusive => codex_utils_file_lock::try_lock(&file),
             };
             match result {
                 Ok(()) => return Ok(Self { _file: file }),
