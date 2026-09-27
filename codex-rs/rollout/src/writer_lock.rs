@@ -65,7 +65,7 @@ impl WriterLockCoordinator {
                 ))
             })?;
 
-        match file.try_lock() {
+        match codex_utils_file_lock::try_lock(&file) {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => {
                 let owner = fs::read_to_string(&path)
@@ -82,7 +82,7 @@ impl WriterLockCoordinator {
                 ));
             }
             Err(std::fs::TryLockError::Error(err)) if is_unsupported_file_lock_error(&err) => {
-                // Advisory locking is unavailable on some Termux filesystems.
+                // Retain compatibility with filesystems lacking advisory locks.
             }
             Err(std::fs::TryLockError::Error(err)) => {
                 return Err(io::Error::other(format!(
@@ -123,7 +123,7 @@ impl WriterLockCoordinator {
         let coordination_lock = self.lock_coordination()?;
         let path = self.directory.join(format!("{thread_id}.lock"));
         match OpenOptions::new().read(true).write(true).open(path) {
-            Ok(file) => match file.try_lock() {
+            Ok(file) => match codex_utils_file_lock::try_lock(&file) {
                 Ok(()) => Ok(Some(coordination_lock)),
                 Err(std::fs::TryLockError::WouldBlock) => Ok(None),
                 Err(std::fs::TryLockError::Error(err)) if is_unsupported_file_lock_error(&err) => {
@@ -145,7 +145,7 @@ impl WriterLockCoordinator {
             .create(true)
             .truncate(false)
             .open(&path)?;
-        if let Err(err) = file.lock()
+        if let Err(err) = codex_utils_file_lock::lock(&file)
             && !is_unsupported_file_lock_error(&err)
         {
             return Err(io::Error::other(format!(
@@ -181,7 +181,7 @@ impl WriterLockCoordinator {
                     continue;
                 }
             };
-            match file.try_lock() {
+            match codex_utils_file_lock::try_lock(&file) {
                 Ok(()) => {
                     drop(file);
                     if let Err(err) = fs::remove_file(&path)
