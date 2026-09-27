@@ -114,13 +114,11 @@ fn publication_skips_live_writers_and_keeps_coordination_locked() {
         .open(writer.directory.join(COORDINATION_LOCK_FILE))
         .unwrap();
     assert!(matches!(
-        coordination.try_lock(),
+        codex_utils_file_lock::try_lock(&coordination),
         Err(fs::TryLockError::WouldBlock)
     ));
     drop(publication);
-    coordination
-        .try_lock()
-        .expect("publication releases coordination");
+    codex_utils_file_lock::try_lock(&coordination).expect("publication releases coordination");
     drop(coordination);
     // An existing but unlocked file is also idle; file existence is not ownership.
     fs::File::create(writer.directory.join(format!("{thread_id}.lock"))).unwrap();

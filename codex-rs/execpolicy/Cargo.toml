@@ -18,6 +18,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+codex-utils-file-lock = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-utils-absolute-path = { workspace = true }
