@@ -115,7 +115,7 @@ pub async fn start_control_socket_acceptor(
         socket_guard.rendezvous_path.as_path(),
     )?;
     #[cfg(unix)]
-    socket_guard._startup_lock._file.unlock()?;
+    codex_utils_file_lock::unlock(&socket_guard._startup_lock._file)?;
     info!(
         socket_path = %socket_guard.socket_path.display(),
         "app-server control socket listening"
@@ -311,6 +311,10 @@ pub struct AppServerStartupLock {
     remove_on_drop: bool,
 }
 
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 pub async fn acquire_app_server_startup_lock(
     startup_lock_path: AbsolutePathBuf,
 ) -> IoResult<AppServerStartupLock> {
@@ -324,7 +328,11 @@ pub async fn acquire_app_server_startup_lock(
             .read(true)
             .write(true)
             .open(startup_lock_path.as_path())?;
-        file.lock()?;
+        if let Err(err) = codex_utils_file_lock::lock(&file)
+            && !is_unsupported_file_lock_error(&err)
+        {
+            return Err(err);
+        }
         Ok(AppServerStartupLock {
             _file: file,
             #[cfg(unix)]
@@ -368,7 +376,7 @@ impl AppServerStartupLock {
         let Some(path) = self.removable_path.as_ref() else {
             return Ok(());
         };
-        match self._file.try_lock() {
+        match codex_utils_file_lock::try_lock(&self._file) {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => return Ok(()),
             Err(std::fs::TryLockError::Error(err)) => return Err(err),
@@ -390,7 +398,10 @@ pub(super) fn try_acquire_removable_app_server_startup_lock(
         .read(true)
         .write(true)
         .open(startup_lock_path.as_path())?;
-    file.try_lock()?;
+    codex_utils_file_lock::try_lock(&file).map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => std::io::ErrorKind::WouldBlock.into(),
+        std::fs::TryLockError::Error(error) => error,
+    })?;
     if !startup_lock_file_matches_path(&file, startup_lock_path.as_path())? {
         return Err(ErrorKind::WouldBlock.into());
     }

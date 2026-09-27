@@ -645,7 +645,7 @@ fn lock_managed_ca_certificate(certificate_path: &Path) -> Result<File> {
     let lock_path = managed_ca_certificate_lock_path(certificate_path)
         .ok_or_else(|| anyhow!("managed MITM CA certificate path is missing a file name"))?;
     let file = open_managed_ca_lock(&lock_path)?;
-    file.lock_shared()
+    codex_utils_file_lock::lock_shared(&file)
         .with_context(|| format!("failed to lock {}", lock_path.display()))?;
     Ok(file)
 }
@@ -653,7 +653,7 @@ fn lock_managed_ca_certificate(certificate_path: &Path) -> Result<File> {
 fn lock_managed_ca_artifacts(proxy_dir: &Path) -> Result<File> {
     let lock_path = proxy_dir.join(MANAGED_MITM_CA_ARTIFACT_LOCK);
     let file = open_managed_ca_lock(&lock_path)?;
-    file.lock()
+    codex_utils_file_lock::lock(&file)
         .with_context(|| format!("failed to lock {}", lock_path.display()))?;
     Ok(file)
 }
@@ -746,7 +746,7 @@ fn remove_inactive_managed_ca_certificate(certificate_path: &Path) {
     let Ok(lock_file) = open_managed_ca_lock(&lock_path) else {
         return;
     };
-    match lock_file.try_lock() {
+    match codex_utils_file_lock::try_lock(&lock_file) {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => return,
         Err(err) => {
