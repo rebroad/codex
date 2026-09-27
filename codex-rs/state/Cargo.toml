@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+codex-utils-file-lock = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 codex-history = { workspace = true }

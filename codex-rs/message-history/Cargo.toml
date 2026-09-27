@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-utils-file-lock = { workspace = true }
 codex-config = { workspace = true }
 memchr = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
