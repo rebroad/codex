@@ -24,6 +24,13 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 
+/// Detect filesystems lacking advisory locks independently of the platform.
+/// Android uses native locking; a genuine filesystem limitation remains a
+/// runtime property rather than a reason to disable all Android locking.
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
     /// Stable path to the current Codex executable for child re-execs.
@@ -387,7 +394,12 @@ fn prepare_path_entry_for_codex_aliases(
         .create(true)
         .truncate(false)
         .open(&lock_path)?;
-    lock_file.try_lock()?;
+    if let Err(err) = codex_utils_file_lock::try_lock(&lock_file) {
+        let io_err: std::io::Error = err.into();
+        if !is_unsupported_file_lock_error(&io_err) {
+            return Err(io_err);
+        }
+    }
 
     for filename in &[
         APPLY_PATCH_ARG0,
@@ -528,10 +540,17 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
         Err(err) => return Err(err),
     };
 
-    match lock_file.try_lock() {
+    match codex_utils_file_lock::try_lock(&lock_file) {
         Ok(()) => Ok(Some(lock_file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(err) => Err(err.into()),
+        Err(err) => {
+            let io_err: std::io::Error = err.into();
+            if is_unsupported_file_lock_error(&io_err) {
+                Ok(None)
+            } else {
+                Err(io_err)
+            }
+        }
     }
 }
 
@@ -540,6 +559,7 @@ mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::is_unsupported_file_lock_error;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
     #[cfg(unix)]
@@ -792,7 +812,7 @@ mod tests {
         let dir = root.path().join("locked");
         fs::create_dir(&dir)?;
         let lock_file = create_lock(&dir)?;
-        lock_file.try_lock()?;
+        codex_utils_file_lock::try_lock(&lock_file)?;
 
         janitor_cleanup(root.path())?;
 
@@ -811,5 +831,21 @@ mod tests {
 
         assert!(!dir.exists());
         Ok(())
+    }
+
+    #[test]
+    fn unsupported_file_lock_errors_are_detected() {
+        assert!(is_unsupported_file_lock_error(&std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "unsupported",
+        )));
+    }
+
+    #[test]
+    fn other_file_lock_errors_are_not_treated_as_unsupported() {
+        assert!(!is_unsupported_file_lock_error(&std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )));
     }
 }

@@ -2372,6 +2372,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-file-lock",
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-windows-sandbox",
@@ -2997,6 +2998,7 @@ dependencies = [
  "codex-utils-audio",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
+ "codex-utils-file-lock",
  "codex-utils-git-discovery",
  "codex-utils-home-dir",
  "codex-utils-image",
@@ -3322,6 +3324,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-utils-absolute-path",
+ "codex-utils-file-lock",
  "multimap",
  "pretty_assertions",
  "serde",
@@ -3849,6 +3852,7 @@ dependencies = [
  "codex-secrets",
  "codex-terminal-detection",
  "codex-utils-cargo-bin",
+ "codex-utils-file-lock",
  "codex-utils-process",
  "codex-utils-template",
  "codex-workload-identity",
@@ -4034,6 +4038,7 @@ name = "codex-message-history"
 version = "0.0.0"
 dependencies = [
  "codex-config",
+ "codex-utils-file-lock",
  "memchr",
  "pretty_assertions",
  "serde",
@@ -4145,6 +4150,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-utils-absolute-path",
+ "codex-utils-file-lock",
  "codex-utils-home-dir",
  "codex-utils-path-uri",
  "codex-utils-rustls-provider",
@@ -4424,6 +4430,7 @@ dependencies = [
  "codex-protocol",
  "codex-secrets",
  "codex-utils-cargo-bin",
+ "codex-utils-file-lock",
  "codex-utils-home-dir",
  "codex-utils-path-uri",
  "codex-utils-pty",
@@ -4471,6 +4478,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-utils-absolute-path",
+ "codex-utils-file-lock",
  "codex-utils-output-truncation",
  "codex-utils-path",
  "codex-utils-process",
@@ -4661,6 +4669,7 @@ dependencies = [
  "codex-history",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-file-lock",
  "file-id",
  "libsqlite3-sys",
  "log",
@@ -4849,6 +4858,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-elapsed",
+ "codex-utils-file-lock",
  "codex-utils-fuzzy-match",
  "codex-utils-home-dir",
  "codex-utils-oss",
@@ -5023,6 +5033,14 @@ dependencies = [
 [[package]]
 name = "codex-utils-elapsed"
 version = "0.0.0"
+
+[[package]]
+name = "codex-utils-file-lock"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "tempfile",
+]
 
 [[package]]
 name = "codex-utils-fuzzy-match"
