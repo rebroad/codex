@@ -212,18 +212,12 @@ async fn detached_memory_responses_metadata_starts_an_independent_root_turn() {
     );
 }
 
-#[tokio::test]
-async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
+#[test]
+fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
 
-    let thread_manager = crate::ThreadManager::with_models_provider_for_tests(
-        codex_login::CodexAuth::from_api_key("test"),
-        crate::config::test_config().await.model_provider,
-    );
-
-    let header = detached_memory_responses_metadata(
-        &thread_manager,
+    let header = detached_memory_responses_metadata_with_workspaces(
         String::new(),
         String::new(),
         String::new(),
@@ -232,8 +226,8 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
         &cwd,
         &PermissionProfile::read_only(),
         /*sandbox*/ None,
+        std::collections::BTreeMap::new(),
     )
-    .await
     .turn_metadata_json()
     .expect("detached memory should emit its request kind");
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
