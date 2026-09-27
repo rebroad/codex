@@ -311,6 +311,10 @@ pub struct AppServerStartupLock {
     remove_on_drop: bool,
 }
 
+fn is_unsupported_file_lock_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 pub async fn acquire_app_server_startup_lock(
     startup_lock_path: AbsolutePathBuf,
 ) -> IoResult<AppServerStartupLock> {
@@ -324,7 +328,11 @@ pub async fn acquire_app_server_startup_lock(
             .read(true)
             .write(true)
             .open(startup_lock_path.as_path())?;
-        file.lock()?;
+        if let Err(err) = file.lock()
+            && !is_unsupported_file_lock_error(&err)
+        {
+            return Err(err);
+        }
         Ok(AppServerStartupLock {
             _file: file,
             #[cfg(unix)]

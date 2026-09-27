@@ -72,9 +72,9 @@ pub(crate) async fn offer(
             .write(true)
             .open(&path)
         {
-            Ok(file) => match file.try_lock() {
+            Ok(file) => match codex_utils_file_lock::try_lock(&file) {
                 Ok(()) => {
-                    file.unlock()?;
+                    codex_utils_file_lock::unlock(&file)?;
                     return Ok(true);
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {}
