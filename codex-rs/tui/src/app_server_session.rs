@@ -155,6 +155,7 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -328,6 +329,7 @@ pub(crate) struct AppServerBootstrap {
 
 pub(crate) struct AppServerSession {
     client: AppServerClient,
+    buffered_events: VecDeque<AppServerEvent>,
     next_request_id: i64,
     history_pagination: HashMap<ThreadId, history::ThreadHistoryPagination>,
     task_tool_threads: HashSet<ThreadId>,
@@ -436,6 +438,7 @@ impl AppServerSession {
     pub(crate) fn new(client: AppServerClient, thread_params_mode: ThreadParamsMode) -> Self {
         Self {
             client,
+            buffered_events: VecDeque::new(),
             next_request_id: 1,
             history_pagination: HashMap::new(),
             task_tool_threads: HashSet::new(),
@@ -853,7 +856,10 @@ impl AppServerSession {
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
-        self.client.next_event().await
+        match self.buffered_events.pop_front() {
+            Some(event) => Some(event),
+            None => self.client.next_event().await,
+        }
     }
 
     #[cfg(test)]
