@@ -487,6 +487,17 @@ pub struct ThreadResumeResponse {
     pub items_backwards_cursor: Option<String>,
 }
 
+/// Progress while the app-server reads a legacy rollout for `thread/resume`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadResumeProgressNotification {
+    pub request_id: crate::RequestId,
+    pub thread_id: String,
+    /// Percentage of the rollout decoded so far, from 0 to 100.
+    pub progress: u8,
+}
+
 impl ThreadResumeResponse {
     /// Parses valid absolute instruction source paths and omits malformed legacy values.
     pub fn instruction_source_path_uris(&self) -> Vec<PathUri> {

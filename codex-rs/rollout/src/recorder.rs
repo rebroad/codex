@@ -1105,14 +1105,38 @@ impl RolloutRecorder {
     pub async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+        Self::load_rollout_items_with_progress(path, |_| {}).await
+    }
+
+    /// Loads rollout records and reports decoded-byte progress when the input
+    /// format exposes a trustworthy total size.
+    pub async fn load_rollout_items_with_progress(
+        path: &Path,
+        on_progress: impl FnMut(u8) + Send + 'static,
+    ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        compression::read_rollout_lines(path, |reader| {
+        let total_bytes = compression::rollout_uncompressed_size(path)
+            .await
+            .ok()
+            .flatten();
+        compression::read_rollout_lines(path, move |reader| {
             let mut items: Vec<RolloutItem> = Vec::new();
             let mut thread_id: Option<ThreadId> = None;
             let mut parse_errors = 0usize;
+            let mut loaded_bytes = 0_u64;
+            let mut reported_progress = 0_u8;
+            let mut on_progress = on_progress;
             let mut saw_non_empty_line = false;
             for line in reader {
                 let line = line?;
+                loaded_bytes = loaded_bytes.saturating_add(line.len() as u64 + 1);
+                if let Some(total_bytes) = total_bytes.filter(|total| *total > 0) {
+                    let progress = ((loaded_bytes.saturating_mul(100) / total_bytes).min(99)) as u8;
+                    if progress > reported_progress {
+                        reported_progress = progress;
+                        on_progress(progress);
+                    }
+                }
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -1157,6 +1181,9 @@ impl RolloutRecorder {
             }
             if !saw_non_empty_line {
                 return Err(IoError::other("empty session file"));
+            }
+            if total_bytes.is_some() {
+                on_progress(100);
             }
 
             tracing::debug!(

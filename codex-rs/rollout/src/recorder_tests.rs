@@ -344,6 +344,58 @@ async fn load_rollout_items_defaults_legacy_session_id() -> std::io::Result<()> 
 }
 
 #[tokio::test]
+async fn load_rollout_items_reports_monotonic_progress_for_plain_and_compressed_files()
+-> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let path = home.path().join("progress.jsonl");
+    let thread_id = ThreadId::new();
+    let mut contents = Vec::new();
+    let first = RolloutLine {
+        timestamp: "2026-09-30T00:00:00Z".to_string(),
+        ordinal: Some(0),
+        item: paginated_session_meta_item(thread_id, home.path()),
+    };
+    writeln!(contents, "{}", serde_json::to_string(&first)?)?;
+    for ordinal in 1..=100 {
+        let line = RolloutLine {
+            timestamp: "2026-09-30T00:00:00Z".to_string(),
+            ordinal: Some(ordinal),
+            item: agent_message_item(&"x".repeat(400)),
+        };
+        writeln!(contents, "{}", serde_json::to_string(&line)?)?;
+    }
+    fs::write(&path, &contents)?;
+
+    let compressed_path = crate::compression::compressed_rollout_path(&path);
+    let output = File::create(&compressed_path)?;
+    let mut encoder = zstd::stream::write::Encoder::new(output, 3)?;
+    encoder.set_pledged_src_size(Some(contents.len() as u64))?;
+    encoder.write_all(&contents)?;
+    encoder.finish()?;
+
+    for rollout_path in [&path, &compressed_path] {
+        let percentages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let progress = std::sync::Arc::clone(&percentages);
+        let (items, loaded_thread_id, parse_errors) =
+            RolloutRecorder::load_rollout_items_with_progress(rollout_path, move |percent| {
+                progress.lock().unwrap().push(percent);
+            })
+            .await?;
+        let percentages = percentages.lock().unwrap();
+        assert_eq!(loaded_thread_id, Some(thread_id));
+        assert_eq!(parse_errors, 0);
+        assert_eq!(items.len(), 101);
+        assert!(
+            percentages.len() > 2,
+            "expected granular updates: {percentages:?}"
+        );
+        assert!(percentages.windows(2).all(|values| values[0] < values[1]));
+        assert_eq!(percentages.last(), Some(&100));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_rollout_items_ignores_unknown_fork_source_history_mode() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let uuid = Uuid::new_v4();

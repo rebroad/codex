@@ -13,9 +13,11 @@ use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadItemsListAnchor;
 use codex_app_server_protocol::ThreadItemsListCursor;
+use codex_app_server_protocol::ThreadResumeProgressNotification;
 use codex_app_server_protocol::ThreadRevertParams;
 use codex_app_server_protocol::ThreadRevertResponse;
 use codex_app_server_protocol::ThreadRevertedNotification;
@@ -32,6 +34,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
+use codex_thread_store::ThreadReadProgressCallback;
 use std::ops::ControlFlow;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
@@ -3655,6 +3658,7 @@ impl ThreadRequestProcessor {
         client_mcp_extensions: ClientMcpExtensions,
         prepared_config: &mut Option<PreparedResumeConfig>,
     ) -> Result<ControlFlow<()>, JSONRPCErrorError> {
+        let resume_started_at = std::time::Instant::now();
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -3732,14 +3736,22 @@ impl ThreadRequestProcessor {
         } = params.clone();
         let include_turns = !exclude_turns;
 
+        let history_load_started_at = std::time::Instant::now();
+        let progress_request = match target {
+            ThreadResumeTarget::Client(request_id) => Some(request_id.clone()),
+            ThreadResumeTarget::DaemonRecovery(_) => None,
+        };
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
-            self.load_resume_initial_history_from_stored_thread(*stored_thread)
-                .await
-                .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
+            self.load_resume_initial_history_from_stored_thread_with_progress(
+                *stored_thread,
+                progress_request,
+            )
+            .await
+            .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
         } else {
             match self
                 .read_stored_thread_for_resume(
@@ -3750,7 +3762,10 @@ impl ThreadRequestProcessor {
                 .await
             {
                 Ok(stored_thread) => self
-                    .load_resume_initial_history_from_stored_thread(stored_thread)
+                    .load_resume_initial_history_from_stored_thread_with_progress(
+                        stored_thread,
+                        progress_request,
+                    )
                     .await
                     .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread))),
                 Err(error) => Err(error),
@@ -3780,6 +3795,13 @@ impl ThreadRequestProcessor {
                 resumed.conversation_id
             )));
         }
+        tracing::info!(
+            thread_id = %thread_id,
+            history_load_ms = history_load_started_at.elapsed().as_millis(),
+            history_items = thread_history.get_rollout_items().len(),
+            exclude_turns,
+            "resume persisted history loaded"
+        );
         let paginated_thread_id = resume_source_thread.as_ref().and_then(|thread| {
             matches!(thread.history_mode, ThreadHistoryMode::Paginated).then_some(thread.thread_id)
         });
@@ -3969,12 +3991,18 @@ impl ThreadRequestProcessor {
             _ => {
                 // Config loading can call back into Desktop; release both locks during host work.
                 drop(_goal_resume_guard);
+                let config_started_at = std::time::Instant::now();
                 drop(_thread_list_state_permit);
                 let config = self
                     .config_manager
                     .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
                     .await
                     .map_err(|err| config_load_error(&err))?;
+                tracing::info!(
+                    thread_id = %thread_id,
+                    config_ms = config_started_at.elapsed().as_millis(),
+                    "resume configuration loaded"
+                );
                 *prepared_config = Some(PreparedResumeConfig {
                     state: config_state,
                     config,
@@ -3986,9 +4014,23 @@ impl ThreadRequestProcessor {
         if clear_reasoning_effort {
             config.model_reasoning_effort = None;
         }
+        if is_chatgpt_remote_client(app_server_client_name.as_deref()) {
+            // Remote clients have a bounded resume deadline. Let the thread response be built
+            // while the local executor connects; execution still waits when an environment is
+            // needed by a turn.
+            config
+                .features
+                .enable(Feature::DeferredExecutor)
+                .map_err(|err| {
+                    invalid_request(format!(
+                        "cannot defer executor startup for remote thread resume: {err}"
+                    ))
+                })?;
+        }
 
         let response_history = thread_history.clone();
 
+        let thread_create_started_at = std::time::Instant::now();
         match self
             .thread_manager
             .resume_thread_with_history(
@@ -4030,6 +4072,13 @@ impl ThreadRequestProcessor {
                     return Ok(ControlFlow::Break(()));
                 };
                 let request_id = request_id.clone();
+                tracing::info!(
+                    thread_id = %thread_id,
+                    thread_create_ms = thread_create_started_at.elapsed().as_millis(),
+                    paginated = paginated_resume,
+                    include_turns,
+                    "resume thread created"
+                );
                 if let Err(err) = Self::set_app_server_client_info(
                     codex_thread.as_ref(),
                     app_server_client_name,
@@ -4215,6 +4264,11 @@ impl ThreadRequestProcessor {
                 self.outgoing
                     .send_response_with_thread_originator(request_id, response, thread_originator)
                     .await;
+                tracing::info!(
+                    thread_id = %thread_id,
+                    total_ms = resume_started_at.elapsed().as_millis(),
+                    "resume response sent"
+                );
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_turn_id) = token_usage_turn_id {
@@ -4596,15 +4650,66 @@ impl ThreadRequestProcessor {
         &self,
         stored_thread: StoredThread,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
+        self.load_resume_initial_history_from_stored_thread_with_progress(stored_thread, None)
+            .await
+    }
+
+    async fn load_resume_initial_history_from_stored_thread_with_progress(
+        &self,
+        stored_thread: StoredThread,
+        progress_request: Option<ConnectionRequestId>,
+    ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
+        let thread_id = stored_thread.thread_id.to_string();
+        let rollout_path = stored_thread.rollout_path.clone();
+        let (progress, progress_delivery) = progress_request
+            .map(|request| {
+                let outgoing = Arc::clone(&self.outgoing);
+                let connection_id = request.connection_id;
+                let request_id = request.request_id;
+                let thread_id = thread_id.clone();
+                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+                let delivery = tokio::spawn(async move {
+                    while let Some(progress) = progress_rx.recv().await {
+                        outgoing
+                            .send_server_notification_to_connections(
+                                &[connection_id],
+                                ServerNotification::ThreadResumeProgress(
+                                    ThreadResumeProgressNotification {
+                                        request_id: request_id.clone(),
+                                        thread_id: thread_id.clone(),
+                                        progress,
+                                    },
+                                ),
+                            )
+                            .await;
+                    }
+                });
+                let progress = Arc::new(move |progress| {
+                    let _ = progress_tx.send(progress);
+                }) as ThreadReadProgressCallback;
+                (progress, delivery)
+            })
+            .map_or((None, None), |(progress, delivery)| {
+                (Some(progress), Some(delivery))
+            });
         if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
-            let model_context = self
-                .thread_store
-                .load_latest_model_context(StoreLoadThreadHistoryParams {
-                    thread_id: stored_thread.thread_id,
-                    include_archived: true,
-                })
-                .await
-                .map_err(thread_store_resume_read_error)?;
+            let params = StoreLoadThreadHistoryParams {
+                thread_id: stored_thread.thread_id,
+                include_archived: true,
+            };
+            let model_context_result = if let Some(progress) = progress {
+                self.thread_store
+                    .load_latest_model_context_with_progress(params, progress)
+                    .await
+            } else {
+                self.thread_store.load_latest_model_context(params).await
+            };
+            if let Some(progress_delivery) = progress_delivery
+                && let Err(error) = progress_delivery.await
+            {
+                warn!(%error, "failed to deliver thread resume progress notifications");
+            }
+            let model_context = model_context_result.map_err(thread_store_resume_read_error)?;
             let history = InitialHistory::Resumed(ResumedHistory {
                 history_revision: model_context.revision,
                 conversation_id: model_context.thread_id,
@@ -4613,16 +4718,20 @@ impl ThreadRequestProcessor {
             });
             return Ok((history, stored_thread));
         }
-
-        let thread_id = stored_thread.thread_id.to_string();
-        let rollout_path = stored_thread.rollout_path.clone();
-        let mut stored_thread = self
-            .read_stored_thread_for_resume(
+        let stored_thread_result = self
+            .read_stored_thread_for_resume_with_progress(
                 &thread_id,
                 rollout_path.as_ref(),
                 /*include_history*/ true,
+                progress,
             )
-            .await?;
+            .await;
+        if let Some(progress_delivery) = progress_delivery
+            && let Err(error) = progress_delivery.await
+        {
+            warn!(%error, "failed to deliver thread resume progress notifications");
+        }
+        let mut stored_thread = stored_thread_result?;
         let history = self
             .stored_thread_to_initial_history(&mut stored_thread)
             .await?;
@@ -4635,14 +4744,30 @@ impl ThreadRequestProcessor {
         path: Option<&PathBuf>,
         include_history: bool,
     ) -> Result<StoredThread, JSONRPCErrorError> {
+        self.read_stored_thread_for_resume_with_progress(thread_id, path, include_history, None)
+            .await
+    }
+
+    async fn read_stored_thread_for_resume_with_progress(
+        &self,
+        thread_id: &str,
+        path: Option<&PathBuf>,
+        include_history: bool,
+        progress: Option<ThreadReadProgressCallback>,
+    ) -> Result<StoredThread, JSONRPCErrorError> {
         let result = if let Some(path) = path {
-            self.thread_store
-                .read_thread_by_rollout_path(StoreReadThreadByRolloutPathParams {
-                    rollout_path: path.clone(),
-                    include_archived: true,
-                    include_history,
-                })
-                .await
+            let params = StoreReadThreadByRolloutPathParams {
+                rollout_path: path.clone(),
+                include_archived: true,
+                include_history,
+            };
+            if let Some(progress) = progress {
+                self.thread_store
+                    .read_thread_by_rollout_path_with_progress(params, progress)
+                    .await
+            } else {
+                self.thread_store.read_thread_by_rollout_path(params).await
+            }
         } else {
             let existing_thread_id = match ThreadId::from_string(thread_id) {
                 Ok(id) => id,
@@ -4655,7 +4780,13 @@ impl ThreadRequestProcessor {
                 include_archived: true,
                 include_history,
             };
-            self.thread_store.read_thread(params).await
+            if let Some(progress) = progress {
+                self.thread_store
+                    .read_thread_with_progress(params, progress)
+                    .await
+            } else {
+                self.thread_store.read_thread(params).await
+            }
         };
 
         let stored_thread = result.map_err(thread_store_resume_read_error)?;
