@@ -196,6 +196,7 @@ pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
 mod projectless;
+mod provider_selection;
 pub(crate) mod public_widgets;
 mod render;
 mod resize_reflow_cap;
@@ -1064,11 +1065,13 @@ fn uses_remote_workspace_or_environment(
 async fn resolve_startup_resume_or_fork_cwd(
     tui: &mut Tui,
     config: &Config,
+    state_db: Option<&codex_rollout::StateDbHandle>,
     app_server: Option<&mut AppServerSession>,
     session_selection: &resume_picker::SessionSelection,
     cwd_override: Option<&Path>,
     uses_remote_workspace: bool,
     uses_remote_workspace_or_environment: bool,
+    mut startup_draft: Option<&mut startup_draft::StartupDraftPump>,
 ) -> color_eyre::Result<ResolveCwdOutcome> {
     let Some((action, target_session)) = (match session_selection {
         resume_picker::SessionSelection::Resume(target_session) => {
@@ -1092,6 +1095,9 @@ async fn resolve_startup_resume_or_fork_cwd(
         );
     }
     if uses_remote_workspace {
+        if let Some(startup_draft) = startup_draft.as_deref_mut() {
+            startup_draft.continue_resume_progress_without_cwd_prompt();
+        }
         return Ok(ResolveCwdOutcome::Continue(Some(config.cwd.to_path_buf())));
     }
 
@@ -1100,23 +1106,49 @@ async fn resolve_startup_resume_or_fork_cwd(
     } else if let Some(cwd) = &target_session.cwd {
         Some(cwd.clone())
     } else if let Some(app_server) = app_server {
-        read_session_cwd(app_server, target_session.thread_id).await
+        let read_cwd = read_session_cwd(app_server, target_session.thread_id);
+        if let Some(startup_draft) = startup_draft.as_deref_mut() {
+            startup_draft.run_until(tui, read_cwd).await?
+        } else {
+            read_cwd.await
+        }
     } else {
         None
     };
-    resolve_cwd_for_resume_or_fork(
-        tui,
-        config,
-        history_cwd,
-        action,
-        ResumeCwdContext {
-            current_cwd: config.cwd.as_path(),
-            remembered_current_cwd: config.cwd.as_path(),
-            allow_remember_current: !uses_remote_workspace_or_environment || cwd_override.is_some(),
-            mode: resume_cwd_mode,
-        },
-    )
-    .await
+    let cwd_context = ResumeCwdContext {
+        target_session: Some(target_session),
+        state_db_ctx: state_db.map(AsRef::as_ref),
+        current_cwd: config.cwd.as_path(),
+        remembered_current_cwd: config.cwd.as_path(),
+        allow_remember_current: !uses_remote_workspace_or_environment || cwd_override.is_some(),
+        mode: resume_cwd_mode,
+    };
+    if let Some(startup_draft) = startup_draft.as_deref_mut() {
+        let mut before_prompt =
+            |tui: &mut Tui| startup_draft.complete_resume_progress_before_cwd_prompt(tui);
+        let outcome = crate::session_resume::resolve_cwd_for_resume_or_fork_with_before_prompt(
+            tui,
+            config,
+            history_cwd,
+            action,
+            cwd_context,
+            &mut before_prompt,
+        )
+        .await?;
+        drop(before_prompt);
+        match outcome {
+            ResolveCwdOutcome::ContinueAfterPrompt(_) => {
+                startup_draft.restart_resume_progress_after_cwd_prompt(tui)?;
+            }
+            ResolveCwdOutcome::Continue(_) => {
+                startup_draft.continue_resume_progress_without_cwd_prompt();
+            }
+            ResolveCwdOutcome::Exit => {}
+        }
+        Ok(outcome)
+    } else {
+        resolve_cwd_for_resume_or_fork(tui, config, history_cwd, action, cwd_context).await
+    }
 }
 
 fn should_load_configured_environments(
@@ -1222,13 +1254,6 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
-    let run_started_at = Instant::now();
-    let resume_launch_started_at =
-        if !cli.resume_picker && (cli.resume_session_id.is_some() || cli.resume_last) {
-            Some(run_started_at)
-        } else {
-            None
-        };
     system_motion::initialize().await;
     startup_recovery::scope(async move {
         // Startup retains a large future for the whole session. Keep it off callers' stacks,
@@ -1238,7 +1263,6 @@ pub async fn run_main(
             arg0_paths,
             loader_overrides,
             explicit_remote_endpoint,
-            resume_launch_started_at,
         ))
         .await
         {
@@ -1287,7 +1311,6 @@ async fn run_ratatui_app(
     managed_daemon: bool,
     launch_telemetry: daemon_telemetry::Launch<impl FnOnce(&AppServerTarget, bool)>,
     startup_draft: startup_draft::StartupDraft,
-    resume_launch_started_at: Option<Instant>,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     let workload_identity_selected = is_workload_identity_selected();
@@ -1306,7 +1329,6 @@ async fn run_ratatui_app(
         prev_hook(info);
     }));
     let (mut tui, mut terminal_restore_guard, mut startup_draft) = startup_draft.into_parts();
-
     #[cfg(not(debug_assertions))]
     {
         use crate::update_prompt::UpdatePromptOutcome;
@@ -1796,10 +1818,7 @@ async fn run_ratatui_app(
             target_session.path.as_deref(),
             target_session.history_mode,
         );
-        startup_draft.begin_resume_progress(
-            estimate,
-            tokio::time::Instant::from_std(resume_launch_started_at.unwrap_or_else(Instant::now)),
-        );
+        startup_draft.begin_resume_progress(estimate);
     }
 
     if let Err(err) = startup_draft.update_session_selection(&mut tui, &session_selection) {
@@ -1820,11 +1839,13 @@ async fn run_ratatui_app(
     let fallback_cwd = match resolve_startup_resume_or_fork_cwd(
         &mut tui,
         &config,
+        state_db.as_ref(),
         app_server.as_mut(),
         &session_selection,
         cli.cwd.as_deref(),
         uses_remote_workspace,
         uses_remote_workspace_or_environment(&app_server_target, &environment_manager),
+        Some(&mut startup_draft),
     )
     .await
     {
@@ -2933,11 +2954,13 @@ requires_openai_auth = {requires_openai_auth}
             let fallback_cwd = match resolve_startup_resume_or_fork_cwd(
                 &mut tui,
                 &config,
+                /*state_db*/ None,
                 /*app_server*/ None,
                 &session_selection,
                 cwd_override,
                 /*uses_remote_workspace*/ false,
                 /*uses_remote_workspace_or_environment*/ false,
+                /*startup_draft*/ None,
             )
             .await?
             {
@@ -3020,6 +3043,7 @@ requires_openai_auth = {requires_openai_auth}
         let error = resolve_startup_resume_or_fork_cwd(
             &mut tui,
             &config,
+            /*state_db*/ None,
             /*app_server*/ None,
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,
@@ -3030,6 +3054,7 @@ requires_openai_auth = {requires_openai_auth}
             /*cwd_override*/ None,
             /*uses_remote_workspace*/ false,
             /*uses_remote_workspace_or_environment*/ true,
+            /*startup_draft*/ None,
         )
         .await
         .expect_err("remote current cwd should require an explicit override");
@@ -3041,6 +3066,7 @@ requires_openai_auth = {requires_openai_auth}
         let explicit = resolve_startup_resume_or_fork_cwd(
             &mut tui,
             &config,
+            /*state_db*/ None,
             /*app_server*/ None,
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,
@@ -3051,6 +3077,7 @@ requires_openai_auth = {requires_openai_auth}
             Some(Path::new("/remote-only/project")),
             /*uses_remote_workspace*/ true,
             /*uses_remote_workspace_or_environment*/ true,
+            /*startup_draft*/ None,
         )
         .await?;
         assert!(
@@ -3076,6 +3103,7 @@ requires_openai_auth = {requires_openai_auth}
         let error = resolve_startup_resume_or_fork_cwd(
             &mut tui,
             &config,
+            /*state_db*/ None,
             /*app_server*/ None,
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,
@@ -3086,6 +3114,7 @@ requires_openai_auth = {requires_openai_auth}
             /*cwd_override*/ None,
             /*uses_remote_workspace*/ false,
             /*uses_remote_workspace_or_environment*/ false,
+            /*startup_draft*/ None,
         )
         .await
         .expect_err("session cwd should require saved metadata");
