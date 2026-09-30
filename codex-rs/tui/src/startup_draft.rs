@@ -37,6 +37,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::resume_picker::SessionSelection;
+use crate::resume_progress::ResumeProgressEstimate;
 use crate::tui;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -45,6 +46,7 @@ use crate::version::CODEX_CLI_DISPLAY_VERSION;
 
 const STARTUP_EVENT_BATCH_SIZE: usize = 64;
 const STARTUP_PASTE_NEWLINE_TIMEOUT: Duration = Duration::from_millis(120);
+const STARTUP_PROGRESS_TICK: Duration = Duration::from_millis(50);
 
 #[path = "startup_draft_layout.rs"]
 mod layout;
@@ -117,6 +119,38 @@ pub(crate) struct StartupDraftPump {
     submission_pending: bool,
     key_chord_matcher: crate::keymap::KeyChordMatcher,
     key_chords: std::sync::Arc<crate::keymap::RuntimeChordKeymap>,
+    progress: Option<StartupProgressDisplay>,
+}
+
+struct StartupProgressDisplay {
+    started_at: Instant,
+    estimate: ResumeProgressEstimate,
+    phase: StartupResumeProgressPhase,
+    pre_prompt_duration: Option<Duration>,
+    complete: bool,
+}
+
+#[derive(Clone, Copy)]
+enum StartupResumeProgressPhase {
+    BeforeCwdPrompt,
+    AfterCwdPrompt,
+    FullStartup,
+}
+
+impl StartupProgressDisplay {
+    fn percentage(&self) -> u8 {
+        if self.complete {
+            return 100;
+        }
+        let elapsed = self.started_at.elapsed();
+        match self.phase {
+            StartupResumeProgressPhase::BeforeCwdPrompt => {
+                self.estimate.pre_prompt_progress_percentage(elapsed)
+            }
+            StartupResumeProgressPhase::AfterCwdPrompt
+            | StartupResumeProgressPhase::FullStartup => self.estimate.progress_percentage(elapsed),
+        }
+    }
 }
 
 impl StartupDraft {
@@ -224,6 +258,57 @@ impl StartupDraftPump {
             submission_pending: false,
             key_chord_matcher: Default::default(),
             key_chords: RuntimeKeymap::defaults().chords,
+            progress: None,
+        }
+    }
+
+    /// Start timing when the selected resume is about to be shown to the user.
+    pub(crate) fn begin_resume_progress(&mut self, estimate: ResumeProgressEstimate) {
+        self.progress = Some(StartupProgressDisplay {
+            started_at: Instant::now(),
+            estimate,
+            phase: StartupResumeProgressPhase::BeforeCwdPrompt,
+            pre_prompt_duration: None,
+            complete: false,
+        });
+    }
+
+    pub(crate) fn complete_resume_progress_before_cwd_prompt(
+        &mut self,
+        tui: &mut Tui,
+    ) -> io::Result<()> {
+        let Some(progress) = self.progress.as_mut() else {
+            return Ok(());
+        };
+        progress.pre_prompt_duration = Some(progress.started_at.elapsed());
+        progress.complete = true;
+        let result = if self.initial_screen == StartupDraftInitialScreen::Composer {
+            self.draw(tui, tui.terminal.last_known_screen_size)
+        } else {
+            Ok(())
+        };
+        result
+    }
+
+    pub(crate) fn restart_resume_progress_after_cwd_prompt(
+        &mut self,
+        tui: &mut Tui,
+    ) -> io::Result<()> {
+        let Some(progress) = self.progress.as_mut() else {
+            return Ok(());
+        };
+        progress.started_at = Instant::now();
+        progress.phase = StartupResumeProgressPhase::AfterCwdPrompt;
+        progress.complete = false;
+        if self.initial_screen == StartupDraftInitialScreen::Composer {
+            self.draw(tui, tui.terminal.last_known_screen_size)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn continue_resume_progress_without_cwd_prompt(&mut self) {
+        if let Some(progress) = self.progress.as_mut() {
+            progress.phase = StartupResumeProgressPhase::FullStartup;
         }
     }
 
@@ -343,9 +428,16 @@ impl StartupDraftPump {
             self.draw(tui, tui.terminal.last_known_screen_size)?;
         }
         tokio::pin!(future);
+        let mut progress_tick = tokio::time::interval(STARTUP_PROGRESS_TICK);
+        progress_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 output = &mut future => return Ok(output),
+                _ = progress_tick.tick() => {
+                    if self.initial_screen == StartupDraftInitialScreen::Composer {
+                        self.draw(tui, tui.terminal.last_known_screen_size)?;
+                    }
+                }
                 event = self.events.next() => {
                     let Some(event) = event else {
                         return Err(io::Error::new(
@@ -357,6 +449,30 @@ impl StartupDraftPump {
                 }
             }
         }
+    }
+
+    /// Record a successful resume when the session or goal choice is ready to display.
+    pub(crate) fn complete_resume_progress(&mut self, tui: &mut Tui) -> io::Result<()> {
+        let Some(mut progress) = self.progress.take() else {
+            return Ok(());
+        };
+        progress
+            .estimate
+            .record_completion(progress.pre_prompt_duration, progress.started_at.elapsed());
+        progress.complete = true;
+        self.progress = Some(progress);
+        let result = if self.initial_screen == StartupDraftInitialScreen::Composer {
+            self.draw(tui, tui.terminal.last_known_screen_size)
+        } else {
+            Ok(())
+        };
+        self.progress = None;
+        result
+    }
+
+    /// Discard a resume estimate when startup was cancelled before a thread became usable.
+    pub(crate) fn abort_resume_progress(&mut self) {
+        self.progress = None;
     }
 
     /// Preserve pending draft edits while continuing to reject startup actions and submission.
@@ -397,7 +513,7 @@ impl StartupDraftPump {
     }
 
     /// Preserve the editable draft, its cursor, and any pending large-paste placeholders.
-    pub(crate) fn into_draft(mut self) -> ComposerDraftSnapshot {
+    pub(crate) fn snapshot_draft(&mut self) -> ComposerDraftSnapshot {
         let draft = self.take_draft();
         crate::startup_recovery::remember(draft.clone());
         draft
@@ -437,12 +553,21 @@ impl StartupDraftPump {
                 .schedule_frame_in(ChatComposer::recommended_paste_flush_delay());
         }
         self.bottom_pane.pre_draw_tick();
+        let progress = self
+            .progress
+            .as_ref()
+            .map(StartupProgressDisplay::percentage);
         let owned = tui.is_owned_screen();
         let owned_layout = layout::OwnedStartupLayout::new(self);
         let renderable = if owned {
             RenderableItem::Borrowed(&owned_layout)
         } else {
-            startup_draft_renderable(&self.header, &self.bottom_pane, self.session_action)
+            startup_draft_renderable_with_progress(
+                &self.header,
+                &self.bottom_pane,
+                self.session_action,
+                progress,
+            )
         };
         let desired_height = if owned {
             screen_size.height
@@ -474,10 +599,20 @@ fn startup_session_header(cwd: Option<&Path>) -> Box<dyn HistoryCell> {
     ))
 }
 
+#[cfg(test)]
 fn startup_draft_renderable<'a>(
     header: &'a dyn Renderable,
     bottom_pane: &'a BottomPane,
     session_action: StartupDraftSessionAction,
+) -> RenderableItem<'a> {
+    startup_draft_renderable_with_progress(header, bottom_pane, session_action, None)
+}
+
+fn startup_draft_renderable_with_progress<'a>(
+    header: &'a dyn Renderable,
+    bottom_pane: &'a BottomPane,
+    session_action: StartupDraftSessionAction,
+    progress: Option<u8>,
 ) -> RenderableItem<'a> {
     let mut renderable = FlexRenderable::new();
     renderable.push(/*flex*/ 1, RenderableItem::Borrowed(header));
@@ -487,6 +622,10 @@ fn startup_draft_renderable<'a>(
         StartupDraftSessionAction::Fork => Some("  Forking session…"),
     };
     if let Some(loading_message) = loading_message {
+        let loading_message = progress.map_or_else(
+            || loading_message.to_string(),
+            |progress| format!("{loading_message} {progress}%"),
+        );
         renderable.push(
             /*flex*/ 0,
             RenderableItem::Owned(Box::new(loading_message.dim())),
