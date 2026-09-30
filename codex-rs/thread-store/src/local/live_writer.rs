@@ -94,9 +94,14 @@ pub(super) async fn resume_thread(
             history
         }
         _ => Arc::new(
-            super::model_context::load_from_rollout_path(store, params.thread_id, &rollout_path)
-                .await?
-                .items,
+            super::model_context::load_from_rollout_path(
+                store,
+                params.thread_id,
+                &rollout_path,
+                None,
+            )
+            .await?
+            .items,
         ),
     };
     let history_mode = canonical_history_mode_from_rollout_items(&history);
