@@ -15,6 +15,7 @@ use super::StartupDraftSessionAction;
 use super::handle_startup_draft_key;
 use super::startup_draft_bottom_pane;
 use super::startup_draft_renderable;
+use super::startup_draft_renderable_with_progress;
 use super::startup_session_header;
 use crate::app_event_sender::AppEventSender;
 use crate::legacy_core::config::ConfigBuilder;
@@ -50,6 +51,7 @@ where
         submission_pending: false,
         key_chord_matcher: Default::default(),
         key_chords: crate::keymap::RuntimeKeymap::defaults().chords,
+        progress: None,
     }
 }
 
@@ -63,6 +65,34 @@ pub(crate) fn startup_test_pump_with_input(text: &str) -> StartupDraftPump {
     let mut pump = startup_test_pump(std::iter::once(TuiEvent::Paste(text.to_string())));
     pump.events = Box::pin(pump.events.chain(futures::stream::pending()));
     pump
+}
+
+#[test]
+fn startup_draft_renders_resume_progress_percentage() {
+    let pump = startup_test_pump(std::iter::empty());
+    let renderable = startup_draft_renderable_with_progress(
+        &pump.header,
+        &pump.bottom_pane,
+        StartupDraftSessionAction::Resume,
+        Some(42),
+    );
+    let area = Rect::new(0, 0, 80, renderable.desired_height(80));
+    let mut buffer = Buffer::empty(area);
+    renderable.render(area, &mut buffer);
+    let rendered = (0..area.height)
+        .map(|row| {
+            (0..area.width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Resuming session… 42%"));
+    insta::assert_snapshot!(crate::version::normalize_cli_version_for_snapshot(
+        &rendered
+    ));
 }
 
 #[test]
@@ -506,7 +536,7 @@ async fn startup_draft_preserves_deferred_paste_newlines_across_handoff() {
         .expect("finish the deferred paste before startup handoff");
     continuation.await.expect("join the paste continuation");
 
-    assert_eq!(pump.into_draft().text, "first line\ns");
+    assert_eq!(pump.snapshot_draft().text, "first line\ns");
 }
 
 #[tokio::test]
@@ -536,7 +566,7 @@ async fn startup_draft_does_not_turn_a_standalone_enter_into_a_newline_at_handof
         .await
         .expect("discard standalone Enter after its lookahead expires");
 
-    assert_eq!(pump.into_draft().text, "first line");
+    assert_eq!(pump.snapshot_draft().text, "first line");
 }
 
 #[test]
@@ -901,7 +931,7 @@ async fn startup_draft_flushes_large_event_backlogs_without_submitting_or_retain
         .expect("flush safe startup input");
 
     assert!(pump.app_event_rx.try_recv().is_err());
-    let draft = pump.into_draft();
+    let draft = pump.snapshot_draft();
     assert_eq!(draft.text, "trusted! last\nline @s");
     assert_eq!(draft.cursor, draft.text.len() - 1);
     assert!(draft.local_images.is_empty());
@@ -916,7 +946,7 @@ async fn startup_draft_preserves_large_pastes_without_attaching_images() {
         .await
         .expect("preserve large startup paste");
 
-    let draft = pump.into_draft();
+    let draft = pump.snapshot_draft();
     assert_eq!(draft.pending_pastes, vec![(draft.text.clone(), pasted)]);
     assert_eq!(draft.cursor, draft.text.len());
     assert!(draft.local_images.is_empty());

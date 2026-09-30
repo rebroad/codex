@@ -2,17 +2,54 @@ use super::super::ForkGoalContinuation;
 use super::super::ForkPermissionMode;
 use super::super::ResumeModelSettings;
 use super::super::ThreadParamsMode;
+use super::take_resume_progress;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout;
+use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadResumeProgressNotification;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+
+#[test]
+fn resume_progress_consumes_only_the_matching_request_event() {
+    let request_id = RequestId::Integer(7);
+    let progress_event = |request_id, progress| {
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadResumeProgress(
+            ThreadResumeProgressNotification {
+                request_id,
+                thread_id: "thread-1".to_string(),
+                progress,
+            },
+        )))
+    };
+
+    assert!(matches!(
+        take_resume_progress(progress_event(request_id.clone(), 64), &request_id),
+        Ok(())
+    ));
+    assert!(matches!(
+        take_resume_progress(progress_event(RequestId::Integer(8), 80), &request_id),
+        Err(AppServerEvent::ServerNotification(_))
+    ));
+    assert!(matches!(
+        take_resume_progress(
+            AppServerEvent::Disconnected {
+                message: "connection closed".to_string(),
+            },
+            &request_id,
+        ),
+        Err(AppServerEvent::Disconnected { .. })
+    ));
+}
 
 async fn build_config(temp_dir: &TempDir) -> Config {
     ConfigBuilder::default()
