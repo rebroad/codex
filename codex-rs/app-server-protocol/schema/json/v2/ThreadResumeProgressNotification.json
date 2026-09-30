@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ]
+    }
+  },
+  "description": "Progress while the app-server reads a legacy rollout for `thread/resume`.",
+  "properties": {
+    "progress": {
+      "description": "Percentage of the rollout decoded so far, from 0 to 100.",
+      "format": "uint8",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "requestId": {
+      "$ref": "#/definitions/RequestId"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "progress",
+    "requestId",
+    "threadId"
+  ],
+  "title": "ThreadResumeProgressNotification",
+  "type": "object"
+}
