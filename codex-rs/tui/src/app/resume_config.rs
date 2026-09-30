@@ -67,6 +67,8 @@ impl App {
                 history_cwd,
                 CwdPromptAction::Resume,
                 crate::session_resume::ResumeCwdContext {
+                    target_session: Some(target_session),
+                    state_db_ctx: self.state_db.as_deref(),
                     current_cwd: &current_cwd,
                     remembered_current_cwd,
                     allow_remember_current: !uses_remote_workspace_or_environment
