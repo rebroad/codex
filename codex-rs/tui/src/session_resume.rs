@@ -11,9 +11,15 @@ use crate::cwd_prompt;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::cwd_prompt::CwdPromptOutcome;
 use crate::legacy_core::config::Config;
+use crate::resume_picker::SessionTarget;
 use crate::tui::Tui;
 use codex_config::types::ResumeCwdMode;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_rollout::RolloutItem;
+use codex_rollout::builder_from_items;
+use codex_rollout::read_session_meta_line;
+use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -25,6 +31,8 @@ pub(crate) enum ResolveCwdOutcome {
 }
 
 pub(crate) struct ResumeCwdContext<'path> {
+    pub(crate) target_session: Option<&'path SessionTarget>,
+    pub(crate) state_db_ctx: Option<&'path StateRuntime>,
     pub(crate) current_cwd: &'path Path,
     pub(crate) remembered_current_cwd: &'path Path,
     pub(crate) allow_remember_current: bool,
@@ -96,19 +104,59 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
         )
         .await?;
         return Ok(match selection_outcome {
-            CwdPromptOutcome::Selection(selection) => ResolveCwdOutcome::ContinueAfterPrompt(
-                selection
+            CwdPromptOutcome::Selection(selection) => {
+                let selected_cwd = selection
                     .selected_cwd(
                         cwd_context.current_cwd,
                         &history_cwd,
                         cwd_context.remembered_current_cwd,
                     )
-                    .to_path_buf(),
-            ),
+                    .to_path_buf();
+                if selection == cwd_prompt::CwdSelection::CurrentAndRememberForSession {
+                    let Some(target_session) = cwd_context.target_session else {
+                        color_eyre::eyre::bail!(
+                            "cannot update the session directory without a selected session"
+                        );
+                    };
+                    persist_session_cwd(
+                        cwd_context.state_db_ctx,
+                        target_session,
+                        selected_cwd.as_path(),
+                    )
+                    .await?;
+                }
+                ResolveCwdOutcome::ContinueAfterPrompt(selected_cwd)
+            }
             CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
         });
     }
     Ok(ResolveCwdOutcome::Continue(Some(history_cwd)))
+}
+
+async fn persist_session_cwd(
+    state_db_ctx: Option<&StateRuntime>,
+    target_session: &SessionTarget,
+    cwd: &Path,
+) -> color_eyre::Result<()> {
+    let Some(rollout_path) = target_session.path.as_deref() else {
+        color_eyre::eyre::bail!("cannot update the session directory without a local rollout path");
+    };
+    let mut session_meta = read_session_meta_line(rollout_path).await?;
+    session_meta.meta.cwd = cwd.to_path_buf();
+    let item = RolloutItem::SessionMeta(SessionMetaLine {
+        meta: session_meta.meta,
+        git: session_meta.git,
+    });
+
+    if let Some(state_db_ctx) = state_db_ctx {
+        let builder = builder_from_items(std::slice::from_ref(&item), rollout_path)
+            .ok_or_else(|| color_eyre::eyre::eyre!("session metadata has no thread ID"))?;
+        state_db_ctx
+            .apply_rollout_items(&builder, std::slice::from_ref(&item), None, None)
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
@@ -142,6 +190,8 @@ mod tests {
                 Some(session_cwd.clone()),
                 CwdPromptAction::Fork,
                 ResumeCwdContext {
+                    target_session: None,
+                    state_db_ctx: None,
                     current_cwd: &current_cwd,
                     remembered_current_cwd: &current_cwd,
                     allow_remember_current: true,
@@ -171,6 +221,8 @@ mod tests {
             Some(current_cwd.clone()),
             CwdPromptAction::Resume,
             ResumeCwdContext {
+                target_session: None,
+                state_db_ctx: None,
                 current_cwd: &current_cwd,
                 remembered_current_cwd: &current_cwd,
                 allow_remember_current: true,
@@ -199,6 +251,8 @@ mod tests {
             /*history_cwd*/ None,
             CwdPromptAction::Resume,
             ResumeCwdContext {
+                target_session: None,
+                state_db_ctx: None,
                 current_cwd: &current_cwd,
                 remembered_current_cwd: &current_cwd,
                 allow_remember_current: true,

@@ -185,6 +185,7 @@ pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
 mod projectless;
+mod provider_selection;
 pub(crate) mod public_widgets;
 mod render;
 mod resize_reflow_cap;
@@ -1025,6 +1026,7 @@ fn uses_remote_workspace_or_environment(
 async fn resolve_startup_resume_or_fork_cwd(
     tui: &mut Tui,
     config: &Config,
+    state_db: Option<&codex_rollout::StateDbHandle>,
     app_server: Option<&mut AppServerSession>,
     session_selection: &resume_picker::SessionSelection,
     cwd_override: Option<&Path>,
@@ -1071,6 +1073,8 @@ async fn resolve_startup_resume_or_fork_cwd(
         history_cwd,
         action,
         ResumeCwdContext {
+            target_session: Some(target_session),
+            state_db_ctx: state_db.map(AsRef::as_ref),
             current_cwd: config.cwd.as_path(),
             remembered_current_cwd: config.cwd.as_path(),
             allow_remember_current: !uses_remote_workspace_or_environment || cwd_override.is_some(),
@@ -1780,6 +1784,7 @@ async fn run_ratatui_app(
     let fallback_cwd = match resolve_startup_resume_or_fork_cwd(
         &mut tui,
         &config,
+        state_db.as_ref(),
         app_server.as_mut(),
         &session_selection,
         cli.cwd.as_deref(),
@@ -2859,6 +2864,7 @@ requires_openai_auth = {requires_openai_auth}
             let fallback_cwd = match resolve_startup_resume_or_fork_cwd(
                 &mut tui,
                 &config,
+                /*state_db*/ None,
                 /*app_server*/ None,
                 &session_selection,
                 cwd_override,
@@ -2946,6 +2952,7 @@ requires_openai_auth = {requires_openai_auth}
         let error = resolve_startup_resume_or_fork_cwd(
             &mut tui,
             &config,
+            /*state_db*/ None,
             /*app_server*/ None,
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,
@@ -2967,6 +2974,7 @@ requires_openai_auth = {requires_openai_auth}
         let explicit = resolve_startup_resume_or_fork_cwd(
             &mut tui,
             &config,
+            /*state_db*/ None,
             /*app_server*/ None,
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,
@@ -3002,6 +3010,7 @@ requires_openai_auth = {requires_openai_auth}
         let error = resolve_startup_resume_or_fork_cwd(
             &mut tui,
             &config,
+            /*state_db*/ None,
             /*app_server*/ None,
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,

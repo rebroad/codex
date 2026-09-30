@@ -4066,7 +4066,6 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     let requirements = codex_home.path().join("requirements.toml");
     let rules = "allowed_approval_policies=[\"untrusted\"]\nallowed_sandbox_modes=[\"read-only\"]";
     fs::write(&requirements, rules)?;
-    fs::create_dir_all(unknown.join(".codex"))?;
     for dir in [&trusted, &untrusted, &mismatch, &failed] {
         let trust = [T::Trusted, T::Untrusted][usize::from(dir == &untrusted)];
         crate::legacy_core::config::set_project_trust_level(codex_home.path(), dir, trust)
@@ -4158,6 +4157,8 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
             "Permission profile cannot be preserved",
         ),
         ("../p", "keymap", "open_transcript"),
+        ("../trusted", "main", "background terminals"),
+        ("../trusted", "child", "background terminals"),
     ] {
         app.config.approvals_reviewer = ApprovalsReviewer::User;
         if matches!(kind, "reviewer" | "standalone_reviewer") {
