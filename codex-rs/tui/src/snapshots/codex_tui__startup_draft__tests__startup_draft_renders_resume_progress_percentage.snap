@@ -1,0 +1,12 @@
+---
+source: tui/src/startup_draft_tests.rs
+expression: rendered
+---
+
+  >_ OpenAI Codex (v<VERSION>)
+     loading
+  Resuming session… 42%
+
+› Ask Codex to do anything
+
+  ? for shortcuts
