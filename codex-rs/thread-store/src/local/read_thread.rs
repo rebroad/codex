@@ -32,6 +32,14 @@ pub(super) async fn read_thread(
     store: &LocalThreadStore,
     params: ReadThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
+    read_thread_with_progress(store, params, None).await
+}
+
+pub(super) async fn read_thread_with_progress(
+    store: &LocalThreadStore,
+    params: ReadThreadParams,
+    progress: Option<&crate::ThreadReadProgressCallback>,
+) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
     let sqlite_metadata = read_sqlite_metadata(store, thread_id).await;
     let persisted_model_settings = sqlite_metadata
@@ -85,7 +93,7 @@ pub(super) async fn read_thread(
             thread = rollout_thread;
         }
         reject_paginated_history(&thread, params.include_history)?;
-        attach_history_if_requested(&mut thread, params.include_history).await?;
+        attach_history_if_requested(&mut thread, params.include_history, progress).await?;
         return Ok(thread);
     }
 
@@ -113,7 +121,7 @@ pub(super) async fn read_thread(
         });
     }
     reject_paginated_history(&thread, params.include_history)?;
-    attach_history_if_requested(&mut thread, params.include_history).await?;
+    attach_history_if_requested(&mut thread, params.include_history, progress).await?;
     Ok(thread)
 }
 
@@ -137,6 +145,23 @@ pub(super) async fn read_thread_by_rollout_path(
     rollout_path: std::path::PathBuf,
     include_archived: bool,
     include_history: bool,
+) -> ThreadStoreResult<StoredThread> {
+    read_thread_by_rollout_path_with_progress(
+        store,
+        rollout_path,
+        include_archived,
+        include_history,
+        None,
+    )
+    .await
+}
+
+pub(super) async fn read_thread_by_rollout_path_with_progress(
+    store: &LocalThreadStore,
+    rollout_path: std::path::PathBuf,
+    include_archived: bool,
+    include_history: bool,
+    progress: Option<&crate::ThreadReadProgressCallback>,
 ) -> ThreadStoreResult<StoredThread> {
     let path = resolve_requested_rollout_path(store, rollout_path).await?;
     let mut thread = read_thread_from_rollout_path(store, path.clone()).await?;
@@ -188,7 +213,7 @@ pub(super) async fn read_thread_by_rollout_path(
         }
     }
     reject_paginated_history(&thread, include_history)?;
-    attach_history_if_requested(&mut thread, include_history).await?;
+    attach_history_if_requested(&mut thread, include_history, progress).await?;
     Ok(thread)
 }
 
@@ -243,6 +268,7 @@ pub(super) async fn resolve_requested_rollout_path(
 async fn attach_history_if_requested(
     thread: &mut StoredThread,
     include_history: bool,
+    progress: Option<&crate::ThreadReadProgressCallback>,
 ) -> ThreadStoreResult<()> {
     if !include_history {
         return Ok(());
@@ -254,7 +280,11 @@ async fn attach_history_if_requested(
         });
     };
     let before = super::history_revision::read(&path).await;
-    let items = load_history_items(&path).await?;
+    let items = if let Some(progress) = progress {
+        load_history_items_with_progress(&path, progress).await?
+    } else {
+        load_history_items(&path).await?
+    };
     let after = super::history_revision::read(&path).await;
     thread.history = Some(StoredThreadHistory {
         revision: before.filter(|revision| Some(revision) == after.as_ref()),
@@ -310,6 +340,20 @@ pub(super) async fn load_history_items(
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to load thread history {}: {err}", path.display()),
         })?;
+    Ok(items)
+}
+
+async fn load_history_items_with_progress(
+    path: &std::path::Path,
+    progress: &crate::ThreadReadProgressCallback,
+) -> ThreadStoreResult<Vec<codex_rollout::RolloutItem>> {
+    let (items, _, _) = RolloutRecorder::load_rollout_items_with_progress(path, |value| {
+        progress(value);
+    })
+    .await
+    .map_err(|err| ThreadStoreError::Internal {
+        message: format!("failed to load thread history {}: {err}", path.display()),
+    })?;
     Ok(items)
 }
 
