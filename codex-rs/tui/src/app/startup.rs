@@ -14,6 +14,7 @@ use crate::session_start::SessionStartConfig;
 use crate::session_start::SessionStartOutcome;
 use crate::session_start::cancel_session_start;
 use crate::session_start::complete_session_start;
+use crate::session_start::session_start_error;
 use crate::unarchive_prompt::run_unarchive_prompt;
 
 fn spawn_startup_thread_start(
@@ -122,6 +123,13 @@ pub(super) fn startup_model(
             bootstrap.default_model.clone()
         }
     })
+}
+
+fn missing_model_provider_from_error(err: &color_eyre::eyre::Report) -> Option<String> {
+    let message = err.to_string();
+    let prefix = "Model provider `";
+    let provider = message.split_once(prefix)?.1.split_once("` not found")?.0;
+    Some(provider.to_string())
 }
 
 impl App {
@@ -612,11 +620,10 @@ impl App {
                     &config,
                     &harness_overrides,
                 );
-                let progress_observer = startup_draft.resume_progress_observer();
                 let resumed = match startup_draft
                     .run_until(
                         tui,
-                        app_server.resume_thread_with_permission_overrides_and_progress(
+                        app_server.resume_thread_with_permission_overrides(
                             &local_settings,
                             config.clone(),
                             target_session.thread_id,
@@ -625,7 +632,6 @@ impl App {
                                 &config,
                                 &harness_overrides,
                             ),
-                            progress_observer,
                         ),
                     )
                     .await
@@ -651,7 +657,55 @@ impl App {
                             Err(err) => return shutdown_on_startup_error(app_server, err).await,
                         }
                     }
-                    Ok(resumed) => resumed,
+                    Ok(Err(err)) => {
+                        let Some(missing_provider) = missing_model_provider_from_error(&err) else {
+                            return Err(session_start_error("resume", &target_session, err));
+                        };
+                        let Some(provider_id) = crate::provider_selection::select_model_provider(
+                            tui,
+                            &config,
+                            &missing_provider,
+                        )
+                        .await?
+                        else {
+                            return Err(session_start_error("resume", &target_session, err));
+                        };
+                        crate::provider_selection::persist_model_provider(
+                            target_session.path.as_deref(),
+                            &provider_id,
+                        )
+                        .await
+                        .map_err(|persist_err| {
+                            session_start_error(
+                                "remember provider for",
+                                &target_session,
+                                persist_err,
+                            )
+                        })?;
+                        let Some(provider) = config.model_providers.get(&provider_id).cloned()
+                        else {
+                            unreachable!("provider selection returned an unknown provider");
+                        };
+                        config.model_provider_id = provider_id;
+                        config.model_provider = provider;
+                        match startup_draft
+                            .run_until(
+                                tui,
+                                app_server.resume_thread_with_permission_overrides(
+                                    &local_settings,
+                                    config.clone(),
+                                    target_session.thread_id,
+                                    crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+                                    crate::resume_permissions::ResumePermissions::default(),
+                                ),
+                            )
+                            .await
+                        {
+                            Ok(Ok(resumed)) => Ok(resumed),
+                            Ok(Err(err)) => Err(session_start_error("resume", &target_session, err)),
+                            Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                        }
+                    }
                     Err(err) => return shutdown_on_startup_error(app_server, err).await,
                 };
                 let resumed = if read_only_thread {
@@ -1067,19 +1121,21 @@ See the Codex keymap documentation for supported actions and examples."
                         .add_info_message(notice.to_string(), /*hint*/ None);
                 }
             }
-            if !read_only_thread
-                && should_prompt_for_paused_goal_after_startup_resume
-                && let Err(err) = startup_draft
+            if !read_only_thread && should_prompt_for_paused_goal_after_startup_resume {
+                let paused_goal = match startup_draft
                     .run_until(
                         tui,
-                        app.maybe_prompt_resume_paused_goal_after_resume(
-                            &mut app_server,
-                            thread_id,
-                        ),
+                        app.paused_goal_objective_after_resume(&mut app_server, thread_id),
                     )
                     .await
-            {
-                return shutdown_on_startup_error(app_server, err).await;
+                {
+                    Ok(paused_goal) => paused_goal,
+                    Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                };
+                if let Some(objective) = paused_goal {
+                    app.chat_widget
+                        .show_resume_paused_goal_prompt(thread_id, objective);
+                }
             }
         }
         if !start_in_agents_overview
