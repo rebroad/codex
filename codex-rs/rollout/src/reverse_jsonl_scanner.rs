@@ -22,6 +22,7 @@ pub enum ScanOutcome<T> {
 /// Read-only scanner for newline-delimited JSON records, starting from the end.
 pub struct ReverseJsonlScanner<R> {
     reader: R,
+    scan_start_offset: u64,
     next_chunk_end: u64,
     chunk_position: usize,
     chunk: Vec<u8>,
@@ -53,6 +54,7 @@ where
         }
         Ok(Self {
             reader,
+            scan_start_offset: end_byte_offset,
             next_chunk_end: end_byte_offset,
             chunk_position: 0,
             chunk: vec![0; READ_CHUNK_SIZE],
@@ -66,6 +68,17 @@ where
     pub fn with_max_record_bytes(mut self, max_record_bytes: usize) -> Self {
         self.max_record_bytes = Some(max_record_bytes);
         self
+    }
+
+    /// Returns how many source bytes have been consumed from the configured scan end.
+    pub fn bytes_scanned(&self) -> u64 {
+        self.scan_start_offset
+            .saturating_sub(self.next_chunk_end + self.chunk_position as u64)
+    }
+
+    /// Returns the logical byte offset at which this reverse scan began.
+    pub fn scan_end_offset(&self) -> u64 {
+        self.scan_start_offset
     }
 
     /// Scans the next nonblank record.

@@ -79,6 +79,52 @@ async fn stops_at_newest_usable_compaction_and_keeps_companions() {
 }
 
 #[tokio::test]
+async fn paginated_model_context_read_reports_monotonic_rollout_progress() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(/*v*/ 1010);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let path = write_session_file_with_history_mode(
+        home.path(),
+        "2025-01-03T13-00-08",
+        uuid,
+        ThreadHistoryMode::Paginated,
+    )
+    .expect("write session file");
+    let mut items = vec![compacted("latest compaction", Some(Vec::new()))];
+    items.extend((0..100).map(|index| user_message(&format!("{index}: {}", "x".repeat(2048)))));
+    append_items(&path, items);
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let progress = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed_progress = std::sync::Arc::clone(&progress);
+
+    store
+        .load_latest_model_context_with_progress(
+            LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            },
+            std::sync::Arc::new(move |percent| {
+                observed_progress
+                    .lock()
+                    .expect("progress lock should not be poisoned")
+                    .push(percent);
+            }),
+        )
+        .await
+        .expect("load model context");
+
+    let progress = progress
+        .lock()
+        .expect("progress lock should not be poisoned");
+    assert!(
+        progress.len() > 20,
+        "expected granular progress: {progress:?}"
+    );
+    assert!(progress.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(progress.last(), Some(&100));
+}
+
+#[tokio::test]
 async fn loads_recent_context_after_many_empty_wake_turns() {
     let home = TempDir::new().expect("temp dir");
     let uuid = Uuid::from_u128(/*v*/ 1008);
