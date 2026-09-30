@@ -967,6 +967,7 @@ See the Codex keymap documentation for supported actions and examples."
             app.chat_widget.open_hooks_browser(entry);
         }
         app.update_visible_history_rows(tui.terminal.last_known_screen_size);
+        let had_started_thread = initial_started_thread.is_some();
         let initial_session_started_at = Instant::now();
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
@@ -1043,12 +1044,17 @@ See the Codex keymap documentation for supported actions and examples."
         // Keep cancelled resume/fork text editable, but never carry confirmation to another session.
         let mut pending_startup_submission =
             startup_draft.take_submission_intent() && !startup_session_cancelled;
-        let mut pending_startup_draft = Some(startup_draft.into_draft());
+        let mut pending_startup_draft = Some(startup_draft.snapshot_draft());
         if app_event_rx.is_empty() && !app.has_queued_startup_protected_request() {
             app.chat_widget.restore_startup_input_when_ready(
                 &mut pending_startup_draft,
                 &mut pending_startup_submission,
             );
+        }
+        if had_started_thread {
+            startup_draft.complete_resume_progress(tui)?;
+        } else {
+            startup_draft.abort_resume_progress();
         }
 
         #[cfg(windows)]

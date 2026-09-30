@@ -193,6 +193,7 @@ mod render;
 mod resize_reflow_cap;
 mod resume_permissions;
 mod resume_picker;
+mod resume_progress;
 mod screen_reader;
 mod service_tier_resolution;
 mod session_archive_commands;
@@ -1185,6 +1186,13 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    let run_started_at = Instant::now();
+    let resume_launch_started_at =
+        if !cli.resume_picker && (cli.resume_session_id.is_some() || cli.resume_last) {
+            Some(run_started_at)
+        } else {
+            None
+        };
     system_motion::initialize().await;
     startup_recovery::scope(async move {
         // Startup retains a large future for the whole session. Keep it off callers' stacks,
@@ -1194,6 +1202,7 @@ pub async fn run_main(
             arg0_paths,
             loader_overrides,
             explicit_remote_endpoint,
+            resume_launch_started_at,
         ))
         .await
         {
@@ -1241,6 +1250,7 @@ async fn run_ratatui_app(
     daemon_startup_warning: Option<String>,
     launch_telemetry: daemon_telemetry::Launch<impl FnOnce(&AppServerTarget, bool)>,
     startup_draft: startup_draft::StartupDraft,
+    resume_launch_started_at: Option<Instant>,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     let workload_identity_selected = is_workload_identity_selected();
@@ -1742,6 +1752,18 @@ async fn run_ratatui_app(
     } else {
         resume_picker::SessionSelection::StartFresh
     };
+
+    if let resume_picker::SessionSelection::Resume(target_session) = &session_selection {
+        let estimate = crate::resume_progress::ResumeProgressEstimate::load(
+            config.codex_home.clone(),
+            target_session.path.as_deref(),
+            target_session.history_mode,
+        );
+        startup_draft.begin_resume_progress(
+            estimate,
+            tokio::time::Instant::from_std(resume_launch_started_at.unwrap_or_else(Instant::now)),
+        );
+    }
 
     if let Err(err) = startup_draft.update_session_selection(&mut tui, &session_selection) {
         shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;

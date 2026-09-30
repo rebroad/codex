@@ -83,6 +83,17 @@ impl Renderable for OwnedStartupLayout<'_> {
             StartupDraftSessionAction::Resume => Some("  Resuming session…"),
             StartupDraftSessionAction::Fork => Some("  Forking session…"),
         };
+        let progress = self
+            .pump
+            .progress
+            .as_ref()
+            .map(super::StartupProgressDisplay::percentage);
+        let message = message.map(|message| {
+            progress.map_or_else(
+                || message.to_string(),
+                |progress| format!("{message} {progress}%"),
+            )
+        });
         if let Some(message) = message
             && header.bottom() < bottom.y
         {
