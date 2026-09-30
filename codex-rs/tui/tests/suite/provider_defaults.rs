@@ -21,7 +21,7 @@ async fn history_lookup_uses_server_provider_with_local_and_embedded_servers() -
             (false, true, true),
             (false, false, true),
         ] {
-            let home = tempfile::tempdir_in("/tmp")?;
+            let home = tempfile::tempdir()?;
             write_test_config(home.path(), &cwd)?;
             let config_path = home.path().join("config.toml");
             let config = std::fs::read_to_string(&config_path)?;
@@ -98,10 +98,18 @@ async fn history_lookup_uses_server_provider_with_local_and_embedded_servers() -
                 ("Server provider history", "Client provider history")
             };
             terminal.wait_for_screen(expected)?;
-            ensure!(
-                !terminal.screen_contains(excluded),
-                "{action}: unexpected provider history"
-            );
+            if last {
+                ensure!(
+                    !terminal.screen_contains(excluded),
+                    "{action} --last (embedded={embedded}, explicit={explicit}): unexpected provider history"
+                );
+            } else {
+                ensure!(
+                    terminal.screen_contains("Client provider history")
+                        && terminal.screen_contains("Server provider history"),
+                    "{action} picker (embedded={embedded}, explicit={explicit}) should show sessions from both providers"
+                );
+            }
             drop(terminal);
             daemon.kill().await?;
             daemon.wait().await?;
