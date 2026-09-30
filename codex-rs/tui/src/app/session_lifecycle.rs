@@ -1333,6 +1333,12 @@ impl App {
         app_server: &mut AppServerSession,
         target_session: SessionTarget,
     ) -> Result<AppRunControl> {
+        let resume_started_at = std::time::Instant::now();
+        let target_thread_id = target_session.thread_id;
+        tracing::info!(
+            thread_id = %target_thread_id,
+            "resume session selected"
+        );
         if self.ignore_same_thread_resume(&target_session) {
             self.agents_overview
                 .hidden_threads
@@ -1368,6 +1374,12 @@ impl App {
         }
         let permission_overrides = self.resume_permission_overrides(&resume_config);
 
+        tracing::info!(
+            thread_id = %target_thread_id,
+            preparation_ms = resume_started_at.elapsed().as_millis(),
+            "resume configuration preparation completed"
+        );
+
         if let Some(history_mode) = target_session.history_mode {
             app_server.remember_thread_history_mode(target_session.thread_id, history_mode);
         }
@@ -1375,7 +1387,7 @@ impl App {
             .resume_thread_with_permission_overrides(
                 &local_settings,
                 resume_config.clone(),
-                target_session.thread_id,
+                target_thread_id,
                 self.resume_model_settings(),
                 permission_overrides,
             )
@@ -1422,6 +1434,7 @@ impl App {
         );
         self.file_search
             .update_search_dir(self.config.cwd.to_path_buf());
+        let attach_started_at = std::time::Instant::now();
         match self
             .replace_chat_widget_with_app_server_thread(
                 tui,
@@ -1432,6 +1445,11 @@ impl App {
             .await
         {
             Ok(()) => {
+                tracing::info!(
+                    thread_id = %resumed_thread_id,
+                    attach_ms = attach_started_at.elapsed().as_millis(),
+                    "resume chat widget attach completed"
+                );
                 if let Some(input) = retained_input {
                     self.chat_widget.restore_thread_input_state(
                         Some(input),
@@ -1449,7 +1467,13 @@ impl App {
                             .add_info_message(notice.to_string(), /*hint*/ None);
                     }
                 }
+                let backfill_started_at = std::time::Instant::now();
                 self.backfill_loaded_subagent_threads(app_server).await;
+                tracing::info!(
+                    thread_id = %resumed_thread_id,
+                    backfill_ms = backfill_started_at.elapsed().as_millis(),
+                    "resume loaded-subagent backfill completed"
+                );
                 if matches!(
                     self.runtime_approval_policy_override,
                     Some(RuntimeApprovalPolicyOverride::Restored(_))
@@ -1476,6 +1500,11 @@ impl App {
                     )
                     .await;
                 }
+                tracing::info!(
+                    thread_id = %resumed_thread_id,
+                    total_ms = resume_started_at.elapsed().as_millis(),
+                    "resume session ready"
+                );
             }
             Err(err) => {
                 self.add_session_picker_error(format!(

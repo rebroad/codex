@@ -1282,6 +1282,27 @@ pub async fn existing_rollout_path(path: &Path) -> Option<PathBuf> {
     path::existing_rollout_path(path).await
 }
 
+/// Returns the decoded byte length when the rollout representation declares it.
+/// Compressed rollout frames written by Codex include this value; older or
+/// externally-produced frames may not, in which case callers can report
+/// indeterminate progress instead of inventing a percentage.
+pub async fn rollout_uncompressed_size(path: &Path) -> io::Result<Option<u64>> {
+    let path = path::existing_rollout_path(path)
+        .await
+        .unwrap_or_else(|| path.to_path_buf());
+    if !path::is_compressed_rollout_path(path.as_path()) {
+        return Ok(Some(tokio::fs::metadata(path).await?.len()));
+    }
+
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut header = [0_u8; 18];
+    let read = file.read(&mut header).await?;
+    Ok(zstd::zstd_safe::get_frame_content_size(&header[..read])
+        .ok()
+        .flatten())
+}
+
 mod path {
     use std::ffi::OsStr;
     use std::fs::Metadata;

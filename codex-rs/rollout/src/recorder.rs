@@ -1104,69 +1104,92 @@ impl RolloutRecorder {
     pub async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+        Self::load_rollout_items_with_progress(path, |_| {}).await
+    }
+
+    /// Loads rollout records and reports decoded-byte progress when the input
+    /// format exposes a trustworthy total size.
+    pub async fn load_rollout_items_with_progress(
+        path: &Path,
+        mut on_progress: impl FnMut(u8),
+    ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        compression::read_rollout_lines(path, |reader| {
-            let mut items: Vec<RolloutItem> = Vec::new();
-            let mut thread_id: Option<ThreadId> = None;
-            let mut parse_errors = 0usize;
-            let mut saw_non_empty_line = false;
-            for line in reader {
-                let line = line?;
-                if line.trim().is_empty() {
+        let mut items: Vec<RolloutItem> = Vec::new();
+        let mut thread_id: Option<ThreadId> = None;
+        let mut parse_errors = 0usize;
+        let total_bytes = compression::rollout_uncompressed_size(path)
+            .await
+            .ok()
+            .flatten();
+        let mut loaded_bytes = 0_u64;
+        let mut reported_progress = 0_u8;
+        let mut reader = compression::open_rollout_line_reader(path).await?;
+        let mut saw_non_empty_line = false;
+        while let Some(line) = reader.next_line().await? {
+            loaded_bytes = loaded_bytes.saturating_add(line.len() as u64 + 1);
+            if let Some(total_bytes) = total_bytes.filter(|total| *total > 0) {
+                let progress = ((loaded_bytes.saturating_mul(100) / total_bytes).min(99)) as u8;
+                if progress > reported_progress {
+                    reported_progress = progress;
+                    on_progress(progress);
+                }
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            saw_non_empty_line = true;
+            let mut value: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(e) => {
+                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
+                    parse_errors = parse_errors.saturating_add(1);
                     continue;
                 }
-                saw_non_empty_line = true;
-                let mut value: Value = match serde_json::from_str(&line) {
-                    Ok(value) => value,
-                    Err(e) => {
-                        warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                        parse_errors = parse_errors.saturating_add(1);
-                        continue;
-                    }
-                };
-                if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
-                    trace!("skipping legacy ghost_snapshot rollout line");
+            };
+            if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
+                trace!("skipping legacy ghost_snapshot rollout line");
+                continue;
+            }
+            if thread_id.is_none() {
+                // The first SessionMeta belongs to this rollout. Later SessionMeta lines
+                // can be copied from fork history, so only validate unknown history modes
+                // before we have parsed the rollout's own SessionMeta.
+                reject_unknown_thread_history_mode(&value)?;
+            }
+
+            let rollout_line = match crate::decode_rollout_line(value) {
+                Ok(rollout_line) => rollout_line,
+                Err(e) => {
+                    trace!("failed to parse rollout line: {e}");
+                    parse_errors = parse_errors.saturating_add(1);
                     continue;
                 }
-                if thread_id.is_none() {
-                    // The first SessionMeta belongs to this rollout. Later SessionMeta lines
-                    // can be copied from fork history, so only validate unknown history modes
-                    // before we have parsed the rollout's own SessionMeta.
-                    reject_unknown_thread_history_mode(&value)?;
-                }
+            };
 
-                let rollout_line = match crate::decode_rollout_line(value) {
-                    Ok(rollout_line) => rollout_line,
-                    Err(e) => {
-                        trace!("failed to parse rollout line: {e}");
-                        parse_errors = parse_errors.saturating_add(1);
-                        continue;
-                    }
-                };
-
-                let item = rollout_line.item;
-                // Use the FIRST SessionMeta encountered in the file as the canonical
-                // thread id and main session information. Keep all items intact.
-                if thread_id.is_none()
-                    && let RolloutItem::SessionMeta(session_meta_line) = &item
-                {
-                    thread_id = Some(session_meta_line.meta.id);
-                }
-                items.push(item);
+            let item = rollout_line.item;
+            // Use the FIRST SessionMeta encountered in the file as the canonical
+            // thread id and main session information. Keep all items intact.
+            if thread_id.is_none()
+                && let RolloutItem::SessionMeta(session_meta_line) = &item
+            {
+                thread_id = Some(session_meta_line.meta.id);
             }
-            if !saw_non_empty_line {
-                return Err(IoError::other("empty session file"));
-            }
+            items.push(item);
+        }
+        if !saw_non_empty_line {
+            return Err(IoError::other("empty session file"));
+        }
+        if total_bytes.is_some() {
+            on_progress(100);
+        }
 
-            tracing::debug!(
-                "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
-                items.len(),
-                thread_id,
-                parse_errors,
-            );
-            Ok((items, thread_id, parse_errors))
-        })
-        .await
+        tracing::debug!(
+            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+            items.len(),
+            thread_id,
+            parse_errors,
+        );
+        Ok((items, thread_id, parse_errors))
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {

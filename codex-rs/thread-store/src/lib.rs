@@ -56,6 +56,7 @@ pub use projects::UpdatedProject;
 pub use queue_store::LocalQueueStore;
 pub use queue_store::QueueStore;
 pub use store::PersistContext;
+pub use store::ThreadReadProgressCallback;
 pub use store::ThreadStore;
 pub use store::ThreadStoreFuture;
 pub use thread_attachments::AddThreadAttachmentParams;
