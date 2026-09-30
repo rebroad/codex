@@ -553,6 +553,7 @@ export type { ThreadRealtimeTranscriptDoneNotification } from "./ThreadRealtimeT
 export type { ThreadRealtimeTranscriptRole } from "./ThreadRealtimeTranscriptRole";
 export type { ThreadResumeInitialTurnsPageParams } from "./ThreadResumeInitialTurnsPageParams";
 export type { ThreadResumeParams } from "./ThreadResumeParams";
+export type { ThreadResumeProgressNotification } from "./ThreadResumeProgressNotification";
 export type { ThreadResumeResponse } from "./ThreadResumeResponse";
 export type { ThreadRevertParams } from "./ThreadRevertParams";
 export type { ThreadRevertResponse } from "./ThreadRevertResponse";

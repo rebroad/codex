@@ -63,6 +63,9 @@ use crate::UpdatedProject;
 /// Future returned by [`ThreadStore`] operations.
 pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResult<T>> + Send + 'a>>;
 
+/// Receives monotonically increasing rollout-read percentages during resume.
+pub type ThreadReadProgressCallback = Arc<dyn Fn(u8) + Send + Sync>;
+
 /// Why thread persistence is being requested.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PersistContext {
@@ -218,6 +221,15 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Loads the latest model context while reporting progress when supported.
+    fn load_latest_model_context_with_progress(
+        &self,
+        params: LoadThreadHistoryParams,
+        _progress: ThreadReadProgressCallback,
+    ) -> ThreadStoreFuture<'_, StoredModelContext> {
+        self.load_latest_model_context(params)
+    }
+
     /// Freezes source history and model context used to initialize a referenced fork.
     ///
     /// Stores without reference-backed fork support can retain this default implementation.
@@ -247,6 +259,16 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Reads a thread summary and optionally its persisted history.
     fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreFuture<'_, StoredThread>;
 
+    /// Reads a thread and reports progress while legacy rollout history is decoded.
+    /// Stores without streaming history can use the default implementation.
+    fn read_thread_with_progress(
+        &self,
+        params: ReadThreadParams,
+        _progress: ThreadReadProgressCallback,
+    ) -> ThreadStoreFuture<'_, StoredThread> {
+        self.read_thread(params)
+    }
+
     /// Reads a rollout-backed thread by path when the store supports path-addressed lookups.
     ///
     /// Deprecated: new callers should use [`ThreadStore::read_thread`] instead.
@@ -254,6 +276,15 @@ pub trait ThreadStore: Any + Send + Sync {
         &self,
         params: ReadThreadByRolloutPathParams,
     ) -> ThreadStoreFuture<'_, StoredThread>;
+
+    /// Path-addressed equivalent of [`Self::read_thread_with_progress`].
+    fn read_thread_by_rollout_path_with_progress(
+        &self,
+        params: ReadThreadByRolloutPathParams,
+        _progress: ThreadReadProgressCallback,
+    ) -> ThreadStoreFuture<'_, StoredThread> {
+        self.read_thread_by_rollout_path(params)
+    }
 
     /// Lists stored threads matching the supplied filters.
     fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreFuture<'_, ThreadPage>;
