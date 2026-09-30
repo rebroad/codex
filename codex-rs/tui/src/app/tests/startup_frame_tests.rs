@@ -140,7 +140,7 @@ async fn owned_startup_preserves_loading_until_resume_replay_is_applied() -> Res
             turns,
         )
         .await?;
-        let mut draft = Some(startup.into_draft());
+        let mut draft = Some(startup.snapshot_draft());
         assert!(!events.is_empty());
         assert!(app.transcript_cells.is_empty());
         while !events.is_empty() {
