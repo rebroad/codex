@@ -18,6 +18,7 @@ use super::rollout_lineage::RolloutLineage;
 use super::thread_rollout_resolver;
 use crate::LoadThreadHistoryParams;
 use crate::StoredModelContext;
+use crate::ThreadReadProgressCallback;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
@@ -37,6 +38,22 @@ pub(super) async fn load_latest_model_context(
     store: &LocalThreadStore,
     params: LoadThreadHistoryParams,
 ) -> ThreadStoreResult<StoredModelContext> {
+    load_latest_model_context_with_optional_progress(store, params, None).await
+}
+
+pub(super) async fn load_latest_model_context_with_progress(
+    store: &LocalThreadStore,
+    params: LoadThreadHistoryParams,
+    progress: ThreadReadProgressCallback,
+) -> ThreadStoreResult<StoredModelContext> {
+    load_latest_model_context_with_optional_progress(store, params, Some(progress)).await
+}
+
+async fn load_latest_model_context_with_optional_progress(
+    store: &LocalThreadStore,
+    params: LoadThreadHistoryParams,
+    progress: Option<ThreadReadProgressCallback>,
+) -> ThreadStoreResult<StoredModelContext> {
     let resolved = if params.include_archived {
         thread_rollout_resolver::resolve_current_including_archived(store, params.thread_id).await?
     } else {
@@ -49,13 +66,14 @@ pub(super) async fn load_latest_model_context(
                 message: format!("no rollout found for thread id {}", params.thread_id),
             })?;
 
-    load_from_rollout_path(store, params.thread_id, &path).await
+    load_from_rollout_path(store, params.thread_id, &path, progress).await
 }
 
 pub(super) async fn load_from_rollout_path(
     store: &LocalThreadStore,
     thread_id: codex_protocol::ThreadId,
     path: &Path,
+    progress: Option<ThreadReadProgressCallback>,
 ) -> ThreadStoreResult<StoredModelContext> {
     let before = super::history_revision::read(path).await;
     let session_meta = codex_rollout::read_session_meta_line(path)
@@ -78,7 +96,7 @@ pub(super) async fn load_from_rollout_path(
         let lineage = store
             .resolve_rollout_lineage(thread_id, Some(path.to_path_buf()))
             .await?;
-        scan_model_context_from_lineage(lineage, session_meta).await?
+        scan_model_context_from_lineage(lineage, session_meta, progress.clone()).await?
     } else {
         read_thread::load_history_items(path).await?
     };
@@ -149,7 +167,7 @@ pub(super) async fn load_for_fork(
     match history_base {
         Some(history_base) => {
             let lineage = lineage.truncate_at(history_base).await?;
-            scan_model_context_from_lineage(lineage, session_meta).await
+            scan_model_context_from_lineage(lineage, session_meta, None).await
         }
         None => Ok(vec![RolloutItem::SessionMeta(session_meta)]),
     }
@@ -158,9 +176,28 @@ pub(super) async fn load_for_fork(
 async fn scan_model_context_from_lineage(
     lineage: RolloutLineage,
     session_meta: SessionMetaLine,
+    progress: Option<ThreadReadProgressCallback>,
 ) -> ThreadStoreResult<Vec<RolloutItem>> {
+    let total_bytes = if progress.is_some() {
+        let mut total_bytes = Some(0_u64);
+        for segment in lineage.segments() {
+            let segment_bytes = match segment.end {
+                Some(end) => Some(end.end_byte_offset),
+                None => codex_rollout::rollout_uncompressed_size(segment.rollout_path.as_path())
+                    .await
+                    .ok()
+                    .flatten(),
+            };
+            total_bytes = total_bytes.and_then(|total| {
+                segment_bytes.map(|segment_bytes| total.saturating_add(segment_bytes))
+            });
+        }
+        total_bytes
+    } else {
+        None
+    };
     let scan = tokio::task::spawn_blocking(move || {
-        scan_model_context_from_lineage_blocking(&lineage, session_meta)
+        scan_model_context_from_lineage_blocking(&lineage, session_meta, progress, total_bytes)
     })
     .await
     .map_err(|err| ThreadStoreError::Internal {
@@ -177,15 +214,32 @@ async fn scan_model_context_from_lineage(
 fn scan_model_context_from_lineage_blocking(
     lineage: &RolloutLineage,
     session_meta: SessionMetaLine,
+    progress: Option<ThreadReadProgressCallback>,
+    total_bytes: Option<u64>,
 ) -> io::Result<Vec<RolloutItem>> {
     let mut scan = ModelContextScan::default();
+    let mut bytes_before_segment = 0_u64;
+    let mut reported_progress = 0_u8;
     'segments: for segment in lineage.segments().iter().rev() {
         let file = codex_rollout::open_rollout_seekable_reader(segment.rollout_path.as_path())?;
         let mut scanner = match segment.end.map(|end| end.end_byte_offset) {
             Some(end_byte_offset) => ReverseJsonlScanner::new_at(file, end_byte_offset)?,
             None => ReverseJsonlScanner::new(file)?,
         };
+        let segment_bytes = segment
+            .end
+            .map_or_else(|| scanner.scan_end_offset(), |end| end.end_byte_offset);
         while let Some(outcome) = scanner.scan_next_rollout_line()? {
+            if let (Some(progress), Some(total_bytes)) = (&progress, total_bytes)
+                && total_bytes > 0
+            {
+                let bytes_scanned = bytes_before_segment.saturating_add(scanner.bytes_scanned());
+                let percentage = (bytes_scanned.saturating_mul(100) / total_bytes).min(99) as u8;
+                if percentage > reported_progress {
+                    reported_progress = percentage;
+                    progress(percentage);
+                }
+            }
             let ScanOutcome::Parsed(line) = outcome else {
                 continue;
             };
@@ -199,9 +253,15 @@ fn scan_model_context_from_lineage_blocking(
                 ModelContextScanProgress::Complete => break 'segments,
             }
         }
+        bytes_before_segment = bytes_before_segment.saturating_add(segment_bytes);
     }
 
     let mut items = scan.finish();
     items.insert(0, RolloutItem::SessionMeta(session_meta));
+    if let Some(progress) = progress
+        && total_bytes.is_some()
+    {
+        progress(100);
+    }
     Ok(items)
 }
