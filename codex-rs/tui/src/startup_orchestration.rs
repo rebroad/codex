@@ -12,6 +12,7 @@ pub(super) async fn run_main_inner(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
+    resume_launch_started_at: Option<Instant>,
 ) -> std::io::Result<AppExitInfo> {
     if cli.no_daemon && explicit_remote_endpoint.is_some() {
         return Err(std::io::Error::other(
@@ -908,6 +909,7 @@ pub(super) async fn run_main_inner(
         managed_daemon,
         launch_telemetry,
         startup_draft,
+        resume_launch_started_at,
     ))
     .await
     .map_err(|err| {
