@@ -283,7 +283,7 @@ async fn startup_typeahead_pty_child() {
         .await
         .expect("flush real startup terminal input");
     tui.pause_events();
-    let draft = startup_draft.into_draft();
+    let draft = startup_draft.snapshot_draft();
     assert_eq!(
         draft.text, "abZ!c",
         "startup Enter must not submit the draft"
