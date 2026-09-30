@@ -12,10 +12,12 @@ use super::started_thread_from_resume_response;
 use super::thread_resume_params_from_config;
 use super::thread_session_state_from_thread_response;
 use crate::legacy_core::config::Config;
+use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -27,11 +29,57 @@ use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
-use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 // Bound recovery to recent messages when item paging is unavailable.
 const READ_ONLY_HISTORY_TURN_LIMIT: u32 = 100;
+
+fn take_resume_progress(
+    event: AppServerEvent,
+    request_id: &RequestId,
+) -> Result<(), AppServerEvent> {
+    match event {
+        AppServerEvent::ServerNotification(notification) => {
+            if let ServerNotification::ThreadResumeProgress(progress) = notification.as_ref()
+                && progress.request_id == *request_id
+            {
+                return Ok(());
+            }
+            Err(AppServerEvent::ServerNotification(notification))
+        }
+        event => Err(event),
+    }
+}
+
+async fn request_thread_resume_with_progress(
+    session: &mut AppServerSession,
+    request_id: RequestId,
+    params: ThreadResumeParams,
+) -> Result<ThreadResumeResponse, TypedRequestError> {
+    let request_id_for_progress = request_id.clone();
+    let request_handle = session.client.request_handle();
+    let request = request_handle.request_typed(ClientRequest::ThreadResume { request_id, params });
+    tokio::pin!(request);
+    let mut events_open = true;
+    loop {
+        tokio::select! {
+            // Drain this request's rollout progress before its response. Yield between
+            // notifications so the startup screen can update its duration estimate.
+            biased;
+            event = session.client.next_event(), if events_open => match event {
+                Some(event) => match take_resume_progress(event, &request_id_for_progress) {
+                    Ok(()) => {
+                        // Let the startup event loop update its progress display during a scan.
+                        tokio::task::yield_now().await;
+                    }
+                    Err(event) => session.buffered_events.push_back(event),
+                },
+                None => events_open = false,
+            },
+            result = &mut request => return result,
+        }
+    }
+}
 
 impl AppServerSession {
     /// Read a conflicting thread without taking its writer lease. This is a snapshot, not an
@@ -231,13 +279,8 @@ impl AppServerSession {
             rollout_maintenance_guard = None;
         }
         let request_id = self.next_request_id();
-        let resume_response = self
-            .client
-            .request_typed(ClientRequest::ThreadResume {
-                request_id,
-                params: params.clone(),
-            })
-            .await;
+        let resume_response =
+            request_thread_resume_with_progress(self, request_id, params.clone()).await;
         drop(rollout_maintenance_guard);
         let mut response: ThreadResumeResponse = match resume_response {
             Ok(response) => response,
@@ -247,8 +290,7 @@ impl AppServerSession {
                 self.history_support = ThreadHistorySupport::LegacyOnly;
                 params.exclude_turns = false;
                 let request_id = self.next_request_id();
-                self.client
-                    .request_typed(ClientRequest::ThreadResume { request_id, params })
+                request_thread_resume_with_progress(self, request_id, params)
                     .await
                     .map_err(|err| {
                         bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
@@ -270,13 +312,12 @@ impl AppServerSession {
                             );
                             let original_client = std::mem::replace(&mut self.client, client);
                             let request_id = self.next_request_id();
-                            match self
-                                .client
-                                .request_typed(ClientRequest::ThreadResume {
-                                    request_id,
-                                    params: params.clone(),
-                                })
-                                .await
+                            match request_thread_resume_with_progress(
+                                self,
+                                request_id,
+                                params.clone(),
+                            )
+                            .await
                             {
                                 Ok(response) => Some(response),
                                 Err(err) => {
@@ -317,8 +358,7 @@ impl AppServerSession {
                         ));
                     }
                     let request_id = self.next_request_id();
-                    self.client
-                        .request_typed(ClientRequest::ThreadResume { request_id, params })
+                    request_thread_resume_with_progress(self, request_id, params)
                         .await
                         .map_err(|err| {
                             bootstrap_request_error(
