@@ -94,7 +94,7 @@ async fn startup_submission_honors_configured_submit_binding() {
             .expect("configured submit");
     }
     assert!(pump.take_submission_intent());
-    assert_eq!(pump.into_draft(), draft);
+    assert_eq!(pump.snapshot_draft(), draft);
 }
 
 #[tokio::test]
@@ -109,7 +109,7 @@ async fn startup_submission_accepts_enter_after_paste_ambiguity_expires() {
     pump.handle_event(&mut tui, TuiEvent::Key(KeyEvent::from(KeyCode::Enter)))
         .expect("confirm after the ambiguous paste has finished");
     assert!(pump.take_submission_intent());
-    assert_eq!(pump.into_draft().text, "pasted draft");
+    assert_eq!(pump.snapshot_draft().text, "pasted draft");
 }
 
 #[tokio::test]
@@ -127,7 +127,7 @@ async fn startup_submission_redirect_to_agents_preserves_only_editable_text() {
         pump.update_session_selection(&mut tui, &selection)
             .expect("redirect away from startup destination");
         assert!(!pump.take_submission_intent());
-        assert_eq!(pump.into_draft(), draft);
+        assert_eq!(pump.snapshot_draft(), draft);
     }
 }
 
@@ -156,5 +156,5 @@ async fn startup_submission_thread_change_preserves_only_editable_text() {
         }
     }
     assert!(!pump.take_submission_intent());
-    assert_eq!(pump.into_draft().text, "retained draft");
+    assert_eq!(pump.snapshot_draft().text, "retained draft");
 }
