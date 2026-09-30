@@ -354,6 +354,7 @@ impl AppServerSession {
         let budget = HistoryLoadBudget::new(scope, config, local_settings, height);
         let mut scanned_items = 0;
         let mut rendered_rows = 0;
+        let mut loaded_pages: usize = 0;
         while let Some(limit) = budget.next_page_size(rendered_rows, scanned_items) {
             let page = self
                 .thread_items_page(
@@ -368,6 +369,7 @@ impl AppServerSession {
                 break;
             }
             scanned_items = scanned_items.saturating_add(page.data.len());
+            loaded_pages = loaded_pages.saturating_add(1);
             let items = self
                 .merge_thread_item_page(thread_id, page, &mut state, &mut thread.turns)
                 .await?;
