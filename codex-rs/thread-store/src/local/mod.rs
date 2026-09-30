@@ -585,6 +585,16 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { model_context::load_latest_model_context(self, params).await })
     }
 
+    fn load_latest_model_context_with_progress(
+        &self,
+        params: LoadThreadHistoryParams,
+        progress: crate::ThreadReadProgressCallback,
+    ) -> ThreadStoreFuture<'_, StoredModelContext> {
+        Box::pin(async move {
+            model_context::load_latest_model_context_with_progress(self, params, progress).await
+        })
+    }
+
     fn prepare_fork(&self, params: PrepareForkParams) -> ThreadStoreFuture<'_, PreparedFork> {
         Box::pin(async move { paginated_fork::prepare(self, params).await })
     }
@@ -597,6 +607,16 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { read_thread::read_thread(self, params).await })
     }
 
+    fn read_thread_with_progress(
+        &self,
+        params: ReadThreadParams,
+        progress: crate::ThreadReadProgressCallback,
+    ) -> ThreadStoreFuture<'_, StoredThread> {
+        Box::pin(async move {
+            read_thread::read_thread_with_progress(self, params, Some(&progress)).await
+        })
+    }
+
     fn read_thread_by_rollout_path(
         &self,
         params: ReadThreadByRolloutPathParams,
@@ -604,6 +624,23 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(LocalThreadStore::read_thread_by_rollout_path_params(
             self, params,
         ))
+    }
+
+    fn read_thread_by_rollout_path_with_progress(
+        &self,
+        params: ReadThreadByRolloutPathParams,
+        progress: crate::ThreadReadProgressCallback,
+    ) -> ThreadStoreFuture<'_, StoredThread> {
+        Box::pin(async move {
+            read_thread::read_thread_by_rollout_path_with_progress(
+                self,
+                params.rollout_path,
+                params.include_archived,
+                params.include_history,
+                Some(&progress),
+            )
+            .await
+        })
     }
 
     fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreFuture<'_, ThreadPage> {

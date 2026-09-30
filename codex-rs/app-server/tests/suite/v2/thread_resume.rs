@@ -61,6 +61,7 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeProgressNotification;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
@@ -2560,7 +2561,8 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 #[tokio::test]
 async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<()> {
     for client_name in ["codex_chatgpt_android_remote", "codex_chatgpt_ios_remote"] {
-        let remote_resume = resume_redaction_fixture(Some(client_name)).await?;
+        let remote_resume =
+            resume_redaction_fixture(Some(client_name), Some(Duration::from_secs(15))).await?;
         let remote_turn = remote_resume
             .thread
             .turns
@@ -2623,7 +2625,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         }
     }
 
-    let normal_resume = resume_redaction_fixture(Some("some_other_client")).await?;
+    let normal_resume = resume_redaction_fixture(Some("some_other_client"), None).await?;
     let normal_turn = normal_resume
         .thread
         .turns
@@ -2682,7 +2684,10 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
     Ok(())
 }
 
-async fn resume_redaction_fixture(client_name: Option<&str>) -> Result<ThreadResumeResponse> {
+async fn resume_redaction_fixture(
+    client_name: Option<&str>,
+    exec_server_delay: Option<Duration>,
+) -> Result<ThreadResumeResponse> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri()).write(codex_home.path())?;
@@ -2704,10 +2709,13 @@ async fn resume_redaction_fixture(client_name: Option<&str>) -> Result<ThreadRes
         &conversation_id,
     )?;
 
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build()
-        .await?;
+    let builder = TestAppServer::builder().with_codex_home(codex_home.path());
+    let builder = if let Some(exec_server_delay) = exec_server_delay {
+        builder.with_exec_server_delay(exec_server_delay)
+    } else {
+        builder
+    };
+    let mut mcp = builder.build().await?;
     if let Some(client_name) = client_name {
         let _ = timeout(
             DEFAULT_READ_TIMEOUT,
@@ -6344,4 +6352,128 @@ async fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<Ro
         conversation_id,
         rollout_file_path,
     })
+}
+
+#[tokio::test]
+async fn cold_legacy_resume_streams_rollout_progress_before_its_response() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Progress test",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let path = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &thread_id);
+    let mut rollout = std::fs::OpenOptions::new().append(true).open(path)?;
+    for _ in 0..256 {
+        let event = EventMsg::AgentMessage(AgentMessageEvent {
+            message: "x".repeat(4096),
+            phase: None,
+            memory_citation: None,
+            delivery: None,
+            questions: None,
+        });
+        writeln!(
+            rollout,
+            "{}",
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "event_msg",
+                "payload": serde_json::to_value(event)?,
+            })
+        )?;
+    }
+    drop(rollout);
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let progress: ThreadResumeProgressNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_notification("thread/resume/progress"),
+    )
+    .await??;
+    assert_eq!(progress.request_id, RequestId::Integer(request_id));
+    assert!((1..100).contains(&progress.progress));
+    let next_progress: ThreadResumeProgressNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_notification("thread/resume/progress"),
+    )
+    .await??;
+    assert_eq!(next_progress.request_id, RequestId::Integer(request_id));
+    assert!(next_progress.progress > progress.progress);
+    let _: ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_paginated_resume_streams_rollout_progress_before_its_response() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let thread_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-01",
+        "2025-01-05T12:00:00Z",
+        "Paginated progress test",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let path = rollout_path(codex_home.path(), "2025-01-05T12-00-01", &thread_id);
+    for index in 0..256 {
+        append_rollout_item_to_path(
+            &path,
+            &RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: format!("{index}: {}", "x".repeat(4096)),
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            })),
+        )
+        .await?;
+    }
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let mut progress_values = Vec::new();
+    for _ in 0..20 {
+        let progress: ThreadResumeProgressNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_notification("thread/resume/progress"),
+        )
+        .await??;
+        assert_eq!(progress.request_id, RequestId::Integer(request_id));
+        progress_values.push(progress.progress);
+    }
+    assert!(
+        progress_values
+            .windows(2)
+            .all(|values| values[0] < values[1])
+    );
+    let _: ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    Ok(())
 }
