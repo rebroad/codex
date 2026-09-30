@@ -253,7 +253,7 @@ async fn resolves_name_and_preview_from_server_list() -> color_eyre::Result<()> 
         "saved-session",
         &[SessionCollection::Active],
         ThreadParamsMode::Remote,
-        /*model_provider*/ None,
+        Some(&other_config.model_provider_id),
     )
     .await?;
     assert_eq!(

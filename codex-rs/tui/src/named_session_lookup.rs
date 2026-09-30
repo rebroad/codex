@@ -87,6 +87,9 @@ pub(super) async fn lookup(
                     !cursor.contains('|') || codex_rollout::parse_cursor(cursor).is_none()
                 });
                 for thread in response.data {
+                    if model_provider.is_some_and(|provider| thread.model_provider != provider) {
+                        continue;
+                    }
                     if display_label(&thread) != name {
                         continue;
                     }
