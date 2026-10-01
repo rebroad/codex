@@ -186,7 +186,7 @@ async fn run_foreground_remote_control(
     #[cfg(not(windows))]
     let socket_dir = tempfile::Builder::new()
         .prefix("codex-rc-")
-        .tempdir_in("/tmp")
+        .tempdir()
         .or_else(|_| tempfile::tempdir())
         .context("failed to create private app-server socket directory")?;
     #[cfg(not(windows))]
