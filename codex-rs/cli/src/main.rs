@@ -675,6 +675,9 @@ enum AppServerSubcommand {
     /// Proxy stdio bytes to the running app-server control socket.
     Proxy(AppServerProxyCommand),
 
+    /// Reload mutable configuration in the running app server without restarting it.
+    Reload,
+
     /// [experimental] Generate TypeScript bindings for the app server protocol.
     GenerateTs(GenerateTsCommand),
 
@@ -1457,6 +1460,13 @@ async fn cli_main(
                         }
                     };
                     codex_stdio_to_uds::run(socket_path.as_path()).await?;
+                }
+                Some(AppServerSubcommand::Reload) => {
+                    let codex_home = find_codex_home()?;
+                    let socket_path =
+                        codex_app_server::app_server_control_socket_path(&codex_home)?;
+                    codex_app_server_daemon::reload_config_at_socket(socket_path.as_path()).await?;
+                    println!("Reloaded mutable app-server configuration.");
                 }
                 Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
                     let options = codex_app_server_protocol::GenerateTsOptions {
@@ -2416,6 +2426,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::PidUpdateLoop { .. } => "app-server daemon pid-update-loop",
         },
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
+        Some(AppServerSubcommand::Reload) => "app-server reload",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
         Some(AppServerSubcommand::GenerateJsonSchema(_)) => "app-server generate-json-schema",
         Some(AppServerSubcommand::GenerateInternalJsonSchema(_)) => {
@@ -4757,6 +4768,15 @@ mod tests {
             Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
                 socket_path: None
             }))
+        ));
+    }
+
+    #[test]
+    fn app_server_reload_subcommand_parses() {
+        let app_server = app_server_from_args(["codex", "app-server", "reload"].as_ref());
+        assert!(matches!(
+            app_server.subcommand,
+            Some(AppServerSubcommand::Reload)
         ));
     }
 

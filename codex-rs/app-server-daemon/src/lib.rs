@@ -107,6 +107,12 @@ pub async fn probe_app_server_version(socket_path: &Path) -> Result<String> {
     Ok(client::probe(socket_path).await?.app_server_version)
 }
 
+/// Reload mutable configuration on an already-running app-server.
+pub async fn reload_config_at_socket(socket_path: &Path) -> Result<()> {
+    ensure_supported_platform()?;
+    remote_control_client::reload_config(socket_path).await
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BootstrapStatus {
