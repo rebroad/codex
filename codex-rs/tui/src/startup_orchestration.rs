@@ -544,8 +544,12 @@ pub(super) async fn run_main_inner(
     let mut daemon_features = daemon_startup::server_features(&cli_kv_overrides);
     // Disabling shared services requires confirmation, even on a fresh auto-start.
     daemon_features.retain(|_, enabled| *enabled);
+    // A successful default-socket probe already selected the live daemon. Attach to
+    // it directly; do not route an existing session through daemon lifecycle startup.
+    let mut started_daemon = false;
     let mut managed_daemon = false;
-    if auto_start_daemon && daemon_exclusion.is_none() {
+    if daemon_startup::should_start_daemon(auto_start_daemon, daemon_exclusion, &app_server_target)
+    {
         let output = startup_draft
             .run_until(async {
                 // Daemon startup needs no terminal input. Keep the composer visible and
@@ -566,12 +570,16 @@ pub(super) async fn run_main_inner(
             })
             .await??;
         if let Some(output) = output {
+            started_daemon = output.status == codex_app_server_daemon::LifecycleStatus::Started;
             managed_daemon = output.backend.is_some();
+            let allow_embedded_fallback = output.backend.is_none();
             app_server_target = AppServerTarget::LocalDaemon {
                 endpoint: RemoteAppServerEndpoint::UnixSocket {
                     socket_path: AbsolutePathBuf::from_absolute_path_checked(output.socket_path)?,
                 },
-                allow_embedded_fallback: false,
+                // Never interrupt an unmanaged server just because its shared
+                // feature settings differ from this TUI's configuration.
+                allow_embedded_fallback,
             };
         } else {
             app_server_target = AppServerTarget::Embedded;
@@ -579,18 +587,23 @@ pub(super) async fn run_main_inner(
         }
     }
     // The overview must inspect the shared server's agents regardless of local settings.
+    let mut use_embedded_fallback = false;
     let compatibility_warning = if cli.agents_overview {
         None
-    } else {
-        daemon_recovery::check(
+    } else if started_daemon {
+        let warning = daemon_recovery::check(
             &mut startup_draft,
             &app_server_target,
             &config,
             managed_daemon,
         )
-        .await?
+        .await?;
+        use_embedded_fallback = warning.is_some();
+        warning
+    } else {
+        daemon_compatibility::check(&mut startup_draft, &app_server_target, &config).await?
     };
-    if compatibility_warning.is_some() {
+    if use_embedded_fallback {
         app_server_target = AppServerTarget::Embedded;
         daemon_exclusion = Some("daemon feature settings");
     }
