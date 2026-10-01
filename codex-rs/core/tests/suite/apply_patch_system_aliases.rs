@@ -30,7 +30,7 @@ async fn system_alias_patch_creates_multiple_files_and_missing_parents_without_r
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(Ok(()), "exercises native macOS system aliases");
-    let directory = tempfile::tempdir_in("/tmp")?;
+    let directory = tempfile::tempdir()?;
     let target = directory
         .path()
         .canonicalize()?

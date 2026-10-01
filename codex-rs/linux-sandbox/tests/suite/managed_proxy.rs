@@ -5,6 +5,7 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
 
+use super::test_temp_dir;
 use codex_core::exec_env::create_env;
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::write_attribution_frame;
@@ -643,7 +644,7 @@ async fn approved_command_with_denied_reads_preserves_standard_devices() {
         eprintln!("skipping bwrap test: bubblewrap is unavailable");
         return;
     }
-    let files = tempfile::tempdir().unwrap();
+    let files = test_temp_dir();
     let denied = files.path().join("secret");
     let output_file = files.path().join("output");
     std::fs::write(&denied, "secret").unwrap();
@@ -988,7 +989,7 @@ async fn handoff_isolates_concurrent_endpoints_and_closes_privileged_descriptors
         return;
     }
 
-    let shared = tempfile::tempdir_in("/tmp").expect("shared writable test directory");
+    let shared = tempfile::tempdir().expect("shared writable test directory");
     let test_executable = std::env::current_exe().expect("integration test executable");
     let test_executable = test_executable.to_str().expect("UTF-8 executable path");
     // Libtest selectors include the module path but omit the integration crate name.
