@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 #[test_case::test_case(FileSystemAccessMode::Read; "read_root")]
 #[test_case::test_case(FileSystemAccessMode::Write; "write_root")]
 fn wslg_mask_follows_filesystem_grants_and_denials(root_access: FileSystemAccessMode) {
-    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let temp_dir = test_temp_dir();
     let denied = temp_dir.path().join("denied.txt");
     fs::write(&denied, "fixture").expect("write fixture");
     let denied = AbsolutePathBuf::from_absolute_path(denied).expect("absolute fixture");
@@ -222,7 +222,7 @@ fn glob_ancestor_mask_in_no_rg_fallback() {
         );
         return;
     }
-    let temp = tempfile::tempdir().expect("temp directory");
+    let temp = test_temp_dir();
     // '/' is an ancestor on every test host; no WSL mount is needed. Only
     // inspect arguments: never launch this synthetic filesystem policy.
     let relative_root: PathBuf =
