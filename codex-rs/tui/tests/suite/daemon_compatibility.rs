@@ -1,10 +1,8 @@
-//! Exercises daemon compatibility fallback through real TUI startup.
+//! Verifies feature mismatches do not divert TUI startup from an existing daemon.
 
 use super::focus_palette::PtyCodex;
 use super::focus_palette::write_test_config;
-use anyhow::Context;
 use anyhow::Result;
-use anyhow::ensure;
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -62,16 +60,21 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         };
         let mut terminal = PtyCodex::start(&cwd, home, &args)?;
         terminal.wait_for_startup()?;
-        terminal.wait_for_screen("warning")?;
+        if let Err(error) = terminal.wait_for_screen("warning") {
+            return Err(anyhow::anyhow!(
+                "{error}; screen:\n{}",
+                terminal.screen_contents()
+            ));
+        }
         terminal.write_input(b"\x14")?;
         let (snapshot, warning_end) = match scenario {
             "explicit enable" => (
                 "daemon_feature_mismatch",
-                "api_key_model_discovery to be enabled.",
+                "existing background server has different feature settings",
             ),
             "explicit disable" => (
                 "daemon_override_mismatch",
-                "api_key_model_discovery to be disabled.",
+                "existing background server has different feature settings",
             ),
             _ => unreachable!(),
         };
@@ -79,8 +82,8 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         let screen = terminal.screen_contents();
         let warning = screen
             .lines()
-            .find(|line| line.contains("Running without the shared background server"))
-            .context("missing warning line")?;
+            .find(|line| line.contains(warning_end))
+            .ok_or_else(|| anyhow::anyhow!("missing existing-server warning: {screen}"))?;
         insta::assert_snapshot!(snapshot, warning);
         terminal.write_input(b"\x14")?;
         terminal.write_input(b"/status")?;
@@ -88,7 +91,7 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         terminal.read_output(std::time::Duration::from_millis(/*millis*/ 200))?;
         terminal.write_input(b"\r")?;
         terminal.wait_for_screen("Model:")?;
-        ensure!(!terminal.screen_contains("unix://"));
+        assert!(!terminal.screen_contains("unix://"));
         tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), server).await???;
     }
     Ok(())
