@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_app_server_protocol::ConfigReloadParams;
+use codex_app_server_protocol::ConfigReloadResponse;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -30,6 +32,19 @@ use crate::client;
 const REMOTE_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_CONTROL_REQUEST_ID: RequestId = RequestId::Integer(2);
 const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
+
+pub(crate) async fn reload_config(socket_path: &Path) -> Result<()> {
+    let mut websocket = client::connect(socket_path).await?;
+    initialize_client(&mut websocket).await?;
+    let _: ConfigReloadResponse = request_remote_control_with_legacy_fallback(
+        &mut websocket,
+        "config/reload",
+        serde_json::to_value(ConfigReloadParams {})?,
+    )
+    .await?;
+    websocket.close(None).await.ok();
+    Ok(())
+}
 
 enum RemoteControlRpcResponse<T> {
     Success(T),

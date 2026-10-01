@@ -1148,6 +1148,11 @@ impl MessageProcessor {
                 .read(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::ConfigReload { .. } => self
+                .config_processor
+                .reload()
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::WindowsSandboxReadiness { .. } => {
                 self.windows_sandbox_processor
                     .windows_sandbox_readiness(&request_id)
