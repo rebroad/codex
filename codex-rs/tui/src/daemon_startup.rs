@@ -1,8 +1,7 @@
 //! Local daemon launch policy. Explicit embedded launches never discover or start a daemon;
-//! optional attachment may fall back to embedded mode, while automatic launches
-//! require a compatible shared server and a successful connection, except when
-//! the Windows launcher forbids detaching a missing server. Elevated local
-//! Windows sessions use explicit embedded behavior before discovery or startup.
+//! automatic launches attach to the shared server and report feature differences without
+//! diverting the TUI from existing sessions. Elevated local Windows sessions use explicit
+//! embedded behavior before discovery or startup.
 
 use super::*;
 use codex_app_server_client::TypedRequestError;
@@ -56,7 +55,7 @@ pub fn uses_wsl_drvfs(codex_home: &std::path::Path) -> bool {
 pub(super) const ELEVATED_LAUNCH_WARNING: &str = "Running as administrator: shared background server disabled. To enable it, restart Codex in a terminal without administrator permissions.";
 
 #[derive(Debug, thiserror::Error)]
-#[error("Cannot use the shared background server: {reason}.\n{FAILURE_HINT}")]
+#[error("{reason}.\n{FAILURE_HINT}")]
 pub(super) struct CompatibilityError {
     pub reason: String,
     pub restart_features: Option<BTreeMap<String, bool>>,
@@ -153,6 +152,16 @@ pub(super) fn server_features(overrides: &[(String, toml::Value)]) -> BTreeMap<S
             Some((name.to_string(), enabled))
         })
         .collect()
+}
+
+pub(super) fn should_start_daemon(
+    auto_start_daemon: bool,
+    daemon_exclusion: Option<&str>,
+    target: &AppServerTarget,
+) -> bool {
+    auto_start_daemon
+        && daemon_exclusion.is_none()
+        && !matches!(target, AppServerTarget::LocalDaemon { .. })
 }
 
 /// Best-effort configured readback, not a guarantee about startup-captured service state.
@@ -254,7 +263,7 @@ pub(super) async fn compatibility_warning(
     match check {
         Ok(()) => Ok(None),
         Err(reason) if *allow_embedded_fallback => Ok(Some(format!(
-            "Running without the shared background server: {reason}."
+            "The existing background server has different feature settings: {reason}."
         ))),
         Err(reason) => Err(CompatibilityError {
             reason,
