@@ -21,6 +21,7 @@ use codex_app_server_protocol::ComputerUseWindowsRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigReloadResponse;
 use codex_app_server_protocol::ConfigRequirements;
 use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
@@ -128,6 +129,15 @@ impl ConfigRequestProcessor {
             }
         }
         Ok(response)
+    }
+
+    pub(crate) async fn reload(&self) -> Result<ConfigReloadResponse, JSONRPCErrorError> {
+        self.config_manager
+            .load_config_layers(/*cwd*/ None)
+            .await
+            .map_err(|err| internal_error(format!("failed to reload configuration: {err}")))?;
+        reload_user_config(&self.config_manager, &self.thread_manager).await;
+        Ok(ConfigReloadResponse {})
     }
 
     pub(crate) async fn config_requirements_read(

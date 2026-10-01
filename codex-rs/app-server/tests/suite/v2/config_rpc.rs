@@ -30,6 +30,7 @@ use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigReloadResponse;
 use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
@@ -58,6 +59,24 @@ use tokio::time::timeout;
 // Bazel CI can spend tens of seconds starting app-server subprocesses or
 // processing config RPCs under load.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[tokio::test]
+async fn config_reload_request_succeeds() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, "model = \"gpt-5\"\n")?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = app_server
+        .send_raw_request("config/reload", Some(json!({})))
+        .await?;
+    let _: ConfigReloadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    Ok(())
+}
 
 fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
     Ok(std::fs::write(

@@ -107,6 +107,8 @@ export type { ConfigLayerMetadata } from "./ConfigLayerMetadata";
 export type { ConfigLayerSource } from "./ConfigLayerSource";
 export type { ConfigReadParams } from "./ConfigReadParams";
 export type { ConfigReadResponse } from "./ConfigReadResponse";
+export type { ConfigReloadParams } from "./ConfigReloadParams";
+export type { ConfigReloadResponse } from "./ConfigReloadResponse";
 export type { ConfigRequirements } from "./ConfigRequirements";
 export type { ConfigRequirementsReadResponse } from "./ConfigRequirementsReadResponse";
 export type { ConfigValueWriteParams } from "./ConfigValueWriteParams";
