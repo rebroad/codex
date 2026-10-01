@@ -1,10 +1,8 @@
-//! Exercises daemon compatibility fallback through real TUI startup.
+//! Verifies feature mismatches do not divert TUI startup from an existing daemon.
 
 use super::focus_palette::PtyCodex;
 use super::focus_palette::write_test_config;
-use anyhow::Context;
 use anyhow::Result;
-use anyhow::ensure;
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -21,6 +19,7 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket.parent().unwrap())?;
         let listener = UnixListener::bind(socket.as_path())?;
+        let server_cwd = cwd.clone();
         let server = tokio::spawn(async move {
             let mut socket = loop {
                 let (stream, _) = listener.accept().await?;
@@ -62,16 +61,21 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         };
         let mut terminal = PtyCodex::start(&cwd, home, &args)?;
         terminal.wait_for_startup()?;
-        terminal.wait_for_screen("warning")?;
+        if let Err(error) = terminal.wait_for_screen("warning") {
+            return Err(anyhow::anyhow!(
+                "{error}; screen:\n{}",
+                terminal.screen_contents()
+            ));
+        }
         terminal.write_input(b"\x14")?;
         let (snapshot, warning_end) = match scenario {
             "explicit enable" => (
                 "daemon_feature_mismatch",
-                "api_key_model_discovery to be enabled.",
+                "existing background server has different feature settings",
             ),
             "explicit disable" => (
                 "daemon_override_mismatch",
-                "api_key_model_discovery to be disabled.",
+                "existing background server has different feature settings",
             ),
             _ => unreachable!(),
         };
@@ -79,8 +83,8 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         let screen = terminal.screen_contents();
         let warning = screen
             .lines()
-            .find(|line| line.contains("Running without the shared background server"))
-            .context("missing warning line")?;
+            .find(|line| line.contains(warning_end))
+            .ok_or_else(|| anyhow::anyhow!("missing existing-server warning: {screen}"))?;
         insta::assert_snapshot!(snapshot, warning);
         terminal.write_input(b"\x14")?;
         terminal.write_input(b"/status")?;

@@ -1,5 +1,5 @@
-//! Explicit recovery from required-daemon incompatibility. Restart is managed-only,
-//! requires a fresh confirmation, and is followed by one compatibility check, never a loop.
+//! Explicit recovery when a newly started daemon cannot serve this client's feature settings.
+//! Existing daemons are never restarted by this path.
 
 use crate::AppServerTarget;
 use crate::app_event::AppEvent;
