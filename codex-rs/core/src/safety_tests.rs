@@ -25,7 +25,7 @@ fn local_context(cwd: &PathUri) -> FileSystemSandboxPolicyContext<'_> {
 #[cfg(target_os = "macos")]
 #[test]
 fn local_system_aliases_do_not_change_remote_patch_permissions() -> std::io::Result<()> {
-    let directory = tempfile::tempdir_in("/tmp")?;
+    let directory = tempfile::tempdir()?;
     let cwd = PathUri::from_host_native_path(directory.path())?;
     let target =
         PathUri::from_host_native_path(directory.path().canonicalize()?.join("missing/file"))?;
