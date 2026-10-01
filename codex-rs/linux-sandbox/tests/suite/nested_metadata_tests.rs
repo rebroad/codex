@@ -5,6 +5,7 @@ use super::create_env_from_core_vars;
 use super::run_cmd_result_with_cwd_and_writable_roots;
 use super::run_cmd_result_with_permission_profile_for_cwd;
 use super::should_skip_bwrap_tests;
+use crate::suite::test_temp_dir;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -31,7 +32,7 @@ async fn sandbox_starts_with_nested_writable_metadata(layout: RootLayout, relati
         return;
     }
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = test_temp_dir();
     let home =
         AbsolutePathBuf::from_absolute_path(temp.path().join("home")).expect("absolute home");
     match layout {
@@ -144,7 +145,7 @@ async fn workspace_write_protects_resolved_gitdir_in_another_writable_root(layou
         return;
     }
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = test_temp_dir();
     // Roots at the same depth keep the workspace mount before the additional writable root.
     let workspace = temp.path().join("workspace");
     let writable = temp.path().join("writable");

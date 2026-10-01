@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 #[cfg(target_os = "macos")]
 #[test]
 fn system_aliases_preserve_mutable_symlinks_and_missing_descendants() -> std::io::Result<()> {
-    let directory = tempfile::tempdir_in("/tmp")?;
+    let directory = tempfile::tempdir()?;
     let outside = tempfile::tempdir()?;
     let logical = AbsolutePathBuf::from_absolute_path(directory.path())?;
     let physical = logical.canonicalize()?;
