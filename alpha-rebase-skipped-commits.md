@@ -328,3 +328,172 @@ commits and the sandbox IPC/hardening commits remain separate because each
 pair crosses distinct responsibilities and exceeds roughly 800 changed lines
 when combined; remote-control capture and auth are separate for the same
 reason (over 2,000 combined changed lines).
+
+## Alpha.10 history preparation refresh (2026-10-02)
+
+The current upstream branch moved after the prior audit: fetching
+`upstream/latest-alpha-cli` produced `838a0aeb33acaaaf1daf6d90dad561006a38384a`
+(`Release 0.162.0-alpha.1`). The local tracking ref had still pointed at the
+alpha.13 tag and Git updated it to the remote tip; the merge-base with `alpha`
+remains `6b4daafdb445340e5af66f067ad4057e6ed9fd81`. The alpha.13 commit remains
+available by its tag. The current downstream range is 100 commits.
+
+The latest rearrangement checkpoint is
+`alpha.before-rearrange-build-cluster-20261002` at
+`064a12aa296737705557a8393a748fb1fae9fa93`, tree
+`abc3f7c6ffab31c60b84ae306e56537bc2c678cc`. After rearranging, `alpha` is
+`49342c1ee8f993aa77d1fb948445b2eec9bc9284` with that exact same tree. The two
+valid fixups were autosquashed: remote `thread/resume` timeout handling into
+`feat(app-server): stream resume progress`, and reflink-required build-tree
+sync into `build: require reflinks for source sync`; no `fixup!` commits remain.
+The build guidance and sync change now follow the build-tree recipe setup.
+
+The generated `sandbox_log_path` schema entry was moved out of
+`docs(core): clarify background terminal poll bounds` and into
+`fix(sandbox): restore bwrap debug logging`, the commit that introduces the
+setting. The reflink source-sync change keeps `scripts/rsync_git_sync.py`
+because `build_codex.sh` still uses it for the separate Rusty V8 checkout with
+an explicit toolchain exclusion. The Codex checkout's own build-tree sync uses
+`cpto --lngit` with `CPTO_REQUIRE_REFLINKS=1`. The focused helper tests passed
+4/4; the remote-resume focused app-server test passed 1/1 earlier in this
+preparation. Full post-rebase tests and Flip7 install validation remain
+pending.
+
+## Rebase and validation status correction (2026-10-02)
+
+The rebase onto `upstream/latest-alpha-cli` has since completed. The fetched
+upstream tip is `838a0aeb33acaaaf1daf6d90dad561006a38384a`, which is now the
+merge-base of `alpha`. The current `alpha` commit is
+`c2d5e70b4c18ada039f15d5fdba0af880ee623ef`, tree
+`52fd5567ab72a09a31a9aad50ebbe39bae1a63be`. That tree exactly matches the
+unique safety checkpoint `alpha.before-rearrange-20261002-postrebase-fixups`
+at `f8f15f02436123cae41a1e8ae8d92d8142a80ae5` (same tree hash). The earlier
+`alpha.before-rebase-20261002-alpha1` checkpoint remains unchanged at commit
+`a5bc261ea66807d460922120d321f04d279f7eca`, tree
+`53ea27d942b487539627400509e8c8f7eb825b3f`. `alpha` currently contains 100
+commits after the upstream tip, with no unsquashed `fixup!`, `squash!`, or
+`amend!` subjects in that range.
+
+The schema-export regeneration is now attached to the downstream config-reload
+feature, and nested `.git` cleanup is attached to the source/build-tree fix.
+The TUI's incompatible-daemon recovery dialog originated upstream in
+`d6093d3228`; downstream `71703cf898` adapts it by allowing embedded fallback
+for unmanaged daemons. It is intentionally a separate downstream compatibility
+change, not a fixup to an upstream commit; no downstream owner for this
+behavioral adaptation was identified. Its focused real-TUI integration test
+`incompatible_daemon_falls_back_for_default_and_explicit_features` passed
+1/1 in an isolated user/mount namespace, confirming that an unmanaged daemon
+feature mismatch falls back without presenting the unavailable restart
+action. The installed TUI binary itself has not yet been reverified.
+The app-server-protocol package passed 319 tests, and app-server-daemon passed
+70 tests. The first full workspace test run exposed two compile errors; the
+restored upstream bwrap test helper and missing Unix `PermissionsExt` import
+are local uncommitted corrections. The first focused Linux-sandbox run then
+compiled and ran 240 tests: 217 passed, 23 failed. Failures include stale
+physical-versus-logical temporary-path expectations and sandbox prerequisites
+physical-versus-logical temporary-path expectations. After adjusting those
+expectations, isolating the login-shell test from the host `.bashrc`, and
+updating the `.aws` assertion to match upstream commit `1d804e91b7`, the full
+Linux-sandbox package passed in an isolated user/mount namespace: 240 passed,
+3 skipped. The `.aws` expectation is separate test maintenance because its
+implementation owner is upstream. The symlinked-temp integration fixture now
+keeps its alias in the writable workspace and its redirected target below the
+authorized temp root; both its focused test and the full package passed. An
+ordinary nested-sandbox invocation of the TUI integration test failed before
+assertions with `Operation not permitted`; the isolated-namespace retry passed.
+An isolated bubblewrap mountpoint probe under the physical `/var/tmp` target
+left its disposable directory unchanged. No cleanup was performed on the
+shared socket directory.
+
+The working tree currently contains uncommitted sandbox-test adjustments and
+the two compile corrections listed above. Full `just test`, release build, and
+`build_codex.sh --release --install flip7` validation remain outstanding; do
+not treat this rebase as fully validated.
+After those adjustments, `cargo check --locked --tests -p codex-linux-sandbox`
+completed successfully from the external build tree (compile-only; this was
+followed by the passing full package test run recorded above).
+
+## Auth and command-group validation repairs (2026-10-02)
+
+Two focused repairs were committed as actual downstream fixups and autosquashed.
+Auth account-context changes now notify remote-control consumers even when
+refresh credentials compare equal. This belongs to the split remote-control
+credentials feature (formerly `4048a85b11`, now `451acb5846`). Its enrollment
+regression test passed; the test waits 900 ms, below the one-second retry delay,
+to verify notification-driven enrollment without the previous 100 ms load flake.
+
+Exploration groups retain failed reads and following reasoning while staying
+separate from compact ordinary command groups. Replay flushes a completed
+ordinary group before a failure, but preserves exploration grouping. These
+repairs belong to successful command grouping (formerly `42c73dd12d`, now
+`1c39261b9a`). Five focused grouping/replay tests passed. The snapshot removes
+variable completion timestamps while retaining command durations.
+
+Before autosquashing, the clean branch was checkpointed as
+`alpha.before-rearrange-auth-tui-fixups-20261002`, commit
+`3911fb08a0d4be64e93f9f95b4eec7fc874426ae`, tree
+`616a577cf1fa717e18059fb73d88057cc376eb7a`. The resulting branch was
+`376f5a6b3f9d618f60198b79bf8c9feca9bdcf3d`, with exactly the same tree;
+`git diff --exit-code` also confirmed equality. No fixup subjects remained.
+
+The elevated full TUI run before the final focused replay repair had 5,652
+passes, 35 failures, two timeouts, and eight skips. Its log is
+`/var/tmp/codex-alpha-20261002-tui-full-escalated.log`. Several remaining
+command-history tests assume immediate flushing and need investigation against
+the downstream deferred-grouping contract. Broader failures, full workspace
+validation, installed TUI verification, and the Flip7 release install remain
+outstanding. This record does not claim final validation.
+
+The follow-up command-history validation passed all 59 selected tests without
+retries (`/var/tmp/codex-alpha-20261002-command-history-validation-retry.log`).
+Successful-command tests now check deferred grouping before flushing at a
+boundary. Completion timestamp normalization occurs before live/replay equality
+and snapshot comparisons; command durations and ordering remain asserted.
+An earlier follow-up process terminated with signal 15 during synchronization,
+before compilation, and was confirmed absent before this successful retry.
+
+A fresh upstream fetch now points to `a986d89b99bc2a5556f3f757a6b8d8b4c6711d1f`
+(`Release 0.162.0-alpha.5`). The remote tracking ref moved non-fast-forward from
+`838a0aeb33acaaaf1daf6d90dad561006a38384a`; use that previous upstream boundary
+explicitly when replaying downstream commits onto the new tip. The new
+`chore(scripts): add rollout model updater` commit was added independently during
+validation and is preserved.
+
+## Alpha.5 checkpoint and replay (2026-10-02)
+
+The clean branch was checkpointed before the final command-history autosquash as
+`alpha.before-rearrange-command-history-20261002`, commit
+`ec2eb6ef57f616369b1c8db29e0eb241037706dc`, tree
+`92b54e6250127344b2e6dc4e7e5f676f04c0eca2`. The rearranged commit
+`cb757b4a3409ef4683b261554eb6db5a7b5ddc77` has exactly that tree, verified by
+tree hashes and an empty `git diff --exit-code`. No fixups remained.
+
+The distinct pre-rebase backup `alpha.before-rebase-20261002-alpha5` preserves
+that rearranged commit and tree. All 101 downstream commits were rebased from
+the explicit previous upstream boundary `838a0aeb33` onto `a986d89b99`
+without conflicts or skipped commits. The resulting commit was
+`7fdc965221256ccf89c6aa2998d9e8bedc593b3f`, tree
+`8e2085c09f41bd6397812514f7552501a048333e`; its merge-base is the new upstream
+tip. Every entry in the pre/post rebase range-diff was equivalent. Tree equality
+was required and proved for rearrangement; the upstream rebase intentionally
+changes the tree by incorporating upstream changes.
+
+Full post-rebase TUI validation is running with output in
+`/var/tmp/codex-alpha-20261002-alpha5-tui-validation.log`. Two CWD test
+expectations are corrected locally to preserve logical temporary paths. Their
+implementation and old expectations both originated upstream in `b114781495f`,
+so this test maintenance has no downstream fixup owner. It must remain a scoped
+maintenance commit if retained. No production CWD behavior was changed.
+Full workspace tests, local release validation, and Flip7 installation are
+still outstanding.
+
+The alpha.5 full TUI retry completed with 5,669 passes, 27 failures, two timeouts,
+and eight skips (5,698 tests). Both corrected logical-CWD tests passed, as did
+the command-history grouping tests. The log is
+`/var/tmp/codex-alpha-20261002-alpha5-tui-validation-retry.log`. Remaining
+failures include account-policy refresh after persisted account changes,
+app-state/permission expectations, terminal rendering, snapshots, and reconnect
+timeouts. Several tests aborted and need their actual error inspected before
+classification. This run compiled the rebased TUI successfully but does not
+prove complete validation. CWD test maintenance was committed separately as
+`d02e50faff`; its implementation and stale expectations originated upstream.
