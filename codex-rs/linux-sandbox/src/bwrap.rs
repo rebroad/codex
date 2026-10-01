@@ -1773,6 +1773,14 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+fn test_temp_dir() -> tempfile::TempDir {
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .expect("canonical temporary root");
+    tempfile::TempDir::new_in(root).expect("temp dir")
+}
+
+#[cfg(test)]
 #[path = "bwrap_wslg_tests.rs"]
 mod wslg_tests;
 
@@ -1915,7 +1923,7 @@ mod tests {
             return;
         }
 
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let root_env = temp_dir.path().join(".env");
         std::fs::write(&root_env, "secret").expect("write env");
         let root_alias = temp_dir.path().join("root-alias");
@@ -1987,7 +1995,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn restricted_policy_chdirs_to_canonical_command_cwd() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let real_root = temp_dir.path().join("real");
         let real_subdir = real_root.join("subdir");
         let link_root = temp_dir.path().join("link");
@@ -2067,7 +2075,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinked_writable_roots_bind_real_target_and_remap_carveouts() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let real_root = temp_dir.path().join("real");
         let link_root = temp_dir.path().join("link");
         let blocked = real_root.join("blocked");
@@ -2115,7 +2123,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn writable_root_aliases_bind_shared_target_once_and_keep_carveouts() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let real_root = temp_dir.path().join("real");
         let real_denied = real_root.join("real-denied");
         let alias_denied = real_root.join("alias-denied");
@@ -2180,7 +2188,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn writable_roots_under_symlinked_ancestors_keep_logical_alias() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let logical_home = temp_dir.path().join("home");
         let real_target = temp_dir.path().join("real-target");
         let logical_alias = logical_home.join(".alias");
@@ -2231,7 +2239,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn writable_symlink_alias_precedes_read_only_descendant_mounts() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let real_root = temp_dir.path().join("real");
         let alias_root = temp_dir.path().join("alias");
         let readable_root = alias_root.join("readable");
@@ -2285,7 +2293,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn nested_writable_root_does_not_follow_symlink_inside_writable_root() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let writable_root = temp_dir.path().join("writable");
         let external_target = temp_dir.path().join("external-target");
         let external_child = external_target.join("nested");
@@ -2342,7 +2350,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn protected_symlinked_directory_subpaths_drop_writable_root() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let root = temp_dir.path().join("root");
         let agents_target = root.join("agents-target");
         let agents_link = root.join(".agents");
@@ -2371,7 +2379,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinked_writable_roots_nested_symlink_escape_paths_fail_closed() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let real_root = temp_dir.path().join("real");
         let link_root = temp_dir.path().join("link");
         let outside = temp_dir.path().join("outside-private");
@@ -2451,7 +2459,7 @@ mod tests {
 
     #[test]
     fn missing_read_only_subpath_masks_files_and_tracks_metadata_creation() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let workspace = temp_dir.path().join("workspace");
         let blocked = workspace.join("blocked");
         let second_blocked = workspace.join("second-blocked");
@@ -2515,7 +2523,7 @@ mod tests {
 
     #[test]
     fn transient_empty_preserved_file_uses_empty_file_bind_data() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let workspace = temp_dir.path().join("workspace");
         let dot_git = workspace.join(".git");
         std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -2556,7 +2564,7 @@ mod tests {
 
     #[test]
     fn empty_file_bind_data_uses_distinct_preserved_descriptors() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let workspace = temp_dir.path().join("workspace");
         let dot_git = workspace.join(".git");
         let blocked = workspace.join("blocked");
@@ -2606,7 +2614,7 @@ mod tests {
 
     #[test]
     fn missing_child_git_under_parent_repo_is_mounted_read_only() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let repo = temp_dir.path().join("repo");
         let workspace = repo.join("workspace");
         let dot_git = workspace.join(".git");
@@ -2641,7 +2649,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinked_missing_child_git_under_parent_repo_mounts_effective_path_read_only() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let repo = temp_dir.path().join("repo");
         let workspace = repo.join("workspace");
         let link_repo = temp_dir.path().join("link-repo");
@@ -2678,7 +2686,7 @@ mod tests {
 
     #[test]
     fn ignores_missing_writable_roots() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let existing_root = temp_dir.path().join("existing");
         let missing_root = temp_dir.path().join("missing");
         std::fs::create_dir(&existing_root).expect("create existing root");
@@ -2714,7 +2722,7 @@ mod tests {
 
     #[test]
     fn missing_project_root_metadata_carveouts_use_metadata_path_masks() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -2776,7 +2784,7 @@ mod tests {
 
     #[test]
     fn missing_user_project_root_subpath_rules_are_still_enforced() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -2917,7 +2925,7 @@ mod tests {
 
     #[test]
     fn restricted_read_only_uses_scoped_read_roots_instead_of_erroring() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let readable_root = temp_dir.path().join("readable");
         std::fs::create_dir(&readable_root).expect("create readable root");
 
@@ -2947,7 +2955,7 @@ mod tests {
 
     #[test]
     fn restricted_read_only_creates_parents_for_file_read_roots() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let file = temp_dir.path().join("nested").join("helper");
         std::fs::create_dir_all(file.parent().expect("file parent")).expect("create parent");
         std::fs::write(&file, b"helper").expect("write file");
@@ -2977,7 +2985,7 @@ mod tests {
 
     #[test]
     fn restricted_read_only_with_platform_defaults_includes_usr_when_present() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::Minimal,
@@ -3005,7 +3013,7 @@ mod tests {
 
     #[test]
     fn split_policy_reapplies_unreadable_carveouts_after_writable_binds() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let writable_root = temp_dir.path().join("workspace");
         let blocked = writable_root.join("blocked");
         std::fs::create_dir_all(&blocked).expect("create blocked dir");
@@ -3076,7 +3084,7 @@ mod tests {
 
     #[test]
     fn split_policy_reenables_nested_writable_subpaths_after_read_only_parent() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let writable_root = temp_dir.path().join("workspace");
         let docs = writable_root.join("docs");
         let docs_public = docs.join("public");
@@ -3134,7 +3142,7 @@ mod tests {
 
     #[test]
     fn split_policy_reenables_writable_subpaths_after_unreadable_parent() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let blocked = temp_dir.path().join("blocked");
         let allowed = blocked.join("allowed");
         std::fs::create_dir_all(&allowed).expect("create blocked/allowed");
@@ -3196,7 +3204,7 @@ mod tests {
 
     #[test]
     fn split_policy_reenables_writable_files_after_unreadable_parent() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let blocked = temp_dir.path().join("blocked");
         let allowed_dir = blocked.join("allowed");
         let allowed_file = allowed_dir.join("note.txt");
@@ -3275,7 +3283,7 @@ mod tests {
 
     #[test]
     fn split_policy_reenables_nested_writable_roots_after_unreadable_parent() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let writable_root = temp_dir.path().join("workspace");
         let blocked = writable_root.join("blocked");
         let allowed = blocked.join("allowed");
@@ -3331,7 +3339,7 @@ mod tests {
 
     #[test]
     fn split_policy_masks_root_read_directory_carveouts() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let blocked = temp_dir.path().join("blocked");
         std::fs::create_dir_all(&blocked).expect("create blocked dir");
         let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked dir");
@@ -3373,7 +3381,7 @@ mod tests {
 
     #[test]
     fn split_policy_masks_root_read_file_carveouts() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let blocked_file = temp_dir.path().join("blocked.txt");
         let second_blocked_file = temp_dir.path().join("second-blocked.txt");
         std::fs::write(&blocked_file, "secret").expect("create blocked file");
@@ -3441,7 +3449,7 @@ mod tests {
             return;
         }
 
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let root_env = temp_dir.path().join(".env");
         let nested_env = temp_dir.path().join("app").join(".env");
         let too_deep_env = temp_dir.path().join("app").join("deep").join(".env");
@@ -3482,7 +3490,7 @@ mod tests {
             return;
         }
 
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let temp_dir = test_temp_dir();
         let real_root = temp_dir.path().join("real");
         let link_root = temp_dir.path().join("link");
         let real_secret = real_root.join("secret.env");
