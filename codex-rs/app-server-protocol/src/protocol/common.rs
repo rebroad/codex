@@ -1414,6 +1414,12 @@ client_request_definitions! {
         serialization: global_shared_read("config"),
         response: v2::ConfigReadResponse,
     },
+
+    ConfigReload => "config/reload" {
+        params: v2::ConfigReloadParams,
+        serialization: global("config"),
+        response: v2::ConfigReloadResponse,
+    },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
         params: v2::ExternalAgentConfigDetectParams,
         serialization: global("external-agent-detect"),

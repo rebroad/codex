@@ -373,6 +373,12 @@ layers with enterprise MCP disabled. Other planned thread refreshes are processe
 before the rejection is reported, so an error does not imply that no changes were
 applied. Correct the policy before retrying the reload.
 
+Send the v2 `config/reload` request to make a running app-server reread its
+configuration and refresh settings that are runtime-reloadable for open
+threads. The local CLI shortcut is `codex app-server reload`; it connects to
+the app-server control socket and does not restart the process. Startup-only
+settings still require a restart.
+
 # Enterprise sign-in
 
 Call `mcpServer/oauth/login` with a directly configured server's `name` and its

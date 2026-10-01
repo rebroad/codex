@@ -576,6 +576,9 @@
       },
       "type": "object"
     },
+    "ConfigReloadParams": {
+      "type": "object"
+    },
     "ConfigValueWriteParams": {
       "properties": {
         "expectedVersion": {
@@ -8294,6 +8297,30 @@
         "params"
       ],
       "title": "Config/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "config/reload"
+          ],
+          "title": "Config/reloadRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ConfigReloadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Config/reloadRequest",
       "type": "object"
     },
     {
