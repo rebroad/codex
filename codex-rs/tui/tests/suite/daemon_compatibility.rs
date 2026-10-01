@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
     for scenario in ["explicit enable", "explicit disable"] {
         let cwd = codex_utils_cargo_bin::repo_root()?;
-        let home = tempfile::tempdir_in("/tmp")?;
+        let home = tempfile::tempdir()?;
         write_test_config(home.path(), &cwd)?;
         let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket.parent().unwrap())?;
