@@ -1226,16 +1226,16 @@ async fn sandbox_keeps_parent_repo_discovery_while_blocking_child_metadata() {
         return;
     }
 
-    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let tmpdir = super::test_temp_dir();
     let repo = tmpdir.path().join("repo");
     let subdir = repo.join("sub");
     let real_tmp = tmpdir.path().join("real-tmp");
-    let redirected_tmp = tmpdir.path().join("redirected-tmp");
-    let tmp_alias = tmpdir.path().join("tmp-alias");
+    let redirected_tmp = real_tmp.join("redirected-tmp");
+    let tmp_alias = subdir.join("tmp-alias");
     std::fs::create_dir(&real_tmp).expect("create real temp directory");
     std::fs::create_dir(&redirected_tmp).expect("create redirected temp directory");
-    std::os::unix::fs::symlink(&real_tmp, &tmp_alias).expect("create temp directory alias");
     std::fs::create_dir_all(&subdir).expect("create nested workspace");
+    std::os::unix::fs::symlink(&real_tmp, &tmp_alias).expect("create temp directory alias");
     assert!(
         std::process::Command::new("git")
             .arg("init")
@@ -1281,6 +1281,9 @@ fi
     );
     let mut env = create_env_from_core_vars();
     env.insert("TMPDIR".to_string(), tmp_alias.display().to_string());
+    let isolated_home = tmpdir.path().join("home");
+    std::fs::create_dir(&isolated_home).expect("create isolated home");
+    env.insert("HOME".to_string(), isolated_home.display().to_string());
     let output = run_cmd_result_with_permission_profile_for_cwd(
         &["bash", "-lc", &script],
         cwd,
@@ -1449,20 +1452,33 @@ async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
     let helper_dir = AbsolutePathBuf::try_from(sandbox_helper.parent().expect("helper parent"))
         .expect("absolute helper directory");
 
-    for tmp_root in [PathBuf::from("/tmp"), temp.path().join("denied-tmp")] {
+    let configured_tmp_root = std::env::temp_dir()
+        .canonicalize()
+        .expect("resolve configured temporary directory");
+    let denied_tmp_root = temp.path().join("denied-tmp");
+    std::fs::create_dir_all(&denied_tmp_root).expect("create denied temp root");
+    let denied_tmp_root = denied_tmp_root
+        .canonicalize()
+        .expect("resolve denied temp root");
+
+    for (tmp_root, denied_path) in [
+        (
+            configured_tmp_root,
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Tmpdir,
+            },
+        ),
+        (
+            denied_tmp_root.clone(),
+            AbsolutePathBuf::try_from(denied_tmp_root.as_path())
+                .expect("absolute denied temp root")
+                .into(),
+        ),
+    ] {
         std::fs::create_dir_all(&tmp_root).expect("create temp root");
         let secret = NamedTempFile::new_in(&tmp_root).expect("denied file");
         std::fs::write(secret.path(), "private").expect("write denied file");
         for read_root in [FileSystemSpecialPath::Root, FileSystemSpecialPath::Minimal] {
-            let denied_path = if tmp_root == std::path::Path::new("/tmp") {
-                FileSystemPath::Special {
-                    value: FileSystemSpecialPath::SlashTmp,
-                }
-            } else {
-                AbsolutePathBuf::try_from(tmp_root.as_path())
-                    .expect("absolute temp root")
-                    .into()
-            };
             let policy = FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry::new(
                     FileSystemPath::Special { value: read_root },
@@ -1470,7 +1486,7 @@ async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
                 ),
                 FileSystemSandboxEntry::new(helper_dir.clone().into(), FileSystemAccessMode::Read),
                 FileSystemSandboxEntry::new(cwd.clone().into(), FileSystemAccessMode::Write),
-                FileSystemSandboxEntry::new(denied_path, FileSystemAccessMode::Deny),
+                FileSystemSandboxEntry::new(denied_path.clone(), FileSystemAccessMode::Deny),
             ]);
             let mut env = create_env_from_core_vars();
             env.insert("TMPDIR".to_string(), tmp_root.display().to_string());

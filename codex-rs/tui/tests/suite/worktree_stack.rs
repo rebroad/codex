@@ -24,7 +24,7 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     } else {
         PtyCodex::start
     };
-    let repository = tempfile::tempdir_in("/tmp")?;
+    let repository = tempfile::tempdir()?;
     let root = repository.path().canonicalize()?;
     let status = Command::new("git")
         .args(["init", "-q", "-b", "main"])
@@ -57,7 +57,7 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
         "commit test repository"
     );
 
-    let codex_home = tempfile::tempdir_in("/tmp")?;
+    let codex_home = tempfile::tempdir()?;
     write_test_config(codex_home.path(), &root)?;
     let server = responses::start_mock_server().await;
     let config_path = codex_home.path().join("config.toml");
