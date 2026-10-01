@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_app_server_protocol::ConfigReloadParams;
+use codex_app_server_protocol::ConfigReloadResponse;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -28,8 +30,23 @@ use crate::RemoteControlReadyStatus;
 use crate::client;
 
 const REMOTE_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const CONFIG_RELOAD_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const REMOTE_CONTROL_REQUEST_ID: RequestId = RequestId::Integer(2);
 const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
+
+pub(crate) async fn reload_config(socket_path: &Path) -> Result<()> {
+    let mut websocket = client::connect(socket_path).await?;
+    initialize_client(&mut websocket).await?;
+    let _: ConfigReloadResponse = request_remote_control_with_legacy_fallback(
+        &mut websocket,
+        "config/reload",
+        serde_json::to_value(ConfigReloadParams {})?,
+        CONFIG_RELOAD_RESPONSE_TIMEOUT,
+    )
+    .await?;
+    websocket.close(None).await.ok();
+    Ok(())
+}
 
 enum RemoteControlRpcResponse<T> {
     Success(T),
@@ -49,6 +66,7 @@ pub(crate) async fn disable_remote_control(socket_path: &Path) -> Result<RemoteC
         &mut websocket,
         "remoteControl/disable",
         params,
+        client::CONTROL_SOCKET_RESPONSE_TIMEOUT,
     )
     .await?;
     websocket.close(None).await.ok();
@@ -70,6 +88,7 @@ pub(crate) async fn start_pairing(socket_path: &Path) -> Result<RemoteControlPai
         &mut websocket,
         &REMOTE_CONTROL_REQUEST_ID,
         "remoteControl/pairing/start",
+        client::CONTROL_SOCKET_RESPONSE_TIMEOUT,
     )
     .await?
     {
@@ -133,6 +152,7 @@ where
         websocket,
         "remoteControl/enable",
         serde_json::to_value(RemoteControlEnableParams { ephemeral: true })?,
+        client::CONTROL_SOCKET_RESPONSE_TIMEOUT,
     )
     .await?;
     let mut latest = RemoteControlReadyStatus::from(response);
@@ -181,6 +201,7 @@ async fn request_remote_control_with_legacy_fallback<S, T>(
     websocket: &mut WebSocketStream<S>,
     method: &str,
     params: serde_json::Value,
+    response_timeout: Duration,
 ) -> Result<T>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -193,7 +214,14 @@ where
         Some(params),
     )
     .await?;
-    match read_remote_control_response(websocket, &REMOTE_CONTROL_REQUEST_ID, method).await? {
+    match read_remote_control_response(
+        websocket,
+        &REMOTE_CONTROL_REQUEST_ID,
+        method,
+        response_timeout,
+    )
+    .await?
+    {
         RemoteControlRpcResponse::Success(response) => Ok(response),
         RemoteControlRpcResponse::InvalidParams => {
             send_remote_control_request(
@@ -203,8 +231,13 @@ where
                 /*params*/ None,
             )
             .await?;
-            match read_remote_control_response(websocket, &REMOTE_CONTROL_REQUEST_ID, method)
-                .await?
+            match read_remote_control_response(
+                websocket,
+                &REMOTE_CONTROL_REQUEST_ID,
+                method,
+                response_timeout,
+            )
+            .await?
             {
                 RemoteControlRpcResponse::Success(response) => Ok(response),
                 RemoteControlRpcResponse::InvalidParams => {
@@ -243,18 +276,16 @@ async fn read_remote_control_response<S, T>(
     websocket: &mut WebSocketStream<S>,
     request_id: &RequestId,
     method: &str,
+    response_timeout: Duration,
 ) -> Result<RemoteControlRpcResponse<T>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     T: DeserializeOwned,
 {
     loop {
-        let message = timeout(
-            client::CONTROL_SOCKET_RESPONSE_TIMEOUT,
-            client::read_message(websocket),
-        )
-        .await
-        .with_context(|| format!("timed out waiting for {method} response"))??;
+        let message = timeout(response_timeout, client::read_message(websocket))
+            .await
+            .with_context(|| format!("timed out waiting for {method} response"))??;
         match message {
             JSONRPCMessage::Response(response) if response.id == *request_id => {
                 let response = serde_json::from_value::<T>(response.result)
@@ -419,6 +450,35 @@ mod tests {
                 timed_out: false,
             }
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reload_config_waits_for_slow_response() -> Result<()> {
+        let dir = TempDir::new()?;
+        let socket_path = dir.path().join("app-server.sock");
+        let mut listener = UnixListener::bind(&socket_path).await?;
+        let server_task = tokio::spawn(async move {
+            let mut websocket = accept_initialized_client(&mut listener).await?;
+            let request = client::read_message(&mut websocket).await?;
+            let JSONRPCMessage::Request(request) = request else {
+                panic!("expected config/reload request");
+            };
+            assert_eq!(request.method, "config/reload");
+            tokio::time::sleep(Duration::from_millis(1_500)).await;
+            client::send_message(
+                &mut websocket,
+                &JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!({}),
+                }),
+            )
+            .await?;
+            Ok::<_, anyhow::Error>(())
+        });
+
+        timeout(CONFIG_RELOAD_RESPONSE_TIMEOUT, reload_config(&socket_path)).await??;
+        server_task.await??;
         Ok(())
     }
 
