@@ -1,8 +1,7 @@
 //! Local daemon launch policy. Explicit embedded launches never discover or start a daemon;
-//! optional attachment may fall back to embedded mode, while automatic launches
-//! require a compatible shared server and a successful connection, except when
-//! the Windows launcher forbids detaching a missing server. Elevated local
-//! Windows sessions use explicit embedded behavior before discovery or startup.
+//! automatic launches attach to the shared server and report feature differences without
+//! diverting the TUI from existing sessions. Elevated local Windows sessions use explicit
+//! embedded behavior before discovery or startup.
 
 use super::*;
 use std::collections::BTreeMap;
@@ -18,13 +17,6 @@ pub(super) const FAILURE_HINT: &str = "To work without the background server, re
 
 #[cfg(any(windows, test))]
 pub(super) const ELEVATED_LAUNCH_WARNING: &str = "Running as administrator: shared background server disabled. To enable it, restart Codex in a terminal without administrator permissions.";
-
-#[derive(Debug, thiserror::Error)]
-#[error("Cannot use the shared background server: {reason}.\n{FAILURE_HINT}")]
-pub(super) struct CompatibilityError {
-    pub reason: String,
-    pub restart_features: Option<BTreeMap<String, bool>>,
-}
 
 pub(super) fn exclusion(
     cli: &Cli,
@@ -119,11 +111,21 @@ pub(super) fn server_features(overrides: &[(String, toml::Value)]) -> BTreeMap<S
         .collect()
 }
 
+pub(super) fn should_start_daemon(
+    auto_start_daemon: bool,
+    daemon_exclusion: Option<&str>,
+    target: &AppServerTarget,
+) -> bool {
+    auto_start_daemon
+        && daemon_exclusion.is_none()
+        && !matches!(target, AppServerTarget::LocalDaemon { .. })
+}
+
 /// Best-effort configured readback, not a guarantee about startup-captured service state.
 pub(super) async fn compatibility_warning(
     target: &AppServerTarget,
     config: &Config,
-) -> Result<Option<String>, CompatibilityError> {
+) -> Result<Option<String>, String> {
     let AppServerTarget::LocalDaemon {
         allow_embedded_fallback,
         ..
@@ -131,7 +133,6 @@ pub(super) async fn compatibility_warning(
     else {
         return Ok(None);
     };
-    let mut restart_features = None;
     let check = async {
         // The feature-list RPC cannot report this process-scoped structured setting.
         if !config.features.enabled(Feature::CodeModeHost)
@@ -163,14 +164,6 @@ pub(super) async fn compatibility_warning(
                 .is_some_and(|feature| feature.enabled)
                 != enabled
             {
-                restart_features = Some(
-                    SERVER_FEATURES
-                        .into_iter()
-                        .map(|feature| {
-                            (feature.key().to_string(), config.features.enabled(feature))
-                        })
-                        .collect(),
-                );
                 let state = if enabled { "enabled" } else { "disabled" };
                 return Err(format!("This session requires {name} to be {state}"));
             }
@@ -181,11 +174,8 @@ pub(super) async fn compatibility_warning(
     match check {
         Ok(()) => Ok(None),
         Err(reason) if *allow_embedded_fallback => Ok(Some(format!(
-            "Running without the shared background server: {reason}."
+            "The existing background server has different feature settings: {reason}."
         ))),
-        Err(reason) => Err(CompatibilityError {
-            reason,
-            restart_features,
-        }),
+        Err(reason) => Err(reason),
     }
 }

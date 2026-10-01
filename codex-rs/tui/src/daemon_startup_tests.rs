@@ -120,6 +120,38 @@ fn daemon_features_follow_cli_table_replacement_and_last_value() {
 }
 
 #[test]
+fn existing_daemon_is_attached_without_running_daemon_startup() {
+    let endpoint = RemoteAppServerEndpoint::UnixSocket {
+        socket_path: AbsolutePathBuf::relative_to_current_dir("existing.sock").unwrap(),
+    };
+    let existing_daemon = AppServerTarget::LocalDaemon {
+        endpoint,
+        allow_embedded_fallback: false,
+    };
+
+    assert!(!daemon_startup::should_start_daemon(
+        true,
+        None,
+        &existing_daemon
+    ));
+    assert!(daemon_startup::should_start_daemon(
+        true,
+        None,
+        &AppServerTarget::Embedded
+    ));
+    assert!(!daemon_startup::should_start_daemon(
+        false,
+        None,
+        &AppServerTarget::Embedded
+    ));
+    assert!(!daemon_startup::should_start_daemon(
+        true,
+        Some("--no-daemon"),
+        &AppServerTarget::Embedded
+    ));
+}
+
+#[test]
 fn daemon_launch_telemetry_records_once_on_connection_or_early_return() {
     for connected in [false, true] {
         let observations = std::cell::RefCell::new(Vec::new());
@@ -215,7 +247,7 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
             let result = daemon_startup::compatibility_warning(&target, &config).await;
             server.await?;
             if scenario == "matching" {
-                assert_eq!(result?, None);
+                assert_eq!(result.unwrap(), None);
                 continue;
             }
             let reason = match scenario {
@@ -228,23 +260,14 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
             };
             if allow_embedded_fallback {
                 assert_eq!(
-                    result?,
+                    result.unwrap(),
                     Some(format!(
-                        "Running without the shared background server: {reason}."
+                        "The existing background server has different feature settings: {reason}."
                     ))
                 );
             } else {
-                let error = result.unwrap_err().to_string();
-                assert_eq!(
-                    error,
-                    format!(
-                        "Cannot use the shared background server: {reason}.\n{}",
-                        daemon_startup::FAILURE_HINT
-                    )
-                );
-                if scenario == "stale overrides" {
-                    insta::assert_snapshot!("daemon_feature_mismatch_error", error);
-                }
+                let error = result.unwrap_err();
+                assert_eq!(error, reason);
             }
         }
     }
