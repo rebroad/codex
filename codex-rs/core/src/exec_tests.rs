@@ -1014,7 +1014,8 @@ fn windows_elevated_supports_unreadable_split_carveouts() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let blocked = temp_dir.path().join("blocked");
     std::fs::create_dir_all(&blocked).expect("create blocked");
-    let expected_blocked = dunce::canonicalize(&blocked).expect("canonical blocked");
+    let expected_blocked_read = blocked.clone();
+    let expected_blocked_write = dunce::canonicalize(&blocked).expect("canonical blocked");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
@@ -1059,13 +1060,15 @@ fn windows_elevated_supports_unreadable_split_carveouts() {
             write_roots_override: None,
             additional_deny_read_paths: vec![
                 codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-                    expected_blocked.clone(),
+                    expected_blocked_read,
                 )
                 .expect("absolute blocked"),
             ],
             additional_deny_write_paths: vec![
-                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(expected_blocked)
-                    .expect("absolute blocked"),
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+                    expected_blocked_write,
+                )
+                .expect("absolute blocked"),
             ],
         }))
     );
