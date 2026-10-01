@@ -149,7 +149,7 @@ async fn daemon_worktree_start_and_fork_bind_owner_before_turn() -> anyhow::Resu
 async fn worktree_start_and_fork(backend: &str) -> anyhow::Result<()> {
     // Leave room for the local control socket on Unix platforms with short sun_path limits.
     #[cfg(unix)]
-    let root = tempfile::Builder::new().tempdir_in("/tmp")?;
+    let root = tempfile::tempdir()?;
     #[cfg(not(unix))]
     let root = TempDir::new()?;
     let root = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(root.path())?

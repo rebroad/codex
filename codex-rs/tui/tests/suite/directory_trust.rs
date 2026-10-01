@@ -24,7 +24,7 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
         let repo_root = workspace.path().canonicalize()?;
         std::fs::create_dir(repo_root.join(".git"))?;
         std::fs::write(repo_root.join(".git/HEAD"), "ref: refs/heads/main\n")?;
-        let codex_home = tempfile::tempdir_in("/tmp")?;
+        let codex_home = tempfile::tempdir()?;
         // The server's trust decision must win over the client's trusted-folder setting.
         write_test_config(codex_home.path(), &repo_root)?;
         let config_path = codex_home.path().join("config.toml");

@@ -357,7 +357,7 @@ fn canonical_grants_cannot_escape_through_readable_or_writable_symlinks() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_system_path_aliases_share_the_same_physical_permissions() {
-    let temp = TempDir::new_in("/tmp").expect("workspace under system path alias");
+    let temp = TempDir::new().expect("temporary workspace");
     let canonical = canonical(&temp);
     let alias = absolute(
         &Path::new("/").join(

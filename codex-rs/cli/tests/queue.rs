@@ -22,16 +22,6 @@ enum QueueResponse {
     UnknownMethodVariant,
 }
 
-#[cfg(unix)]
-fn socket_test_home() -> Result<TempDir> {
-    // macOS temporary paths can exceed the Unix socket path limit.
-    #[cfg(target_os = "macos")]
-    let home = tempfile::tempdir_in("/tmp")?;
-    #[cfg(not(target_os = "macos"))]
-    let home = TempDir::new()?;
-    Ok(home)
-}
-
 async fn respond_to_queue_request<S>(
     stream: S,
     codex_home: &Path,
@@ -229,7 +219,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     use tokio::process::Command;
     use tokio::time::timeout;
 
-    let codex_home = socket_test_home()?;
+    let codex_home = TempDir::new()?;
     let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
     let model = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("queued message consumed")?,
@@ -480,7 +470,7 @@ fn remote_session_commands_validate_config() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test]
 async fn queue_rejects_local_daemon_that_does_not_support_queueing() -> Result<()> {
-    let codex_home = socket_test_home()?;
+    let codex_home = tempfile::tempdir()?;
     let socket_path = codex_app_server::app_server_control_socket_path(codex_home.path())?;
     std::fs::create_dir_all(
         socket_path
@@ -521,7 +511,7 @@ async fn queue_rejects_local_daemon_that_does_not_support_queueing() -> Result<(
 #[cfg(unix)]
 #[tokio::test]
 async fn queue_rejects_overrides_that_bypass_local_daemon() -> Result<()> {
-    let codex_home = socket_test_home()?;
+    let codex_home = tempfile::tempdir()?;
     let socket_path = codex_app_server::app_server_control_socket_path(codex_home.path())?;
     std::fs::create_dir_all(
         socket_path
