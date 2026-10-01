@@ -1,20 +1,18 @@
-//! Exercises daemon compatibility fallback through real TUI startup.
+//! Verifies feature mismatches do not divert TUI startup from an existing daemon.
 
 use super::focus_palette::PtyCodex;
+use super::focus_palette::available_test_model_list;
 use super::focus_palette::write_test_config;
-use anyhow::Context;
 use anyhow::Result;
-use anyhow::ensure;
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::SinkExt;
 use futures::StreamExt;
-use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::net::UnixListener;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> Result<()> {
+async fn incompatible_daemon_remains_attached_for_feature_mismatches() -> Result<()> {
     for scenario in ["default", "explicit", "host policy"] {
         let cwd = codex_utils_cargo_bin::repo_root()?;
         let home = tempfile::tempdir()?;
@@ -32,6 +30,7 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
         let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket.parent().unwrap())?;
         let listener = UnixListener::bind(socket.as_path())?;
+        let server_cwd = cwd.clone();
         let server = tokio::spawn(async move {
             let mut socket = loop {
                 let (stream, _) = listener.accept().await?;
@@ -43,16 +42,62 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
                 let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
                     continue;
                 };
-                let response = if request.method == "initialize" {
-                    json!({"id": request.id, "result": {"userAgent": "daemon-test/0.0.0"}})
-                } else {
-                    assert_eq!(request.method, "experimentalFeature/list");
-                    json!({"id": request.id, "result": {"data": [{
+                let result = match request.method.as_str() {
+                    "initialize" => json!({"userAgent": "daemon-test/0.0.0"}),
+                    "account/read" => json!({
+                        "account": {"type": "apiKey"},
+                        "requiresOpenaiAuth": false,
+                        "workspaceRouting": null,
+                    }),
+                    "config/read" => json!({
+                        "config": {"projects": {
+                            server_cwd.to_string_lossy(): {"trust_level": "trusted"}
+                        }},
+                        "origins": {},
+                        "layers": [],
+                    }),
+                    "configRequirements/read" => json!({"requirements": null}),
+                    "model/list" => available_test_model_list(),
+                    "hooks/list"
+                    | "collaborationMode/list"
+                    | "plugin/list"
+                    | "thread/attachment/list"
+                    | "thread/loaded/list"
+                    | "skills/list" => json!({"data": []}),
+                    "thread/list" => json!({"data": [], "nextCursor": null}),
+                    "thread/start" => {
+                        json!({
+                            "thread": {
+                                "id": "00000000-0000-0000-0000-000000000001",
+                                "sessionId": "00000000-0000-0000-0000-000000000001",
+                                "preview": "New test session",
+                                "ephemeral": false,
+                                "modelProvider": "openai",
+                                "createdAt": 1,
+                                "updatedAt": 2,
+                                "status": {"type": "active", "activeFlags": []},
+                                "cwd": server_cwd,
+                                "cliVersion": "0.0.0",
+                                "source": "cli",
+                                "turns": [],
+                            },
+                            "model": "gpt-5.6-terra",
+                            "modelProvider": "openai",
+                            "cwd": server_cwd,
+                            "approvalPolicy": "never",
+                            "approvalsReviewer": "user",
+                            "sandbox": {"type": "dangerFullAccess"},
+                            "reasoningEffort": null,
+                        })
+                    }
+                    "experimentalFeature/list" => json!({"data": [{
                         "name": "api_key_model_discovery", "stage": "stable",
                         "displayName": null, "description": null, "announcement": null,
                         "enabled": scenario == "explicit", "defaultEnabled": true,
-                    }], "nextCursor": null}})
+                    }], "nextCursor": null}),
+                    method => anyhow::bail!("unexpected app-server request: {method}"),
                 };
+                let response = json!({"id": request.id, "result": result});
                 socket
                     .send(Message::Text(response.to_string().into()))
                     .await?;
@@ -66,38 +111,37 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
         };
         let mut terminal = PtyCodex::start(&cwd, home, &args)?;
         terminal.wait_for_startup()?;
-        terminal.wait_for_screen("warning")?;
+        if let Err(error) = terminal.wait_for_screen("warning") {
+            return Err(anyhow::anyhow!(
+                "{error}; screen:\n{}",
+                terminal.screen_contents()
+            ));
+        }
         terminal.write_input(b"\x14")?;
-        let (snapshot, warning_end) = match scenario {
+        let (snapshot, warning_marker) = match scenario {
             "default" => (
                 "daemon_feature_mismatch",
-                "api_key_model_discovery to be enabled.",
+                "existing background server has different feature settings",
             ),
             "explicit" => (
                 "daemon_override_mismatch",
-                "api_key_model_discovery to be disabled.",
+                "existing background server has different feature settings",
             ),
-            "host policy" => ("daemon_host_policy_mismatch", "requires embedded mode."),
+            "host policy" => (
+                "daemon_host_policy_mismatch",
+                "existing background server has different feature settings",
+            ),
             _ => unreachable!(),
         };
-        terminal.wait_for_screen(warning_end)?;
+        terminal.wait_for_screen(warning_marker)?;
         let screen = terminal.screen_contents();
         let warning = screen
             .lines()
-            .find(|line| line.contains("Running without the shared background server"))
-            .context("missing warning line")?;
+            .find(|line| line.contains(warning_marker))
+            .ok_or_else(|| anyhow::anyhow!("missing existing-server warning: {screen}"))?;
         insta::assert_snapshot!(snapshot, warning);
-        terminal.write_input(b"\x14")?;
-        terminal.write_input(b"/status")?;
-        terminal.wait_for_screen("show current session configuration")?;
-        terminal.read_output(std::time::Duration::from_millis(/*millis*/ 200))?;
-        terminal.write_input(b"\r")?;
-        terminal.wait_for_screen("Model:")?;
-        ensure!(!terminal.screen_contains("unix://"));
-        if scenario == "host policy" {
-            server.abort();
-            continue;
-        }
+        assert!(terminal.screen_contains("Ask Codex to do anything"));
+        drop(terminal);
         tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), server).await???;
     }
     Ok(())
