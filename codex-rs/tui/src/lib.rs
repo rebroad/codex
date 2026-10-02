@@ -3693,8 +3693,7 @@ requires_openai_auth = {requires_openai_auth}
     }
 
     #[tokio::test]
-    async fn config_cwd_for_app_server_target_canonicalizes_embedded_cli_cwd() -> std::io::Result<()>
-    {
+    async fn config_cwd_for_app_server_target_preserves_embedded_cli_cwd() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::Embedded;
         let environment_manager = EnvironmentManager::default_for_tests();
@@ -3709,16 +3708,14 @@ requires_openai_auth = {requires_openai_auth}
 
         assert_eq!(
             config_cwd,
-            Some(AbsolutePathBuf::from_absolute_path(dunce::canonicalize(
-                temp_dir.path()
-            )?)?)
+            Some(AbsolutePathBuf::from_absolute_path(temp_dir.path())?)
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn config_cwd_for_app_server_target_canonicalizes_local_daemon_cli_cwd()
-    -> std::io::Result<()> {
+    async fn config_cwd_for_app_server_target_preserves_local_daemon_cli_cwd() -> std::io::Result<()>
+    {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::LocalDaemon {
             allow_embedded_fallback: true,
@@ -3738,9 +3735,7 @@ requires_openai_auth = {requires_openai_auth}
 
         assert_eq!(
             config_cwd,
-            Some(AbsolutePathBuf::from_absolute_path(dunce::canonicalize(
-                temp_dir.path()
-            )?)?)
+            Some(AbsolutePathBuf::from_absolute_path(temp_dir.path())?)
         );
         Ok(())
     }
