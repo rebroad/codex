@@ -127,7 +127,7 @@ while [ "$attempt" -le "$max_attempts" ]; do
             fi
             break
             ;;
-        *"token_expired"*|*"remote control server refresh failed"*|*"remote control server enrollment failed"*|*"pairing is unavailable until enrollment completes"*)
+        *"remote control authentication changed"*|*"token_expired"*|*"remote control server refresh failed"*|*"remote control server enrollment failed"*|*"pairing is unavailable until enrollment completes"*)
             sleep "$retry_delay"
             ;;
         *)
