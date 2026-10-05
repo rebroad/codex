@@ -88,11 +88,97 @@ start_remote_server() {
 }
 
 mkdir -p "$(dirname "$lock_dir")"
+lock_owner_file="$lock_dir/pid"
+
+process_start_time() {
+    process_stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    process_stat=${process_stat##*) }
+    set -- $process_stat
+    shift 19
+    [ -n "${1:-}" ] || return 1
+    printf '%s\n' "$1"
+}
+
+pairing_process_exists() {
+    for proc_cmdline in /proc/[0-9]*/cmdline; do
+        [ -r "$proc_cmdline" ] || continue
+        proc_pid=${proc_cmdline#/proc/}
+        proc_pid=${proc_pid%/cmdline}
+        [ "$proc_pid" = "$$" ] && continue
+        proc_args=$(tr '\000' ' ' < "$proc_cmdline" 2>/dev/null || true)
+        case "$proc_args" in
+            *codex-pairing-code*|*"remote-control pair"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+lock_owner_is_live() {
+    owner_pid=$1
+    owner_start_time=$2
+    case "$owner_pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    if ! kill -0 "$owner_pid" 2>/dev/null; then
+        return 1
+    fi
+    current_start_time=$(process_start_time "$owner_pid" 2>/dev/null || true)
+    if [ -n "$current_start_time" ] && [ -n "$owner_start_time" ]; then
+        [ "$current_start_time" = "$owner_start_time" ]
+        return $?
+    fi
+    owner_cmdline="/proc/$owner_pid/cmdline"
+    if [ -r "$owner_cmdline" ]; then
+        owner_args=$(tr '\000' ' ' < "$owner_cmdline" 2>/dev/null || true)
+        case "$owner_args" in
+            *codex-pairing-code*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    # If Android denies /proc access, keep the lock rather than risk stealing it.
+    return 0
+}
+
 if ! mkdir "$lock_dir" 2>/dev/null; then
-    printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
-    exit 1
+    stale_lock=0
+    if [ -f "$lock_owner_file" ]; then
+        existing_owner=""
+        existing_start_time=""
+        read existing_owner existing_start_time < "$lock_owner_file" || true
+        if ! lock_owner_is_live "$existing_owner" "$existing_start_time"; then
+            stale_lock=1
+        fi
+    else
+        # Older helper versions left an empty directory. Allow a just-created
+        # lock time to receive its owner PID before classifying it as stale.
+        sleep 1
+        if [ -d "$lock_dir" ] && [ ! -e "$lock_owner_file" ] && ! pairing_process_exists; then
+            lock_contents=$(find "$lock_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)
+            [ -z "$lock_contents" ] && stale_lock=1
+        fi
+    fi
+
+    if [ "$stale_lock" -eq 1 ]; then
+        rm -f "$lock_owner_file"
+        if rmdir "$lock_dir" 2>/dev/null && mkdir "$lock_dir" 2>/dev/null; then
+            :
+        else
+            printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
+            exit 1
+        fi
+    else
+        printf '%s\n' 'Codex Remote: another pairing request is already running.' >&2
+        exit 1
+    fi
 fi
-trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT HUP INT TERM
+
+own_start_time=$(process_start_time "$$" 2>/dev/null || true)
+printf '%s %s\n' "$$" "$own_start_time" > "$lock_owner_file"
+cleanup_pairing_lock() {
+    rm -f "$lock_owner_file"
+    rmdir "$lock_dir" 2>/dev/null || true
+}
+trap cleanup_pairing_lock EXIT HUP INT TERM
 
 if [ ! -S "$control_socket" ] || [ -n "$start_option" ]; then
     start_status=0
