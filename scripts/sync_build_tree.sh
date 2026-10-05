@@ -55,4 +55,4 @@ if ! command -v cpto >/dev/null 2>&1; then
   echo "cpto is required to synchronize source and build trees" >&2
   exit 1
 fi
-exec env CPTO_REQUIRE_REFLINKS=1 cpto --lngit "${source_repo}" "${build_repo}"
+exec cpto --lngit "${source_repo}" "${build_repo}"
