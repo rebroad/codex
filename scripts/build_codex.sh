@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -L)"
 BUILD_TREE=""
 SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -L)"
+BUILD_REPO_OVERRIDE="${CODEX_BUILD_REPO:-}"
 case "${SCRIPT_REPO##*/}" in
   *.build|*.make)
     BUILD_TREE="${SCRIPT_REPO}"
@@ -28,16 +29,15 @@ case "${SCRIPT_REPO##*/}" in
     ;;
   *)
     SOURCE_REPO="${SCRIPT_REPO}"
-    for candidate in "${SOURCE_REPO}.build" "${SOURCE_REPO}.make"; do
-      if [[ -d "${candidate}" ]]; then
-        BUILD_TREE="$(cd -- "${candidate}" && pwd -P)"
-        break
-      fi
-    done
+    if [[ -n "${BUILD_REPO_OVERRIDE}" ]]; then
+      BUILD_TREE="${BUILD_REPO_OVERRIDE}"
+    else
+      BUILD_TREE="${SOURCE_REPO}.build"
+    fi
     ;;
 esac
 if [[ -z "${BUILD_TREE}" ]]; then
-  echo "No sibling build tree found; expected ${SOURCE_REPO}.build or ${SOURCE_REPO}.make" >&2
+  echo "No build tree found. Set CODEX_BUILD_REPO to an external .build/.make path, or create ${SOURCE_REPO}.build" >&2
   exit 1
 fi
 if [[ -z "${SOURCE_REPO}" || ! -d "${SOURCE_REPO}/codex-rs" ]]; then
@@ -91,8 +91,8 @@ usage() {
   cat <<'EOF'
 Usage: scripts/build_codex.sh [options]
 
-Builds from the source checkout into the first existing sibling build tree
-(<repo>.build or <repo>.make), retaining Cargo's incremental cache.
+Builds from the source checkout into CODEX_BUILD_REPO or the designated
+external build tree, retaining Cargo's incremental cache.
 
 Options:
   --debug                  Build debug (default)
@@ -112,7 +112,7 @@ Options:
   --package-version V      Override only the npm package release version
   --dry-run                Use supported dry-run checks
   --preflight-only         Run syntax/tooling checks without compiling
-  --no-sync                Reuse the already-synced sibling source tree
+  --no-sync                Reuse the already-synced external source tree
   --allow-concurrent-build  Bypass the shared Cargo target lock and share the target directory
   --jobs N                 Set CARGO_BUILD_JOBS
   --install TARGETS        Build and install to comma-separated SSH targets
@@ -1435,7 +1435,6 @@ done
 
 export CODEX_ALLOW_CONCURRENT_BUILD="${ALLOW_CONCURRENT_BUILD}"
 export CODEX_BUILD_PID="$$"
-register_build_process
 trap cleanup_build_process EXIT
 
 read_toolchain
@@ -1522,6 +1521,7 @@ if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS
 fi
 sync_sources
+register_build_process
 if [[ -n "${INSTALL_TARGETS}" ]]; then
   require_cmd rsync
   IFS=',' read -r -a INSTALL_TARGET_LIST <<<"${INSTALL_TARGETS}"
