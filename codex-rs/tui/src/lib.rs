@@ -2456,6 +2456,7 @@ fn should_show_bedrock_setup_wizard(
 }
 
 mod daemon_compatibility;
+mod daemon_recovery;
 mod daemon_startup;
 mod daemon_telemetry;
 

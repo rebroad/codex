@@ -17,11 +17,14 @@ pub(super) async fn check(
     Ok(compatibility_note(result))
 }
 
-fn compatibility_note(result: Result<Option<String>, String>) -> Option<String> {
+fn compatibility_note(
+    result: Result<Option<String>, daemon_startup::CompatibilityError>,
+) -> Option<String> {
     match result {
         Ok(warning) => warning,
         Err(issue) => Some(format!(
-            "Continuing with the existing background server: {issue}."
+            "Continuing with the existing background server: {}.",
+            issue.reason
         )),
     }
 }
