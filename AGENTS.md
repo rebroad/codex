@@ -9,9 +9,9 @@
 - Edit source files only in the source checkout. Build in the `../codex.build`
   sibling by default; it may be a symlink to storage elsewhere. Synchronize
   source with `scripts/sync_build_tree.sh`, which uses
-  Git-aware `cpto --lngit` synchronization with
-  `CPTO_REQUIRE_REFLINKS=1`; it must fail rather than silently copy files
-  without reflinks. The sync keeps destination Git-ignored build outputs,
+  Git-aware `cpto --lngit` synchronization, preferring reflinks when supported
+  and falling back to regular copies when they are not. The sync keeps
+  destination Git-ignored build outputs,
   removes stale non-ignored files, and aligns linked-worktree HEAD/index
   metadata. Repository `just` recipes must not build in the source tree.
 - On native Linux, `codex_cargo_env.sh` serializes Cargo link steps with
