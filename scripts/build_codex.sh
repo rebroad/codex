@@ -32,20 +32,7 @@ case "${SCRIPT_REPO##*/}" in
     if [[ -n "${BUILD_REPO_OVERRIDE}" ]]; then
       BUILD_TREE="${BUILD_REPO_OVERRIDE}"
     else
-      source_home_relative="${SOURCE_REPO#${HOME}/}"
-      if [[ "${source_home_relative}" != "${SOURCE_REPO}" ]]; then
-        build_owner="${USER:-$(id -un)}"
-        designated_build_tree="/mnt/kingston/builds/${build_owner}/${source_home_relative}.build"
-        BUILD_TREE="${designated_build_tree}"
-      fi
-      if [[ -z "${BUILD_TREE}" ]]; then
-        for candidate in "${SOURCE_REPO}.build" "${SOURCE_REPO}.make"; do
-          if [[ -d "${candidate}" ]]; then
-            BUILD_TREE="${candidate}"
-            break
-          fi
-        done
-      fi
+      BUILD_TREE="${SOURCE_REPO}.build"
     fi
     ;;
 esac

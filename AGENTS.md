@@ -6,9 +6,9 @@
   sccache when it is faster for the workload; do not enable the experimental
   sccache/incremental launcher or change the normal sccache installation,
   global `PATH`, or project configuration without a specific request.
-- Edit source files only in the source checkout. Put `.build` and `.make`
-  siblings under `/mnt/kingston/builds/`, mirroring the path below `@home`, and
-  build there. Synchronize source with `scripts/sync_build_tree.sh`, which uses
+- Edit source files only in the source checkout. Build in the `../codex.build`
+  sibling by default; it may be a symlink to storage elsewhere. Synchronize
+  source with `scripts/sync_build_tree.sh`, which uses
   Git-aware `cpto --lngit` synchronization with
   `CPTO_REQUIRE_REFLINKS=1`; it must fail rather than silently copy files
   without reflinks. The sync keeps destination Git-ignored build outputs,
