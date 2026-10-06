@@ -1582,6 +1582,18 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
         assert!(!app.handle_composer_copy_event(&mut tui, event, |_, _| unreachable!()));
     }
 
+    assert!(app.handle_owned_transcript_event(
+        &mut tui,
+        &mut server,
+        &mouse(Down(Left), x + 5, y),
+    )?);
+    assert_eq!(
+        app.chat_widget
+            .right_click_paste_target()
+            .map(|(_, cursor)| cursor),
+        Some(5)
+    );
+
     // A fresh composer click takes ownership away from the transcript selection.
     app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Down(Left), x, y))?;
     assert!(!app.transcript_view.has_active_interaction());
