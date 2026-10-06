@@ -32,6 +32,7 @@ initialize the connection, the TUI starts an embedded server instead. Explicit
 ```sh
 codex app-server daemon start
 codex app-server daemon restart
+codex app-server daemon restart-if-idle
 codex app-server daemon update
 codex app-server daemon enable-remote-control
 codex app-server daemon disable-remote-control
@@ -150,6 +151,12 @@ other tool updates the managed binary path:
 JSON-RPC initialize handshake on the Unix control socket.
 
 `restart` stops any managed daemon and starts it again.
+
+`restart-if-idle` requests graceful shutdown and waits for active assistant
+turns to finish before starting the daemon with the invoking Codex binary. It
+never force-kills the app-server. The local build script requests this after
+installing a binary whose commit or size differs from the previous Cargo-bin
+executable.
 
 `enable-remote-control` and `disable-remote-control` persist the launch setting
 for future starts. If a managed app-server is already running, they restart it
