@@ -472,6 +472,11 @@ impl App {
             }
             if composer_ready && self.chat_widget.handle_composer_mouse(*mouse) {
                 self.handle_composer_selection_release(tui, *mouse);
+                if mouse.kind
+                    == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                {
+                    tui.request_soft_keyboard();
+                }
                 if !matches!(
                     mouse.kind,
                     crossterm::event::MouseEventKind::ScrollUp
