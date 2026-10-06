@@ -433,6 +433,7 @@ use codex_file_search::FileMatch;
 #[cfg(test)]
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
+use std::cell::Cell;
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -655,6 +656,7 @@ pub(crate) struct ChatComposer {
     history_search_next_keys: Vec<KeyBinding>,
     editor_keymap: Arc<EditorKeymap>,
     vim_normal_keymap: VimNormalKeymap,
+    rendered_composer_area: Cell<Option<Rect>>,
 }
 
 /// A resolved legacy `$` target plus any catalog built while disambiguating shell syntax.
@@ -831,6 +833,7 @@ impl ChatComposer {
             history_search_next_keys: default_keymap.composer.history_search_next.clone(),
             editor_keymap: default_editor_keymap,
             vim_normal_keymap: default_vim_normal_keymap,
+            rendered_composer_area: Cell::new(None),
         };
         this.draft.textarea.set_keymap_bindings(&default_keymap);
         // Apply configuration via the setter to keep side-effects centralized.
@@ -4503,6 +4506,7 @@ impl ChatComposer {
             popup: popup_rect,
             footer: footer_rect,
         } = self.layout_with_options(area, options);
+        self.rendered_composer_area.set(Some(composer_rect));
         self.render_status_surface(status, buf, options);
         if self.popups.active.is_above_composer()
             && options.command_popup_placement != CommandPopupPlacement::Hidden
