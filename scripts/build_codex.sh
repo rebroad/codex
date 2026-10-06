@@ -66,6 +66,7 @@ RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
 LOCKFILE_REGENERATION_REQUIRED="false"
 ALLOW_CONCURRENT_BUILD="false"
+RESTART_APP_SERVER="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -115,6 +116,7 @@ Options:
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced external source tree
   --allow-concurrent-build  Bypass the shared Cargo target lock and share the target directory
+  --restart-if-idle        Restart local/remote app-servers after changed installs when idle
   --jobs N                 Set CARGO_BUILD_JOBS
   --install TARGETS        Build and install to comma-separated SSH targets
   -h, --help               Show this help
@@ -945,6 +947,19 @@ install_binary() {
   cleanup_adjacent_same_size_binaries "${INSTALL_BIN_DIR}/${name}"
   echo "Installed ${INSTALL_BIN_DIR}/${name}"
   echo "Linked ${INSTALL_BIN_DIR}/codex"
+  local running_version="" running_commit="" daemon_version_output=""
+  if daemon_version_output="$("${INSTALL_BIN_DIR}/codex" app-server daemon version 2>/dev/null)"; then
+    running_version="$(python3 -c 'import json,sys; value=json.load(sys.stdin).get("appServerVersion"); print(value or "")' <<<"${daemon_version_output}")"
+  fi
+  if [[ "${running_version}" =~ -([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
+    running_commit="${BASH_REMATCH[1]}"
+  fi
+  local installed_version="${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
+  if [[ "${RESTART_APP_SERVER}" == true \
+    && ( "${running_commit}" != "${short}" || "${running_version}" != "${installed_version}" ) ]]; then
+    echo "Requesting a graceful app-server restart after active turns finish."
+    "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle
+  fi
 }
 
 cleanup_adjacent_same_size_binaries() {
@@ -1097,13 +1112,26 @@ install_remote_binary() {
     rm -f "${staging}"
     return 75
   fi
-  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_INSTALL'
+  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- \
+    "${install_dir}" "${name}" "${remote_tmp}" "${RESTART_APP_SERVER}" <<'REMOTE_INSTALL'
 set -euo pipefail
 install_dir="$1"
 name="$2"
 remote_tmp="$3"
+restart_if_idle="$4"
 mkdir -p "$install_dir"
 remote_size="$(stat -c '%s' "$remote_tmp")"
+previous_commit=""
+previous_size=""
+if [[ -L "$install_dir/codex" ]]; then
+  previous_target="$(readlink "$install_dir/codex")"
+  if [[ "$previous_target" =~ -([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
+    previous_commit="${BASH_REMATCH[1]}"
+  fi
+  if [[ -f "$install_dir/$previous_target" ]]; then
+    previous_size="$(wc -c <"$install_dir/$previous_target")"
+  fi
+fi
 for candidate in "$install_dir"/codex-*; do
   [[ -f "$candidate" && ! -L "$candidate" ]] || continue
   [[ "$(stat -c '%s' "$candidate")" == "$remote_size" ]] || continue
@@ -1117,6 +1145,11 @@ for candidate in "$install_dir"/codex-*; do
 done
 install -m 0755 "$remote_tmp" "$install_dir/$name"
 ln -sfn "$name" "$install_dir/codex"
+new_commit=""
+if [[ "$name" =~ -([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
+  new_commit="${BASH_REMATCH[1]}"
+fi
+new_size="$(wc -c <"$install_dir/$name")"
 case ":${PATH}:" in
   *:"${install_dir}":*) ;;
   *)
@@ -1127,6 +1160,11 @@ case ":${PATH}:" in
 esac
 rm -f "$remote_tmp"
 printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir"
+if [[ "$restart_if_idle" == true \
+  && ( "$previous_commit" != "$new_commit" || "$previous_size" != "$new_size" ) ]]; then
+  printf 'Requesting an idle app-server restart on the remote target.\n'
+  "$install_dir/codex" app-server daemon restart-if-idle
+fi
 REMOTE_INSTALL
   then
     echo "Unable to finish installation on ${target}; deferring it for retry." >&2
@@ -1429,6 +1467,7 @@ while (($#)); do
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
     --allow-concurrent-build) ALLOW_CONCURRENT_BUILD=true; shift ;;
+    --restart-if-idle) RESTART_APP_SERVER=true; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
     --jobs=*) CARGO_BUILD_JOBS="${1#*=}"; shift ;;
     --install) INSTALL_TARGETS="${2:-}"; shift 2 ;;

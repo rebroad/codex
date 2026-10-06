@@ -226,6 +226,13 @@ async fn websocket_transport_repeated_sighup_keeps_waiting_for_running_turn() ->
     send_sighup(&process)?;
     assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
 
+    // Restart-if-idle must keep accepting turns while the active turn is running.
+    send_thread_start_request(&mut ws, /*id*/ 6).await?;
+    let ThreadStartResponse { thread, .. } =
+        to_response(read_response_for_id(&mut ws, /*id*/ 6).await?)?;
+    send_turn_start_request(&mut ws, /*id*/ 7, &thread.id).await?;
+    to_response::<TurnStartResponse>(read_response_for_id(&mut ws, /*id*/ 7).await?)?;
+
     send_sighup(&process)?;
     assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
 
