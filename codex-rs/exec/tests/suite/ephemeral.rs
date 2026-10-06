@@ -29,6 +29,21 @@ fn session_rollout_count(home_path: &std::path::Path) -> usize {
         .count()
 }
 
+fn ephemeral_rollout_paths(home_path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let sessions_dir = home_path.join("ephemeral_sessions");
+    if !sessions_dir.exists() {
+        return Vec::new();
+    }
+
+    WalkDir::new(sessions_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".jsonl"))
+        .map(|entry| entry.into_path())
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn persists_rollout_file_by_default() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -48,7 +63,7 @@ async fn persists_rollout_file_by_default() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn does_not_persist_rollout_file_in_ephemeral_mode() -> anyhow::Result<()> {
+async fn persists_ephemeral_rollout_file_separately() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let test = test_codex_exec();
@@ -63,5 +78,15 @@ async fn does_not_persist_rollout_file_in_ephemeral_mode() -> anyhow::Result<()>
         .code(0);
 
     assert_eq!(session_rollout_count(test.home_path()), 0);
+    let ephemeral_rollouts = ephemeral_rollout_paths(test.home_path());
+    assert_eq!(ephemeral_rollouts.len(), 1);
+    let rollout = std::fs::read_to_string(&ephemeral_rollouts[0])?;
+    assert!(
+        rollout
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .contains("\"ephemeral\":true")
+    );
     Ok(())
 }

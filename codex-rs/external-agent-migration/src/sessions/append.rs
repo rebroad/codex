@@ -316,6 +316,7 @@ fn persistence_metadata(
         Some(_) => return None,
     };
     Some(ThreadPersistenceMetadata {
+        ephemeral: false,
         cwd: Some(meta.cwd.clone()),
         model_provider: meta.model_provider.clone()?,
         memory_mode,

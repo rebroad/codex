@@ -47,6 +47,7 @@ pub(crate) struct ThreadMetadataSync {
     last_touch_persisted_at: Option<Instant>,
     defer_create_update_until_history_exists: bool,
     defer_resume_update_until_append: bool,
+    enabled: bool,
 }
 
 pub(crate) struct PendingThreadMetadataPatch {
@@ -56,6 +57,21 @@ pub(crate) struct PendingThreadMetadataPatch {
 
 impl ThreadMetadataSync {
     pub(crate) async fn for_create(params: &CreateThreadParams) -> Self {
+        if params.metadata.ephemeral {
+            return Self {
+                thread_id: params.thread_id,
+                cwd_seen: true,
+                preview_seen: true,
+                first_user_message_seen: true,
+                title_seen: true,
+                pending_update: None,
+                pending_update_generation: 0,
+                last_touch_persisted_at: None,
+                defer_create_update_until_history_exists: false,
+                defer_resume_update_until_append: false,
+                enabled: false,
+            };
+        }
         let created_at = Utc::now();
         let cwd = params.metadata.cwd.clone().unwrap_or_default();
         let git_info = if get_git_repo_root(cwd.as_path()).is_some() {
@@ -101,6 +117,7 @@ impl ThreadMetadataSync {
             last_touch_persisted_at: None,
             defer_create_update_until_history_exists: true,
             defer_resume_update_until_append: false,
+            enabled: true,
         }
     }
 
@@ -133,6 +150,7 @@ impl ThreadMetadataSync {
             last_touch_persisted_at: None,
             defer_create_update_until_history_exists: false,
             defer_resume_update_until_append: false,
+            enabled: true,
         };
         if let Some(history) = params.history.as_deref() {
             sync.record_resume_history(history);
@@ -180,6 +198,9 @@ impl ThreadMetadataSync {
         &mut self,
         items: &[RolloutItem],
     ) -> Option<PendingThreadMetadataPatch> {
+        if !self.enabled {
+            return None;
+        }
         self.defer_create_update_until_history_exists = false;
         self.defer_resume_update_until_append = false;
         let affects_metadata = items
@@ -505,6 +526,7 @@ mod tests {
             initial_window_id: uuid::Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
@@ -889,6 +911,7 @@ mod tests {
             history: Some(Arc::new(history)),
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
