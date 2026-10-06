@@ -8,6 +8,7 @@ use serde_json::Value;
 
 pub(crate) mod compression;
 pub(crate) mod config;
+mod ephemeral_cleanup;
 pub(crate) mod list;
 mod maintenance;
 pub(crate) mod metadata;
@@ -85,6 +86,7 @@ pub fn parse_rollout_line_bytes(bytes: &[u8]) -> serde_json::Result<RolloutLine>
 
 pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
+pub const EPHEMERAL_SESSIONS_SUBDIR: &str = "ephemeral_sessions";
 pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock::new(|| {
     vec![
         SessionSource::Cli,
@@ -115,6 +117,7 @@ pub async fn materialize_rollout_for_reference(
 pub use config::Config;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
+pub use ephemeral_cleanup::cleanup_expired_ephemeral_rollouts;
 pub use list::Cursor;
 pub use list::SortDirection;
 pub use list::ThreadItem;

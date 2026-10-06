@@ -43,6 +43,10 @@ impl codex_rollout::RolloutConfigView for Config {
     fn generate_memories(&self) -> bool {
         self.memories.generate_memories
     }
+
+    fn ephemeral_rollout_retention(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.ephemeral_rollout_retention_hours) * 3600)
+    }
 }
 
 pub(crate) mod list {

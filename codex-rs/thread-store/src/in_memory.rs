@@ -186,6 +186,7 @@ mod tests {
                     initial_window_id: uuid::Uuid::now_v7().to_string(),
                     runtime_workspace_roots: None,
                     metadata: ThreadPersistenceMetadata {
+                        ephemeral: false,
                         cwd: None,
                         model_provider: "test-provider".to_string(),
                         memory_mode: ThreadMemoryMode::Enabled,
@@ -467,6 +468,7 @@ mod tests {
 
     fn thread_metadata() -> ThreadPersistenceMetadata {
         ThreadPersistenceMetadata {
+            ephemeral: false,
             cwd: None,
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,

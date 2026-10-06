@@ -664,6 +664,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         std::process::exit(1);
     }
 
+    if direct && ephemeral {
+        anyhow::bail!("--direct cannot be combined with --ephemeral");
+    }
     if direct && command.is_some() {
         anyhow::bail!("--direct is only valid for top-level codex exec runs");
     }
