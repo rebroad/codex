@@ -186,6 +186,8 @@ pub enum RemoteControlTrafficLogRedaction {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
+    /// Age threshold for automatic cleanup of `--ephemeral` rollouts, in hours.
+    pub ephemeral_rollout_retention_hours: Option<u32>,
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Default Daybreak preference for new threads and non-interactive turns.

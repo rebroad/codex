@@ -621,6 +621,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
         LocalThreadStoreConfig {
             codex_home: codex_home.path().to_path_buf(),
             sqlite,
+            ephemeral_rollout_retention: std::time::Duration::from_secs(24 * 60 * 60),
             default_model_provider_id: "mock_provider".to_string(),
         },
         Some(state_db),
@@ -647,6 +648,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
             initial_window_id: Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(codex_home.path().to_path_buf()),
                 model_provider: "mock_provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
@@ -1720,6 +1722,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
         LocalThreadStoreConfig {
             codex_home: codex_home.path().to_path_buf(),
             sqlite,
+            ephemeral_rollout_retention: std::time::Duration::from_secs(24 * 60 * 60),
             default_model_provider_id: "mock_provider".to_string(),
         },
         Some(state_db),
@@ -1746,6 +1749,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
             initial_window_id: Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(codex_home.path().to_path_buf()),
                 model_provider: "mock_provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
@@ -2651,6 +2655,7 @@ async fn seed_pathless_store_thread(
             initial_window_id: Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
