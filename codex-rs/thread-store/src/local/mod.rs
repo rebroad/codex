@@ -154,6 +154,7 @@ pub struct LocalThreadStore {
     state_db: Option<StateDbHandle>,
     thread_history_db: Arc<OnceCell<sqlx::SqlitePool>>,
     thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
+    _ephemeral_cleanup_lifetime: Arc<()>,
 }
 
 type ThreadDataCleanup = dyn Fn(Vec<ThreadId>) -> ThreadStoreFuture<'static, ()> + Send + Sync;
@@ -236,6 +237,7 @@ impl LiveWriterLocks {
 pub struct LocalThreadStoreConfig {
     pub codex_home: PathBuf,
     pub sqlite: SqliteConfig,
+    pub ephemeral_rollout_retention: std::time::Duration,
     /// Provider used only when older local metadata does not contain one.
     pub default_model_provider_id: String,
 }
@@ -245,6 +247,7 @@ impl LocalThreadStoreConfig {
         Self {
             codex_home: config.codex_home().to_path_buf(),
             sqlite: config.sqlite_config().clone(),
+            ephemeral_rollout_retention: config.ephemeral_rollout_retention(),
             default_model_provider_id: config.model_provider_id().to_string(),
         }
     }
@@ -262,6 +265,37 @@ impl LocalThreadStore {
     /// Create a local store using an already initialized state DB handle.
     pub fn new(config: LocalThreadStoreConfig, state_db: Option<StateDbHandle>) -> Self {
         let writer_lock_coordinator = Arc::new(WriterLockCoordinator::new(&config.codex_home));
+        let ephemeral_cleanup_lifetime = Arc::new(());
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let cleanup_lifetime = Arc::downgrade(&ephemeral_cleanup_lifetime);
+            let codex_home = config.codex_home.clone();
+            let retention = config.ephemeral_rollout_retention;
+            runtime.spawn(async move {
+                loop {
+                    if cleanup_lifetime.upgrade().is_none() {
+                        break;
+                    }
+                    let home = codex_home.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        codex_rollout::cleanup_expired_ephemeral_rollouts(&home, retention)
+                    })
+                    .await
+                    {
+                        Ok(Ok(removed)) if removed > 0 => {
+                            tracing::debug!(removed, "removed expired ephemeral rollouts");
+                        }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            tracing::warn!(%err, "failed to clean up expired ephemeral rollouts");
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "ephemeral rollout cleanup task failed");
+                        }
+                    }
+                    tokio::time::sleep(duration_until_next_local_midnight()).await;
+                }
+            });
+        }
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
@@ -272,6 +306,7 @@ impl LocalThreadStore {
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
             thread_data_cleanup: None,
+            _ephemeral_cleanup_lifetime: ephemeral_cleanup_lifetime,
         }
     }
 
@@ -476,6 +511,34 @@ impl LocalThreadStore {
     ) -> ThreadStoreResult<ThreadOccurrenceSearchPage> {
         thread_history::search_thread_occurrences(self, params).await
     }
+}
+
+fn duration_until_next_local_midnight() -> std::time::Duration {
+    use chrono::Local;
+    use chrono::TimeZone;
+
+    let now = Local::now();
+    let Some(tomorrow) = now.date_naive().succ_opt() else {
+        return std::time::Duration::from_secs(24 * 60 * 60);
+    };
+    for minute in 0..24 * 60 {
+        let Some(local_midnight) = tomorrow
+            .and_hms_opt(0, 0, 0)
+            .and_then(|midnight| midnight.checked_add_signed(chrono::Duration::minutes(minute)))
+        else {
+            continue;
+        };
+        if let Some(next_run) = Local
+            .from_local_datetime(&local_midnight)
+            .earliest()
+            .or_else(|| Local.from_local_datetime(&local_midnight).latest())
+        {
+            if let Ok(delay) = (next_run - now).to_std() {
+                return delay;
+            }
+        }
+    }
+    std::time::Duration::from_secs(24 * 60 * 60)
 }
 
 impl ThreadStore for LocalThreadStore {
@@ -1060,6 +1123,7 @@ mod tests {
                 history: Some(Arc::clone(&history)),
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
+                    ephemeral: false,
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "test-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,
@@ -1412,6 +1476,7 @@ mod tests {
                 history: None,
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
+                    ephemeral: false,
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "different-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,
@@ -1468,6 +1533,7 @@ mod tests {
                 history: None,
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
+                    ephemeral: false,
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "different-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,
@@ -1841,6 +1907,7 @@ mod tests {
                 history: None,
                 include_archived: true,
                 metadata: ThreadPersistenceMetadata {
+                    ephemeral: false,
                     cwd: None,
                     model_provider: "test-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,
@@ -2264,6 +2331,7 @@ mod tests {
 
     fn thread_metadata() -> ThreadPersistenceMetadata {
         ThreadPersistenceMetadata {
+            ephemeral: false,
             cwd: Some(std::env::current_dir().expect("cwd")),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,

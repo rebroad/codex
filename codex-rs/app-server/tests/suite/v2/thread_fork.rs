@@ -2862,6 +2862,10 @@ async fn inheriting_fork_requires_persisted_parent(
         })
         .await?;
     if ephemeral {
+        assert_eq!(
+            parent.thread.path, None,
+            "ephemeral parent rollouts must remain pathless in the API"
+        );
         mcp.start_turn_and_wait_for_completion(TurnStartParams {
             thread_id: parent.thread.id.clone(),
             input: vec![UserInput::Text {

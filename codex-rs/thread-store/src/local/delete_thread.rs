@@ -800,6 +800,7 @@ SELECT
                 history: None,
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
+                    ephemeral: false,
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "test-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,

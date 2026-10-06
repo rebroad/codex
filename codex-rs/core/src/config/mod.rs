@@ -984,8 +984,11 @@ pub struct Config {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
-    /// When true, session is not persisted on disk. Default to `false`
+    /// When true, its rollout is stored temporarily and cleaned up after the configured retention.
     pub ephemeral: bool,
+
+    /// How long rollouts for ephemeral sessions are retained before cleanup.
+    pub ephemeral_rollout_retention_hours: u32,
 
     /// Optional extra configuration fields for the thread.
     pub extra_config: Option<ExtraConfig>,
@@ -4540,6 +4543,9 @@ impl Config {
             application_auth_route_config: None,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
+            ephemeral_rollout_retention_hours: cfg
+                .ephemeral_rollout_retention_hours
+                .unwrap_or(24),
             extra_config: None,
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),

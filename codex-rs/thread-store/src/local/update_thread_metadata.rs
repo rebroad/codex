@@ -2440,6 +2440,7 @@ mod tests {
 
     fn test_thread_metadata() -> ThreadPersistenceMetadata {
         ThreadPersistenceMetadata {
+            ephemeral: false,
             cwd: Some(std::env::current_dir().expect("cwd")),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
