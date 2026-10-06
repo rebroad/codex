@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from resolve_source_repo import is_build_repo_inside_source, resolve_source_repo
+from resolve_source_repo import (
+    is_build_repo_inside_source,
+    resolve_build_repo,
+    resolve_source_repo,
+)
 
 
 class ResolveSourceRepoTests(unittest.TestCase):
@@ -58,6 +62,7 @@ class ResolveSourceRepoTests(unittest.TestCase):
             )
 
             self.assertEqual(resolve_source_repo(build_root), source_root)
+            self.assertEqual(resolve_build_repo(build_root), build_root)
             self.assertFalse(is_build_repo_inside_source(source_root, build_root))
 
     def test_resolves_mirrored_build_tree_to_source_checkout(self) -> None:
@@ -81,6 +86,31 @@ class ResolveSourceRepoTests(unittest.TestCase):
 
             with patch.dict("os.environ", {}, clear=True):
                 self.assertEqual(resolve_source_repo(source_root), source_root)
+
+    def test_resolves_sibling_build_tree_from_source_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_root = Path(temp_dir) / "codex"
+            build_root = Path(temp_dir) / "codex.build"
+            for repo in (source_root, build_root):
+                (repo / "codex-rs").mkdir(parents=True)
+                (repo / "justfile").touch()
+            (source_root / ".git").mkdir()
+
+            with patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(resolve_build_repo(source_root), build_root)
+
+    def test_resolves_mirrored_build_tree_from_source_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_root = root / "@home" / "rebroad" / "src" / "codex"
+            build_root = root / "builds" / "rebroad" / "src" / "codex.build"
+            for repo in (source_root, build_root):
+                (repo / "codex-rs").mkdir(parents=True)
+                (repo / "justfile").touch()
+            (source_root / ".git").mkdir()
+
+            with patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(resolve_build_repo(source_root), build_root)
 
     def test_explicit_source_repo_overrides_build_tree_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

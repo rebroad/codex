@@ -57,6 +57,31 @@ fn composer_mouse_edits_flush_typing_and_reconcile_placeholders() {
 }
 
 #[test]
+fn tapping_composer_padding_is_handled_without_moving_the_cursor() {
+    let (mut composer, _rx) = new_test_composer();
+    composer.insert_str("hello");
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 10,
+    );
+    composer.render(area, &mut Buffer::empty(area));
+    let layout = composer.layout_with_options(area, ComposerRenderOptions::default());
+    let old_cursor = composer.draft.textarea.cursor();
+
+    for row in [layout.composer.y, layout.composer.bottom() - 1] {
+        let event = MouseEvent {
+            kind: Down(Left),
+            column: layout.composer.x,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(composer.prepare_mouse(event));
+        composer.render(area, &mut Buffer::empty(area));
+        assert!(composer.handle_mouse(event));
+        assert_eq!(composer.draft.textarea.cursor(), old_cursor);
+    }
+}
+
+#[test]
 fn selected_text_navigation_does_not_recall_history_or_select_images() {
     for (key, remote) in [
         (KeyCode::Up, false),

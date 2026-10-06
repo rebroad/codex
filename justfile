@@ -10,7 +10,7 @@ cargo_incremental := env_var_or_default("CARGO_INCREMENTAL", "0")
 python := if os_family() == "windows" { "python" } else { "python3" }
 source_repo := shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " " + quote(justfile_directory()))
 build_repo_override := env_var_or_default("CODEX_BUILD_REPO", "")
-build_repo := if build_repo_override != "" { build_repo_override } else if source_repo == justfile_directory() { "" } else if path_exists(justfile_directory() / ".git") == "true" { justfile_directory() } else if path_exists((source_repo + ".build") / "codex-rs") == "true" { source_repo + ".build" } else { source_repo + ".make" }
+build_repo := if build_repo_override != "" { build_repo_override } else { shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " --resolve-build-repo " + quote(justfile_directory())) }
 build_repo_is_inside_source := if build_repo == "" { "true" } else { shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " --is-build-repo-inside-source " + quote(source_repo) + " " + quote(build_repo)) }
 build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"

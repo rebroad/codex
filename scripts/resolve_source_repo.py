@@ -114,6 +114,28 @@ def resolve_source_repo(repo_root: Path) -> Path:
     return fallback if is_repository(fallback) else repo_root
 
 
+def resolve_build_repo(repo_root: Path) -> Path:
+    """Find the external sibling build checkout for this source or build tree."""
+    repo_root = repo_root.resolve()
+    source_root = resolve_source_repo(repo_root)
+    if repo_root != source_root and is_build_tree_root(repo_root):
+        return repo_root
+
+    build_root = source_root.with_name(f"{source_root.name}.build")
+    if (build_root / "codex-rs").is_dir():
+        return build_root
+
+    parts = list(source_root.parts)
+    if "@home" in parts:
+        parts[parts.index("@home")] = "builds"
+        parts[-1] = f"{parts[-1]}.build"
+        mirrored_build_root = Path(*parts)
+        if (mirrored_build_root / "codex-rs").is_dir():
+            return mirrored_build_root
+
+    return source_root.with_name(f"{source_root.name}.make")
+
+
 def main() -> int:
     try:
         if len(sys.argv) == 4 and sys.argv[1] == "--is-build-repo-inside-source":
@@ -122,6 +144,9 @@ def main() -> int:
                     is_build_repo_inside_source(Path(sys.argv[2]), Path(sys.argv[3]))
                 ).lower()
             )
+            return 0
+        if len(sys.argv) == 3 and sys.argv[1] == "--resolve-build-repo":
+            print(resolve_build_repo(Path(sys.argv[2])))
             return 0
         print(resolve_source_repo(Path(sys.argv[1])))
     except (IndexError, ValueError) as error:

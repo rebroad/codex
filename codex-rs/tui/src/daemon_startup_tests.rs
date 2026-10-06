@@ -267,7 +267,7 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                 );
             } else {
                 let error = result.unwrap_err();
-                assert_eq!(error, reason);
+                assert_eq!(error.reason, reason);
             }
         }
     }
