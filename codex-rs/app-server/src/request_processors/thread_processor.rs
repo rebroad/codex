@@ -1569,12 +1569,17 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.config_snapshot",
             ))
             .await;
+        let rollout_path = if config_snapshot.ephemeral {
+            None
+        } else {
+            session_configured.rollout_path.clone()
+        };
         let mut thread = build_thread_from_snapshot(
             thread_id,
             session_configured.session_id.to_string(),
             thread.multi_agent_version(),
             &config_snapshot,
-            session_configured.rollout_path.clone(),
+            rollout_path,
         );
         thread.project_id = project_id.clone();
         thread.daybreak_enabled = daybreak_enabled;
@@ -5421,6 +5426,7 @@ impl ThreadRequestProcessor {
             .await?
         };
 
+        let ephemeral_fork = options.config.ephemeral;
         let fork_options = StartThreadOptions {
             thread_source,
             parent_trace,
@@ -5478,7 +5484,8 @@ impl ThreadRequestProcessor {
             app_server_client_version,
         )
         .await?;
-        if session_configured.rollout_path.is_some()
+        if !ephemeral_fork
+            && session_configured.rollout_path.is_some()
             && let Some(name) = source_thread_name.clone()
         {
             self.thread_manager
@@ -5493,7 +5500,8 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(|err| core_thread_write_error("inherit source thread name", err))?;
         }
-        let inherited_goal = if defer_goal_continuation
+        let inherited_goal = if !ephemeral_fork
+            && defer_goal_continuation
             && session_configured.rollout_path.is_some()
             && goals_enabled
         {
@@ -5540,46 +5548,50 @@ impl ThreadRequestProcessor {
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so their visible history is projected before the source history is consumed.
-        let (mut thread, mut token_usage_turn_id) = if session_configured.rollout_path.is_some() {
-            let stored_thread = self
-                .read_stored_thread_for_new_fork(thread_id, include_turns && !paginated_source)
-                .await?;
-            let (mut thread, history) = thread_from_stored_thread(
-                stored_thread,
-                fallback_model_provider.as_str(),
-                &self.config.cwd,
-            );
-            if include_turns && let Some(history) = history.as_ref() {
-                populate_thread_turns_from_history(
-                    &mut thread,
-                    &history.items,
-                    /*active_turn*/ None,
+        // Ephemeral rollouts are retained on disk for a limited time, but they
+        // are not indexed in the ordinary thread store and must stay pathless
+        // in the thread/fork response.
+        let (mut thread, mut token_usage_turn_id) =
+            if !ephemeral_fork && session_configured.rollout_path.is_some() {
+                let stored_thread = self
+                    .read_stored_thread_for_new_fork(thread_id, include_turns && !paginated_source)
+                    .await?;
+                let (mut thread, history) = thread_from_stored_thread(
+                    stored_thread,
+                    fallback_model_provider.as_str(),
+                    &self.config.cwd,
                 );
-            }
-            let token_usage_turn_id = include_turns.then(|| {
-                restored_token_usage_turn_id(
-                    history
-                        .as_ref()
-                        .map(|history| history.items.as_slice())
-                        .or_else(|| token_usage_history_items.as_deref().map(Vec::as_slice))
-                        .unwrap_or(&[]),
-                    thread.turns.as_slice(),
-                )
-            });
-            (thread, token_usage_turn_id)
-        } else {
-            let mut thread = build_thread_from_snapshot(
-                thread_id,
-                session_configured.session_id.to_string(),
-                forked_thread.multi_agent_version(),
-                &config_snapshot,
-                /*path*/ None,
-            );
-            thread.preview = ephemeral_preview;
-            thread.forked_from_id = Some(source_thread_id.to_string());
-            thread.turns = ephemeral_turns;
-            (thread, ephemeral_token_usage_turn_id)
-        };
+                if include_turns && let Some(history) = history.as_ref() {
+                    populate_thread_turns_from_history(
+                        &mut thread,
+                        &history.items,
+                        /*active_turn*/ None,
+                    );
+                }
+                let token_usage_turn_id = include_turns.then(|| {
+                    restored_token_usage_turn_id(
+                        history
+                            .as_ref()
+                            .map(|history| history.items.as_slice())
+                            .or_else(|| token_usage_history_items.as_deref().map(Vec::as_slice))
+                            .unwrap_or(&[]),
+                        thread.turns.as_slice(),
+                    )
+                });
+                (thread, token_usage_turn_id)
+            } else {
+                let mut thread = build_thread_from_snapshot(
+                    thread_id,
+                    session_configured.session_id.to_string(),
+                    forked_thread.multi_agent_version(),
+                    &config_snapshot,
+                    /*path*/ None,
+                );
+                thread.preview = ephemeral_preview;
+                thread.forked_from_id = Some(source_thread_id.to_string());
+                thread.turns = ephemeral_turns;
+                (thread, ephemeral_token_usage_turn_id)
+            };
         if paginated_source && include_turns {
             thread.turns = self.paginated_thread_full_turns(thread_id).await?;
             token_usage_turn_id = Some(restored_token_usage_turn_id(
