@@ -209,6 +209,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
             history: None,
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(codex_home.clone()),
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
@@ -772,6 +773,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
             initial_window_id: "window-1".to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(home.path().to_path_buf()),
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
@@ -1266,6 +1268,7 @@ async fn paginated_fork_reads_compressed_shared_lineage_without_materializing() 
             history: None,
             include_archived: true,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(home.path().to_path_buf()),
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
@@ -2873,6 +2876,7 @@ async fn create_paginated_subagent_thread(
             initial_window_id: "window-1".to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(std::env::current_dir().expect("cwd")),
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,

@@ -113,6 +113,31 @@ impl WriterLockCoordinator {
         })
     }
 
+    /// Locks a thread while expiry cleanup inspects or removes its rollout.
+    /// Cleanup skips the file when advisory locks are unavailable because it
+    /// cannot prove that another process is not writing it.
+    pub(crate) fn try_acquire_for_cleanup(&self, thread_id: ThreadId) -> io::Result<Option<File>> {
+        let coordination_lock = self.lock_coordination()?;
+        let path = self.directory.join(format!("{thread_id}.lock"));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        let lock_result = codex_utils_file_lock::try_lock(&file);
+        drop(coordination_lock);
+
+        match lock_result {
+            Ok(()) => Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(err)) if is_unsupported_file_lock_error(&err) => {
+                Ok(None)
+            }
+            Err(std::fs::TryLockError::Error(err)) => Err(err),
+        }
+    }
+
     /// Holds coordination through publication after probing that the thread is idle.
     /// Every writer takes coordination before opening its thread lock, so the probe
     /// itself can be released. Encoding and verification must finish before this call.

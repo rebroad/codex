@@ -5381,6 +5381,7 @@ impl ThreadRequestProcessor {
                 });
             }
         };
+        let persistent_fork = !ephemeral && session_configured.rollout_path.is_some();
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),
@@ -5388,9 +5389,7 @@ impl ThreadRequestProcessor {
             app_server_client_version,
         )
         .await?;
-        if session_configured.rollout_path.is_some()
-            && let Some(name) = source_thread_name.clone()
-        {
+        if persistent_fork && let Some(name) = source_thread_name.clone() {
             self.thread_manager
                 .update_thread_metadata(
                     thread_id,
@@ -5450,7 +5449,7 @@ impl ThreadRequestProcessor {
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so their visible history is projected before the source history is consumed.
-        let (mut thread, mut token_usage_turn_id) = if session_configured.rollout_path.is_some() {
+        let (mut thread, mut token_usage_turn_id) = if persistent_fork {
             let stored_thread = self
                 .read_stored_thread_for_new_fork(thread_id, include_turns && !paginated_source)
                 .await?;

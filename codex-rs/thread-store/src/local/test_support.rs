@@ -14,6 +14,7 @@ pub(super) fn test_config(codex_home: &Path) -> LocalThreadStoreConfig {
     LocalThreadStoreConfig {
         codex_home: codex_home.to_path_buf(),
         sqlite: codex_state::SqliteConfig::new_for_testing(codex_home.abs()),
+        ephemeral_rollout_retention: std::time::Duration::from_secs(24 * 60 * 60),
         default_model_provider_id: "test-provider".to_string(),
     }
 }
