@@ -292,6 +292,7 @@ async fn create_paginated_thread(store: &LocalThreadStore, thread_id: ThreadId) 
             initial_window_id: "window-1".to_string(),
             runtime_workspace_roots: Some(vec![store.config.codex_home.join("workspace").abs()]),
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(std::env::current_dir().expect("cwd")),
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
