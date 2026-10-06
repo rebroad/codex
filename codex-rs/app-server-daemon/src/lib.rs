@@ -64,6 +64,7 @@ const STATE_DIR_NAME: &str = "app-server-daemon";
 pub enum LifecycleCommand {
     Start,
     Restart,
+    RestartIfIdle,
     Stop,
     Version,
 }
@@ -413,6 +414,7 @@ impl Daemon {
         match command {
             LifecycleCommand::Start => selected.start(&BTreeMap::new()).await,
             LifecycleCommand::Restart => selected.restart().await,
+            LifecycleCommand::RestartIfIdle => selected.restart_if_idle().await,
             LifecycleCommand::Stop => {
                 let output = selected.stop().await?;
                 if let Err(err) = thread_recovery::discard_pending(&selected) {
@@ -525,6 +527,61 @@ impl Daemon {
                 Some(info.app_server_version),
             )
             .await)
+    }
+
+    #[cfg(unix)]
+    async fn restart_if_idle(&self) -> Result<LifecycleOutput> {
+        let settings = self.load_settings().await?;
+        if client::probe(&self.socket_path).await.is_ok()
+            && self.running_backend(&settings).await?.is_none()
+        {
+            return Err(anyhow!(
+                "app server is running but is not managed by codex app-server daemon"
+            ));
+        }
+
+        let Some(backend) = self.running_backend_instance(&settings).await? else {
+            return Ok(self
+                .output(LifecycleStatus::NotRunning, None, None, None)
+                .await);
+        };
+
+        prepare_install::prepare(self, &settings).await?;
+        let mut managed = self.clone();
+        managed.managed_codex_bin = self
+            .invoking_codex_bin
+            .as_deref()
+            .filter(|codex_bin| codex_bin.is_file())
+            .map(Path::to_path_buf)
+            .unwrap_or(self.current_managed_codex_bin()?);
+        managed.ensure_managed_codex_bin()?;
+
+        if let Err(err) = thread_recovery::discard_pending(self) {
+            eprintln!("warning: failed to clear stale daemon recovery before restart: {err}");
+        }
+        backend.stop_gracefully().await?;
+        let pid = managed.start_managed_backend(&settings).await?;
+        let info = managed.wait_until_ready().await?;
+        if let Err(err) = managed.ensure_managed_updater(&settings).await {
+            eprintln!(
+                "warning: failed to ensure managed updater after app-server restart: {err:#}"
+            );
+        }
+        Ok(managed
+            .output(
+                LifecycleStatus::Restarted,
+                Some(BackendKind::Pid),
+                pid,
+                Some(info.app_server_version),
+            )
+            .await)
+    }
+
+    #[cfg(not(unix))]
+    async fn restart_if_idle(&self) -> Result<LifecycleOutput> {
+        Err(anyhow!(
+            "restart-if-idle is only supported on Unix platforms"
+        ))
     }
 
     #[cfg(any(unix, windows))]
