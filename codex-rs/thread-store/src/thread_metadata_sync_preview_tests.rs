@@ -18,6 +18,7 @@ fn delegated_output_emits_only_first_preview_in_live_patch() {
             history_revision: None,
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
