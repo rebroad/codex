@@ -492,6 +492,7 @@ impl ExternalAgentSessionImporter {
             subagent_history_start_ordinal: None,
             initial_window_id: uuid::Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(cwd.clone()),
                 model_provider: model_provider.clone(),
                 memory_mode,

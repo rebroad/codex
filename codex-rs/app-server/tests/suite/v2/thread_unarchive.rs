@@ -266,6 +266,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             initial_window_id: Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
