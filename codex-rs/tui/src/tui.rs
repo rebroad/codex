@@ -848,6 +848,22 @@ impl Tui {
         self.frame_requester.clone()
     }
 
+    /// Ask Termux to show its soft keyboard after the user focuses editable TUI input.
+    pub(crate) fn request_soft_keyboard(&self) {
+        const REQUEST: &[u8] = b"\x1b]777;termux;show-keyboard\x07";
+        const TMUX_REQUEST: &[u8] =
+            b"\x1bPtmux;\x1b\x1b]777;termux;show-keyboard\x07\x1b\\";
+        let request = if std::env::var_os("TMUX").is_some() {
+            TMUX_REQUEST
+        } else {
+            REQUEST
+        };
+        let mut output = stdout().lock();
+        if let Err(error) = output.write_all(request).and_then(|()| output.flush()) {
+            tracing::debug!("failed to request Termux soft keyboard: {error}");
+        }
+    }
+
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
     }
