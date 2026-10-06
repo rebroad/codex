@@ -159,6 +159,13 @@ impl ChatComposer {
             self.sync_popups();
         }
         handled
+            || (event.kind == MouseEventKind::Down(MouseButton::Left)
+                && self.rendered_composer_area.get().is_some_and(|area| {
+                    event.column >= area.x
+                        && event.column < area.right()
+                        && event.row >= area.y
+                        && event.row < area.bottom()
+                }))
     }
 }
 
