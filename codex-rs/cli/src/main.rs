@@ -706,6 +706,9 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
+    /// Gracefully restart after active turns have finished.
+    RestartIfIdle,
+
     /// Update the daemon package (may interrupt running work).
     Update {
         /// Copy and pin this CLI package.
@@ -1433,6 +1436,10 @@ async fn cli_main(
                             feature_overrides,
                         })
                         .await?;
+                    }
+                    AppServerDaemonSubcommand::RestartIfIdle => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::RestartIfIdle)
+                            .await?;
                     }
                     AppServerDaemonSubcommand::Update {
                         from_cli: true,
@@ -2452,6 +2459,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
             AppServerDaemonSubcommand::Start => "app-server daemon start",
             AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::RestartIfIdle => "app-server daemon restart-if-idle",
             AppServerDaemonSubcommand::Update { .. } => "app-server daemon update",
             AppServerDaemonSubcommand::EnableRemoteControl => {
                 "app-server daemon enable-remote-control"
