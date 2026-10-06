@@ -368,6 +368,7 @@ fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
         initial_window_id: uuid::Uuid::now_v7().to_string(),
         runtime_workspace_roots: None,
         metadata: ThreadPersistenceMetadata {
+            ephemeral: false,
             cwd: Some(std::env::current_dir().expect("cwd")),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,

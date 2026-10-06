@@ -4477,6 +4477,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
         history_base: None,
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
+        ephemeral: false,
         context_window: None,
     };
     std::fs::write(

@@ -53,6 +53,7 @@ fn resume(thread_id: ThreadId, path: &Path, home: &Path) -> ResumeThreadParams {
         history: None,
         include_archived: true,
         metadata: ThreadPersistenceMetadata {
+            ephemeral: false,
             cwd: Some(home.to_path_buf()),
             model_provider: "test-provider".into(),
             memory_mode: ThreadMemoryMode::Enabled,
