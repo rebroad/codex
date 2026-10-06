@@ -74,10 +74,10 @@ cargo-artifact-log *args:
     {{ python }} ../scripts/cargo_artifact_operations.py --ledger "{{ build_repo }}/build/cargo-artifact-operations.jsonl" "$@"
 
 fix *args:
-    cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-fix; {{ cargo_setup }} cargo clippy --fix --tests --allow-dirty --locked "$@"
+    cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-fix; {{ cargo_setup }} if [ -n "${CODEX_CARGO_CLIPPY:-}" ]; then "$CODEX_CARGO_CLIPPY" --fix --tests --locked "$@"; else cargo clippy --fix --tests --allow-dirty --locked "$@"; fi
 
 clippy *args:
-    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo clippy --tests --locked "$@"
+    cd "{{ cargo_working_directory }}" && {{ cargo_setup }} if [ -n "${CODEX_CARGO_CLIPPY:-}" ]; then "$CODEX_CARGO_CLIPPY" --tests --locked "$@"; else cargo clippy --tests --locked "$@"; fi
 
 [unix]
 install:
