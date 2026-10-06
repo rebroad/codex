@@ -396,6 +396,18 @@ record_artifact_operation
 printf '%s\n' 'unset CC CXX AR RANLIB CFLAGS CXXFLAGS TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_ALL_STATIC PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS'
 printf 'export RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_TARGET_DIR=%q CODEX_BUILD_TIMESTAMP=0000000000-000000000000\n' "${TARGET_DIR}"
 printf 'export CARGO_INCREMENTAL=%q\n' "${CARGO_INCREMENTAL}"
+if ! command -v rustup >/dev/null 2>&1; then
+  rustc_path="$(command -v "${RUSTC_BIN}")"
+  standalone_toolchain_bin="$(dirname "${rustc_path}")"
+  standalone_clippy="${standalone_toolchain_bin}/cargo-clippy"
+  if [[ ! -x "${standalone_clippy}" ]]; then
+    echo "rustup is unavailable and matching cargo-clippy was not found beside ${rustc_path}" >&2
+    exit 1
+  fi
+  printf 'export RUSTC=%q CODEX_CARGO_CLIPPY=%q\n' "${rustc_path}" "${standalone_clippy}"
+else
+  printf 'export CODEX_CARGO_CLIPPY=\n'
+fi
 if [[ "${CODEX_ALLOW_CONCURRENT_BUILD:-false}" == true ]]; then
   printf 'echo %q >&2\n' "Concurrent build override enabled; sharing Cargo target directory ${TARGET_DIR}."
 elif command -v flock >/dev/null 2>&1; then
