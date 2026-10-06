@@ -578,6 +578,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     base_instructions: None,
                     dynamic_tools: None,
                     selected_capability_roots: Vec::new(),
+                    ephemeral: false,
                     memory_mode: None,
                     history_mode: Default::default(),
                     history_base: None,

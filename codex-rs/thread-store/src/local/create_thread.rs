@@ -39,6 +39,7 @@ pub(super) async fn create_thread(
             params.base_instructions,
             params.dynamic_tools,
         )
+        .with_ephemeral(params.metadata.ephemeral)
         .with_creator(params.creator_user_id, params.creator_account_id)
         .with_session_id(params.session_id)
         .with_selected_capability_roots(params.selected_capability_roots)
