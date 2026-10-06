@@ -199,7 +199,7 @@ fn load_custom_pet(value: &str, codex_home: Option<&Path>) -> Result<Pet> {
         );
     }
 
-    bail!("unknown pet {value}")
+    bail!("unknown pet {value}");
 }
 
 fn load_pet_path(value: &str) -> Result<Pet> {
