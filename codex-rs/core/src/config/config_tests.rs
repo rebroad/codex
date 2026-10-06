@@ -435,6 +435,34 @@ async fn bare_prompt_cli_override_is_loaded() {
     assert!(config.bare_prompt);
 }
 
+#[tokio::test]
+async fn ephemeral_rollout_retention_defaults_to_one_day_and_is_configurable() {
+    let codex_home = tempdir().expect("tempdir");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("default config should load");
+    assert_eq!(config.ephemeral_rollout_retention_hours, 24);
+
+    let codex_home = tempdir().expect("tempdir");
+    let config_toml = toml::from_str::<ConfigToml>("ephemeral_rollout_retention_hours = 36")
+        .expect("retention period should parse from config.toml");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.path().abs(),
+    )
+    .await
+    .expect("configured retention should load from config.toml");
+    assert_eq!(config.ephemeral_rollout_retention_hours, 36);
+    let thread_store_config = codex_thread_store::LocalThreadStoreConfig::from_config(&config);
+    assert_eq!(
+        thread_store_config.ephemeral_rollout_retention,
+        std::time::Duration::from_secs(36 * 60 * 60)
+    );
+}
+
 #[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(

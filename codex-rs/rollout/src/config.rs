@@ -2,6 +2,7 @@ use codex_state::SqliteConfig;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub trait RolloutConfigView {
     fn codex_home(&self) -> &Path;
@@ -9,6 +10,9 @@ pub trait RolloutConfigView {
     fn cwd(&self) -> &Path;
     fn model_provider_id(&self) -> &str;
     fn generate_memories(&self) -> bool;
+    fn ephemeral_rollout_retention(&self) -> Duration {
+        Duration::from_secs(24 * 60 * 60)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +80,10 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for &T {
     fn generate_memories(&self) -> bool {
         (*self).generate_memories()
     }
+
+    fn ephemeral_rollout_retention(&self) -> Duration {
+        (*self).ephemeral_rollout_retention()
+    }
 }
 
 impl<T: RolloutConfigView + ?Sized> RolloutConfigView for Arc<T> {
@@ -97,5 +105,9 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for Arc<T> {
 
     fn generate_memories(&self) -> bool {
         self.as_ref().generate_memories()
+    }
+
+    fn ephemeral_rollout_retention(&self) -> Duration {
+        self.as_ref().ephemeral_rollout_retention()
     }
 }
