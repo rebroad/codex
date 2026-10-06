@@ -36,6 +36,7 @@ use tracing::trace;
 use tracing::warn;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
+use super::EPHEMERAL_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::compression;
 use super::list::Cursor;
@@ -119,6 +120,7 @@ pub enum RolloutRecorderParams {
         history_base: Option<HistoryPosition>,
         subagent_history_start_ordinal: Option<u64>,
         initial_window_id: Option<String>,
+        ephemeral: bool,
     },
     Resume {
         path: PathBuf,
@@ -225,6 +227,7 @@ impl RolloutRecorderParams {
             history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: None,
+            ephemeral: false,
         }
     }
 
@@ -358,6 +361,17 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *window_id = Some(initial_window_id);
+        }
+        self
+    }
+
+    pub fn with_ephemeral(mut self, ephemeral: bool) -> Self {
+        if let Self::Create {
+            ephemeral: is_ephemeral,
+            ..
+        } = &mut self
+        {
+            *is_ephemeral = ephemeral;
         }
         self
     }
@@ -918,11 +932,16 @@ impl RolloutRecorder {
                 history_base,
                 subagent_history_start_ordinal,
                 initial_window_id,
+                ephemeral,
             } => {
                 let ordinal_state =
                     RolloutOrdinalState::for_new_rollout(history_mode, history_base);
-                let (path, started_at) =
-                    precompute_new_rollout_path(config, conversation_id, rollout_id_override)?;
+                let (path, started_at) = precompute_new_rollout_path(
+                    config,
+                    conversation_id,
+                    rollout_id_override,
+                    ephemeral,
+                )?;
 
                 let timestamp_format: &[FormatItem] = format_description!(
                     "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
@@ -933,6 +952,7 @@ impl RolloutRecorder {
                     .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
                 let session_meta = SessionMeta {
+                    ephemeral,
                     session_id,
                     id: conversation_id,
                     forked_from_id,
@@ -1750,12 +1770,17 @@ fn precompute_new_rollout_path(
     config: &impl RolloutConfigView,
     thread_id: ThreadId,
     rollout_id_override: Option<RolloutId>,
+    ephemeral: bool,
 ) -> std::io::Result<(PathBuf, OffsetDateTime)> {
-    // Resolve ~/.codex/sessions/YYYY/MM/DD path.
+    // Keep expiring ephemeral files outside the normal and archived session trees.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
     let mut dir = config.codex_home().to_path_buf();
-    dir.push(SESSIONS_SUBDIR);
+    dir.push(if ephemeral {
+        EPHEMERAL_SESSIONS_SUBDIR
+    } else {
+        SESSIONS_SUBDIR
+    });
     dir.push(timestamp.year().to_string());
     dir.push(format!("{:02}", u8::from(timestamp.month())));
     dir.push(format!("{:02}", timestamp.day()));

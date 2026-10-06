@@ -6801,6 +6801,12 @@
       "description": "Legacy fallback for `tui.disable_paste_burst`. Prefer the setting under `[tui]`.",
       "type": "boolean"
     },
+    "ephemeral_rollout_retention_hours": {
+      "description": "Age threshold for automatic cleanup of `--ephemeral` rollouts, in hours.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },

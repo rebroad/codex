@@ -505,6 +505,7 @@ mod tests {
             initial_window_id: uuid::Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
@@ -888,6 +889,7 @@ mod tests {
             history: Some(Arc::new(history)),
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,

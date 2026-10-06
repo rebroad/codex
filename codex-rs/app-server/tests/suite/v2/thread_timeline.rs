@@ -53,6 +53,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
         LocalThreadStoreConfig {
             codex_home: codex_home.path().to_path_buf(),
             sqlite,
+            ephemeral_rollout_retention: std::time::Duration::from_secs(24 * 60 * 60),
             default_model_provider_id: "mock_provider".to_string(),
         },
         Some(state_db),
@@ -79,6 +80,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
             initial_window_id: Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
+                ephemeral: false,
                 cwd: Some(codex_home.path().to_path_buf()),
                 model_provider: "mock_provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,

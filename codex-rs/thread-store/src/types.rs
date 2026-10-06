@@ -55,6 +55,9 @@ mod optional_option {
 /// Thread-scoped metadata used when opening live persistence.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadPersistenceMetadata {
+    /// Marks the rollout for timed retention because its session is ephemeral.
+    #[serde(default)]
+    pub ephemeral: bool,
     /// Effective working directory for environment-backed threads.
     ///
     /// `None` means the thread has no filesystem/environment context.

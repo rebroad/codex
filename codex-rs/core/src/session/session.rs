@@ -837,6 +837,14 @@ impl Session {
                 .model(),
             session_configuration.provider
         );
+        let thread_store: Arc<dyn ThreadStore> = if config.ephemeral {
+            Arc::new(LocalThreadStore::new(
+                codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+                /*state_db*/ None,
+            ))
+        } else {
+            thread_store
+        };
         let base_instructions_provenance = if config.base_instructions.is_some() {
             Some(
                 config
@@ -1060,112 +1068,112 @@ impl Session {
         let persistence_auth = futures::FutureExt::shared(auth_manager.auth());
         let mcp_auth = persistence_auth.clone();
         let thread_persistence_fut = async {
-            if config.ephemeral {
-                Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None), None))
-            } else {
-                let mut local_guard = LiveThreadInitGuard::default();
-                let mut resume_context = None;
-                let mut managed_guard = match &startup {
-                    Some(startup) => Some(startup.persistence.lock().await),
-                    None => None,
-                };
-                let guard = managed_guard.as_deref_mut().unwrap_or(&mut local_guard);
-                let live_thread = match &initial_history {
-                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                        let auth = persistence_auth.await;
-                        let params = CreateThreadParams {
-                            creator_user_id: auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id),
-                            creator_account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
-                            session_id,
-                            thread_id,
-                            extra_config: config.extra_config.clone(),
-                            forked_from_id,
-                            parent_thread_id,
-                            source: session_source,
-                            thread_source: session_configuration.thread_source.clone(),
-                            originator: session_configuration.originator.clone(),
-                            base_instructions: BaseInstructions {
-                                text: session_configuration.base_instructions.clone(),
-                                provenance: base_instructions_provenance.clone(),
-                            },
-                            dynamic_tools: session_configuration.dynamic_tools.clone(),
-                            selected_capability_roots: selected_capability_roots.clone(),
-                            multi_agent_version: initial_multi_agent_version,
-                            history_mode: session_configuration.history_mode,
-                            history_base: match &fork_persistence {
-                                ForkPersistence::Copied | ForkPersistence::CopiedDeferred => None,
-                                ForkPersistence::Referenced { history_base, .. } => *history_base,
-                            },
-                            subagent_history_start_ordinal: None,
-                            initial_window_id: initial_auto_compact_window_ids
-                                .window_id
-                                .to_string(),
-                            runtime_workspace_roots: Some(config.workspace_roots.clone()),
-                            metadata: ThreadPersistenceMetadata {
-                                cwd: Some(config.cwd.to_path_buf()),
-                                model_provider: config.model_provider_id.clone(),
-                                memory_mode: if config.memories.generate_memories {
-                                    ThreadMemoryMode::Enabled
-                                } else {
-                                    ThreadMemoryMode::Disabled
-                                },
-                            },
-                        };
-                        if is_paginated_subagent
-                            && matches!(
-                                &fork_persistence,
-                                ForkPersistence::Copied | ForkPersistence::CopiedDeferred
-                            )
-                            && let InitialHistory::Forked(items) = &initial_history
-                        {
-                            LiveThread::create_with_inherited_model_context(
-                                Arc::clone(&thread_store),
-                                params,
-                                items,
-                                guard,
-                            )
-                            .await?
-                        } else {
-                            guard
-                                .acquire(LiveThread::create(Arc::clone(&thread_store), params))
-                                .await?
-                        }
-                    }
-                    InitialHistory::Resumed(resumed_history) => {
-                        let params = ResumeThreadParams {
-                            history_revision: resumed_history.history_revision.clone(),
-                            thread_id: resumed_history.conversation_id,
-                            rollout_path: resumed_history.rollout_path.clone(),
-                            history: Some(resumed_history.history.clone()),
-                            include_archived: true,
-                            metadata: ThreadPersistenceMetadata {
-                                cwd: Some(config.cwd.to_path_buf()),
-                                model_provider: config.model_provider_id.clone(),
-                                memory_mode: if config.memories.generate_memories {
-                                    ThreadMemoryMode::Enabled
-                                } else {
-                                    ThreadMemoryMode::Disabled
-                                },
-                            },
-                        };
-                        let store = Arc::clone(&thread_store);
-                        let history_mode = session_configuration.history_mode;
-                        let (context_tx, context_rx) = tokio::sync::oneshot::channel();
-                        let live_thread = guard
-                            .acquire(async move {
-                                let (live_thread, history) =
-                                    LiveThread::resume(store, history_mode, params).await?;
-                                // Cancellation still leaves the writer with the acquisition guard.
-                                let _ = context_tx.send(history);
-                                Ok(live_thread)
-                            })
-                            .await?;
-                        resume_context = Some(context_rx.await?);
-                        live_thread
-                    }
-                };
-                Ok((Some(live_thread), local_guard, resume_context))
+            let mut local_guard = LiveThreadInitGuard::default();
+            if config.ephemeral && matches!(&initial_history, InitialHistory::Resumed(_)) {
+                // Ephemeral resumes have no local thread-store record to reopen.
+                return Ok((None, local_guard, None));
             }
+            let mut resume_context = None;
+            let mut managed_guard = match &startup {
+                Some(startup) => Some(startup.persistence.lock().await),
+                None => None,
+            };
+            let guard = managed_guard.as_deref_mut().unwrap_or(&mut local_guard);
+            let live_thread = match &initial_history {
+                InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                    let auth = persistence_auth.await;
+                    let params = CreateThreadParams {
+                        creator_user_id: auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id),
+                        creator_account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
+                        session_id,
+                        thread_id,
+                        extra_config: config.extra_config.clone(),
+                        forked_from_id,
+                        parent_thread_id,
+                        source: session_source,
+                        thread_source: session_configuration.thread_source.clone(),
+                        originator: session_configuration.originator.clone(),
+                        base_instructions: BaseInstructions {
+                            text: session_configuration.base_instructions.clone(),
+                            provenance: base_instructions_provenance.clone(),
+                        },
+                        dynamic_tools: session_configuration.dynamic_tools.clone(),
+                        selected_capability_roots: selected_capability_roots.clone(),
+                        multi_agent_version: initial_multi_agent_version,
+                        history_mode: session_configuration.history_mode,
+                        history_base: match &fork_persistence {
+                            ForkPersistence::Copied | ForkPersistence::CopiedDeferred => None,
+                            ForkPersistence::Referenced { history_base, .. } => *history_base,
+                        },
+                        subagent_history_start_ordinal: None,
+                        initial_window_id: initial_auto_compact_window_ids.window_id.to_string(),
+                        runtime_workspace_roots: Some(config.workspace_roots.clone()),
+                        metadata: ThreadPersistenceMetadata {
+                            ephemeral: config.ephemeral,
+                            cwd: Some(config.cwd.to_path_buf()),
+                            model_provider: config.model_provider_id.clone(),
+                            memory_mode: if config.memories.generate_memories {
+                                ThreadMemoryMode::Enabled
+                            } else {
+                                ThreadMemoryMode::Disabled
+                            },
+                        },
+                    };
+                    if is_paginated_subagent
+                        && matches!(
+                            &fork_persistence,
+                            ForkPersistence::Copied | ForkPersistence::CopiedDeferred
+                        )
+                        && let InitialHistory::Forked(items) = &initial_history
+                    {
+                        LiveThread::create_with_inherited_model_context(
+                            Arc::clone(&thread_store),
+                            params,
+                            items,
+                            guard,
+                        )
+                        .await?
+                    } else {
+                        guard
+                            .acquire(LiveThread::create(Arc::clone(&thread_store), params))
+                            .await?
+                    }
+                }
+                InitialHistory::Resumed(resumed_history) => {
+                    let params = ResumeThreadParams {
+                        history_revision: resumed_history.history_revision.clone(),
+                        thread_id: resumed_history.conversation_id,
+                        rollout_path: resumed_history.rollout_path.clone(),
+                        history: Some(resumed_history.history.clone()),
+                        include_archived: true,
+                        metadata: ThreadPersistenceMetadata {
+                            ephemeral: false,
+                            cwd: Some(config.cwd.to_path_buf()),
+                            model_provider: config.model_provider_id.clone(),
+                            memory_mode: if config.memories.generate_memories {
+                                ThreadMemoryMode::Enabled
+                            } else {
+                                ThreadMemoryMode::Disabled
+                            },
+                        },
+                    };
+                    let store = Arc::clone(&thread_store);
+                    let history_mode = session_configuration.history_mode;
+                    let (context_tx, context_rx) = tokio::sync::oneshot::channel();
+                    let live_thread = guard
+                        .acquire(async move {
+                            let (live_thread, history) =
+                                LiveThread::resume(store, history_mode, params).await?;
+                            // Cancellation still leaves the writer with the acquisition guard.
+                            let _ = context_tx.send(history);
+                            Ok(live_thread)
+                        })
+                        .await?;
+                    resume_context = Some(context_rx.await?);
+                    live_thread
+                }
+            };
+            Ok::<_, anyhow::Error>((Some(live_thread), local_guard, resume_context))
         }
         .instrument(info_span!(
             "session_init.thread_persistence",

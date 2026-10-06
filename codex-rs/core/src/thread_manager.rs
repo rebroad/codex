@@ -737,6 +737,7 @@ impl ThreadManager {
             LocalThreadStoreConfig {
                 codex_home: codex_home.clone(),
                 sqlite: codex_state::SqliteConfig::new_for_testing(absolute_codex_home),
+                ephemeral_rollout_retention: std::time::Duration::from_secs(24 * 60 * 60),
                 default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
             },
             state_db.clone(),
