@@ -1,5 +1,29 @@
 # Alpha history: skipped commit audit
 
+## Rearrangement audit (2026-10-07)
+
+The clean starting `alpha` commit was `efbf5f7d83ea7d8b25c8d6be98dd2f30691da640`,
+tree `9589f0af3a3fc1528a7ebf77a20b375c520c3242`, with merge-base
+`635a0c0b1353e22c8783ef15652c3985078cb2c5` (`Release 0.162.0-alpha.9`) and 125
+downstream commits. The uniquely named checkpoint
+`alpha.before-rearrange-20261007-goal-split` points to that exact commit and
+tree. Keep the merge-base fixed and require the final tree to equal this tree.
+
+The downstream range contained 14 `fixup!` commits. Three have direct
+downstream owners: takeover fixup `157abfa155` belongs to `308af1a2e0` (active
+session takeover); bare-prompt fixup `8064eaab05` belongs to `715c671132`
+(direct request mode); and build-helper fixup `2f1bbf1671` belongs to
+`29d1f1184a` (shared Cargo and linker harness). The second build fixup,
+`451610855b`, mixes a helper change with `justfile` recipe changes introduced
+by `631974b745`. Keep it as a clearly named integration commit after both
+prerequisites rather than forcing the whole patch onto one owner. The ten
+remaining subjects target commits absent from the downstream range and have no
+same-path downstream owner. Their patches form two mechanical groups by
+behavior: four atomic counter calls switch from `fetch_update` to `try_update`,
+and six `bail!` call sites gain terminating semicolons. Keep each group as one
+clearly scoped maintenance commit rather than retaining upstream-targeted
+fixup subjects.
+
 This note records older `alpha` commits that were omitted as separate commits
 during prior history rearrangements. The earlier replay onto
 `deca38acd3efccd5fd5e3d79758c217da1cc952a` (0.161.0-alpha.6) is recorded
