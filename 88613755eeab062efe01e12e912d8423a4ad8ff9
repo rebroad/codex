@@ -1,0 +1,31 @@
+Alpha downstream history rearrangement audit (2026-10-07)
+
+Scope
+- Rearranged downstream commits only; did not advance or rebase onto a newer upstream tip.
+- Fixed merge-base: 635a0c0b1353e22c8783ef15652c3985078cb2c5.
+- Final alpha: 88613755eeab062efe01e12e912d8423a4ad8ff9.
+- Final downstream count: 114 commits; no fixup! subjects remain in the range.
+- Final working tree: clean. Final tree equals the pre-rearrangement checkpoint tree.
+
+Checkpoint record
+- Original pre-pass: alpha.before-rearrange-20261007-post-audit at efe390b7a29f313796c0c2d6bda03f1fd0877477, tree 572ece22c54ab85b7e92b5f00eb7fc97df437035.
+- Follow-up pass: alpha.before-rearrange-20261007-followups at f2803f5f85853ccc2e8f31eb971bac61bfec5e72, same tree.
+- Drift investigation: alpha.before-rearrange-20261007-tree-drift at b1b10e14e1a9a8ec3b37a3e90628556fda629698, tree bd5526607da5b90fc17770542ab94c2ac261c542. Dropping the obsolete audit-document pair exposed an older 499-line audit document; commit 00df3a9dd1 removed it and restored the checkpoint tree.
+- Final rearrangement checkpoint: alpha.before-rearrange-20261007-owner-clusters at 00df3a9dd1e38c7fe14073aaee706729cea805b5, tree 572ece22c54ab85b7e92b5f00eb7fc97df437035.
+- Final alpha tree: 572ece22c54ab85b7e92b5f00eb7fc97df437035.
+
+Ownership decisions
+- Pairing helper owns stale pairing-lock recovery and retry after authentication changes; both follow-up repairs were folded into the pairing-helper commit.
+- Build-tree setup owns the later self-initializing build setup. Copy fallback remains separate because it is a distinct synchronization policy (reflink preferred, regular-copy fallback) spanning helper and instructions.
+- Core response-usage attribution owns filtering raw response-completed events and the rollout purge utility; the policy and utility were folded into that feature owner.
+- TUI unmanaged daemon mismatch fallback owns the recovery prompt WIP implementation. Managed recovery still requires explicit restart consent; unmanaged mismatch retains fallback behavior.
+- Formatter cache and formatting updates were grouped with the formatter build-tree owner.
+- Prompt/tool override policy (50427eef67) remains separate from built-in provider config override (6b65c6b9e6): their behavior and ownership are independent despite touching prompts/models versus config/provider resolution.
+- Other repeated touches to cli/src/main.rs, config_toml.rs, core/config.schema.json, Cargo.lock, app-server daemon state, and TUI module roots belong to separate features/APIs or dependency updates; range history was inspected and no single owner can coherently absorb them.
+- Standalone fixes without a downstream feature owner remain standalone: Git enrichment task release, Rustls fallback recognition, synthetic-root discovery, and Android managed daemon identity.
+- A private user Bazel config symlink remains in the tree and is intentionally not published or altered.
+
+Open validation and publication
+- TUI daemon recovery behavior was source-inspected and history-grouped, but end-to-end validation remains open for the later rebase/validation goal.
+- No tests/build were run in this history-only pass.
+- alpha diverges from origin/alpha (ahead 87, behind 98); no push was attempted because the rewritten branch is not a fast-forward. Do not force-push without separate explicit authority.
