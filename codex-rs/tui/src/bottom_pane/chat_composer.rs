@@ -5194,6 +5194,24 @@ mod tests {
     ) where
         F: FnOnce(&mut ChatComposer),
     {
+        snapshot_composer_state_with_extra_height(
+            name,
+            width,
+            /*extra_height*/ 8,
+            enhanced_keys_supported,
+            setup,
+        );
+    }
+
+    pub(super) fn snapshot_composer_state_with_extra_height<F>(
+        name: &str,
+        width: u16,
+        extra_height: u16,
+        enhanced_keys_supported: bool,
+        setup: F,
+    ) where
+        F: FnOnce(&mut ChatComposer),
+    {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -5209,7 +5227,7 @@ mod tests {
         setup(&mut composer);
         let footer_props = composer.footer_props();
         let footer_lines = footer_height(&footer_props, width);
-        let height = footer_lines + 8;
+        let height = footer_lines + extra_height;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|f| composer.render(f.area(), f.buffer_mut()))

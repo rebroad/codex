@@ -1051,6 +1051,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
                 .args(["-c", "commit.gpgSign=false"])
                 .args(args)
                 .current_dir(&source)
+                .env("AGENT_GIT_ADD_BYPASS", "1")
                 .env("GIT_AUTHOR_NAME", "Test")
                 .env("GIT_AUTHOR_EMAIL", "test@example.com")
                 .env("GIT_COMMITTER_NAME", "Test")

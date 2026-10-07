@@ -5,7 +5,7 @@ export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
 set shell := ["python3", "-c", 'import os, runpy; runpy.run_path(os.environ.get("JUST_SHELL", "../scripts/just-shell.py"), run_name="__main__")']
 set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.environ.get("JUST_SHELL", "../scripts/just-shell.py"), run_name="__main__")']
 
-rust_min_stack := "8388608" # 8 MiB
+rust_min_stack := "16777216" # 16 MiB
 cargo_incremental := env_var_or_default("CARGO_INCREMENTAL", "1")
 python := if os_family() == "windows" { "python" } else { "python3" }
 source_repo := shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " " + quote(justfile_directory()))
@@ -106,10 +106,10 @@ install:
 [unix]
 test *args:
     @bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
-    @cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test CODEX_DENY_WARNINGS=1 CARGO_INCREMENTAL={{ cargo_incremental }}; if test "$(rustc -vV | sed -n "s/^host: //p")" = aarch64-linux-android; then export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_CODEGEN_UNITS=1; fi; {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_DEV_CODEGEN_UNITS CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n "s/^host: //p")" != aarch64-linux-android; then NEXTEST_PROFILE=local bash "{{ voice_cargo_wrapper }}" --build-repo "{{ build_repo }}" -- cargo nextest run --locked --no-fail-fast "$@"; else bash "{{ voice_cargo_wrapper }}" --build-repo "{{ build_repo }}" -- cargo test --locked "$@"; fi
+    @cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test CODEX_DENY_WARNINGS=1 CARGO_INCREMENTAL={{ cargo_incremental }}; if test "$(rustc -vV | sed -n "s/^host: //p")" = aarch64-linux-android; then export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_CODEGEN_UNITS=1; fi; {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_DEV_CODEGEN_UNITS CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; bash "{{ source_repo }}/scripts/build_test_cli_if_needed.sh" "$@" || exit $?; if command -v cargo-nextest >/dev/null 2>&1 || test "$(rustc -vV | sed -n "s/^host: //p")" != aarch64-linux-android; then NEXTEST_PROFILE=local bash "{{ voice_cargo_wrapper }}" --build-repo "{{ build_repo }}" -- cargo nextest run --locked --no-fail-fast "$@"; else bash "{{ voice_cargo_wrapper }}" --build-repo "{{ build_repo }}" -- cargo test --locked "$@"; fi
 [windows]
 test *args:
-    @bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Set-Location "{{ cargo_working_directory }}"; $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --locked --no-fail-fast @($args | Select-Object -Skip 1)
+    @bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Set-Location "{{ cargo_working_directory }}"; $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; bash "{{ source_repo }}/scripts/build_test_cli_if_needed.sh" @($args | Select-Object -Skip 1); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; cargo nextest run --locked --no-fail-fast @($args | Select-Object -Skip 1)
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.

@@ -1,10 +1,10 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 1372
+assertion_line: 1381
 expression: rendered
 ---
 ╭──────────────────────────────────────────────────╮
-│ ✨ Update available! <VERSION> -> 9.9.9    │
+│ ✨ Update available! <VERSION> -> 9.9.9   │
 │ Run npm install -g @reb.ai/codex to update.      │
 │                                                  │
 │ See full release notes:                          │

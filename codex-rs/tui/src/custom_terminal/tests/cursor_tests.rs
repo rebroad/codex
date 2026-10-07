@@ -92,6 +92,7 @@ fn terminal_draw_repaints_the_cursor_anchor_only_when_its_style_needs_restoring(
 
 #[test]
 fn terminal_draw_repairs_styled_anchor_on_cursor_only_frames() {
+    let color_enabled = !Colored::ansi_color_disabled_memoized();
     let mut terminal =
         Terminal::with_options(CaptureBackend::new(/*width*/ 12, /*height*/ 2)).expect("terminal");
     let area = Rect::new(
@@ -124,7 +125,14 @@ fn terminal_draw_repairs_styled_anchor_on_cursor_only_frames() {
         assert_eq!(parser.screen().cursor_position(), (1, x));
         for column in 0..area.width {
             let cell = parser.screen().cell(1, column).expect("viewport cell");
-            assert_eq!(cell.bgcolor(), vt100::Color::Rgb(80, 80, 80));
+            assert_eq!(
+                cell.bgcolor(),
+                if color_enabled {
+                    vt100::Color::Rgb(80, 80, 80)
+                } else {
+                    vt100::Color::Default
+                }
+            );
             assert!(
                 cell.bold(),
                 "lost anchor or trailing-cell modifier at {column}"
@@ -132,11 +140,16 @@ fn terminal_draw_repairs_styled_anchor_on_cursor_only_frames() {
         }
         frames.push(terminal.backend().output().escape_debug().to_string());
     }
-    assert_snapshot!("cursor_style_styled_frames", frames.join("\n"));
+    if color_enabled {
+        assert_snapshot!("cursor_style_styled_frames", frames.join("\n"));
+    } else {
+        assert_snapshot!("cursor_style_styled_frames_no_color", frames.join("\n"));
+    }
 }
 
 #[test]
 fn terminal_draw_repairs_owned_wide_hyperlink_after_skipped_glyphs() {
+    let color_enabled = !Colored::ansi_color_disabled_memoized();
     let mut terminal =
         Terminal::with_options(CaptureBackend::new(/*width*/ 8, /*height*/ 1)).expect("terminal");
     let area = Rect::new(
@@ -160,11 +173,16 @@ fn terminal_draw_repairs_owned_wide_hyperlink_after_skipped_glyphs() {
             .expect("draw");
         frames.push(terminal.backend().output().escape_debug().to_string());
     }
-    assert_snapshot!("cursor_style_owned_wide_frames", frames.join("\n"));
+    if color_enabled {
+        assert_snapshot!("cursor_style_owned_wide_frames", frames.join("\n"));
+    } else {
+        assert_snapshot!("cursor_style_owned_wide_frames_no_color", frames.join("\n"));
+    }
 }
 
 #[test]
 fn terminal_draw_repairs_single_column_without_scrolling() {
+    let color_enabled = !Colored::ansi_color_disabled_memoized();
     let mut terminal =
         Terminal::with_options(CaptureBackend::new(/*width*/ 1, /*height*/ 1)).expect("terminal");
     let area = Rect::new(
@@ -191,11 +209,19 @@ fn terminal_draw_repairs_single_column_without_scrolling() {
     }
     parser.screen_mut().set_scrollback(/*rows*/ 1);
     assert_eq!(parser.screen().scrollback(), 0);
-    assert_snapshot!("cursor_style_single_column_frames", frames.join("\n"));
+    if color_enabled {
+        assert_snapshot!("cursor_style_single_column_frames", frames.join("\n"));
+    } else {
+        assert_snapshot!(
+            "cursor_style_single_column_frames_no_color",
+            frames.join("\n")
+        );
+    }
 }
 
 #[test]
 fn terminal_draw_omits_cursor_style_without_an_owned_glyph() {
+    let color_enabled = !Colored::ansi_color_disabled_memoized();
     let mut terminal =
         Terminal::with_options(CaptureBackend::new(/*width*/ 2, /*height*/ 1)).expect("terminal");
     for width in [0, 2] {
@@ -219,7 +245,14 @@ fn terminal_draw_omits_cursor_style_without_an_owned_glyph() {
             .expect("draw");
         assert_eq!(
             terminal.backend().output(),
-            "\x1b[39m\x1b[49m\x1b[0m\x1b[1;2H\x1b[?25h"
+            format!(
+                "{}\x1b[0m\x1b[1;2H\x1b[?25h",
+                if color_enabled {
+                    "\x1b[39m\x1b[49m"
+                } else {
+                    ""
+                }
+            )
         );
     }
     terminal.set_viewport_area(Rect::default());
@@ -227,6 +260,13 @@ fn terminal_draw_omits_cursor_style_without_an_owned_glyph() {
     terminal.draw(|_| {}).expect("hide cursor");
     assert_eq!(
         terminal.backend().output(),
-        "\x1b[39m\x1b[49m\x1b[0m\x1b[?25l"
+        format!(
+            "{}\x1b[0m\x1b[?25l",
+            if color_enabled {
+                "\x1b[39m\x1b[49m"
+            } else {
+                ""
+            }
+        )
     );
 }

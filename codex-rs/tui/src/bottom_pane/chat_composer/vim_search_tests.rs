@@ -1,6 +1,7 @@
 //! Fresh draft entry and composer-local Vim search remain separate input paths.
 
 use super::super::InputResult;
+use super::super::tests::snapshot_composer_state_with_extra_height;
 use super::super::tests::snapshot_composer_state_with_width;
 use super::super::tests::type_chars_humanlike;
 use crate::keymap::KeyChordMatch;
@@ -114,9 +115,10 @@ fn vim_search_query_edits_and_paste_preserve_the_draft() {
 
 #[test]
 fn empty_vim_normal_slash_opens_commands() {
-    snapshot_composer_state_with_width(
+    snapshot_composer_state_with_extra_height(
         "vim_empty_normal_slash",
         /*width*/ 60,
+        /*extra_height*/ 10,
         /*enhanced_keys_supported*/ false,
         |composer| {
             composer.set_vim_enabled(/*enabled*/ true);
