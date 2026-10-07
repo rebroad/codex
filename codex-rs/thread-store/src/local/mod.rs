@@ -514,7 +514,8 @@ impl LocalThreadStore {
 }
 
 fn duration_until_next_local_midnight() -> std::time::Duration {
-    use chrono::{Local, TimeZone};
+    use chrono::Local;
+    use chrono::TimeZone;
 
     let now = Local::now();
     let Some(tomorrow) = now.date_naive().succ_opt() else {

@@ -113,7 +113,9 @@ def main() -> int:
         connection.execute("PRAGMA busy_timeout = 30000")
         if args.apply:
             connection.execute("BEGIN IMMEDIATE")
-        rows = connection.execute("SELECT id, model FROM threads ORDER BY id").fetchall()
+        rows = connection.execute(
+            "SELECT id, model FROM threads ORDER BY id"
+        ).fetchall()
         progress = Progress(len(rows))
         progress.update(0)
         totals: Counter[str] = Counter()
