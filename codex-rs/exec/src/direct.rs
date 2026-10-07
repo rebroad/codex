@@ -69,20 +69,21 @@ pub(crate) async fn run(prompt_text: String, config: &Config, json_mode: bool) -
 
     let mut prompt = Prompt::default();
     prompt.input = build_inputs(
-        (!config.bare_prompt)
-            .then_some(config.developer_instructions.as_deref())
-            .flatten()
+        config
+            .developer_instructions
+            .as_deref()
             .filter(|instructions| !instructions.is_empty()),
         &prompt_text,
     );
     prompt.base_instructions.text.clear();
     prompt.base_instructions.provenance = None;
-    if !config.bare_prompt {
-        prompt.base_instructions.text = config
-            .base_instructions
-            .clone()
-            .unwrap_or_else(|| codex_core::review_prompts::render_model_instructions(&model_info));
-    }
+    prompt.base_instructions.text = config.base_instructions.clone().unwrap_or_else(|| {
+        if config.bare_prompt {
+            String::new()
+        } else {
+            codex_core::review_prompts::render_model_instructions(&model_info)
+        }
+    });
 
     let mut client_session = ModelClient::new(
         Some(auth_manager),

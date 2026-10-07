@@ -707,7 +707,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         set_parent_from_context(&exec_span, context);
     }
 
-    if direct {
+    // A top-level bare prompt has no session context to preserve. Use the isolated
+    // request path so the server does not attach the normal Codex session context.
+    if direct || (bare_prompt && command.is_none()) {
         return direct::run(resolve_prompt(prompt), &config, json_mode).await;
     }
     let config_warnings: Vec<ConfigWarningNotification> = config
