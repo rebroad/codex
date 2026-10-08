@@ -1,4 +1,4 @@
-Rebase the reviewed downstream commits on `alpha` onto the latest `upstream/latest-alpha-cli`, preserving relevant downstream functionality and validating the resulting branch.
+Copy (`git branch`) the `alpha` branch to a `alpha-rebasing-<timestamp>` branch and switch to it. Rebase this onto the latest `upstream/latest-alpha-cli`, preserving relevant downstream functionality and validating the resulting branch.
 
 - Establish an upstream baseline before judging downstream validation using `~/src/codex.upstream` (a symlink into `/mnt/kingston/builds/` area), build the upstream branch at the exact rebase target there, and run the full upstream test suite. Record the upstream commit, build result, and test results/failures. Compare downstream failures with this baseline so failures already present upstream are not treated as regressions introduced by our downstream changes.
 - Start from the clean, rearranged `alpha` series produced by `GOAL.md`. Verify its recorded commit and tree hash, and confirm its merge-base has not moved since the rearrangement goal.
