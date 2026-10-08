@@ -630,25 +630,37 @@ impl App {
                                 let deadline =
                                     tokio::time::Instant::now() + Duration::from_secs(120);
                                 let mut delay = 1;
+                                let mut last_reconnect_error = None;
                                 loop {
                                     tokio::time::sleep(Duration::from_secs(delay)).await;
                                     if tokio::time::Instant::now() >= deadline {
-                                        color_eyre::eyre::bail!(
-                                            "app-server did not reconnect after draining"
-                                        );
+                                        if let Some(error) = last_reconnect_error {
+                                            color_eyre::eyre::bail!(
+                                                "app-server did not reconnect after draining; last reconnect error: {error}"
+                                            );
+                                        }
+                                        color_eyre::eyre::bail!("app-server did not reconnect after draining");
                                     }
                                     delay = (delay * 2).min(8);
-                                    let Ok(client) =
-                                        crate::app_server_connection::connect(&app_server_target)
-                                            .await
-                                    else {
-                                        continue;
+                                    let client = match crate::app_server_connection::connect(
+                                        &app_server_target,
+                                    )
+                                    .await
+                                    {
+                                        Ok(client) => client,
+                                        Err(err) => {
+                                            last_reconnect_error = Some(format!("{err:#}"));
+                                            continue;
+                                        }
                                     };
                                     app_server.replace_client(client);
-                                    let Ok(_reconnected_bootstrap) =
-                                        app_server.bootstrap(&config).await
-                                    else {
-                                        continue;
+                                    if let Err(err) = app_server.bootstrap(&config).await {
+                                        last_reconnect_error = Some(format!("{err:#}"));
+                                        if crate::app_server_session::is_server_draining_error(&err)
+                                        {
+                                            continue;
+                                        }
+                                        break Err(err);
                                     };
                                     match app_server
                                         .resume_thread_with_permission_overrides(
@@ -665,6 +677,7 @@ impl App {
                                             if crate::app_server_session::
                                                 is_server_draining_error(&err) =>
                                         {
+                                            last_reconnect_error = Some(format!("{err:#}"));
                                             continue;
                                         }
                                         Err(err) => break Err(err),
