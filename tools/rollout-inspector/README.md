@@ -21,6 +21,9 @@ API endpoints:
 - `GET /api/thread?file=/abs/path/rollout.jsonl` returns a simplified thread view
 - `GET /api/analyze?file=/abs/path/rollout.jsonl&top=20&largeKb=256` returns large/redundant payload analysis
 
+The rollout list is ordered by modification time from oldest to newest. The
+rollout list and conversation view scroll independently.
+
 ## 1b) One-shot CLI: open a specific rollout file in browser
 
 ```bash

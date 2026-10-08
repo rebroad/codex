@@ -97,14 +97,24 @@ button:hover {
   grid-template-columns: 340px 1fr;
   gap: 12px;
   padding: 0 24px 24px 24px;
+  height: calc(100vh - 260px);
+  min-height: 300px;
 }
 
 .file-list ul {
+  flex: 1;
+  min-height: 0;
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 70vh;
-  overflow: auto;
+  overflow-y: auto;
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .file-list li {
@@ -124,6 +134,8 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .meta {
@@ -207,6 +219,7 @@ button:hover {
 
 @media (max-width: 1100px) {
   .layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 0.8fr) minmax(0, 1.2fr);
   }
 }
