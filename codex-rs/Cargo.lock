@@ -5281,6 +5281,7 @@ dependencies = [
  "rtc",
  "rubato",
  "sonora",
+ "system-deps",
  "tempfile",
  "tokio",
  "webrtc",
