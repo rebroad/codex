@@ -17,7 +17,7 @@ Open:
 
 API endpoints:
 
-- `GET /api/files?root=/path/to/.codex` lists recent rollout files under `sessions/` and `archived_sessions/`
+- `GET /api/files?root=/path/to/.codex` lists recent files under `sessions/`, `archived_sessions/`, and `ephemeral_sessions/`; add `directory=1` to list beneath `root` directly with summaries
 - `GET /api/thread?file=/abs/path/rollout.jsonl` returns a simplified thread view
 - `GET /api/analyze?file=/abs/path/rollout.jsonl&top=20&largeKb=256` returns large/redundant payload analysis
 
@@ -28,8 +28,15 @@ node tools/rollout-inspector/view-rollout.js 019c336c-9ced-7553-a843-15c04790ca4
 ```
 
 The positional argument may be a session-id without `.jsonl`. The inspector
-searches both `~/.codex/sessions` and `~/.codex/archived_sessions`; an explicit
-rollout path remains supported.
+searches `~/.codex/sessions`, `~/.codex/archived_sessions`, and
+`~/.codex/ephemeral_sessions`; an explicit rollout path remains supported. Pass
+a directory to browse all rollouts beneath it, with expandable summaries for
+each rollout:
+
+```bash
+view-rollout ~/.codex/ephemeral_sessions/2026/10/07
+view-rollout .
+```
 
 Useful options:
 
