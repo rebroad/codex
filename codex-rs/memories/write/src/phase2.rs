@@ -312,8 +312,11 @@ mod agent {
         agent_config.mcp_servers = Constrained::allow_only(HashMap::new());
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-        // Consolidation runs as an internal worker and must not recursively delegate.
+        // Model capability can enable Multi-Agent V2 independently of the legacy Collab flag.
+        // Pin both controls off so consolidation never exposes delegation tools.
+        let _ = agent_config.features.disable(Feature::MultiAgentV2);
         let _ = agent_config.features.disable(Feature::Collab);
+        agent_config.agents_enabled = false;
         let _ = agent_config.features.disable(Feature::MemoryTool);
         let _ = agent_config.features.disable(Feature::Apps);
         let _ = agent_config.features.disable(Feature::Plugins);
