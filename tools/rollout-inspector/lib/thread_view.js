@@ -59,6 +59,8 @@ async function buildThreadView(filePath, options = {}) {
 
   const state = {
     sessionMeta: null,
+    models: new Set(),
+    tokenUsage: null,
     turns: [],
     currentTurn: null,
     totals: {
@@ -86,6 +88,17 @@ async function buildThreadView(filePath, options = {}) {
 
     if (recordType === "session_meta") {
       state.sessionMeta = payload;
+      continue;
+    }
+
+    if (recordType === "token_usage_record") {
+      if (typeof payload.effective_model === "string") {
+        state.models.add(payload.effective_model);
+      }
+      state.tokenUsage = {
+        latestResponse: payload.usage ?? null,
+        thread: payload.thread_token_usage ?? payload.turn_token_usage ?? null,
+      };
       continue;
     }
 
@@ -219,6 +232,8 @@ async function buildThreadView(filePath, options = {}) {
       timestamp: state.sessionMeta?.timestamp ?? null,
       modelProvider: state.sessionMeta?.model_provider ?? null,
     },
+    models: [...state.models],
+    tokenUsage: state.tokenUsage,
     totals: state.totals,
     parseErrors: state.parseErrors,
     turns: state.turns,
