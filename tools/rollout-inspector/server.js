@@ -183,7 +183,7 @@ async function listRolloutFiles(rootPath, limit = 400, directoryMode = false) {
     await visit(root);
   }
 
-  out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  out.sort((a, b) => a.mtimeMs - b.mtimeMs);
   return out.slice(0, limit);
 }
 
