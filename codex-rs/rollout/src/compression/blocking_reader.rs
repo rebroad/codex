@@ -2,7 +2,9 @@
 //! Consumers may stop early; canceled reads do not contribute an EOF, failure, or duration.
 
 use std::io;
+#[cfg(test)]
 use std::io::BufRead;
+#[cfg(test)]
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -13,10 +15,13 @@ use std::time::Instant;
 use super::BlockingLineReader;
 use super::ReadFailureSource;
 use super::ReadMetrics;
+#[cfg(test)]
 use super::RolloutLineReaderInner;
+#[cfg(test)]
 use super::open_rollout_line_reader;
 
 /// Opens a fresh reader and processes its lines on the shared blocking worker.
+#[cfg(test)]
 pub(crate) async fn read_rollout_lines<T, F>(path: &Path, read: F) -> io::Result<T>
 where
     T: Send + 'static,
