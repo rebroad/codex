@@ -18,6 +18,14 @@ test = false
 [lints]
 workspace = true
 
+[build-dependencies]
+system-deps = "7.0.8"
+
+[package.metadata.system-deps]
+gstreamer_1_0 = { name = "gstreamer-1.0", version = ">= 1.26.2" }
+gstreamer_app_1_0 = { name = "gstreamer-app-1.0", version = ">= 1.26.2" }
+gstreamer_audio_1_0 = { name = "gstreamer-audio-1.0", version = ">= 1.26.2" }
+
 [dependencies]
 codex-process-hardening = { workspace = true }
 codex-realtime-webrtc = { workspace = true }
@@ -31,9 +39,9 @@ webrtc = "=0.20.3"
 [target.'cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"), all(windows, target_env = "msvc")))'.dependencies]
 cpal = "=0.18.2"
 crossbeam-queue = "0.3.12"
-gstreamer = { version = "=0.25.3", features = ["v1_28"] }
-gstreamer-app = { version = "=0.25.2", features = ["v1_28"] }
-gstreamer-audio = { version = "=0.25.3", features = ["v1_28"] }
+gstreamer = { version = "=0.25.3", features = ["v1_26"] }
+gstreamer-app = { version = "=0.25.2", features = ["v1_26"] }
+gstreamer-audio = { version = "=0.25.3", features = ["v1_26"] }
 opus = "=0.4.0"
 rubato = { version = "=5.0.0", default-features = false }
 sonora = { version = "=0.2.0", default-features = false }
