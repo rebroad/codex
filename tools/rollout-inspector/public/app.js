@@ -2,6 +2,8 @@ function $(id) {
   return document.getElementById(id);
 }
 
+let directoryMode = false;
+
 function formatBytes(bytes) {
   const units = ["B", "KiB", "MiB", "GiB"];
   let value = bytes;
@@ -35,6 +37,28 @@ function roleClass(role) {
   return "role-other";
 }
 
+function formatTokenCount(value) {
+  return typeof value === "number"
+    ? new Intl.NumberFormat().format(value)
+    : "unknown";
+}
+
+function renderUsageSummary(thread) {
+  const summary = $("usageSummary");
+  summary.innerHTML = "";
+  const usage =
+    thread?.tokenUsage?.thread ?? thread?.tokenUsage?.latestResponse;
+  const usageLabel = thread?.tokenUsage?.thread
+    ? "Thread tokens (cumulative)"
+    : "Latest response tokens";
+  const modelNames = thread?.models || [];
+  const model = modelNames.length > 0 ? modelNames.join(", ") : "unknown";
+  const tokens = usage
+    ? `${formatTokenCount(usage.total_tokens)} total · ${formatTokenCount(usage.input_tokens)} input (${formatTokenCount(usage.cached_input_tokens)} cached, ${formatTokenCount(usage.cache_write_input_tokens)} cache write) · ${formatTokenCount(usage.output_tokens)} output (${formatTokenCount(usage.reasoning_output_tokens)} reasoning)`
+    : "No token usage recorded";
+  summary.textContent = `Model: ${model}\n${usageLabel}: ${tokens}`;
+}
+
 function renderThread(thread) {
   const view = $("threadView");
   const meta = $("threadMeta");
@@ -42,9 +66,12 @@ function renderThread(thread) {
   meta.textContent = "";
 
   if (!thread) {
+    renderUsageSummary(null);
     view.innerHTML = `<div class="empty">(no data)</div>`;
     return;
   }
+
+  renderUsageSummary(thread);
 
   meta.textContent =
     `file=${thread.file}\n` +
@@ -171,15 +198,46 @@ async function loadRecentFiles() {
   const filesNode = $("files");
   filesNode.innerHTML = "";
   const rootPath = $("rootPath").value.trim();
-  const query = rootPath ? `?root=${encodeURIComponent(rootPath)}` : "";
+  const params = new URLSearchParams();
+  if (rootPath) params.set("root", rootPath);
+  if (directoryMode) params.set("directory", "1");
+  const query = params.size > 0 ? `?${params.toString()}` : "";
 
   const data = await getJson(`/api/files${query}`);
+  $("fileListTitle").textContent = directoryMode
+    ? `Rollouts in ${data.root}`
+    : "Recent Files";
   for (const item of data.files || []) {
     const li = document.createElement("li");
-    li.textContent = `${item.path} (${formatBytes(item.sizeBytes)})`;
-    li.addEventListener("click", () => {
-      $("filePath").value = item.path;
-    });
+    if (directoryMode) {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      const firstMessage = item.summary?.firstMessage || "(no user message found)";
+      summary.textContent = `${new Date(item.mtimeMs).toLocaleString()} · ${firstMessage}`;
+      const info = document.createElement("div");
+      info.className = "rollout-summary";
+      info.textContent = [
+        `session=${item.summary?.sessionId || "(unknown)"}`,
+        `source=${item.summary?.source || "(unknown)"}`,
+        `cwd=${item.summary?.cwd || "(unknown)"}`,
+        `size=${formatBytes(item.sizeBytes)}`,
+        item.path,
+      ].join("\n");
+      const openButton = document.createElement("button");
+      openButton.textContent = "Load full thread";
+      openButton.addEventListener("click", async () => {
+        $("filePath").value = item.path;
+        await loadThread();
+        $("threadView").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      details.append(summary, info, openButton);
+      li.appendChild(details);
+    } else {
+      li.textContent = `${item.path} (${formatBytes(item.sizeBytes)})`;
+      li.addEventListener("click", () => {
+        $("filePath").value = item.path;
+      });
+    }
     filesNode.appendChild(li);
   }
   if (!filesNode.firstChild) {
@@ -191,6 +249,7 @@ function applyUrlState() {
   const params = new URLSearchParams(window.location.search);
   const file = params.get("file");
   const root = params.get("root");
+  directoryMode = params.get("directory") === "1";
   const includeTools = params.get("includeTools");
   const includeReasoning = params.get("includeReasoning");
   const includeSystemMessages = params.get("includeSystemMessages");
