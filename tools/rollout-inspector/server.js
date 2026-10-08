@@ -5,6 +5,7 @@ const http = require("node:http");
 const { URL } = require("node:url");
 const { analyzeRollout } = require("./lib/analyzer");
 const { buildThreadView } = require("./lib/thread_view");
+const { readJsonlLines, safeJsonParse } = require("./lib/jsonl");
 
 const DEFAULT_PORT = 8787;
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -88,10 +89,58 @@ function requireFileParam(urlObj) {
   return resolved;
 }
 
-async function listRolloutFiles(rootPath, limit = 400) {
-  const roots = ["sessions", "archived_sessions"].map((segment) =>
-    path.join(rootPath, segment),
-  );
+function previewText(value, maxChars = 240) {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}…`;
+}
+
+async function summarizeRollout(filePath) {
+  const summary = { sessionId: path.basename(filePath, ".jsonl") };
+  let linesRead = 0;
+  for await (const line of readJsonlLines(filePath)) {
+    linesRead += 1;
+    const parsed = safeJsonParse(line.line);
+    if (!parsed.ok) {
+      if (linesRead >= 500) break;
+      continue;
+    }
+    const record = parsed.value;
+    const payload = record?.payload;
+    if (record?.type === "session_meta") {
+      summary.sessionId = payload.id ?? summary.sessionId;
+      summary.cwd = payload.cwd ?? "";
+      summary.source = payload.source ?? "";
+    } else if (
+      record?.type === "event_msg" &&
+      payload?.type === "user_message" &&
+      typeof payload.message === "string" &&
+      !summary.firstMessage
+    ) {
+      summary.firstMessage = previewText(payload.message);
+    } else if (
+      record?.type === "response_item" &&
+      payload?.type === "message" &&
+      payload.role === "user" &&
+      Array.isArray(payload.content) &&
+      !summary.firstMessage
+    ) {
+      const message = payload.content
+        .map((part) => (typeof part?.text === "string" ? part.text : ""))
+        .join("");
+      if (message) summary.firstMessage = previewText(message);
+    }
+    if (summary.cwd && summary.firstMessage) break;
+    if (linesRead >= 500) break;
+  }
+  return summary;
+}
+
+async function listRolloutFiles(rootPath, limit = 400, directoryMode = false) {
+  const roots = directoryMode
+    ? [rootPath]
+    : ["sessions", "archived_sessions", "ephemeral_sessions"].map(
+        (segment) => path.join(rootPath, segment),
+      );
   const out = [];
 
   async function visit(dirPath) {
@@ -117,11 +166,15 @@ async function listRolloutFiles(rootPath, limit = 400) {
         await visit(fullPath);
       } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
         const stat = await fs.stat(fullPath);
-        out.push({
+        const item = {
           path: fullPath,
           sizeBytes: stat.size,
           mtimeMs: stat.mtimeMs,
-        });
+        };
+        if (directoryMode) {
+          item.summary = await summarizeRollout(fullPath);
+        }
+        out.push(item);
       }
     }
   }
@@ -172,6 +225,7 @@ async function handleApi(req, res, urlObj, codexHome) {
       const files = await listRolloutFiles(
         root,
         Number.isFinite(limit) ? limit : 400,
+        parseBoolean(urlObj.searchParams.get("directory")),
       );
       json(res, 200, { root, files });
     } catch (error) {
