@@ -1,6 +1,7 @@
 //! Drives automatic reconnect through the real binary and terminal event loop.
 
 use super::focus_palette::PtyCodex;
+use super::focus_palette::available_test_model_list;
 use super::focus_palette::write_test_config;
 use anyhow::Result;
 use anyhow::ensure;
@@ -116,7 +117,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                     "account/read" => {
                         json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": false})
                     }
-                    "model/list" => json!({"data": [], "nextCursor": null}),
+                    "model/list" => available_test_model_list(),
                     "config/read" => {
                         let params = request.params.as_ref().unwrap();
                         assert_eq!(params["cwd"], server_cwd.to_string_lossy().as_ref());

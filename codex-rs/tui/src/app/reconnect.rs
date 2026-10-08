@@ -91,6 +91,9 @@ pub(super) async fn reconnect(
                     {
                         return Err(error);
                     }
+                    Err(error) if crate::app_server_session::is_server_draining_error(&error) => {
+                        return Err(error);
+                    }
                     Err(error)
                         if matches!(
                             error.downcast_ref::<TypedRequestError>(),
@@ -175,7 +178,7 @@ impl App {
         let disconnected = matches!(
             error.downcast_ref::<TypedRequestError>(),
             Some(TypedRequestError::Transport { .. })
-        );
+        ) || crate::app_server_session::is_server_draining_error(error);
         disconnected && self.begin_reconnect()
     }
 

@@ -393,6 +393,15 @@ pub(crate) fn is_active_writer_error(err: &color_eyre::eyre::Report) -> bool {
     })
 }
 
+pub(crate) fn is_server_draining_error(err: &color_eyre::eyre::Report) -> bool {
+    matches!(
+        err.downcast_ref::<TypedRequestError>(),
+        Some(TypedRequestError::Server { source, .. })
+            if source.code == -32600
+                && source.message == "Server is draining; retry after reconnecting"
+    )
+}
+
 pub(crate) fn source_agent_path(source: &SessionSource) -> Option<String> {
     match source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
@@ -427,6 +436,11 @@ pub(crate) enum TurnPermissionsOverride {
 pub(crate) struct UnsupportedLegacyPermissionProfile;
 
 impl AppServerSession {
+    pub(crate) fn replace_client(&mut self, client: AppServerClient) {
+        self.client = client;
+        self.buffered_events.clear();
+    }
+
     /// Platform of the app-server process, not necessarily its executor.
     pub(crate) fn app_server_platform_family(&self) -> Option<&str> {
         self.client.platform_family()

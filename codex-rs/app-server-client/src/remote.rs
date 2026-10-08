@@ -188,9 +188,30 @@ type Reconnect<S> = Box<
         + Sync,
 >;
 
+#[derive(Clone, Copy)]
+enum ReconnectPolicy {
+    Automatic,
+    CallerManaged,
+}
+
 impl RemoteAppServerClient {
     pub async fn connect(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
-        Self::connect_with_policy(args, SocketPeerPolicy::ExplicitEndpoint).await
+        Self::connect_with_policy(
+            args,
+            SocketPeerPolicy::ExplicitEndpoint,
+            ReconnectPolicy::Automatic,
+        )
+        .await
+    }
+
+    /// Connects a client whose caller owns recovery after the transport disconnects.
+    pub async fn connect_without_reconnect(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
+        Self::connect_with_policy(
+            args,
+            SocketPeerPolicy::ExplicitEndpoint,
+            ReconnectPolicy::CallerManaged,
+        )
+        .await
     }
 
     /// Connects to an implicitly discovered Windows daemon, verifying its peer
@@ -203,12 +224,37 @@ impl RemoteAppServerClient {
                 "local daemon requires a Unix socket",
             ));
         }
-        Self::connect_with_policy(args, SocketPeerPolicy::NonElevatedCurrentUser).await
+        Self::connect_with_policy(
+            args,
+            SocketPeerPolicy::NonElevatedCurrentUser,
+            ReconnectPolicy::Automatic,
+        )
+        .await
+    }
+
+    /// Connects to the local Windows daemon while leaving recovery to the caller.
+    #[cfg(windows)]
+    pub async fn connect_local_daemon_without_reconnect(
+        args: RemoteAppServerConnectArgs,
+    ) -> IoResult<Self> {
+        if !matches!(args.endpoint, RemoteAppServerEndpoint::UnixSocket { .. }) {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "local daemon requires a Unix socket",
+            ));
+        }
+        Self::connect_with_policy(
+            args,
+            SocketPeerPolicy::NonElevatedCurrentUser,
+            ReconnectPolicy::CallerManaged,
+        )
+        .await
     }
 
     async fn connect_with_policy(
         args: RemoteAppServerConnectArgs,
         peer_policy: SocketPeerPolicy,
+        reconnect_policy: ReconnectPolicy,
     ) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
         let initialize_params = args.initialize_params();
@@ -240,6 +286,7 @@ impl RemoteAppServerClient {
                     stream,
                     initialize_params,
                     reconnect,
+                    reconnect_policy,
                 )
                 .await
             }
@@ -262,6 +309,7 @@ impl RemoteAppServerClient {
                     stream,
                     initialize_params,
                     reconnect,
+                    reconnect_policy,
                 )
                 .await
             }
@@ -290,6 +338,7 @@ impl RemoteAppServerClient {
         stream: WebSocketStream<S>,
         initialize_params: InitializeParams,
         reconnect: Reconnect<S>,
+        reconnect_policy: ReconnectPolicy,
     ) -> IoResult<Self>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -317,7 +366,7 @@ impl RemoteAppServerClient {
             let mut reconnect_attempt = 0u32;
             'worker: loop {
                 let mut worker_exit_error: Option<(ErrorKind, String)> = None;
-                let mut should_reconnect = true;
+                let mut should_reconnect = matches!(reconnect_policy, ReconnectPolicy::Automatic);
                 loop {
                     tokio::select! {
                         command = command_rx.recv() => {

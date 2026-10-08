@@ -619,6 +619,64 @@ impl App {
                     .await
                 {
                     Ok(Ok(resumed)) => Ok(resumed),
+                    Ok(Err(err)) if crate::app_server_session::is_server_draining_error(&err) => {
+                        let permissions =
+                            crate::resume_permissions::ResumePermissions::from_overrides(
+                                &config,
+                                &harness_overrides,
+                            );
+                        match startup_draft
+                            .run_until(tui, async {
+                                let deadline =
+                                    tokio::time::Instant::now() + Duration::from_secs(120);
+                                let mut delay = 1;
+                                loop {
+                                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                                    if tokio::time::Instant::now() >= deadline {
+                                        color_eyre::eyre::bail!(
+                                            "app-server did not reconnect after draining"
+                                        );
+                                    }
+                                    delay = (delay * 2).min(8);
+                                    let Ok(client) =
+                                        crate::app_server_connection::connect(&app_server_target)
+                                            .await
+                                    else {
+                                        continue;
+                                    };
+                                    app_server.replace_client(client);
+                                    let Ok(_reconnected_bootstrap) =
+                                        app_server.bootstrap(&config).await
+                                    else {
+                                        continue;
+                                    };
+                                    match app_server
+                                        .resume_thread_with_permission_overrides(
+                                            &local_settings,
+                                            config.clone(),
+                                            target_session.thread_id,
+                                            model_settings,
+                                            permissions,
+                                        )
+                                        .await
+                                    {
+                                        Ok(resumed) => break Ok(resumed),
+                                        Err(err)
+                                            if crate::app_server_session::
+                                                is_server_draining_error(&err) =>
+                                        {
+                                            continue;
+                                        }
+                                        Err(err) => break Err(err),
+                                    }
+                                }
+                            })
+                            .await
+                        {
+                            Ok(result) => result,
+                            Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                        }
+                    }
                     Ok(Err(err)) if crate::app_server_session::is_active_writer_error(&err) => {
                         read_only_thread = true;
                         match startup_draft

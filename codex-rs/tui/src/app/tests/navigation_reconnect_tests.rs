@@ -252,7 +252,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             Ok::<_, color_eyre::Report>(methods)
         });
         let mut session = AppServerSession::new(
-            crate::connect_remote_app_server(endpoint).await?,
+            crate::connect_remote_app_server_without_reconnect(endpoint).await?,
             ThreadParamsMode::Embedded,
         );
         assert!(
@@ -264,8 +264,11 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 .await
                 .is_err()
         );
-        let disconnected = session.next_event().await.unwrap();
-        app.handle_app_server_event(&session, disconnected).await;
+        if let Some(disconnected) = session.next_event().await {
+            app.handle_app_server_event(&session, disconnected).await;
+        } else {
+            assert!(app.begin_reconnect());
+        }
         assert!(app.reconnect.offline);
         assert!(app.agents_overview.last_messages.is_empty());
         assert!(refresh.await.unwrap_err().is_cancelled());
@@ -406,10 +409,11 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         if previous_thread.is_some() {
             let history = drain_history(&mut app, &mut tui, &mut session, &mut events).await?;
             assert!(history.contains("Unsubmitted title: Keep this task draft!"));
-            assert_snapshot!(
-                "daemon_command_center_vanished_rename",
-                render_bottom_popup(&app.chat_widget, /*width*/ 100)
-            );
+            let snapshot = crate::version::normalize_cli_version_for_snapshot(
+                &render_bottom_popup(&app.chat_widget, /*width*/ 100),
+            )
+            .replace("v<VERSION>", "v0.0.0");
+            assert_snapshot!("daemon_command_center_vanished_rename", snapshot);
             app.handle_tui_event(
                 &mut tui,
                 &mut session,

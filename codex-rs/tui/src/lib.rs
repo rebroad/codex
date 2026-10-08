@@ -501,7 +501,26 @@ pub fn remote_addr_supports_auth_token(endpoint: &RemoteAppServerEndpoint) -> bo
 async fn connect_remote_app_server(
     endpoint: RemoteAppServerEndpoint,
 ) -> color_eyre::Result<AppServerClient> {
-    let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+    connect_remote_app_server_with(endpoint, RemoteReconnectPolicy::Automatic).await
+}
+
+pub(crate) async fn connect_remote_app_server_without_reconnect(
+    endpoint: RemoteAppServerEndpoint,
+) -> color_eyre::Result<AppServerClient> {
+    connect_remote_app_server_with(endpoint, RemoteReconnectPolicy::TuiManaged).await
+}
+
+#[derive(Clone, Copy)]
+enum RemoteReconnectPolicy {
+    Automatic,
+    TuiManaged,
+}
+
+async fn connect_remote_app_server_with(
+    endpoint: RemoteAppServerEndpoint,
+    reconnect_policy: RemoteReconnectPolicy,
+) -> color_eyre::Result<AppServerClient> {
+    let args = RemoteAppServerConnectArgs {
         endpoint,
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -509,8 +528,13 @@ async fn connect_remote_app_server(
         mcp_server_openai_form_elicitation: false,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    })
-    .await
+    };
+    let app_server = match reconnect_policy {
+        RemoteReconnectPolicy::Automatic => RemoteAppServerClient::connect(args).await,
+        RemoteReconnectPolicy::TuiManaged => {
+            RemoteAppServerClient::connect_without_reconnect(args).await
+        }
+    }
     .wrap_err("failed to connect to remote app server")?;
     Ok(AppServerClient::Remote(app_server))
 }

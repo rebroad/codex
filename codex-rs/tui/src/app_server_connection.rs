@@ -3,7 +3,7 @@
 use crate::AppServerTarget;
 #[cfg(windows)]
 use crate::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
-use crate::connect_remote_app_server;
+use crate::connect_remote_app_server_without_reconnect;
 use codex_app_server_client::AppServerClient;
 #[cfg(windows)]
 use codex_app_server_client::RemoteAppServerClient;
@@ -27,8 +27,8 @@ pub(crate) async fn connect(target: &AppServerTarget) -> color_eyre::Result<AppS
             // Revalidate at the real connection, not just the earlier discovery probe.
             let (socket_path, _directory) =
                 codex_uds::validate_private_socket_path(socket_path.as_path())?;
-            let app_server =
-                RemoteAppServerClient::connect_local_daemon(RemoteAppServerConnectArgs {
+            let app_server = RemoteAppServerClient::connect_local_daemon_without_reconnect(
+                RemoteAppServerConnectArgs {
                     endpoint: RemoteAppServerEndpoint::UnixSocket {
                         socket_path: AbsolutePathBuf::from_absolute_path_checked(socket_path)?,
                     },
@@ -38,12 +38,13 @@ pub(crate) async fn connect(target: &AppServerTarget) -> color_eyre::Result<AppS
                     mcp_server_openai_form_elicitation: false,
                     opt_out_notification_methods: Vec::new(),
                     channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-                })
-                .await?;
+                },
+            )
+            .await?;
             Ok(AppServerClient::Remote(app_server))
         }
         AppServerTarget::LocalDaemon { endpoint, .. } | AppServerTarget::Remote { endpoint } => {
-            connect_remote_app_server(endpoint.clone()).await
+            connect_remote_app_server_without_reconnect(endpoint.clone()).await
         }
     }
 }

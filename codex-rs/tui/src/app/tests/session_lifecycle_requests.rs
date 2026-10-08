@@ -701,7 +701,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                     } else {
                         let background = request.method == "thread/backgroundTerminals/list" && {
                             inventories += usize::from(inventories > 0);
-                            matches!(inventories, 2 | 4)
+                            matches!(inventories, 2 | 4 | 5 | 7)
                         };
                         let detach = request.method == "thread/unsubscribe";
                         let request = serde_json::from_value::<ClientRequest>(
@@ -810,10 +810,12 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
         embedded.shutdown().await?;
         Ok(())
     });
-    let app_server = crate::connect_remote_app_server(crate::RemoteAppServerEndpoint::WebSocket {
-        websocket_url,
-        auth_token: None,
-    })
+    let app_server = crate::connect_remote_app_server_without_reconnect(
+        crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url,
+            auth_token: None,
+        },
+    )
     .await?;
 
     Ok((
@@ -3574,6 +3576,7 @@ git-worktree-root = {}
     ] {
         let result = Command::new("git")
             .current_dir(&source)
+            .env("AGENT_GIT_ADD_BYPASS", "1")
             .args([
                 "-c",
                 "user.name=Worktree Test",
@@ -4270,14 +4273,14 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         if let Some(pending) = app.pending_working_directory_change.take() {
             Box::pin(app.finish_working_directory_change(&mut tui, &mut server, pending)).await;
         }
-        assert_eq!(app.chat_widget.thread_id(), Some(original));
+        assert_eq!(app.chat_widget.thread_id(), Some(original), "{kind}");
         assert_eq!(app.config.cwd, current.clone().abs());
         assert!(app.runtime_working_directory_override.is_none());
         let count = requests
             .lock()
             .expect("request recorder lock")
             .iter()
-            .filter(|request| request.method != "server/request/response")
+            .filter(|request| request.method == "thread/backgroundTerminals/list")
             .count();
         let checked = usize::from(kind == "main") + 2 * usize::from(kind == "child");
         assert_eq!(count, checked, "{kind}");

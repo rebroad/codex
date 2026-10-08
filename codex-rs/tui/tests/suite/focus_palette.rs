@@ -559,6 +559,25 @@ pub(super) fn write_test_config(codex_home: &Path, repo_root: &Path) -> Result<(
     .context("write focus-test API-key authentication")
 }
 
+pub(super) fn available_test_model_list() -> serde_json::Value {
+    serde_json::json!({
+        "data": [{
+            "id": "gpt-5.6-terra",
+            "model": "gpt-5.6-terra",
+            "displayName": "GPT-5.6 Terra",
+            "description": "Test model",
+            "hidden": false,
+            "supportedReasoningEfforts": [{
+                "reasoningEffort": "high",
+                "description": "High reasoning",
+            }],
+            "defaultReasoningEffort": "high",
+            "isDefault": true,
+        }],
+        "nextCursor": null,
+    })
+}
+
 #[test]
 fn no_daemon_skips_startup_and_discovery() -> Result<()> {
     for running in [false, true] {
