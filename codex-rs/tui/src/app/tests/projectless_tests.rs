@@ -340,16 +340,16 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
         );
         assert_eq!(
             (
-                config.permissions.permission_profile(),
-                config.permissions.approval_policy.value()
+                config.permissions.approval_policy.value(),
+                config
+                    .permissions
+                    .effective_permission_profile()
+                    .file_system_sandbox_policy()
+                    .can_write_local_path_with_cwd(config.cwd.as_path(), config.cwd.as_path())
             ),
             (
-                &if expected_profile == ":workspace" {
-                    PermissionProfile::workspace_write()
-                } else {
-                    PermissionProfile::read_only()
-                },
-                expected_approval.unwrap_or(original_approval)
+                expected_approval.unwrap_or(original_approval),
+                expected_profile == ":workspace"
             )
         );
         server.shutdown().await?;

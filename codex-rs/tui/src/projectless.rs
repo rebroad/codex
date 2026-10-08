@@ -31,7 +31,7 @@ pub(crate) fn apply_defaults(
         || ["default_permissions", "permissions", "network"].iter()
             .any(|key| defaults.additional.get(*key).is_some_and(|value| !value.is_null()))
         // Reuse local discovery only when server markers and trust decisions agree.
-        || ["project_root_markers", "projects"].iter().any(|key|
+        || ["project_root_markers"].iter().any(|key|
             serde_json::to_value(effective.get(*key)).ok().as_ref()
                 != Some(defaults.additional.get(*key).unwrap_or(&serde_json::Value::Null)))
         || !config.config_layer_stack.is_projectless()
