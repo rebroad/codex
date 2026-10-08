@@ -4,7 +4,7 @@ use super::*;
 use crate::style::accent_color;
 use crate::terminal_hyperlinks::LineWrapPolicy;
 use crate::terminal_hyperlinks::remap_source_wrapped_line;
-use crate::version::cli_version_for_display;
+use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::adaptive_wrap_line_to_width;
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -50,7 +50,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
                 "✨\u{200A}".bold().fg(accent_color()),
                 "Update available!".bold().fg(accent_color()),
                 " ",
-                format!("{} -> {}", cli_version_for_display(), self.latest_version).bold(),
+                format!("{} -> {}", CODEX_CLI_VERSION, self.latest_version).bold(),
             ],
             update_instruction,
             "",
@@ -76,11 +76,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         };
         vec![
             Line::from("Update available!"),
-            Line::from(format!(
-                "{} -> {}",
-                cli_version_for_display(),
-                self.latest_version
-            )),
+            Line::from(format!("{} -> {}", CODEX_CLI_VERSION, self.latest_version)),
             Line::from(update_instruction),
             Line::from(""),
             Line::from("See full release notes:"),
