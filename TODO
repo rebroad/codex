@@ -1,5 +1,4 @@
-codeburn misses ephemeral activity (due to no rollout file), we need to at least have a rollout area for ephemeral sessions so that codeburn can process these too
-Fix `just test` to auto-set CODEX_BUILD_REPO to the build sibling instead of giving the "Cargo operations are disabled in the source tree" error.
+enable wildcards per repo, e.g. for codex, `./.git/worktrees/-cpto-*`
 Add Delete to delete queued prompts (esc already steers), or a Ctrl+letter (E?) to edit queued prompts (they can become concetenated if more than one), or Ctrl+C to delete the most recently-queued
 Add a search feature to the transcript view
 Add abilty to step up down ordinals in transcript view
