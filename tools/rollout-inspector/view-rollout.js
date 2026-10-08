@@ -22,8 +22,8 @@ Options:
 }
 
 async function findRolloutFile(sessionId, codexHome) {
-  const roots = ["sessions", "archived_sessions"].map((segment) =>
-    path.join(codexHome, segment),
+  const roots = ["sessions", "archived_sessions", "ephemeral_sessions"].map(
+    (segment) => path.join(codexHome, segment),
   );
   const suffix = `${sessionId}.jsonl`;
   const matches = [];
