@@ -1,0 +1,157 @@
+# Downstream fork guide
+
+This file is the durable authority for intentional behavioral and operational
+differences between this fork and `upstream/latest-alpha-cli`. It is meant for
+the person resolving the next rebase, not as a complete inventory of every
+downstream commit. Keep it current whenever a deviation is added, removed, or
+materially changed.
+
+## Authority during rebases
+
+1. The selected upstream target is authoritative for all behavior unless a
+   deviation below explicitly says otherwise. A downstream-only commit is not
+   by itself proof that its behavior remains wanted.
+2. Preserve the *behavior and contract* of an intentional deviation, not its
+   old implementation. Upstream may have moved, replaced, or completed the
+   implementation. Port the smallest compatible change and run the named
+   checks.
+3. Tests and current call sites decide whether a downstream patch is still
+   needed. A commit's existence in old history alone is not a reason to replay
+   it.
+4. Resolve conflicts by comparing the upstream target, the downstream commit
+   that owns the behavior, and the relevant tests. Do not copy an entire old
+   file over newer upstream code.
+5. Keep version placeholders stable (`0.0.0`) in tracked source and snapshots;
+   generated build versions belong in build outputs. Avoid replacing the
+   placeholder with a release version, which creates unrelated churn.
+6. Do not resolve a conflict by restoring a whole downstream-era file over
+   upstream's version. Identify the behavior owner, inspect the current
+   upstream implementation and tests, then port only the still-needed
+   behavior. Delete a deviation when upstream now provides the same contract.
+7. For each non-obvious decision, record the old owner commit, the upstream
+   change that overlapped it, the resulting behavior, and focused validation
+   in that rebase's audit notes. This file describes lasting rules; the audit
+   notes describe one-time decisions.
+
+For each rebase, record the exact upstream commit and merge base, checkpoint
+refs and tree IDs, skipped commits, conflict decisions, and validation results
+in the rebase notes. This guide is the durable behavior map; rebase notes are
+the audit trail for a particular run.
+
+## How to use the deviation index
+
+The owner hashes below are provenance pointers into the pre-rebase fork
+history. Paths identify where the contract is implemented today; they can
+change as upstream refactors. During a rebase:
+
+- **Preserve** means keep the externally observable contract, adapting its
+  implementation to the new upstream code.
+- **Re-evaluate** means inspect current upstream code and tests before
+  replaying; upstream may have fixed the issue or changed the relevant API.
+- **Drop** means do not replay the old patch when upstream now supplies the
+  behavior or the original need no longer applies.
+
+The index covers product behavior and local fork operations that have caused
+rebase conflicts or regressions. Ordinary upstream bug fixes, mechanical
+formatting, and one-off conflict resolutions are intentionally not listed.
+
+## Distribution and release identity
+
+The fork ships independently and must not silently become an upstream
+distribution:
+
+- Fork package/repository identity and release promotion: `chore: migrate fork
+  distribution identity` (`3387f3f70a`), `build(release): add fork release
+  orchestration` (`78a5024a8a`), and the npm staging/assembly/promotion series
+  (`a7a0843900`, `8e0f6df3f5`, `a9f9da3b4a`).
+- Fork update channels: `feat(updates): follow fork release channels`
+  (`ad7161d361`). Preserve the fork's channel selection and release metadata
+  while adopting upstream's current update implementation and security checks.
+- Fork CI ownership/policy: `ci: use hosted runners for fork workflows`
+  (`796211545d`) and `ci: move post-merge policy to stable branch`
+  (`e8b47c96c8`). Keep workflow behavior valid for this fork's configured
+  remotes and branch names.
+
+When upstream changes release manifests or updater code, preserve the fork's
+identity and promotion route while taking upstream's current security behavior.
+The downstream installer-update policy is intentionally disabled; the daemon
+restart handoff remains enabled (`fix(security): disable daemon installer
+updates`, `3f43afd1ab`).
+
+## Local build and test workflow
+
+The fork's source checkout is edited separately from its mirrored external
+`.build` tree. Build and test recipes must resolve the intended source and
+external build checkout, keep ignored build output there, and never build in
+the source tree. Key owners are the build resolver/harness/orchestrator series
+(`116867a02b`, `c8615efb76`, `b578b8e143`, `1ccc32b9e2`) and the follow-up
+build-tree fixes. `scripts/build_codex.sh` is the end-to-end build/install
+entry point.
+
+Use `CARGO_INCREMENTAL=1` by default. The sccache launcher remains opt-in; do
+not change global `PATH`, the installed sccache setup, or project defaults as a
+side effect of a rebase. Keep Rust and Bazel locks in sync when dependencies
+change. Build and test scripts must rebuild the CLI they test or prove that a
+cached binary matches the source revision; a stale `target/debug/codex` is not
+valid test evidence.
+
+## Runtime and platform behavior
+
+| Deviation | Owner / main paths | Rebase rule |
+| --- | --- | --- |
+| Bare-prompt `codex exec` avoids injecting default Codex context, while preserving explicitly configured developer/system instructions. The Telegram bot uses this mode and may supply or override its own instructions. | `feat(exec): add direct request mode` (`9e81dbb11c`), `feat(config): support bare prompt` (`06d6dc2610`); `codex-rs/exec/src/{lib.rs,direct.rs}` and `codex-rs/exec/tests/suite/bare_prompt.rs`. | **Preserve.** Bare prompt alone is the user input; explicit configured instructions remain; no implicit default model instructions or session context. Route top-level bare-prompt invocation through the direct request path even when `--direct` is absent. Verify request payload and local usage is below 20 tokens for the simple prompt. |
+| Resume progress and daemon/TUI recovery across server drains, including fallback for an unmanaged server with mismatched feature settings. | `feat(app-server): stream resume progress` (`e5a1922199`), `feat(tui): display resume progress` (`75ff45dfd3`), `fix(tui): fall back for unmanaged daemon mismatch` (`73057bf4a5`), plus related reconnect changes. | **Re-evaluate.** Preserve upstream's newer resume/thread storage model and port only recovery behavior still missing. A same-version feature mismatch is a configuration/negotiation issue; matching versions alone do not prove it is fixed. Validate the actual app-server/TUI pair. |
+| Restart-if-idle must not interrupt an in-progress turn; TUI takeover is offered only for active sessions. | `feat(tui): offer active session takeover` (`07dec65df8`), `feat(daemon): restore restart-if-idle` (`a922ff5b77`) and its fixups. | **Preserve.** Turn activity is the gate for restart. Process listings are diagnostics, not evidence that unrelated descendants block a build. When suppressing descendants, suppress every descendant of an already displayed process. |
+| Android/Termux support, including sandbox/TLS alignment, terminal and clipboard compatibility, openpty compatibility, managed daemon identity, and ARMv7 build support. | `build(android): add ARMv7 cross-build workflow` (`b09594ac8b`), `fix(android): tolerate unsupported file locks` (`fb273065ee`), `fix(android): support sandbox and TLS alignment` (`497d1def59`), and related `fix(android): ...` commits. | **Preserve.** Keep platform guards and fallbacks scoped to unsupported Android/Termux APIs. Do not weaken Linux/macOS/Windows behavior to accommodate Android. Verify on-device whenever that device is part of the requested gate. |
+| App-server configuration reload request and fork-specific daemon state isolation. | `feat(app-server): add config reload request` (`622fc9ecab`), `feat(app-server): namespace daemon state by profile` (`f25fed2329`). | **Preserve.** Keep wire compatibility and current upstream protocol organization. Regenerate stable and experimental schemas when API shapes change. |
+| Remote-control traffic capture and separate remote-control credentials, with pairing helpers. | `feat(remote-control): capture websocket traffic` (`2cd69a833f`), `feat(auth): split remote-control credentials` (`1b4f1489c9`), `feat(remote-control): add pairing helper scripts` (`5182edf46a`). | **Preserve.** Keep credential separation and pairing behavior; do not merge these credentials back into ordinary login storage during conflict resolution. |
+| Local rollout inspection and metadata maintenance tools. | `feat(tools): add local rollout inspector` (`5659185887`), `tools: purge paginated rollout metadata` (`5275c1b2bb`). | **Preserve.** Keep tools local and non-destructive by default. Preserve rollout ordering, pagination, and retained token-usage records. |
+| More conservative execution/security behavior: require an available sandbox backend, preserve sandbox-denied apply-patch handling, and terminate plugin Git descendants. | `fix(core): deny execution without sandbox backend` (`c9db3448c5`), `fix: escalate apply-patch verification outside sandbox` (`658589a503`), `fix(core-plugins): kill descendant git processes` (`f4fa83a753`). | **Preserve, with re-evaluation.** Keep current upstream apply-patch file-update semantics and port only the sandbox fallback. Review filesystem paths and permissions at the current executor boundary. Process cleanup must include descendants without misclassifying them as independent blockers. |
+
+The table is a behavior index, not a list of every fork-only commit. Test
+isolation, portability, formatting, and build maintenance commits may also be
+required to keep this fork's validation reliable; preserve them only while
+their specific upstream failure or local workflow need remains.
+
+## Current alpha.20 rebase audit
+
+- Rebase target: `15c477d788a575de432f661def200ae7bc4a835e`
+  (`Release 0.162.0-alpha.20`).
+- Rebased branch: `alpha-rebasing-20261008-alpha20`.
+- Rearranged pre-rebase checkpoint: `alpha.before-rebase-20261008-alpha20-rearranged`
+  (`88613755eeab062efe01e12e912d8423a4ad8ff9`).
+- History replay completed with 113 downstream commits; the obsolete alpha.9
+  release-only commit and older snapshot refresh were skipped as recorded in
+  the rebase audit.
+- Known conflict-resolution issue found during validation: the sandbox
+  apply-patch fallback retained a removed `ApplyPatchFileUpdateMode` API after
+  alpha.20 made line-ending preservation unconditional. The fallback now uses
+  the current action API; the apply-patch crate tests pass, while dedicated
+  core sandbox-fallback coverage remains unverified.
+- Confirmed runtime regression found by comparing the same daybreak test on
+  upstream and the rebased branch: ephemeral fork sessions now have retained
+  rollout paths, but `thread/fork` must continue returning them as pathless,
+  unindexed API threads. The handler now distinguishes ephemeral forks from
+  ordinary indexed forks. `thread/start` must also remain pathless even though
+  an expiring rollout is retained internally. Owner: `feat(exec): retain
+  ephemeral rollouts with expiry` (`1be0b5a23b`); keep its bounded on-disk
+  retention behavior. Focused checks passed for the daybreak regression,
+  pathless `thread/start`, both persisted-parent fork variants, and paginated
+  ephemeral-fork pathless/listing behavior. The broader app-server suite
+  remains inconclusive because of environment sandbox and timeout failures.
+- The GStreamer Rust bindings use `v1_26`, and `voice-host/build.rs` adds an
+  exact pkg-config floor of `>=1.26.2` for GStreamer core, app, and audio on
+  supported targets. A throwaway pkg-config fixture rejected 1.26.1 and
+  accepted 1.26.2. This host has no GStreamer development packages, so the
+  actual voice-host build remains unverified. `just bazel-lock-update` was
+  attempted but the existing Bazel Rust extension failed resolving the
+  workspace `codex-bwrap` path package before updating the lockfile.
+- Native debug build passed with `scripts/build_codex.sh --debug`, installing
+  the alpha20 CLI. Running local `codex exec --bare-prompt 'say hi'` without
+  `--direct` returned `Hi!` and reported 8 input tokens. Focused tests passed:
+  `codex-exec` 154/154,
+  `codex-apply-patch` 99/99, and the touched app-server ephemeral cases.
+  The full app-server run had 77 failures, mostly sandbox privilege and
+  timeout failures, so that run remains inconclusive. Still open: a real
+  voice-host build against GStreamer 1.26.2 and the release install plus
+  `codex-pairing-code` check on Flip7. Keep the bare-prompt check local.
