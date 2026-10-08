@@ -130,6 +130,20 @@ button:hover {
   border-color: var(--accent);
 }
 
+.file-list details summary {
+  cursor: pointer;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.rollout-summary {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .main-column {
   display: flex;
   flex-direction: column;

@@ -10,7 +10,7 @@ const HEALTH_RETRY_MS = 250;
 
 function usage() {
   console.log(`Usage:
-  node tools/rollout-inspector/view-rollout.js <session-id|rollout.jsonl> [options]
+  node tools/rollout-inspector/view-rollout.js <session-id|rollout.jsonl|directory> [options]
 
 Options:
   --port <n>           Server port (default: 8787)
@@ -73,6 +73,9 @@ async function resolveRolloutFile(input, codexHome) {
   const explicitPath = path.resolve(input);
   try {
     const stat = await fs.stat(explicitPath);
+    if (stat.isDirectory()) {
+      return explicitPath;
+    }
     if (stat.isFile() && explicitPath.endsWith(".jsonl")) {
       return explicitPath;
     }
@@ -213,6 +216,7 @@ async function main() {
     args.file,
     args.codexHome || path.join(process.env.HOME || "", ".codex"),
   );
+  args.directory = (await fs.stat(args.file)).isDirectory();
   const serverPath = path.join(__dirname, "server.js");
 
   const serverArgs = [serverPath, "--port", String(args.port)];
@@ -242,9 +246,14 @@ async function main() {
   await waitForHealthy(args.port);
 
   const pageUrl = new URL(`http://127.0.0.1:${args.port}/`);
-  pageUrl.searchParams.set("file", args.file);
-  pageUrl.searchParams.set("autoload", "1");
-  pageUrl.searchParams.set("analyze", args.autoAnalyze ? "1" : "0");
+  if (args.directory) {
+    pageUrl.searchParams.set("root", args.file);
+    pageUrl.searchParams.set("directory", "1");
+  } else {
+    pageUrl.searchParams.set("file", args.file);
+    pageUrl.searchParams.set("autoload", "1");
+    pageUrl.searchParams.set("analyze", args.autoAnalyze ? "1" : "0");
+  }
 
   if (args.openBrowser) {
     const opened = openBrowser(pageUrl.toString());
