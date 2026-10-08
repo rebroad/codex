@@ -211,6 +211,7 @@ enum OutboundControlEvent {
 struct ShutdownState {
     requested: bool,
     forced: bool,
+    draining: bool,
     last_logged_running_turn_count: Option<usize>,
 }
 
@@ -263,27 +264,77 @@ impl ShutdownState {
         self.forced
     }
 
+    fn draining(&self) -> bool {
+        self.draining
+    }
+
     fn on_signal(
         &mut self,
         signal: ShutdownSignal,
         connection_count: usize,
         running_turn_count: usize,
+        active_admissions: usize,
         turn_admission: &turn_admission::TurnAdmission,
     ) {
         if self.requested {
             if matches!(signal, ShutdownSignal::Forceable) {
                 self.forced = true;
+                turn_admission.begin_drain();
+                self.draining = true;
             }
             return;
         }
 
-        turn_admission.begin_drain();
         self.requested = true;
         self.last_logged_running_turn_count = None;
-        info!(
-            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new client turns rejected)",
-            connection_count, running_turn_count,
-        );
+        let graceful_restart = {
+            #[cfg(unix)]
+            {
+                matches!(signal, ShutdownSignal::GracefulOnly)
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        };
+        let waiting_for_idle =
+            graceful_restart && (running_turn_count > 0 || active_admissions > 0);
+        if waiting_for_idle {
+            info!(
+                "received graceful restart request; waiting for idle before draining (connections={}, runningAssistantTurns={}, admittedRequests={})",
+                connection_count, running_turn_count, active_admissions,
+            );
+        } else {
+            turn_admission.begin_drain();
+            self.draining = true;
+            info!(
+                "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new client turns rejected)",
+                connection_count, running_turn_count,
+            );
+        }
+    }
+
+    fn begin_drain_if_idle(
+        &mut self,
+        running_turn_count: usize,
+        active_admissions: usize,
+        connection_count: usize,
+        turn_admission: &turn_admission::TurnAdmission,
+    ) {
+        if self.requested
+            && !self.draining
+            && !self.forced
+            && running_turn_count == 0
+            && active_admissions == 0
+        {
+            turn_admission.begin_drain();
+            self.draining = true;
+            self.last_logged_running_turn_count = None;
+            info!(
+                "graceful restart reached idle; entering drain (connections={}, new client turns rejected)",
+                connection_count,
+            );
+        }
     }
 
     fn update(
@@ -296,7 +347,7 @@ impl ShutdownState {
             return ShutdownAction::Noop;
         }
 
-        if self.forced || (running_turn_count == 0 && active_admissions == 0) {
+        if self.forced || (self.draining && running_turn_count == 0 && active_admissions == 0) {
             if self.forced {
                 info!(
                     "received second shutdown signal; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
@@ -310,9 +361,15 @@ impl ShutdownState {
         }
 
         if self.last_logged_running_turn_count != Some(running_turn_count) {
-            info!(
-                "shutdown signal restart: waiting for {running_turn_count} running assistant turn(s) and {active_admissions} admitted request(s) to finish"
-            );
+            if self.draining {
+                info!(
+                    "shutdown signal restart: waiting for {running_turn_count} running assistant turn(s) and {active_admissions} admitted request(s) to finish"
+                );
+            } else {
+                info!(
+                    "graceful restart request: waiting for idle before draining (runningAssistantTurns={running_turn_count}, admittedRequests={active_admissions}; new turns remain accepted)"
+                );
+            }
             self.last_logged_running_turn_count = Some(running_turn_count);
         }
 
@@ -1148,8 +1205,21 @@ pub async fn run_main_with_transport_options(
             let exit_reason = loop {
                 // Sample submissions first: one can publish a running turn before
                 // releasing its permit, and shutdown must observe that new turn.
-                let active_admissions = *active_admissions_rx.borrow_and_update();
-                let running_turn_count = *running_turn_count_rx.borrow_and_update();
+                let mut active_admissions = *active_admissions_rx.borrow_and_update();
+                let mut running_turn_count = *running_turn_count_rx.borrow_and_update();
+                shutdown_state.begin_drain_if_idle(
+                    running_turn_count,
+                    active_admissions,
+                    connections.len(),
+                    &processor.turn_admission,
+                );
+                // An admission can race with the zero-count observation above. The
+                // admission lock makes closing atomic; refresh counts after closing
+                // so shutdown still waits for work admitted just before the drain.
+                if shutdown_state.draining() {
+                    active_admissions = *active_admissions_rx.borrow_and_update();
+                    running_turn_count = *running_turn_count_rx.borrow_and_update();
+                }
                 let ready_to_exit = matches!(
                     shutdown_state.update(running_turn_count, active_admissions, connections.len()),
                     ShutdownAction::Finish
@@ -1177,7 +1247,7 @@ pub async fn run_main_with_transport_options(
                 }
 
                 tokio::select! {
-                    _ = &mut snapshot, if shutdown_state.requested() && active_admissions == 0 && !snapshot_finished => {
+                    _ = &mut snapshot, if shutdown_state.draining() && active_admissions == 0 && !snapshot_finished => {
                         snapshot_finished = true;
                     }
                     shutdown_signal_result = &mut shutdown_signal_future, if graceful_signal_restart_enabled && !shutdown_state.forced() => {
@@ -1190,7 +1260,7 @@ pub async fn run_main_with_transport_options(
                             }
                         };
                         let running_turn_count = *running_turn_count_rx.borrow();
-                        shutdown_state.on_signal(signal, connections.len(), running_turn_count, &processor.turn_admission);
+                        shutdown_state.on_signal(signal, connections.len(), running_turn_count, active_admissions, &processor.turn_admission);
                     }
                     changed = running_turn_count_rx.changed(), if shutdown_state.requested() => {
                         if changed.is_err() {
@@ -1214,7 +1284,7 @@ pub async fn run_main_with_transport_options(
                         }
                         match event {
                             TransportEvent::DaemonShutdown => {
-                                shutdown_state.on_signal(ShutdownSignal::Forceable, connections.len(), *running_turn_count_rx.borrow(), &processor.turn_admission);
+                                shutdown_state.on_signal(ShutdownSignal::Forceable, connections.len(), *running_turn_count_rx.borrow(), *active_admissions_rx.borrow(), &processor.turn_admission);
                             }
                             TransportEvent::ConnectionOpened {
                                 connection_id,
@@ -1703,6 +1773,7 @@ mod tests {
             ShutdownSignal::Forceable,
             connection_count,
             running_turn_count,
+            *active.borrow(),
             &admission,
         );
         assert!(matches!(
@@ -1713,6 +1784,7 @@ mod tests {
             ShutdownSignal::Forceable,
             connection_count,
             running_turn_count,
+            *active.borrow(),
             &admission,
         );
         assert!(shutdown.forced());
@@ -1721,6 +1793,49 @@ mod tests {
             ShutdownAction::Finish
         ));
         drop(in_flight);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graceful_restart_waits_for_idle_before_rejecting_new_turns() {
+        let admission = TurnAdmission::default();
+        let active = admission.subscribe_active();
+        let in_flight = admission.admit().expect("initial request admitted");
+        let mut shutdown = ShutdownState::default();
+        let connection_count = 1;
+
+        shutdown.on_signal(
+            ShutdownSignal::GracefulOnly,
+            connection_count,
+            /*running_turn_count*/ 1,
+            *active.borrow(),
+            &admission,
+        );
+        assert!(!shutdown.draining());
+        let accepted_while_waiting = admission
+            .admit()
+            .expect("new turns remain accepted while waiting for idle");
+        assert!(matches!(
+            shutdown.update(1, *active.borrow(), connection_count),
+            ShutdownAction::Noop
+        ));
+
+        drop(accepted_while_waiting);
+        drop(in_flight);
+        assert_eq!(*active.borrow(), 0);
+        shutdown.begin_drain_if_idle(
+            /*running_turn_count*/ 0,
+            *active.borrow(),
+            connection_count,
+            &admission,
+        );
+
+        assert!(shutdown.draining());
+        assert!(admission.admit().is_err());
+        assert!(matches!(
+            shutdown.update(0, *active.borrow(), connection_count),
+            ShutdownAction::Finish
+        ));
     }
 
     #[test]
