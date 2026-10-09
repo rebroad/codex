@@ -39,6 +39,7 @@ pub(crate) use codex_app_server_transport::app_server_startup_lock_path_for_prof
 pub use codex_app_server_transport::prepare_control_socket_path;
 pub use codex_app_server_transport::read_app_server_owner;
 pub use codex_app_server_transport::register_app_server_owner;
+pub use codex_app_server_transport::run_stdio_to_control_socket;
 pub(crate) use codex_app_server_transport::start_control_socket_acceptor;
 pub(crate) use codex_app_server_transport::start_remote_control;
 pub(crate) use codex_app_server_transport::start_stdio_connection;
