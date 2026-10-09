@@ -47,6 +47,7 @@ pub use transport::daemon_recovery_file_path;
 pub use transport::prepare_control_socket_path;
 pub use transport::read_app_server_owner;
 pub use transport::register_app_server_owner;
+pub use transport::run_stdio_to_control_socket;
 pub use transport::start_control_socket_acceptor;
 pub use transport::start_remote_control;
 pub use transport::start_stdio_connection;
