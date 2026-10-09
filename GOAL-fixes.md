@@ -4,3 +4,5 @@ IN PROGRESS: Prevent project `AGENTS.md` instructions from entering model prompt
 
 IN PROGRESS: Default Rust builds and tests to `CARGO_INCREMENTAL=0` with sccache enabled through `scripts/codex_cargo_env.sh`; verify cache statistics show the real builds/tests are using sccache.
 
+TODO: `codex app-server reload` isn't working (it fails with `Error: timed out waiting for config/reload response` and `Caused by: deadline has elapsed`). Fix this.
+
