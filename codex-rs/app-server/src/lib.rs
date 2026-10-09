@@ -820,6 +820,7 @@ pub async fn run_main_with_transport_options(
     let remote_control_shutdown_token = transport_shutdown_token.child_token();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
     let mut owner_endpoint_available = false;
+    let mut app_server_owner_profile = app_server_profile.clone();
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let graceful_signal_restart_enabled =
@@ -860,7 +861,29 @@ pub async fn run_main_with_transport_options(
             {
                 Ok(accept_handle) => transport_accept_handles.push(accept_handle),
                 Err(err) if err.kind() == ErrorKind::AddrInUse => {
-                    warn!(%err, "default app-server control socket is already in use")
+                    warn!(%err, "default app-server control socket is already in use");
+                    let process_profile = format!("processes/{}", std::process::id());
+                    let process_socket_path = app_server_control_socket_path_for_profile(
+                        &codex_home,
+                        Some(&process_profile),
+                    )?;
+                    if let Some(parent) = process_socket_path.as_path().parent() {
+                        let mut directory_builder = tokio::fs::DirBuilder::new();
+                        directory_builder
+                            .mode(0o700)
+                            .recursive(true)
+                            .create(parent)
+                            .await?;
+                    }
+                    let accept_handle = start_control_socket_acceptor(
+                        process_socket_path,
+                        transport_event_tx.clone(),
+                        transport_shutdown_token.clone(),
+                        DaemonShutdownAccess::Disabled,
+                    )
+                    .await?;
+                    transport_accept_handles.push(accept_handle);
+                    app_server_owner_profile = Some(process_profile);
                 }
                 Err(err) => return Err(err),
             }
@@ -900,7 +923,7 @@ pub async fn run_main_with_transport_options(
     let _app_server_owner_guard = if owner_endpoint_available {
         register_app_server_owner(
             &codex_home,
-            app_server_profile.as_deref(),
+            app_server_owner_profile.as_deref(),
             &transport,
             env!("CARGO_PKG_VERSION"),
         )?
