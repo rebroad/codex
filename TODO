@@ -5,7 +5,7 @@ Add a search feature to the transcript view
 Add abilty to step up down ordinals in transcript view
 Make "Working" show the last tool requested, and make it clear what we're waiting for (e.g. response from the backend, or if the backend is streaming, the bytes received)
 Keep the auto_review verdicts visible in the TUI (so the user can read decisions already made)
-Allow regexp for writeable roots config (e.g. could be derived from the repo PATH, e.g. ~/src/codex adds /mnt/kingston/builds/rebroad/src/codex.build)
+Allow regexp for writeable roots config (e.g. could be derived from the repo PATH, e.g. ~/src/codex adds ../codex.build)
 Add a Ctrl+T type thing that gives the same output as we already have (non-transcription) but makes it scrollable (like transcription does).
 Urgent: Move .codex/rules into repos (otherwise wastes input tokens as all rules sent with every prompt!)
 Add ability to edit messages to send after next tool call, in the TUI.
