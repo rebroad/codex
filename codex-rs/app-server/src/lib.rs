@@ -869,11 +869,9 @@ pub async fn run_main_with_transport_options(
                     )?;
                     if let Some(parent) = process_socket_path.as_path().parent() {
                         let mut directory_builder = tokio::fs::DirBuilder::new();
-                        directory_builder
-                            .mode(0o700)
-                            .recursive(true)
-                            .create(parent)
-                            .await?;
+                        #[cfg(unix)]
+                        directory_builder.mode(0o700);
+                        directory_builder.recursive(true).create(parent).await?;
                     }
                     let accept_handle = start_control_socket_acceptor(
                         process_socket_path,
