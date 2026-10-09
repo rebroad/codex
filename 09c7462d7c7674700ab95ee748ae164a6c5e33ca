@@ -1,0 +1,82 @@
+History rearrangement checkpoint
+
+Before-rearrangement checkpoint: alpha.before-rearrange-20261009-same-file-pass3
+Checkpoint commit: b3b01f666eb3f2e3404b363348020fdbcab7485c
+Checkpoint tree: 7d3fbb9a2e0ec76c8dd2e2408d6168e18c675927
+Final commit: 09c7462d7c7674700ab95ee748ae164a6c5e33ca
+Final tree: 7d3fbb9a2e0ec76c8dd2e2408d6168e18c675927 (identical)
+Upstream merge base: 15c477d788a575de432f661def200ae7bc4a835e (unchanged)
+Downstream commit count: 148 before this rearrangement series; 142 after.
+
+Rearranged findings
+- The daemon selection reversal was split from its broad repair commit and folded into the security owner.
+- The bare-prompt routing reversal was folded into the direct-request owner.
+- Same-file build workflow follow-ups were folded into the build orchestrator, source/build resolution, just recipes, and shared Cargo harness owners.
+- Repeated AGENTS.md build guidance changes were consolidated into one documentation owner.
+- Earlier rollout-inspector layout and ephemeral-rollout follow-ups were folded into their feature owners.
+- No fixup! or squash! commits remain in the downstream range.
+
+Same-file exceptions
+The remaining files touched in three or more commits are enumerated below. These are retained because the edits belong to independent features or generated dependency/API outputs, or because a file is an evolving decision/diagnostic log. Shared CLI/app-server/TUI/config entrypoints and test scaffolding register or exercise independently owned behaviors; protocol/config schemas and Cargo.lock accompany separate API/config/dependency changes; daemon PID handling spans independent lock portability, profile identity, managed identity, and restart-if-idle behavior. justfile contains independent build, formatter, TUI, and release recipe changes. GOAL/DOWNSTREAM/rebase notes record evolving decisions and regressions discovered during the work.
+
+Files with three or more downstream touches (path: commit count):
+codex-rs/cli/src/main.rs: 11
+DOWNSTREAM.md: 9
+codex-rs/config/src/config_toml.rs: 8
+codex-rs/core/config.schema.json: 8
+codex-rs/Cargo.lock: 8
+codex-rs/app-server/src/lib.rs: 8
+GOAL-rebase-fix.md: 8
+codex-rs/core/src/config/mod.rs: 7
+codex-rs/tui/src/lib.rs: 7
+codex-rs/app-server-daemon/src/lib.rs: 6
+codex-rs/core/src/session/tests.rs: 6
+codex-rs/app-server/src/request_processors/thread_processor.rs: 5
+justfile: 4
+codex-rs/thread-store/src/local/mod.rs: 4
+codex-rs/rollout/src/recorder_tests.rs: 4
+codex-rs/app-server/tests/suite/v2/thread_resume.rs: 4
+codex-rs/app-server-daemon/src/backend/pid.rs: 4
+codex-rs/core/src/turn_metadata.rs: 4
+codex-rs/core/src/config/config_tests.rs: 4
+codex-rs/core/src/session/mod.rs: 4
+codex-rs/thread-manager-sample/src/main.rs: 4
+codex-rs/app-server/src/bespoke_event_handling.rs: 4
+codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.schemas.json: 4
+codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json: 4
+codex-rs/tui/src/chatwidget/tests/app_server.rs: 4
+codex-rs/core/src/session/session.rs: 4
+GOAL-fixes.md: 4
+scripts/resolve_source_repo.py: 3
+scripts/test_resolve_source_repo.py: 3
+codex-rs/core/Cargo.toml: 3
+.github/workflows/rust-release.yml: 3
+codex-rs/state/src/runtime/threads.rs: 3
+codex-rs/tui/src/chatwidget/tests/status_and_layout.rs: 3
+codex-rs/tui/src/app/tests.rs: 3
+codex-rs/thread-store/src/local/thread_history_materialization_tests.rs: 3
+codex-rs/app-server-protocol/src/protocol/v2/thread.rs: 3
+codex-rs/tui/src/app/event_dispatch.rs: 3
+codex-rs/tui/src/app/startup.rs: 3
+codex-rs/tui/src/app_server_session.rs: 3
+codex-rs/tui/src/app_server_session/rollout_history_tests.rs: 3
+codex-rs/rollout/src/recorder.rs: 3
+codex-rs/rollout/src/writer_lock.rs: 3
+codex-rs/tui/src/app_server_session/rollout_history.rs: 3
+codex-rs/app-server-transport/src/transport/unix_socket.rs: 3
+codex-rs/arg0/src/lib.rs: 3
+codex-rs/app-server/src/message_processor.rs: 3
+codex-rs/app-server-transport/src/lib.rs: 3
+codex-rs/app-server-transport/src/transport/mod.rs: 3
+codex-rs/app-server/src/transport.rs: 3
+codex-rs/app-server-protocol/schema/json/ServerNotification.json: 3
+codex-rs/app-server-protocol/src/protocol/common.rs: 3
+codex-rs/tui/src/chatwidget/protocol.rs: 3
+codex-rs/tui/src/app/tests/session_lifecycle_requests.rs: 3
+codex-rs/tui/src/chatwidget/tests/slash_commands.rs: 3
+codex-rs/linux-sandbox/src/linux_run_main.rs: 3
+codex-rs/linux-sandbox/tests/suite/landlock.rs: 3
+scripts/format.py: 3
+alpha-rebase-skipped-commits.md: 3
+TODO: 3
+GOAL.md: 3
