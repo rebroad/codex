@@ -33,4 +33,6 @@ Also fix `codex resume` when the requested rollout is already active in another 
 
 Finally, fix `codex exec --bare-prompt 'say hello'` so it still creates and updates a rollout file. Only the explicit `--direct` option should bypass rollout creation. Verify both modes: bare-prompt persists the rollout, while direct mode does not.
 
+Also fix the bare-prompt token-usage regression: `codex exec --bareprompt 'say hi'` must use bare-prompt semantics and report local token usage below 20.0 for the `say hi` prompt. Verify that it does not inject the default Codex instructions or context.
+
 Also diagnose why test runs spawn repeated `git fetch` processes for the OpenAI plugins repository. The current source shows curated-plugin startup synchronization invoking a depth-one Git fetch; identify which tests exercise that path and why they reach the real remote instead of a fixture. This runtime refresh is not a build prerequisite, so keep ordinary builds/tests hermetic and avoid redundant network fetches. Ensure child fetch processes terminate when their owning test process exits, and ensure they cannot inherit and retain the Cargo target lock after the owner exits. A test-spawned fetch must not remain orphaned and block later builds.
