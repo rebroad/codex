@@ -534,44 +534,66 @@ pub(crate) async fn try_connect_default_local_app_server(
         });
 
     if let Some(writer_pid) = writer_pid {
-        match codex_app_server_client::read_app_server_owner(codex_home, owner_profile.as_deref()) {
-            Ok(Some(owner)) if owner.pid == writer_pid => {
-                let endpoint = match owner.endpoint {
-                    codex_app_server_client::AppServerOwnerEndpoint::UnixSocket { socket_path } => {
-                        RemoteAppServerEndpoint::UnixSocket {
-                            socket_path: AbsolutePathBuf::from_absolute_path(Path::new(
-                                &socket_path,
-                            ))
-                            .map_err(|err| {
-                                format!("owner published an invalid Unix socket path: {err}")
-                            })?,
-                        }
+        let process_profile = format!("processes/{writer_pid}");
+        let owner = [owner_profile.as_deref(), Some(process_profile.as_str())]
+            .into_iter()
+            .find_map(|profile| {
+                match codex_app_server_client::read_app_server_owner(codex_home, profile) {
+                    Ok(Some(owner)) if owner.pid == writer_pid => Some(owner),
+                    Ok(Some(owner)) => {
+                        tracing::debug!(
+                            owner_pid = owner.pid,
+                            writer_pid,
+                            "app-server owner record does not match the active thread writer"
+                        );
+                        None
                     }
-                    codex_app_server_client::AppServerOwnerEndpoint::WebSocket {
-                        websocket_url,
-                    } => resolve_remote_addr(&websocket_url).map_err(|err| {
+                    Ok(None) => None,
+                    Err(err) => {
+                        tracing::debug!(%err, "failed to read the app-server owner record");
+                        None
+                    }
+                }
+            });
+
+        if let Some(owner) = owner {
+            let endpoint = match owner.endpoint {
+                codex_app_server_client::AppServerOwnerEndpoint::UnixSocket { socket_path } => {
+                    AbsolutePathBuf::from_absolute_path(Path::new(&socket_path))
+                        .map(|socket_path| RemoteAppServerEndpoint::UnixSocket { socket_path })
+                        .map_err(|err| {
+                            format!("owner published an invalid Unix socket path: {err}")
+                        })
+                }
+                codex_app_server_client::AppServerOwnerEndpoint::WebSocket { websocket_url } => {
+                    resolve_remote_addr(&websocket_url).map_err(|err| {
                         format!("owner published an invalid WebSocket endpoint: {err}")
-                    })?,
-                };
-                tracing::info!(
+                    })
+                }
+            };
+            match endpoint {
+                Ok(endpoint) => {
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        owner_pid = writer_pid,
+                        "connecting TUI to the app-server that owns the active thread"
+                    );
+                    match connect_remote_app_server(endpoint).await {
+                        Ok(client) => return Ok(client),
+                        Err(err) => tracing::debug!(
+                            thread_id = %thread_id,
+                            owner_pid = writer_pid,
+                            %err,
+                            "could not reach the process-specific app-server owner; trying the default local app-server"
+                        ),
+                    }
+                }
+                Err(reason) => tracing::debug!(
                     thread_id = %thread_id,
                     owner_pid = writer_pid,
-                    "connecting TUI to the app-server that owns the active thread"
-                );
-                return connect_remote_app_server(endpoint)
-                    .await
-                    .map_err(|err| format!("the owning app-server could not be reached: {err:#}"));
-            }
-            Ok(Some(owner)) => {
-                tracing::debug!(
-                    owner_pid = owner.pid,
-                    writer_pid,
-                    "app-server owner record does not match the active thread writer"
-                );
-            }
-            Ok(None) => {}
-            Err(err) => {
-                tracing::debug!(%err, "failed to read the app-server owner record");
+                    %reason,
+                    "process-specific app-server owner published an invalid endpoint; trying the default local app-server"
+                ),
             }
         }
     }
@@ -3183,6 +3205,191 @@ requires_openai_auth = {requires_openai_auth}
             };
 
         assert!(error.contains("control socket"), "{error}");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_app_server_attach_uses_writer_pid_endpoint() -> color_eyre::Result<()> {
+        use futures::SinkExt;
+        use futures::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let codex_home = TempDir::new()?;
+        let thread_id = ThreadId::new();
+        let writer_pid = std::process::id();
+        let writer_lock = codex_home
+            .path()
+            .join("thread-writer-locks")
+            .join(format!("{thread_id}.lock"));
+        std::fs::create_dir_all(writer_lock.parent().expect("writer lock parent"))?;
+        std::fs::write(&writer_lock, format!("pid={writer_pid}\n"))?;
+
+        let process_profile = format!("processes/{writer_pid}");
+        let socket_path = codex_home.path().join("active-writer.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path)?;
+        let owner_path = codex_app_server_client::app_server_owner_record_path_for_profile(
+            codex_home.path(),
+            Some(&process_profile),
+        );
+        std::fs::create_dir_all(owner_path.parent().expect("owner record parent"))?;
+        let owner = codex_app_server_client::AppServerOwnerRecord {
+            pid: writer_pid,
+            app_server_version: "test".to_string(),
+            endpoint: codex_app_server_client::AppServerOwnerEndpoint::UnixSocket {
+                socket_path: socket_path.display().to_string(),
+            },
+        };
+        std::fs::write(&owner_path, serde_json::to_vec(&owner)?)?;
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let codex_home_path = codex_home.path().display().to_string();
+        let server = tokio::spawn(async move {
+            let result: std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                let (stream, _) = listener.accept().await?;
+                let mut websocket = tokio_tungstenite::accept_async(stream).await?;
+                let request = websocket
+                    .next()
+                    .await
+                    .transpose()?
+                    .ok_or_else(|| std::io::Error::other("client closed before initialize"))?;
+                let request: serde_json::Value = match request {
+                    Message::Text(text) => serde_json::from_str(&text)?,
+                    other => {
+                        return Err(std::io::Error::other(format!("unexpected {other:?}")).into());
+                    }
+                };
+                assert_eq!(request["method"], "initialize");
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": "initialize",
+                            "result": {
+                                "userAgent": "codex/test",
+                                "codexHome": codex_home_path,
+                                "platformFamily": "unix",
+                                "platformOs": "linux"
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+                let _ = release_rx.await;
+                Ok(())
+            }
+            .await;
+            result
+        });
+
+        let client = try_connect_default_local_app_server(codex_home.path(), thread_id)
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        assert!(matches!(client, AppServerClient::Remote(_)));
+        drop(client);
+        let _ = release_tx.send(());
+        server
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_app_server_attach_falls_back_when_writer_endpoint_is_stale()
+    -> color_eyre::Result<()> {
+        use futures::SinkExt;
+        use futures::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let codex_home = TempDir::new()?;
+        let thread_id = ThreadId::new();
+        let writer_pid = std::process::id();
+        let writer_lock = codex_home
+            .path()
+            .join("thread-writer-locks")
+            .join(format!("{thread_id}.lock"));
+        std::fs::create_dir_all(writer_lock.parent().expect("writer lock parent"))?;
+        std::fs::write(&writer_lock, format!("pid={writer_pid}\n"))?;
+
+        let process_profile = format!("processes/{writer_pid}");
+        let owner_path = codex_app_server_client::app_server_owner_record_path_for_profile(
+            codex_home.path(),
+            Some(&process_profile),
+        );
+        std::fs::create_dir_all(owner_path.parent().expect("owner record parent"))?;
+        let stale_owner = codex_app_server_client::AppServerOwnerRecord {
+            pid: writer_pid,
+            app_server_version: "stale".to_string(),
+            endpoint: codex_app_server_client::AppServerOwnerEndpoint::UnixSocket {
+                socket_path: codex_home
+                    .path()
+                    .join("missing-owner.sock")
+                    .display()
+                    .to_string(),
+            },
+        };
+        std::fs::write(&owner_path, serde_json::to_vec(&stale_owner)?)?;
+
+        let default_socket =
+            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        std::fs::create_dir_all(default_socket.as_path().parent().expect("socket parent"))?;
+        let listener = tokio::net::UnixListener::bind(default_socket.as_path())?;
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let codex_home_path = codex_home.path().display().to_string();
+        let server = tokio::spawn(async move {
+            let result: std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                let (probe, _) = listener.accept().await?;
+                drop(probe);
+                let (stream, _) = listener.accept().await?;
+                let mut websocket = tokio_tungstenite::accept_async(stream).await?;
+                let request = websocket
+                    .next()
+                    .await
+                    .transpose()?
+                    .ok_or_else(|| std::io::Error::other("client closed before initialize"))?;
+                let request: serde_json::Value = match request {
+                    Message::Text(text) => serde_json::from_str(&text)?,
+                    other => {
+                        return Err(std::io::Error::other(format!("unexpected {other:?}")).into());
+                    }
+                };
+                assert_eq!(request["method"], "initialize");
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": "initialize",
+                            "result": {
+                                "userAgent": "codex/test",
+                                "codexHome": codex_home_path,
+                                "platformFamily": "unix",
+                                "platformOs": "linux"
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+                let _ = release_rx.await;
+                Ok(())
+            }
+            .await;
+            result
+        });
+
+        let client = try_connect_default_local_app_server(codex_home.path(), thread_id)
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        assert!(matches!(client, AppServerClient::Remote(_)));
+        drop(client);
+        let _ = release_tx.send(());
+        server
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
         Ok(())
     }
 
