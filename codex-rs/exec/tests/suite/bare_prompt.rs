@@ -3,7 +3,27 @@
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex_exec::test_codex_exec;
+use std::path::Path;
 use wiremock::MockServer;
+
+fn rollout_files(directory: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    let mut rollouts = Vec::new();
+    if !directory.exists() {
+        return Ok(rollouts);
+    }
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            rollouts.extend(rollout_files(&path)?);
+        } else if path.file_name().is_some_and(|name| {
+            name.to_string_lossy().starts_with("rollout-")
+                && path.extension().is_some_and(|ext| ext == "jsonl")
+        }) {
+            rollouts.push(path);
+        }
+    }
+    Ok(rollouts)
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bare_prompt_runs_without_direct_and_sends_only_the_user_prompt() -> anyhow::Result<()> {
@@ -38,6 +58,35 @@ async fn bare_prompt_runs_without_direct_and_sends_only_the_user_prompt() -> any
         None
     );
     assert!(request.body_json().get("tools").is_none());
+    assert_eq!(rollout_files(&test.home_path().join("sessions"))?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_direct_does_not_create_a_rollout() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let test = test_codex_exec();
+    let server = MockServer::start().await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-direct"),
+            responses::ev_assistant_message("msg-direct", "Hi!"),
+            responses::ev_completed("resp-direct"),
+        ]),
+    )
+    .await;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("--direct")
+        .arg("say hello")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Hi!"));
+
+    assert!(rollout_files(&test.home_path().join("sessions"))?.is_empty());
     Ok(())
 }
 
