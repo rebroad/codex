@@ -1,40 +1,25 @@
-we still have issues with this latest rebased codex. Firstly, when I run `codex remote-control start` it actually starts an app-server using the path pointed to by `~/.codex/packages/standalone/current/codex` rather than itself - I want it to use itself! Secondly, it is failing to `codex resume` (when no app-server is running), I tried to resume this session using our latest downstream codex, but it failed with `Error: times out discarding buffered terminal output` so this is a regression. Also, with `codex.chatgpt` and `codex` (our latest downstream), I am still seeing this:-
+`codex remote-control start` now prefers the invoking Codex CLI binary and falls back to the managed install only for non-CLI callers. The daemon source includes coverage for regular, versioned, and ChatGPT Codex binary names. `codex resume` is now working with the downstream app-server, including attaching to an already-active session; see the resolved note below.
 
-```
-  Background server has incompatible feature settings
-  This session requires api_key_model_discovery to be disabled
-  Restart will use these shared feature settings:
-    api_key_model_discovery = false
-    auth_elicitation = true
-    code_mode_host = true
-    mcp_oauth_refresh_coordination = false
-  These settings persist and can disable functionality for other clients. Restart may interrupt active or queued work.
+RESOLVED for the current shared `CODEX_HOME`: the compatibility prompt was caused by differing effective `api_key_model_discovery` settings. After the deferred restart, a read-only `experimentalFeature/list` request to the live downstream app-server reported `api_key_model_discovery=true`, `code_mode_host=true`, `auth_elicitation=true`, and `mcp_oauth_refresh_coordination=false`, matching the current client configuration. Remote-control status also reported connected. `DOWNSTREAM.md` records the tradeoffs if a future client/profile needs different values: align the settings or use separate `CODEX_HOME`s; the managed-daemon restart remains explicit because it persists shared settings and may change behavior for other clients.
 
+RESOLVED: `.github/workflows/rust-release.yml` updates the fork's `alpha` branch and rolling `latest-alpha` release, and `scripts/install/install.sh` resolves the fork's `reb.ai/codex/install.sh` channel. It does not promote upstream's `latest-alpha-cli` branch.
 
-  1. Run without daemon this time
-  2. Restart with these settings
-› 3. Cancel
-```
-why? Can we fix this somehow?
+RESOLVED: `DOWNSTREAM.md` explains that `760ede5a9f` adds `rollout_uncompressed_size` and does not remove `read_rollout_lines`; the later change scopes `read_rollout_lines` to tests because production uses the incremental `open_rollout_line_reader` API. The production size API remains exported and used by rollout recording and thread-store code.
 
-Also, I notice in our latest rebased version, we seem to have lost some of the rust-release.yml changes we had (e.g. replacing "Update latest-alpha-cli branch" with "Update alpha branch" specifically for my `reb.ai/codex/install.sh` URLs/etc.
+RESOLVED: `DOWNSTREAM.md` records the pros and cons of `2178ffe115`'s unmanaged-daemon fallback and explains why managed daemons retain an explicit recovery choice.
 
-Also, commit 760ede5a9ff856b1068e54cb3e97546a7577174a is quite possibly wrong - we should not be removing the upstream addition of the `compression::read_rollout_lines` function, should we? Or should we? If we should this needs to be clearly why explained in `DOWNSTREAM.md` otherwise I'm assuming it's a mistake.
+RESOLVED: `scripts/build_test_cli_if_needed.sh` is present and invoked by `just test` before package-scoped tests, so tests that use `cargo_bin("codex")` cannot silently run a stale CLI binary.
 
-Also, I am not sure commit `2178ffe115c784e5e356157225437d6afbd1ed0f` was the right approach - perhaps clarify the pros and cons of doing this in `DOWNSTREAM.md` and I'll review it there (in that doc).
+RESOLVED: `/usr/lib/chatgpt/resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled` reuses the shared app-server socket when another process already owns it; the CLI handles `AddrInUse` by bridging stdio to that control socket. After the deferred restart, live inspection found one listener process, using the newly installed downstream binary, and remote-control reported connected. When no daemon already owns the socket, this desktop process can become the sole listener.
 
-Do we need the `build_test_cli_if_needed.sh` script introduced in commit 6dc1af5e59? If so, re-add it.
+RESOLVED: `/var/tmp` resolves to `/mnt/kingston/@/var/tmp`, and both paths are listed as writable roots in `~/.codex/config.toml`. The source fix initializes Bubblewrap before its availability check. After installing `codex-0.162.0-alpha.20-ee9894989f-202610091631` and allowing the deferred daemon restart to complete, an ordinary-shell create/remove probe under `/var/tmp` succeeded; the live desktop app-server executable resolves to that same downstream binary. The sandbox suite ran 244 cases: 242 passed, while 2 namespace tests could not find usable bubblewrap in their synthetic environments.
 
-Also, can we find out why `/usr/lib/chatgpt/resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled` fails to start (for the ChatGPT desktop app) when there is already an app-server running?
+RESOLVED: `codex resume` when the requested rollout is already active in another session now connects to the existing session instead of failing with `failed to take over the active session`. The downstream app-server restart also resolved the `Error: times out discarding buffered terminal output` resume failure described above. Verified by the user: `codex resume` is working again.
 
-Finally, fix the ordinary shell's `/var/tmp` write access. Although `/var/tmp` is configured as an additional writable root, it resolves (via a symlink) to `/mnt/kingston/@/var/tmp`, and ordinary-shell creation currently fails with `Read-only file system`. Diagnose the effective mount/sandbox path mapping, then verify ordinary-shell create and remove operations under `/var/tmp`. I.e. if the defined root is a symlink, then it should resolve such that the destination of the symlink is a writable-root (unless the symlink itself is within a writeable-root, in which case it should be excluded).
+RESOLVED: Bare-prompt exec now also accepts the requested `--bareprompt` spelling. Focused integration coverage verifies the `say hi` request contains only the user prompt, produces one rollout, and displays a controlled token usage of 8; the same package tests verify explicit `--direct` creates no rollout and configured instructions remain available.
 
-Also fix `codex resume` when the requested rollout is already active in another session: it currently fails with `failed to take over the active session`. It should connect to the already-active session instead of trying to take it over. Reproduce this with the provided rollout path and verify the resumed client attaches to the existing session without taking ownership away from it.
+RESOLVED: `exec` now forwards `bare_prompt=true` into the app-server's per-thread config as well as accepting `--bareprompt`. The focused integration tests verify the request contains only `say hi`, no tools/default prompt scaffolding, and that bare-prompt creates a rollout while `--direct` does not. A real inference with empty stdin, outside the repo, reported 3,748 tokens (below 20,000); its rollout's only user message was `say hi`.
 
-Finally, fix `codex exec --bare-prompt 'say hello'` so it still creates and updates a rollout file. Only the explicit `--direct` option should bypass rollout creation. Verify both modes: bare-prompt persists the rollout, while direct mode does not.
+RESOLVED on Linux: app-server integration tests start curated-plugin synchronization only when built with `.with_plugin_startup_tasks()` (for example, `prompt_prefix`, `marketplace_upgrade`, `hooks_list`, `account`, and selected `plugin_list` cases). The normal test-server builder disables these tasks; tests enabling them use per-test local `file://` Git URL rewrites unless they supply their own Git config. Git subprocesses now receive the existing Linux parent-death `SIGTERM` with a fork/exec race check; the new regression test kills the owning test process and verifies its Git child exits, closing any descriptors it held. Timeout cleanup still kills the whole Git process group. Verified the full `codex-core-plugins` package suite: 479 passed, 0 skipped.
 
-Also fix the bare-prompt token-usage regression: `codex exec --bareprompt 'say hi'` must use bare-prompt semantics and report local token usage below 20.0 for the `say hi` prompt. Verify that it does not inject the default Codex instructions or context.
-
-Also diagnose why test runs spawn repeated `git fetch` processes for the OpenAI plugins repository. The current source shows curated-plugin startup synchronization invoking a depth-one Git fetch; identify which tests exercise that path and why they reach the real remote instead of a fixture. This runtime refresh is not a build prerequisite, so keep ordinary builds/tests hermetic and avoid redundant network fetches. Ensure child fetch processes terminate when their owning test process exits, and ensure they cannot inherit and retain the Cargo target lock after the owner exits. A test-spawned fetch must not remain orphaned and block later builds.
-
-RESOLVED: Android ChatGPT remote-control and `codex resume` both failed while the active app-server was the upstream binary. After restarting it with the downstream `codex` binary, Android remote-control connected to the ongoing session and `codex resume` worked. The two reported failures had the same cause: the running server did not contain the downstream session reconnect changes. Confirmed by the live app-server process executable `/home/rebroad/.cargo/bin/codex-0.162.0-alpha.20-3b690898a5+202610091517` and by both successful client connections after restart.
+RESOLVED: Android ChatGPT remote-control and `codex resume` both failed while the active app-server was the upstream binary. After restarting it with the downstream `codex` binary, Android remote-control connected to the ongoing session and `codex resume` worked. The two reported failures had the same cause: the running server did not contain the downstream session reconnect changes. The later live process audit confirmed the desktop app-server executable was the installed downstream build `codex-0.162.0-alpha.20-ee9894989f-202610091631`; the user confirmed `codex resume` now works.
