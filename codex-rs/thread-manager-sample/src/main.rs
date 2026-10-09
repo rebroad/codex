@@ -340,6 +340,7 @@ async fn new_config(
         codex_home,
         history: History::default(),
         ephemeral: true,
+        ephemeral_rollout_retention_hours: 24,
         extra_config: None,
         file_opener: UriBasedFileOpener::VsCode,
         codex_self_exe: arg0_paths.codex_self_exe,

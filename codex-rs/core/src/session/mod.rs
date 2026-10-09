@@ -3862,6 +3862,9 @@ impl Session {
         let environments = environments.or_cancel(cancellation_token).await?;
         // Keep both preparation futures off caller stacks while they are live together.
         let load_agents_md = Box::pin(async {
+            if self.title_request {
+                return Ok(None);
+            }
             let (loaded_agents_md, warnings) = self
                 .services
                 .agents_md_manager
