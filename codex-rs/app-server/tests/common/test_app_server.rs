@@ -143,6 +143,7 @@ use wiremock::matchers::path;
 
 use crate::json_logging::JsonLogCapture;
 use crate::local_websocket_exec_server::LocalWebsocketExecServer;
+use crate::prepare_curated_plugin_git_fixture;
 use crate::rpc_delay::WebsocketDelayInterposer;
 
 pub struct TestAppServer {
@@ -1978,6 +1979,19 @@ impl TestAppServerBuilder {
                 )
             }
         };
+        let plugin_startup_tasks_enabled = !args
+            .iter()
+            .any(|argument| argument == DISABLE_PLUGIN_STARTUP_TASKS_ARG);
+        let has_custom_git_config = env_overrides
+            .iter()
+            .any(|(key, _)| key == "GIT_CONFIG_GLOBAL");
+        if plugin_startup_tasks_enabled && !has_custom_git_config {
+            let git_config = prepare_curated_plugin_git_fixture(&codex_home)?;
+            env_overrides.push((
+                "GIT_CONFIG_GLOBAL".to_string(),
+                Some(git_config.to_string_lossy().into_owned()),
+            ));
+        }
         let attribution_settings_server = if mock_chatgpt_backend
             || codex_home.join("auth.json").is_file()
         {
