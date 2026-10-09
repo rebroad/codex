@@ -1339,9 +1339,8 @@ async fn cli_main(
                                 socket_path = %socket_path.display(),
                                 "reusing the existing app-server for extension-host stdio"
                             );
-                            codex_stdio_to_uds::run(socket_path.as_path())
-                                .await
-                                .map_err(std::io::Error::other)?;
+                            codex_app_server::run_stdio_to_control_socket(socket_path.as_path())
+                                .await?;
                             return Ok(());
                         }
                     }
@@ -1466,7 +1465,7 @@ async fn cli_main(
                             codex_app_server::app_server_control_socket_path(&codex_home)?
                         }
                     };
-                    codex_stdio_to_uds::run(socket_path.as_path()).await?;
+                    codex_app_server::run_stdio_to_control_socket(socket_path.as_path()).await?;
                 }
                 Some(AppServerSubcommand::Reload) => {
                     let codex_home = find_codex_home()?;

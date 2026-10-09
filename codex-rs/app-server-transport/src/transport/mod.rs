@@ -26,6 +26,7 @@ pub const CHANNEL_CAPACITY: usize = 128;
 mod owner;
 mod remote_control;
 mod stdio;
+mod stdio_proxy;
 mod unix_socket;
 #[cfg(test)]
 mod unix_socket_tests;
@@ -49,6 +50,7 @@ pub use remote_control::RemoteControlUnavailable;
 pub use remote_control::start_remote_control;
 pub use remote_control::take_remote_control_disabled_env;
 pub use stdio::start_stdio_connection;
+pub use stdio_proxy::run_stdio_to_control_socket;
 pub use unix_socket::AppServerStartupLock;
 pub use unix_socket::DaemonShutdownAccess;
 pub use unix_socket::acquire_app_server_startup_lock;
