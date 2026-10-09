@@ -78,3 +78,13 @@ The table is a behavior index, not a list of every fork-only commit. Test isolat
   server must already have compatible settings, or the extension host needs a
   separate profile/CODEX_HOME. Capture the exact runtime error before changing
   this sharing behavior.
+- A recurring `api_key_model_discovery` compatibility prompt means the
+  connecting client's effective value differs from the shared daemon's
+  process-wide value. On the inspected host, the daemon's persisted
+  `app-server-daemon/settings.json` and launch arguments set it to `true`,
+  while the ChatGPT client reports that it requires `false`. The restart option
+  persists the requesting client's complete shared-feature set, so alternating
+  clients can keep changing the daemon's value and recreate the prompt. Align
+  the clients on one value when they share a daemon. Setting it to `false`
+  disables API-key model discovery for other clients; clients that need
+  different values must use separate profiles/CODEX_HOME instances.
