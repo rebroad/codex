@@ -23,10 +23,11 @@ def configure_uv_cache() -> None:
     candidates = []
     if xdg_cache_home := os.environ.get("XDG_CACHE_HOME"):
         candidates.append(Path(xdg_cache_home) / "codex" / "uv")
+    if build_tree := formatter_build_tree():
+        candidates.append(build_tree / "build" / "uv-cache")
     candidates.extend(
         [
             Path.home() / ".cache" / "codex" / "uv",
-            REPO_ROOT.parent / f"{REPO_ROOT.name}.build" / ".uv-cache",
             Path(tempfile.gettempdir()) / "codex-uv-cache",
         ]
     )
@@ -71,19 +72,7 @@ def just_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def rust_formatter_group(*, check: bool) -> FormatterGroup:
-    if shutil.which("rustup") is not None:
-        args = ["cargo", "fmt"]
-    else:
-        encoded_paths = subprocess.check_output(
-            ["git", "ls-files", "-z", "--", "codex-rs"],
-            cwd=REPO_ROOT,
-        ).split(b"\0")
-        rust_files = [
-            str(Path(os.fsdecode(path)).relative_to("codex-rs"))
-            for path in encoded_paths
-            if path.endswith(b".rs")
-        ]
-        args = ["rustfmt", *rust_files]
+    args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
     if check:
         args.append("--check")
     command = Command(tuple(args), REPO_ROOT / "codex-rs")
@@ -143,7 +132,10 @@ def formatter_build_tree() -> Path | None:
     )
 
 
-def ruff_command(project: str, dependency_group: str | None = None) -> list[str]:
+def ruff_command(
+    project: str,
+    dependency_group: str | None = None,
+) -> list[str]:
     """Use a native Ruff when available, otherwise run the locked uv project."""
     if ruff := shutil.which("ruff"):
         return [ruff]
@@ -155,24 +147,36 @@ def ruff_command(project: str, dependency_group: str | None = None) -> list[str]
     return command
 
 
+def ruff_cache_args(build_tree: Path | None) -> list[str]:
+    """Keep Ruff's cache outside the source checkout."""
+    cache_dir = (
+        build_tree / "build" / ".ruff-cache"
+        if build_tree is not None
+        else Path(tempfile.gettempdir()) / "codex-ruff-cache"
+    )
+    return ["--cache-dir", str(cache_dir)]
+
+
 def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
     # Each `--project` retains its local dependency and Ruff configuration context.
     build_tree = formatter_build_tree()
     sdk_env = (
-        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "sdk-python-venv")),)
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "build" / "sdk-python-venv")),)
         if build_tree is not None
         else ()
     )
     ruff_run_args = ruff_command("sdk/python", "format")
+    cache_args = ruff_cache_args(build_tree)
     format_args = [
         *ruff_run_args,
         "format",
+        *cache_args,
     ]
     if check:
         format_args.append("--check")
         # `ruff check --diff` reports lint-driven rewrites without changing files.
         # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
-        lint_args = ["check", "--diff"]
+        lint_args = ["check", "--diff", *cache_args]
     else:
         # Ruff's lint fixer and formatter are separate passes: the first applies
         # fixable lint rewrites, while the second formats source layout.
@@ -190,10 +194,10 @@ def python_sdk_formatter_group(*, check: bool) -> FormatterGroup:
 def python_scripts_formatter_group(*, check: bool) -> FormatterGroup:
     # The SDK and internal scripts intentionally use separate project roots so
     # uv and Ruff retain each project's configuration context.
-    args = [*ruff_command("scripts"), "format"]
     build_tree = formatter_build_tree()
+    args = [*ruff_command("scripts"), "format", *ruff_cache_args(build_tree)]
     scripts_env = (
-        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "scripts-venv")),)
+        (("UV_PROJECT_ENVIRONMENT", str(build_tree / "build" / "scripts-venv")),)
         if build_tree is not None
         else ()
     )
