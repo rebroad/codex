@@ -163,6 +163,7 @@ pub use crate::transport::app_server_owner_record_path_for_profile;
 pub use crate::transport::prepare_control_socket_path;
 pub use crate::transport::read_app_server_owner;
 pub use crate::transport::register_app_server_owner;
+pub use crate::transport::run_stdio_to_control_socket;
 pub use crate::transport::take_remote_control_disabled_env;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
