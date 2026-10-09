@@ -96,6 +96,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -239,6 +240,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration as StdDuration;
+
+#[test]
+fn title_requests_require_ephemeral_thread_title_source() {
+    assert!(super::session::is_title_request(
+        true,
+        Some(&ThreadSource::Feature("thread_title".to_string()))
+    ));
+    assert!(!super::session::is_title_request(
+        false,
+        Some(&ThreadSource::Feature("thread_title".to_string()))
+    ));
+    assert!(!super::session::is_title_request(
+        true,
+        Some(&ThreadSource::User)
+    ));
+}
 
 pub(crate) fn mcp_config_for_test(config: &crate::config::Config) -> Arc<codex_mcp::McpConfig> {
     Arc::new(config.to_mcp_config_with_loaded_plugins(
@@ -7106,6 +7123,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let session = Session {
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        title_request: false,
         tx_event,
         agent_status: agent_status_tx,
         state: Mutex::new(state),
@@ -9376,6 +9394,7 @@ where
     let session = Arc::new(Session {
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        title_request: false,
         tx_event,
         agent_status: agent_status_tx,
         state: Mutex::new(state),

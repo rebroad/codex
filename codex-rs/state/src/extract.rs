@@ -525,6 +525,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
+                    ephemeral: false,
                     creator_user_id: None,
                     creator_account_id: None,
                     session_id: thread_id.into(),
@@ -775,6 +776,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
+                    ephemeral: false,
                     creator_user_id: None,
                     creator_account_id: None,
                     session_id: thread_id.into(),

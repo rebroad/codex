@@ -55,12 +55,21 @@ use tokio::sync::Semaphore;
 type McpToolApprovalMetadataMap =
     HashMap<(String, String), std::sync::Weak<McpToolApprovalContext>>;
 
+pub(super) fn is_title_request(ephemeral: bool, thread_source: Option<&ThreadSource>) -> bool {
+    ephemeral
+        && matches!(
+            thread_source,
+            Some(ThreadSource::Feature(feature)) if feature == "thread_title"
+        )
+}
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
+    pub(super) title_request: bool,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) state: Mutex<SessionState>,
@@ -1750,9 +1759,9 @@ impl Session {
             let codex_responses_headers = thread_extension_data.get::<crate::CodexResponsesHeaders>();
             // Ephemeral title requests use request-level effort even when managed settings
             // enable overrides. The client-supplied tag selects cache behavior, not permissions.
-            let title_request = config.ephemeral && matches!(
+            let title_request = is_title_request(
+                config.ephemeral,
                 session_configuration.thread_source.as_ref(),
-                Some(ThreadSource::Feature(feature)) if feature == "thread_title"
             );
             let reasoning_effort_override_enabled =
                 config.features.enabled(Feature::ReasoningEffortOverride) && !title_request;
@@ -1862,6 +1871,7 @@ impl Session {
             let sess = Arc::new(Session {
                 thread_id,
                 installation_id,
+                title_request,
                 tx_event: tx_event.clone(),
                 agent_status,
                 state: Mutex::new(state),
