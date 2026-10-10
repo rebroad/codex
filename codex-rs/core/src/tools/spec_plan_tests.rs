@@ -917,6 +917,46 @@ async fn request_user_input_tool_respects_experimental_config_gate() {
 }
 
 #[tokio::test]
+async fn root_only_async_user_tools_keep_the_same_specs_for_subagents() {
+    let root = probe(|turn| {
+        update_turn_settings_for_test(turn, |settings| {
+            Arc::make_mut(&mut settings.model_info).experimental_supported_tools = vec![
+                "request_user_input_async".to_string(),
+                "send_message_to_user_async".to_string(),
+            ];
+        });
+        set_feature(turn, Feature::SendMessageToUserAsync, /*enabled*/ true);
+    })
+    .await;
+    let subagent = probe(|turn| {
+        update_turn_settings_for_test(turn, |settings| {
+            Arc::make_mut(&mut settings.model_info).experimental_supported_tools = vec![
+                "request_user_input_async".to_string(),
+                "send_message_to_user_async".to_string(),
+            ];
+        });
+        set_feature(turn, Feature::SendMessageToUserAsync, /*enabled*/ true);
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::Other("test".to_string()));
+    })
+    .await;
+
+    let async_user_tools = |plan: &ToolPlanProbe| {
+        plan.visible_specs
+            .iter()
+            .filter(|spec| {
+                matches!(
+                    spec.name(),
+                    "request_user_input_async" | "send_message_to_user_async"
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(async_user_tools(&root).len(), 2);
+    assert_eq!(async_user_tools(&root), async_user_tools(&subagent));
+}
+
+#[tokio::test]
 async fn update_plan_tool_respects_config_gate() {
     let disabled = probe(|_| {}).await;
     disabled.assert_visible_lacks(&["update_plan"]);

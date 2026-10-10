@@ -68,6 +68,11 @@ impl ToolExecutor<ToolInvocation> for SendMessageToUserAsyncHandler {
                 payload,
                 ..
             } = invocation;
+            if turn.session_source.is_non_root_agent() {
+                return Err(FunctionCallError::RespondToModel(
+                    "only the root agent can message the user".to_string(),
+                ));
+            }
             let ToolPayload::Function { arguments } = payload else {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "{TOOL_NAME} handler received unsupported payload"
