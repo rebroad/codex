@@ -950,16 +950,23 @@ impl Session {
                 .runtime()
                 .root_thread_instructions_provider(thread_id, instructions.thread_provider);
         }
-        // Ephemeral forks reuse cache routing, without sharing storage or lifecycle identity.
+        // Forks reuse cache routing, without sharing storage or lifecycle identity.
         let fork_cache_key = match &initial_history {
             InitialHistory::Forked(items)
-                if config.ephemeral
-                    && !session_configuration.session_source.is_non_root_agent() =>
+                if !session_configuration.session_source.is_non_root_agent() =>
             {
-                items.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta) => Some(meta.meta.session_id.to_string()),
-                    _ => None,
-                })
+                items
+                    .iter()
+                    .find_map(|item| match item {
+                        RolloutItem::SessionMeta(meta) => Some(meta.meta.session_id.to_string()),
+                        _ => None,
+                    })
+                    // Reference-backed paginated forks omit SessionMeta from model context.
+                    .or_else(|| {
+                        session_configuration
+                            .forked_from_thread_id
+                            .map(|thread_id| thread_id.to_string())
+                    })
             }
             InitialHistory::New
             | InitialHistory::Cleared
