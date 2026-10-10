@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub(super) const THREAD_TITLE_MAX_CHARS: usize = 36;
-const THREAD_TITLE_MODEL: &str = "gpt-5.6-luna";
+const THREAD_TITLE_MODEL: &str = "gpt-6-luna";
 pub(super) const THREAD_TITLE_PROMPT_MAX_BYTES: usize = 960;
 const THREAD_TITLE_RECENT_MESSAGES: usize = 8;
 
@@ -86,20 +86,24 @@ impl App {
         let cancellation = entry.insert(CancellationToken::new()).clone();
         self.sync_thread_title_progress();
         let request_handle = app_server.request_handle();
-        let model = if self.chat_widget.config_ref().model_provider_id == "openai"
+        let config = self.chat_widget.config_ref();
+        let configured_title_model = config.thread_title_model.as_deref();
+        let title_model = configured_title_model.unwrap_or(THREAD_TITLE_MODEL);
+        let model = if let Some(configured_title_model) = configured_title_model {
+            configured_title_model.to_string()
+        } else if config.model_provider_id == "openai"
             && self.chat_widget.has_chatgpt_account()
             && self
                 .chat_widget
                 .model_catalog()
                 .try_list_models()
-                .is_ok_and(|models| models.iter().any(|model| model.model == THREAD_TITLE_MODEL))
+                .is_ok_and(|models| models.iter().any(|model| model.model == title_model))
         {
-            THREAD_TITLE_MODEL.to_string()
+            title_model.to_string()
         } else {
             self.chat_widget.current_model().to_string()
         };
-        let effort = (model == THREAD_TITLE_MODEL).then_some(ReasoningEffort::Low);
-        let config = self.chat_widget.config_ref();
+        let effort = (model == title_model).then_some(ReasoningEffort::Low);
         let options = TemporaryStructuredThreadOptions {
             thread_source: ThreadSource::Feature("thread_title".to_string()),
             model,

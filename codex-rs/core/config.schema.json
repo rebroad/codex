@@ -7916,6 +7916,10 @@
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
     },
+    "thread_title_model": {
+      "description": "Model used to generate conversation titles.",
+      "type": "string"
+    },
     "thread_unload_delay_secs": {
       "description": "Seconds a thread must have no subscribers and no activity before app-server unloads it. Defaults to 60; zero unloads immediately. Changes require a server restart.",
       "format": "uint64",
