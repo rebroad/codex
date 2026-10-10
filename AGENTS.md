@@ -8,12 +8,14 @@
   specific request.
 - Edit source files only in the source checkout. Build in the `../codex.build`
   sibling by default; it may be a symlink to storage elsewhere. Synchronize
-  source with `scripts/sync_build_tree.sh`, which uses
-  Git-aware `cpto --lngit` synchronization, preferring reflinks when supported
-  and falling back to regular copies when they are not. The sync keeps
-  destination Git-ignored build outputs,
-  removes stale non-ignored files, and aligns linked-worktree HEAD/index
-  metadata. Repository `just` recipes must not build in the source tree.
+  source with `scripts/sync_build_tree.sh`, which uses `cpto --no-lngit`,
+  preferring reflinks when supported and falling back to regular copies. The
+  source checkout is authoritative: non-ignored changes in the build sibling
+  may be overwritten or removed during synchronization, so do not edit source
+  files there. The sync preserves destination Git-ignored build outputs and
+  removes stale non-ignored files without linking or changing Git metadata in
+  the build sibling. Repository `just` recipes must not build in the source
+  tree.
 - Do not override `CODEX_SOURCE_REPO` or `CODEX_BUILD_REPO` for routine builds
   and tests. Let repository tooling resolve the source root from the repository
   root and the build tree as `../codex.build`. Set either override only when a
