@@ -194,6 +194,8 @@ pub struct ConfigToml {
     pub daybreak: Option<bool>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
+    /// Model used to generate conversation titles.
+    pub thread_title_model: Option<String>,
 
     /// Remote-control diagnostics settings.
     #[serde(default)]
@@ -1120,6 +1122,14 @@ mod tests {
                     .expect_err("idle timeout must be a nonnegative integer");
             assert!(error.to_string().contains("thread_unload_delay_secs"));
         }
+    }
+
+    #[test]
+    fn thread_title_model_can_be_configured() {
+        let config: ConfigToml = toml::from_str("thread_title_model = \"gpt-6-sol\"")
+            .expect("thread title model should deserialize");
+
+        assert_eq!(config.thread_title_model.as_deref(), Some("gpt-6-sol"));
     }
 
     #[test]
