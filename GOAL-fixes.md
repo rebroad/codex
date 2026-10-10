@@ -19,6 +19,12 @@ Validation for the current goal:
   default and a title-generation request using the configured override.
 - In a disposable `CODEX_HOME`, the wrapper started a managed daemon and
   `restart-if-idle` replaced it (PID 1604012 to 1604151).
+- After a cold ChatGPT relaunch, the old PID 3787974 was gone and the owner
+  record identified managed PID 1635938. That process runs the installed CLI
+  with `--managed-daemon`, confirming the desktop wrapper's managed launch path.
+- A live `restart-if-idle` request was issued against PID 1635938. It is still
+  waiting for the current assistant turn to become idle; verify the replacement
+  PID after this turn completes.
 - `bash -n` and `git diff --check` passed. The user-level desktop entry points
-  to the wrapper. The desktop app still needs a cold-start smoke check after it
-  is fully quit and relaunched.
+  to the wrapper and `desktop-file-validate` passed with an existing category
+  hint.
