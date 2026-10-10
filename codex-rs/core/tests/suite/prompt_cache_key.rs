@@ -37,6 +37,33 @@ fn request_has_input_type(request: &wiremock::Request, input_type: &str) -> bool
         })
 }
 
+fn async_user_tool_specs(body: &Value) -> Vec<Value> {
+    let tool_specs = body["tools"].as_array().into_iter().flatten().chain(
+        body["input"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item["type"] == "additional_tools")
+            .flat_map(|item| item["tools"].as_array().into_iter().flatten()),
+    );
+    tool_specs
+        .flat_map(|tool| {
+            tool["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(std::iter::once(tool))
+        })
+        .filter(|tool| {
+            matches!(
+                tool["name"].as_str(),
+                Some("request_user_input_async" | "send_message_to_user_async")
+            )
+        })
+        .cloned()
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
     let server = start_mock_server().await;
@@ -88,6 +115,17 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("dummy"))
+        .with_model_info_override("test-subagent-cache-affinity", |model| {
+            for tool in ["request_user_input_async", "send_message_to_user_async"] {
+                if !model
+                    .experimental_supported_tools
+                    .iter()
+                    .any(|name| name == tool)
+                {
+                    model.experimental_supported_tools.push(tool.to_string());
+                }
+            }
+        })
         .with_config(|config| {
             config
                 .features
@@ -156,6 +194,10 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
             },
         })
     );
+    let root_async_tools = async_user_tool_specs(&root_request.body_json());
+    let child_async_tools = async_user_tool_specs(&child_request.body_json());
+    assert_eq!(root_async_tools.len(), 2);
+    assert_eq!(child_async_tools, root_async_tools);
 
     Ok(())
 }

@@ -102,6 +102,7 @@ async fn persistent_async_message_guidance_follows_tool_availability(
     wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let request = responses.single_request();
+    let expected_tool_schema = model_supports_tool;
     let persistent_instructions = request
         .message_input_texts("developer")
         .into_iter()
@@ -117,7 +118,7 @@ async fn persistent_async_message_guidance_follows_tool_availability(
             .expect("request tools")
             .iter()
             .any(|tool| tool["name"] == "request_user_input_async"),
-        expect_tool_guidance,
+        expected_tool_schema,
     );
 
     Ok(())
@@ -148,6 +149,7 @@ async fn freeform_async_message_requires_root_and_catalog_or_feature_opt_in(
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
     .await;
+    let expected_tool_schema = expected || matches!(session_source, SessionSource::SubAgent(_));
     let test = test_codex()
         .with_model_info_override("gpt-5.2", move |model| {
             model.tool_mode = Some(ToolMode::CodeModeOnly);
@@ -187,7 +189,7 @@ async fn freeform_async_message_requires_root_and_catalog_or_feature_opt_in(
             .iter()
             .filter(|tool| tool["name"] == "send_message_to_user_async")
             .count(),
-        usize::from(expected),
+        usize::from(expected_tool_schema),
     );
     Ok(())
 }
