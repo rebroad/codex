@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CODEX_BIN="${CODEX_APP_SERVER_CLI:-${HOME}/.cargo/bin/codex}"
+CHATGPT_BIN="${CHATGPT_APP_BIN:-/usr/bin/chatgpt}"
+
+if [[ ! -x "${CODEX_BIN}" ]]; then
+  echo "ChatGPT app-server launcher: Codex CLI not executable: ${CODEX_BIN}" >&2
+  exit 1
+fi
+if [[ ! -x "${CHATGPT_BIN}" ]]; then
+  echo "ChatGPT app-server launcher: ChatGPT app not executable: ${CHATGPT_BIN}" >&2
+  exit 1
+fi
+
+export CODEX_APP_SERVER_USE_LOCAL_DAEMON=1
+unset CODEX_CLI_PATH
+if pgrep -x ChatGPT >/dev/null; then
+  exec "${CHATGPT_BIN}" "$@"
+fi
+
+start_output="$("${CODEX_BIN}" app-server daemon start)" || {
+  echo "ChatGPT app-server launcher: failed to start the managed app-server:" >&2
+  echo "${start_output}" >&2
+  exit 1
+}
+if ! python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("backend") == "pid" else 1)' <<<"${start_output}"; then
+  echo "ChatGPT app-server launcher: app-server is running without a managed PID;" >&2
+  echo "close the existing ChatGPT app-server and try again." >&2
+  exit 1
+fi
+
+exec "${CHATGPT_BIN}" "$@"
