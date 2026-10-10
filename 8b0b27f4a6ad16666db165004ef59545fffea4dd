@@ -1,0 +1,94 @@
+History rearrangement pass 2026-10-10
+
+Final branch: alpha
+Final commit: 8b0b27f4a6ad16666db165004ef59545fffea4dd
+Final tree: 96ab5f5bce2cd39eb187b362309edfc16209eee3
+Upstream baseline: 15c477d788a575de432f661def200ae7bc4a835e (same merge base as before)
+Downstream commits: 159; no fixup! or squash! commits remain.
+
+Checkpoints, all created from clean tracked worktrees and all with tree 96ab5f5bce2cd39eb187b362309edfc16209eee3:
+- alpha.before-rearrange-20261010-history-pass1: 4c696934e6027f68c8d5b50ecee364a81d69094d
+- alpha.before-rearrange-20261010-semantic-fixups-pass2: f6974c5f48568f2f40f683323ce11064f6bb98e0
+- alpha.before-rearrange-20261010-sandbox-owner-pass3: d68cedebfa7cb212dd0b9577625fc5833b812a25
+- alpha.before-rearrange-20261010-same-file-followups-pass4: bfe007b01c923c86bc3b7fe4e87e28b99d171273
+- alpha.before-rearrange-20261010-same-file-autosquash-pass5: 2b8ad39c5c9892642c0a1a722d8b9e04fd1776de
+- alpha.before-rearrange-20261010-cargo-env-owner-pass6: 22a268401bc5d1f33c7bc18a7220814b7ab24009
+- alpha.before-rearrange-20261010-cargo-env-autosquash-pass7: d598b223ace58e74be8483d0a464e850c288dddc
+
+Ownership decisions:
+- Folded soft-keyboard padding behavior and tests into the existing soft-keyboard feature.
+- Split the mixed remote-control/cache repair: the timeout behavior belongs to the config-reload feature; the side-chat prompt-cache behavior has no downstream owner because its instruction-boundary change predates the preserved merge base, so it remains a scoped standalone commit.
+- Folded config-reload timeout tuning into the config-reload owner.
+- Folded rollout directory browsing follow-ups for ephemeral session lookup and model/token display into the directory-browser owner.
+- Folded sandboxed sccache server setup into the build-orchestrator owner; its completion status remains a later documentation commit so the task timeline is preserved.
+- Folded orphaned Git lock detection into the shared Cargo harness owner.
+- Folded the sync script executable bit into the source/build-tree resolver owner; other script mode changes remain a separate permissions commit.
+- Persistent-fork cache-affinity behavior remains a standalone scoped repair. Its nominal upstream owner commit is before the preserved merge base, and no downstream commit owns that behavior.
+
+The previous note on 09c7462d7c records the detailed rationales for the earlier repeated-file clusters. The full current count for every path touched more than twice follows. GOAL-fixes.md is an evolving task-status record (19 touches); GOAL-rebase.md is an evolving rebase decision record (3 touches). Generated schemas and Cargo.lock, shared API/CLI entrypoints and test scaffolding, independent daemon lifecycle behavior, and the build/TUI recipes retain the earlier documented ownership exceptions.
+
+Verification: final tree equals all seven checkpoint trees; merge base is unchanged; tracked worktree clean; no unattached fixups/squashes. No tests/build were run because this was a history-only change and the final tree exactly matches the pre-rearrangement tree. Thirty ignored entries under scripts/.venv remain present and unchanged.
+
+Publication: origin/alpha was not updated. The rewritten alpha is non-fast-forward relative to the remote tip; a push to that branch would require a forced update, which the active instructions prohibit. No force push was attempted.
+
+Current paths with three or more commits:
+     19 GOAL-fixes.md
+     11 codex-rs/cli/src/main.rs
+      9 codex-rs/core/config.schema.json
+      9 codex-rs/config/src/config_toml.rs
+      9 DOWNSTREAM.md
+      8 codex-rs/core/src/config/mod.rs
+      8 codex-rs/app-server/src/lib.rs
+      8 codex-rs/Cargo.lock
+      8 GOAL-rebase-fix.md
+      7 codex-rs/tui/src/lib.rs
+      6 codex-rs/core/src/session/tests.rs
+      6 codex-rs/app-server-daemon/src/lib.rs
+      5 justfile
+      5 codex-rs/core/src/session/session.rs
+      5 codex-rs/core/src/config/config_tests.rs
+      5 codex-rs/app-server/src/request_processors/thread_processor.rs
+      4 codex-rs/tui/src/chatwidget/tests/app_server.rs
+      4 codex-rs/tui/src/app/tests.rs
+      4 codex-rs/thread-store/src/local/mod.rs
+      4 codex-rs/thread-manager-sample/src/main.rs
+      4 codex-rs/rollout/src/recorder_tests.rs
+      4 codex-rs/core/src/turn_metadata.rs
+      4 codex-rs/core/src/session/mod.rs
+      4 codex-rs/app-server/tests/suite/v2/thread_resume.rs
+      4 codex-rs/app-server/src/bespoke_event_handling.rs
+      4 codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json
+      4 codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.schemas.json
+      4 codex-rs/app-server-daemon/src/backend/pid.rs
+      3 scripts/test_resolve_source_repo.py
+      3 scripts/resolve_source_repo.py
+      3 scripts/format.py
+      3 codex-rs/tui/src/chatwidget/tests/status_and_layout.rs
+      3 codex-rs/tui/src/chatwidget/tests/slash_commands.rs
+      3 codex-rs/tui/src/chatwidget/protocol.rs
+      3 codex-rs/tui/src/app_server_session/rollout_history_tests.rs
+      3 codex-rs/tui/src/app_server_session/rollout_history.rs
+      3 codex-rs/tui/src/app_server_session.rs
+      3 codex-rs/tui/src/app/tests/session_lifecycle_requests.rs
+      3 codex-rs/tui/src/app/startup.rs
+      3 codex-rs/tui/src/app/event_dispatch.rs
+      3 codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
+      3 codex-rs/state/src/runtime/threads.rs
+      3 codex-rs/rollout/src/writer_lock.rs
+      3 codex-rs/rollout/src/recorder.rs
+      3 codex-rs/linux-sandbox/tests/suite/landlock.rs
+      3 codex-rs/linux-sandbox/src/linux_run_main.rs
+      3 codex-rs/core/Cargo.toml
+      3 codex-rs/arg0/src/lib.rs
+      3 codex-rs/app-server/src/transport.rs
+      3 codex-rs/app-server/src/message_processor.rs
+      3 codex-rs/app-server-transport/src/transport/unix_socket.rs
+      3 codex-rs/app-server-transport/src/transport/mod.rs
+      3 codex-rs/app-server-transport/src/lib.rs
+      3 codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+      3 codex-rs/app-server-protocol/src/protocol/common.rs
+      3 codex-rs/app-server-protocol/schema/json/ServerNotification.json
+      3 alpha-rebase-skipped-commits.md
+      3 TODO
+      3 GOAL-rebase.md
+      3 .github/workflows/rust-release.yml
