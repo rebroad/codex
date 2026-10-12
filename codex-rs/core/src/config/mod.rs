@@ -625,6 +625,10 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
+    /// Substring replacements applied to requested model IDs before model lookup, in
+    /// lexicographic order by search string.
+    pub model_replacements: BTreeMap<String, String>,
+
     /// Default Daybreak preference for new threads and non-interactive turns.
     pub daybreak_enabled: bool,
 
@@ -1708,6 +1712,7 @@ impl Config {
 
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
+            model_replacements: self.model_replacements.clone(),
             model_context_window: self.model_context_window,
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
             tool_output_token_limit: self.tool_output_token_limit,
@@ -3287,6 +3292,20 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        if cfg
+            .model_replacements
+            .as_ref()
+            .is_some_and(|replacements| {
+                replacements
+                    .iter()
+                    .any(|(from, to)| from.is_empty() || to.is_empty())
+            })
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "model_replacements keys and values must not be empty",
+            ));
+        }
         if cfg.model_post_turn_compact_threshold_percent.is_some_and(|percent| percent > 100) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -4422,6 +4441,7 @@ impl Config {
         let config = Self {
             prefer_mxc,
             model,
+            model_replacements: cfg.model_replacements.unwrap_or_default(),
             daybreak_enabled: cfg.daybreak.unwrap_or(false),
             service_tier,
             review_model,
