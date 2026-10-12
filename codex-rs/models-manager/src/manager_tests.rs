@@ -800,6 +800,33 @@ async fn get_model_info_uses_bundled_metadata_when_remote_catalog_omits_model() 
 }
 
 #[tokio::test]
+async fn get_model_info_applies_configured_model_replacements() {
+    let codex_home = tempdir().expect("temp dir");
+    let config = ModelsManagerConfig {
+        model_replacements: std::collections::BTreeMap::from([
+            ("gpt-5.6-terra".to_string(), "gpt-6-luna".to_string()),
+            ("gpt-5.6-luna".to_string(), "gpt-6-luna".to_string()),
+            ("gpt-5.6-sol".to_string(), "gpt-6.1-sol".to_string()),
+        ]),
+        ..Default::default()
+    };
+    let manager = openai_manager_for_tests(
+        codex_home.path().to_path_buf(),
+        TestModelsEndpoint::new(Vec::new()),
+    );
+
+    for (requested, expected) in [
+        ("gpt-5.6-terra", "gpt-6-luna"),
+        ("gpt-5.6-luna", "gpt-6-luna"),
+        ("gpt-5.6-sol", "gpt-6.1-sol"),
+        ("global.openai.gpt-5.6-terra", "global.openai.gpt-6-luna"),
+    ] {
+        let model_info = manager.get_model_info(requested, &config).await;
+        assert_eq!(model_info.slug, expected);
+    }
+}
+
+#[tokio::test]
 async fn get_model_info_applies_long_context_override_to_bundled_gpt_5_6_models() {
     let codex_home = tempdir().expect("temp dir");
     let manager = openai_manager_for_tests(
