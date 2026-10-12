@@ -7855,6 +7855,13 @@
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"
     },
+    "model_replacements": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Substring replacements applied to requested model IDs before model lookup, in lexicographic order by search string.",
+      "type": "object"
+    },
     "model_verbosity": {
       "allOf": [
         {
