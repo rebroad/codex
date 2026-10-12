@@ -246,8 +246,9 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         Box::pin(
             async move {
                 let remote_models = self.get_remote_models().await;
+                let model = config.rewrite_model_id(model);
                 construct_model_info_from_candidates_with_fallback(
-                    model,
+                    &model,
                     &remote_models,
                     self.get_bundled_models(),
                     config,
@@ -488,15 +489,16 @@ impl ModelsManager for OpenAiModelsManager {
     ) -> ModelsManagerFuture<'a, ModelInfo> {
         Box::pin(async move {
             let models = self.get_remote_models().await;
+            let model = config.rewrite_model_id(model);
             match &self.catalog_source {
                 CatalogSource::Default => construct_model_info_from_candidates_with_fallback(
-                    model,
+                    &model,
                     &models,
                     &self.bundled_models,
                     config,
                 ),
                 CatalogSource::ExplicitProvider(_) => construct_model_info(
-                    model,
+                    &model,
                     models.into_iter().find(|candidate| candidate.slug == model),
                     config,
                 ),
@@ -958,7 +960,8 @@ pub(crate) fn construct_model_info_from_candidates(
     candidates: &[ModelInfo],
     config: &ModelsManagerConfig,
 ) -> ModelInfo {
-    construct_model_info_from_candidates_with_fallback(model, candidates, &[], config)
+    let model = config.rewrite_model_id(model);
+    construct_model_info_from_candidates_with_fallback(&model, candidates, &[], config)
 }
 
 fn construct_model_info_from_candidates_with_fallback(
