@@ -854,7 +854,7 @@ async fn guardian_requests_record_only_their_own_tool_calls() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(CodexAuth::from_api_key("test-api-key"), true, "gpt-5.6-luna"; "api_key_uses_luna_with_responses_lite")]
+#[test_case(CodexAuth::from_api_key("test-api-key"), true, "gpt-6-luna"; "api_key_rewrites_legacy_luna_with_responses_lite")]
 #[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), true, "codex-auto-review"; "chatgpt_uses_codex_auto_review")]
 #[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), false, "codex-auto-review"; "chatgpt_without_free_guardian")]
 async fn guardian_session_prewarms_and_is_reused_for_first_review(
@@ -866,6 +866,7 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
 
     let uses_codex_backend = auth.uses_codex_backend();
     let credits_enabled = uses_codex_backend;
+    let rewrite_legacy_luna = expected_model == "gpt-6-luna";
     let bundled_models = codex_models_manager::bundled_models_response()?.models;
     let catalog_auto_review = bundled_models
         .iter()
@@ -888,7 +889,7 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         .find(|model| model.slug == expected_model)
         .expect("bundled Guardian review model");
     let use_responses_lite = review_model.use_responses_lite;
-    if expected_model == "gpt-5.6-luna" {
+    if expected_model == "gpt-6-luna" {
         assert!(use_responses_lite, "Luna must use Responses Lite");
     }
 
@@ -937,6 +938,11 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
             .expect("Guardian endpoint configuration should be written");
         })
         .with_config(move |config| {
+            if rewrite_legacy_luna {
+                config
+                    .model_replacements
+                    .insert("gpt-5.6-luna".to_string(), "gpt-6-luna".to_string());
+            }
             if uses_codex_backend {
                 config.model_provider.base_url = Some(backend_base_url);
             }

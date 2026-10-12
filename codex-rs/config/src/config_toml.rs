@@ -190,6 +190,9 @@ pub struct ConfigToml {
     pub ephemeral_rollout_retention_hours: Option<u32>,
     /// Optional override of model selection.
     pub model: Option<String>,
+    /// Substring replacements applied to requested model IDs before model lookup, in
+    /// lexicographic order by search string.
+    pub model_replacements: Option<BTreeMap<String, String>>,
     /// Default Daybreak preference for new threads and non-interactive turns.
     pub daybreak: Option<bool>,
     /// Review model override used by the `/review` feature.
@@ -1130,6 +1133,26 @@ mod tests {
             .expect("thread title model should deserialize");
 
         assert_eq!(config.thread_title_model.as_deref(), Some("gpt-6-sol"));
+    }
+
+    #[test]
+    fn model_replacements_can_be_configured() {
+        let config: ConfigToml = toml::from_str(
+            r#"[model_replacements]
+"gpt-5.6-terra" = "gpt-6-luna"
+"gpt-5.6-luna" = "gpt-6-luna"
+"gpt-5.6-sol" = "gpt-6.1-sol""#,
+        )
+        .expect("model replacements should deserialize");
+
+        assert_eq!(
+            config.model_replacements,
+            Some(BTreeMap::from([
+                ("gpt-5.6-terra".to_string(), "gpt-6-luna".to_string()),
+                ("gpt-5.6-luna".to_string(), "gpt-6-luna".to_string()),
+                ("gpt-5.6-sol".to_string(), "gpt-6.1-sol".to_string()),
+            ]))
+        );
     }
 
     #[test]
