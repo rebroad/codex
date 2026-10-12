@@ -98,13 +98,21 @@ pub(crate) async fn resolve_review_model(
             turn.config.http_client_factory(),
         )
         .await;
-    let default_review_model_id = turn.provider.approval_review_preferred_model();
-    let review_model = codex_guardian_reviewer::select_review_model(
-        &context.model_info,
+    let models_manager_config = turn.config.to_models_manager_config();
+    let default_review_model_id =
+        models_manager_config.rewrite_model_id(turn.provider.approval_review_preferred_model());
+    let mut parent_model = (*context.model_info).clone();
+    parent_model.auto_review_model_override = parent_model
+        .auto_review_model_override
+        .as_deref()
+        .map(|model| models_manager_config.rewrite_model_id(model));
+    let mut review_model = codex_guardian_reviewer::select_review_model(
+        &parent_model,
         context.reasoning_effort.as_ref(),
-        default_review_model_id,
+        &default_review_model_id,
         &available_models,
     );
+    review_model.model = models_manager_config.rewrite_model_id(&review_model.model);
     // Resolve a separate reviewer against the current catalog on every attempt.
     // Parent fallback must retain the action's metadata even after a catalog refresh.
     let guardian_model_info =
@@ -115,10 +123,7 @@ pub(crate) async fn resolve_review_model(
                 session
                     .services
                     .models_manager
-                    .get_model_info(
-                        review_model.model.as_str(),
-                        &turn.config.to_models_manager_config(),
-                    )
+                    .get_model_info(review_model.model.as_str(), &models_manager_config)
                     .await,
             )
         };
