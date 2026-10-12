@@ -269,6 +269,30 @@ async fn load_config_applies_thread_title_model_override() -> std::io::Result<()
 }
 
 #[tokio::test]
+async fn load_config_passes_model_replacements_to_model_resolution() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"[model_replacements]
+"gpt-5.6-terra" = "gpt-6-luna""#,
+    )
+    .expect("model replacements should parse from config.toml");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config
+            .to_models_manager_config()
+            .rewrite_model_id("global.openai.gpt-5.6-terra"),
+        "global.openai.gpt-6-luna"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_thread_unload_delay() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     for (toml, seconds) in [
