@@ -51,6 +51,8 @@ use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::ReasoningContext;
+use codex_api::RequestCacheComponentFingerprint;
+use codex_api::RequestCacheDiagnostics;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
@@ -120,6 +122,57 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
+
+fn request_cache_component<T: serde::Serialize>(
+    name: &str,
+    value: &T,
+) -> Option<RequestCacheComponentFingerprint> {
+    let serialized = serde_json::to_vec(value).ok()?;
+    let item_fingerprints = serde_json::to_value(value)
+        .ok()?
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    blake3::hash(item.to_string().as_bytes())
+                        .to_hex()
+                        .to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(RequestCacheComponentFingerprint {
+        name: name.to_string(),
+        fingerprint: blake3::hash(&serialized).to_hex().to_string(),
+        byte_len: serialized.len(),
+        item_fingerprints,
+    })
+}
+
+fn request_cache_diagnostics(
+    request: &ResponsesApiRequest,
+    response_session_id: Option<String>,
+) -> Option<RequestCacheDiagnostics> {
+    let components = vec![
+        request_cache_component("input", &request.input)?,
+        request_cache_component("tools", &request.tools)?,
+        request_cache_component("tool_choice", &request.tool_choice)?,
+        request_cache_component("parallel_tool_calls", &request.parallel_tool_calls)?,
+        request_cache_component("reasoning", &request.reasoning)?,
+        request_cache_component("text", &request.text)?,
+        request_cache_component("include", &request.include)?,
+        request_cache_component("service_tier", &request.service_tier)?,
+    ];
+    let prefix = serde_json::to_vec(&(&request.model, &components)).ok()?;
+    Some(RequestCacheDiagnostics {
+        model: request.model.clone(),
+        prompt_cache_key: request.prompt_cache_key.clone(),
+        response_session_id,
+        prefix_fingerprint: blake3::hash(&prefix).to_hex().to_string(),
+        components,
+    })
+}
 
 use crate::attestation::AttestationContext;
 use crate::attestation::AttestationProvider;
@@ -1876,6 +1929,7 @@ impl ResponsesHttpExecutor<'_> {
                 }
                 request.input = input;
             }
+            let cache_diagnostics = request_cache_diagnostics(&request, options.session_id.clone());
             inference_trace_attempt.record_started(&request);
             let client = ApiResponsesClient::new(
                 transport,
@@ -1893,6 +1947,7 @@ impl ResponsesHttpExecutor<'_> {
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
                         interceptors,
+                        cache_diagnostics,
                     );
                     return Ok(stream);
                 }
@@ -2221,6 +2276,14 @@ impl ModelClientSession {
                     item.set_id(original_item_id);
                 }
             }
+            let cache_diagnostics = if warmup {
+                None
+            } else {
+                request_cache_diagnostics(
+                    &request,
+                    Some(self.client.responses_session_id(responses_metadata)),
+                )
+            };
             self.websocket_session.last_request = Some(request);
             self.websocket_session.last_response_from_untraced_warmup = warmup;
             let stream_result = stream_result.map_err(|err| {
@@ -2239,6 +2302,7 @@ impl ModelClientSession {
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
                 interceptors,
+                cache_diagnostics,
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -2495,6 +2559,7 @@ fn map_response_stream(
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
     interceptors: Vec<Box<dyn codex_extension_api::ModelResponseInterceptor>>,
+    request_cache_diagnostics: Option<RequestCacheDiagnostics>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let upstream_request_id = api_stream.upstream_request_id.take();
     let interrupt = api_stream.interrupt.take();
@@ -2504,6 +2569,7 @@ fn map_response_stream(
         session_telemetry,
         inference_trace_attempt,
         provider,
+        request_cache_diagnostics,
     );
     stream.interrupt = interrupt;
     (stream, last_response)
@@ -2515,6 +2581,7 @@ fn map_response_events<S>(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    request_cache_diagnostics: Option<RequestCacheDiagnostics>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -2574,6 +2641,7 @@ where
                     token_usage,
                     usage_metadata,
                     end_turn,
+                    ..
                 }) => {
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
@@ -2597,6 +2665,7 @@ where
                             token_usage,
                             usage_metadata,
                             end_turn,
+                            request_cache_diagnostics: request_cache_diagnostics.clone(),
                         }))
                         .await
                         .is_err()
