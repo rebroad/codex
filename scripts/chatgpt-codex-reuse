@@ -1,0 +1,57 @@
+#!/bin/sh
+
+REAL_CODEX=/home/rebroad/.cargo/bin/codex
+CHATGPT_CODEX=/usr/lib/chatgpt/resources/codex.chatgpt
+print_startup_config=0
+run_app_server=0
+found_app_server=0
+expect_command=0
+
+for arg do
+    if [ "$arg" = --print-startup-config ]; then
+        print_startup_config=1
+    fi
+    if [ "$expect_command" -eq 1 ]; then
+        case "$arg" in
+            -*) run_app_server=1 ;;
+            *) run_app_server=0 ;;
+        esac
+        expect_command=0
+    fi
+    if [ "$arg" = app-server ]; then
+        found_app_server=1
+        expect_command=1
+    fi
+done
+
+if [ "$found_app_server" -eq 1 ] && [ "$print_startup_config" -eq 1 ]; then
+    if ! "$REAL_CODEX" app-server --help 2>&1 | grep -q -- '--print-startup-config'; then
+        if [ -x "$CHATGPT_CODEX" ]; then
+            startup_output=$(mktemp /var/tmp/chatgpt-codex-startup.XXXXXX) || exec "$CHATGPT_CODEX" "$@"
+            startup_rewritten=${startup_output}.json
+            trap 'rm -f "$startup_output" "$startup_rewritten"' 0
+            "$CHATGPT_CODEX" "$@" >"$startup_output"
+            startup_status=$?
+            daemon_info=$("$REAL_CODEX" app-server daemon version 2>/dev/null) || daemon_info=
+            daemon_version=$(printf '%s' "$daemon_info" | jq -er 'select(.status == "running" and .cliVersion == .appServerVersion) | .appServerVersion' 2>/dev/null) || daemon_version=
+            if [ "$startup_status" -eq 0 ] && [ -n "$daemon_version" ] && [ "$daemon_version" != null ] && jq --arg version "$daemon_version" '.appServerVersion = $version' "$startup_output" >"$startup_rewritten" 2>/dev/null; then
+                cat "$startup_rewritten"
+            else
+                cat "$startup_output"
+            fi
+            exit "$startup_status"
+        fi
+    fi
+    exec "$REAL_CODEX" "$@"
+fi
+
+if [ "$found_app_server" -eq 1 ] && { [ "$run_app_server" -eq 1 ] || [ "$expect_command" -eq 1 ]; }; then
+    daemon_info=$("$REAL_CODEX" app-server daemon version 2>/dev/null) || daemon_info=
+    daemon_version=$(printf '%s' "$daemon_info" | jq -r 'select(.status == "running" and .cliVersion == .appServerVersion) | .appServerVersion' 2>/dev/null)
+    socket_path=$(printf '%s' "$daemon_info" | jq -r 'select(.status == "running" and .cliVersion == .appServerVersion) | .socketPath' 2>/dev/null)
+    if [ -n "$daemon_version" ] && [ "$daemon_version" != null ] && [ -n "$socket_path" ] && [ "$socket_path" != null ]; then
+        exec "$REAL_CODEX" app-server proxy --sock "$socket_path"
+    fi
+fi
+
+exec "$REAL_CODEX" "$@"
