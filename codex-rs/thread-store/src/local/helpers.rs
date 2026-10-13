@@ -123,6 +123,7 @@ pub(super) fn touch_modified_time(path: &Path) -> std::io::Result<()> {
 pub(super) fn restore_rollout_moves(moves: &[(PathBuf, PathBuf)]) -> std::io::Result<()> {
     for (source, destination) in moves.iter().rev() {
         std::fs::rename(destination, source)?;
+        codex_rollout::move_cache_diagnostics_for_rollout(destination, source)?;
     }
     Ok(())
 }

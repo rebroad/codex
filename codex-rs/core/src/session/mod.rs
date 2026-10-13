@@ -4832,6 +4832,7 @@ impl Session {
         usage_metadata: Option<&ResponseUsageMetadata>,
         response_effective_model: Option<String>,
         account_id: Option<String>,
+        request_cache_diagnostics: Option<codex_api::RequestCacheDiagnostics>,
     ) {
         let (_, _, effective_model) = self.state.lock().await.token_info_and_rate_limits();
         self.send_event(
@@ -4844,6 +4845,38 @@ impl Session {
             }),
         )
         .await;
+        if let Some(diagnostics) = request_cache_diagnostics {
+            let record = serde_json::json!({
+                "schema_version": 1,
+                "response_id": response_id,
+                "request": {
+                    "model": &diagnostics.model,
+                    "prompt_cache_key": &diagnostics.prompt_cache_key,
+                    "response_session_id": &diagnostics.response_session_id,
+                    "prefix_fingerprint": &diagnostics.prefix_fingerprint,
+                    "components": diagnostics.components.iter().map(|component| serde_json::json!({
+                        "name": &component.name,
+                        "fingerprint": &component.fingerprint,
+                        "byte_len": component.byte_len,
+                        "item_fingerprints": &component.item_fingerprints,
+                    })).collect::<Vec<_>>(),
+                },
+                "usage": usage,
+                "usage_metadata": usage_metadata,
+                "effective_model": response_effective_model.clone(),
+            });
+            match self.current_rollout_path().await {
+                Ok(Some(rollout_path)) => {
+                    if let Err(error) =
+                        codex_rollout::write_cache_diagnostics(&rollout_path, &record)
+                    {
+                        warn!(%error, "failed to persist response cache diagnostics");
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => warn!(%error, "failed to resolve rollout for cache diagnostics"),
+            }
+        }
         if usage.is_none()
             && usage_metadata
                 .and_then(|metadata| metadata.amount.as_ref())

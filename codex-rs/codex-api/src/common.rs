@@ -77,6 +77,25 @@ pub struct MemorySummarizeOutput {
 #[derive(Clone, Debug)]
 pub struct ResponseId(pub String);
 
+/// Privacy-safe fingerprints for comparing Responses request cache prefixes.
+#[derive(Clone, Debug, Serialize)]
+pub struct RequestCacheDiagnostics {
+    pub model: String,
+    pub prompt_cache_key: Option<String>,
+    pub response_session_id: Option<String>,
+    pub prefix_fingerprint: String,
+    pub components: Vec<RequestCacheComponentFingerprint>,
+}
+
+/// Fingerprint and size of one cache-relevant request component.
+#[derive(Clone, Debug, Serialize)]
+pub struct RequestCacheComponentFingerprint {
+    pub name: String,
+    pub fingerprint: String,
+    pub byte_len: usize,
+    pub item_fingerprints: Vec<String>,
+}
+
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created {
@@ -105,6 +124,7 @@ pub enum ResponseEvent {
         response_id: String,
         token_usage: Option<TokenUsage>,
         usage_metadata: Option<ResponseUsageMetadata>,
+        request_cache_diagnostics: Option<RequestCacheDiagnostics>,
         /// Did the model affirmatively end its turn? Some providers do not set this,
         /// so we rely on fallback logic when this is `None`.
         end_turn: Option<bool>,
