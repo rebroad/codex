@@ -1,0 +1,19 @@
+Alpha history rearrangement: cache diagnostics follow-up
+
+Checkpoint: alpha.before-rearrange-20261013-cache-diagnostics
+Checkpoint commit: 45c1b234ed126d2ffb7cb0120a0dfee0a28511ff
+Checkpoint tree: d2467f665960a17022f90da62ad5f3f8760c0e31
+Final commit: 10e99a87f45a753e06b1e64f9da40b54fd0967e8
+Final tree: d2467f665960a17022f90da62ad5f3f8760c0e31 (identical)
+Upstream baseline: upstream/latest-alpha-cli at 15c477d788a575de432f661def200ae7bc4a835e (merge base unchanged)
+Downstream count: 165 before; 162 after. No fixup!/squash! subjects remain.
+
+Ownership decisions:
+- Folded both cache-affinity follow-ups into fix: preserve parent cache affinity in persistent forks. Their added root-only user-tool specs/runtime gating preserve the prompt/tool prefix for root and subagent requests; the focused prompt-cache test now asserts identical tool specs.
+- Split the mixed model-ID fixup. The Guardian reviewer rewrite correction was folded into feat(config): rewrite model IDs from config. The inherited-FD close in scripts/codex_sccache_server.sh was folded into build: add isolated Codex build orchestrator, which owns the server setup.
+- Add rollout cache diagnostics sidecars and reuse running app-server in ChatGPT desktop remain independent scoped features, with no downstream feature owner requiring a fixup.
+
+Same-file audit:
+The prior alpha-rearranged-20261010-pass8 note records the review of the preceding 142-commit series, including all repeated-file clusters and exceptions. Re-audited all additions since that tip and then the complete rewritten range. New repeated touches remain coherent: config schema/config structs/tests and Cargo.lock are generated/API/dependency outputs; core session entrypoints and rollout lib register behavior owned by independent features; GOAL-fixes.md is an evolving task log. Existing exceptions for shared CLI/app-server/TUI/config entrypoints, protocol schemas, Cargo.lock, justfile, daemon lifecycle and evolving downstream/rebase notes remain as documented in the prior note. New sidecar and desktop reuse source files are otherwise single-owner changes.
+
+Verification: git diff checkpoint..alpha is empty; both tree hashes match; merge-base is unchanged; worktree clean; no unattached fixups or squash commits. No tests/build run because the final tree is identical and this change only rearranges history.
