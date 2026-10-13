@@ -2936,6 +2936,7 @@ dependencies = [
  "assert_matches",
  "async-channel",
  "base64 0.22.1",
+ "blake3",
  "bm25",
  "chrono",
  "codex-agent-graph-store",
