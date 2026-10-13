@@ -858,6 +858,7 @@ async fn drain_to_completed(
                 response_id,
                 token_usage,
                 usage_metadata,
+                request_cache_diagnostics,
                 ..
             }) => {
                 let account_id = sess.maybe_emit_backend_account_update(turn_context).await;
@@ -868,6 +869,7 @@ async fn drain_to_completed(
                     usage_metadata.as_ref(),
                     response_effective_model.take(),
                     account_id,
+                    request_cache_diagnostics,
                 )
                 .await;
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())

@@ -3086,6 +3086,7 @@ async fn try_run_sampling_request(
                 token_usage,
                 usage_metadata,
                 end_turn,
+                request_cache_diagnostics,
             } => {
                 let account_id = sess.maybe_emit_backend_account_update(&turn_context).await;
                 sess.services
@@ -3112,6 +3113,7 @@ async fn try_run_sampling_request(
                     usage_metadata.as_ref(),
                     response_effective_model.take(),
                     account_id,
+                    request_cache_diagnostics,
                 )
                 .await;
                 let budget_result = sess

@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use crate::EPHEMERAL_SESSIONS_SUBDIR;
 use crate::WriterLockCoordinator;
+use crate::remove_cache_diagnostics_for_rollout;
 use crate::rollout_file_name::RolloutFileName;
 
 /// Removes expired rollout files from the dedicated ephemeral session tree.
@@ -54,7 +55,10 @@ pub fn cleanup_expired_ephemeral_rollouts(
                     };
                     if is_expired(&path, cutoff)? {
                         match fs::remove_file(&path) {
-                            Ok(()) => removed += 1,
+                            Ok(()) => {
+                                remove_cache_diagnostics_for_rollout(&path)?;
+                                removed += 1;
+                            }
                             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                             Err(err) => return Err(err),
                         }

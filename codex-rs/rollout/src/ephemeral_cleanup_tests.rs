@@ -34,6 +34,11 @@ fn removes_expired_ephemeral_rollouts_only() -> io::Result<()> {
         Duration::from_secs(48 * 60 * 60),
     )?;
     let fresh = rollout_path(home.path(), ThreadId::new(), Duration::from_secs(60))?;
+    let old_sidecar = old.with_file_name(format!(
+        "{}.cache-diagnostics.json",
+        old.file_name().expect("rollout filename").to_string_lossy()
+    ));
+    fs::write(&old_sidecar, "diagnostics")?;
     let ordinary = home.path().join("sessions/2026/01/01/old.jsonl");
     fs::create_dir_all(ordinary.parent().expect("ordinary parent"))?;
     fs::write(&ordinary, "ordinary session")?;
@@ -43,6 +48,7 @@ fn removes_expired_ephemeral_rollouts_only() -> io::Result<()> {
         1
     );
     assert!(!old.exists());
+    assert!(!old_sidecar.exists());
     assert!(fresh.exists());
     assert!(ordinary.exists());
     Ok(())
