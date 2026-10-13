@@ -100,6 +100,19 @@ pub(super) async fn unarchive_thread(
                 message: format!("failed to unarchive thread: {err}"),
             });
         }
+        if let Err(err) = codex_rollout::move_cache_diagnostics_for_rollout(source, destination) {
+            let _ = std::fs::rename(destination, source);
+            if let Err(restore_err) = restore_rollout_moves(&rollout_moves[..index]) {
+                return Err(ThreadStoreError::Internal {
+                    message: format!(
+                        "failed to restore cache diagnostics: {err}; failed to restore moved rollouts: {restore_err}"
+                    ),
+                });
+            }
+            return Err(ThreadStoreError::Internal {
+                message: format!("failed to restore cache diagnostics: {err}"),
+            });
+        }
     }
     if let Err(err) = touch_modified_time(restored_path.as_path()) {
         if let Err(restore_err) = restore_rollout_moves(&rollout_moves) {
