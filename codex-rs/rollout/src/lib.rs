@@ -6,6 +6,7 @@ use codex_protocol::protocol::SessionSource;
 use serde::de::Error as _;
 use serde_json::Value;
 
+mod cache_diagnostics;
 pub(crate) mod compression;
 pub(crate) mod config;
 mod ephemeral_cleanup;
@@ -27,6 +28,9 @@ mod sqlite_metrics;
 pub mod state_db;
 mod writer_lock;
 
+pub use cache_diagnostics::move_cache_diagnostics_for_rollout;
+pub use cache_diagnostics::remove_cache_diagnostics_for_rollout;
+pub use cache_diagnostics::write_cache_diagnostics;
 pub use codex_history::CompactedItem;
 pub use codex_history::CompactionResumeMetadata;
 pub use codex_history::InitialHistory;

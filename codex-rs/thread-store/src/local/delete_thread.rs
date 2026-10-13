@@ -277,6 +277,14 @@ fn delete_rollout_file(store: &LocalThreadStore, rollout_path: &Path) -> ThreadS
     let compressed_path = plain_path.with_extension("jsonl.zst");
     let deleted_plain = delete_rollout_path(store, plain_path.as_path())?;
     let deleted_compressed = delete_rollout_path(store, compressed_path.as_path())?;
+    codex_rollout::remove_cache_diagnostics_for_rollout(plain_path.as_path()).map_err(|err| {
+        ThreadStoreError::Internal {
+            message: format!(
+                "failed to delete cache diagnostics for {}: {err}",
+                plain_path.display()
+            ),
+        }
+    })?;
     Ok(deleted_plain || deleted_compressed)
 }
 

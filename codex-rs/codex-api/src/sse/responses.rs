@@ -473,6 +473,7 @@ pub fn process_responses_event(
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
                             usage_metadata: resp.usage_metadata,
+                            request_cache_diagnostics: None,
                             end_turn: if interrupted {
                                 Some(false)
                             } else {
@@ -877,6 +878,7 @@ mod tests {
                 token_usage,
                 usage_metadata,
                 end_turn,
+                ..
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
@@ -1075,6 +1077,7 @@ mod tests {
                 token_usage,
                 usage_metadata,
                 end_turn,
+                ..
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
@@ -1656,6 +1659,7 @@ mod tests {
                 token_usage: None,
                 usage_metadata: None,
                 end_turn: None,
+                ..
             } if response_id == "resp-1"
         );
     }
@@ -1697,6 +1701,7 @@ mod tests {
                 token_usage: None,
                 usage_metadata: None,
                 end_turn: None,
+                ..
             } if response_id == "resp-1"
         );
     }
@@ -1733,6 +1738,7 @@ mod tests {
                 token_usage: None,
                 usage_metadata: None,
                 end_turn: None,
+                ..
             } if response_id == "resp-1"
         );
     }
@@ -1769,6 +1775,7 @@ mod tests {
                 token_usage: None,
                 usage_metadata: None,
                 end_turn: None,
+                ..
             } if response_id == "resp-1"
         );
     }

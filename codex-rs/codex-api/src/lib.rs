@@ -37,6 +37,8 @@ pub use crate::common::RawMemoryMetadata;
 pub use crate::common::Reasoning;
 pub use crate::common::ReasoningContext;
 pub use crate::common::ReasoningSummaryDelivery;
+pub use crate::common::RequestCacheComponentFingerprint;
+pub use crate::common::RequestCacheDiagnostics;
 pub use crate::common::ResponseCreateWsRequest;
 pub use crate::common::ResponseEvent;
 pub use crate::common::ResponseId;
