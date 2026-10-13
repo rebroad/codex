@@ -2456,6 +2456,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
             }),
             Some("routed-model".to_string()),
             account_id.clone(),
+            None,
         )
         .await;
     child_thread
@@ -2541,6 +2542,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
             }),
             Some("routed-model".to_string()),
             account_id,
+            None,
         )
         .await;
     child_thread

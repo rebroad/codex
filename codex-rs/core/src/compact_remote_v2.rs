@@ -457,6 +457,7 @@ async fn collect_compaction_output(
                 response_id,
                 token_usage,
                 usage_metadata,
+                request_cache_diagnostics,
                 ..
             } => {
                 let account_id = sess.maybe_emit_backend_account_update(turn_context).await;
@@ -467,6 +468,7 @@ async fn collect_compaction_output(
                     usage_metadata.as_ref(),
                     response_effective_model.take(),
                     account_id,
+                    request_cache_diagnostics,
                 )
                 .await;
                 completed_response_id = Some(response_id);
@@ -1256,6 +1258,7 @@ mod tests {
                     metadata: Some(serde_json::json!({ "extra": { "label": "example" } })),
                 }),
                 end_turn: Some(true),
+                request_cache_diagnostics: None,
             }),
         ]);
 

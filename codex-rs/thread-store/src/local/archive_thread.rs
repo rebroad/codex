@@ -128,6 +128,19 @@ async fn archive_thread_with_paths(
                 message: format!("failed to archive thread: {err}"),
             });
         }
+        if let Err(err) = codex_rollout::move_cache_diagnostics_for_rollout(source, destination) {
+            let _ = std::fs::rename(destination, source);
+            if let Err(restore_err) = restore_rollout_moves(&rollout_moves[..index]) {
+                return Err(ThreadStoreError::Internal {
+                    message: format!(
+                        "failed to archive cache diagnostics: {err}; failed to restore moved rollouts: {restore_err}"
+                    ),
+                });
+            }
+            return Err(ThreadStoreError::Internal {
+                message: format!("failed to archive cache diagnostics: {err}"),
+            });
+        }
     }
 
     if let Some(ctx) = state_db_ctx
