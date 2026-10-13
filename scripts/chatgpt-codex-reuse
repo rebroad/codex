@@ -1,0 +1,31 @@
+#!/bin/sh
+
+REAL_CODEX=/home/rebroad/.cargo/bin/codex
+run_app_server=0
+found_app_server=0
+expect_command=0
+
+for arg do
+    if [ "$expect_command" -eq 1 ]; then
+        case "$arg" in
+            -*) run_app_server=1 ;;
+            *) run_app_server=0 ;;
+        esac
+        expect_command=0
+    fi
+    if [ "$arg" = app-server ]; then
+        found_app_server=1
+        expect_command=1
+    fi
+done
+
+if [ "$found_app_server" -eq 1 ] && { [ "$run_app_server" -eq 1 ] || [ "$expect_command" -eq 1 ]; }; then
+    daemon_info=$("$REAL_CODEX" app-server daemon version 2>/dev/null) || daemon_info=
+    daemon_version=$(printf '%s' "$daemon_info" | jq -r 'select(.status == "running" and .cliVersion == .appServerVersion) | .appServerVersion' 2>/dev/null)
+    socket_path=$(printf '%s' "$daemon_info" | jq -r 'select(.status == "running" and .cliVersion == .appServerVersion) | .socketPath' 2>/dev/null)
+    if [ -n "$daemon_version" ] && [ "$daemon_version" != null ] && [ -n "$socket_path" ] && [ "$socket_path" != null ]; then
+        exec "$REAL_CODEX" app-server proxy --sock "$socket_path"
+    fi
+fi
+
+exec "$REAL_CODEX" "$@"
