@@ -328,8 +328,8 @@ fn install_network_seccomp_filter_on_current_thread(
                 SeccompCmpOp::Eq,
                 libc::AF_VSOCK as u64,
             )?])?;
-            rules.insert(libc::SYS_socket, vec![deny_vsock.clone()]);
-            rules.insert(libc::SYS_socketpair, vec![deny_vsock]);
+            rules.insert(libc::SYS_socket.into(), vec![deny_vsock.clone()]);
+            rules.insert(libc::SYS_socketpair.into(), vec![deny_vsock]);
         }
     }
 
