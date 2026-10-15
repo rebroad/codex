@@ -52,7 +52,7 @@ def render_inline_scalar(value: Any) -> str | None:
     if isinstance(value, str):
         if "\n" in value:
             return None
-        if is_plain_string(value):
+        if is_plain_string(value) and not value.isdigit():
             return value
         return json.dumps(value, ensure_ascii=False)
     raise TypeError(f"unsupported scalar type: {type(value)!r}")
@@ -136,8 +136,11 @@ def sanitized_slug(slug: str) -> str:
 
 
 def extract_model_document(model: dict[str, Any], index: int) -> dict[str, Any]:
-    if "base_instructions" not in model:
-        raise ValueError(f"model {model.get('slug', index)} is missing base_instructions")
+    model_messages = model.get("model_messages")
+    if "base_instructions" not in model and not (
+        isinstance(model_messages, dict) and "instructions_template" in model_messages
+    ):
+        raise ValueError(f"model {model.get('slug', index)} is missing instructions")
     return model
 
 

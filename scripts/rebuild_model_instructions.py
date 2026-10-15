@@ -36,8 +36,11 @@ def rebuild_model_document(document: dict[str, Any]) -> dict[str, Any]:
     slug = document.get("slug")
     if not isinstance(slug, str) or not slug:
         raise ValueError("document missing slug")
-    if "base_instructions" not in document:
-        raise ValueError(f"document {slug} missing base_instructions")
+    model_messages = document.get("model_messages")
+    if "base_instructions" not in document and not (
+        isinstance(model_messages, dict) and "instructions_template" in model_messages
+    ):
+        raise ValueError(f"document {slug} missing instructions")
     return document
 
 
