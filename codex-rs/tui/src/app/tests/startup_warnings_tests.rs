@@ -45,6 +45,20 @@ async fn deprecation_delivery_deduplicates_retained_transcript() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ false)?;
+    app.chat_widget.handle_server_notification(
+        ServerNotification::DeprecationNotice(
+            codex_app_server_protocol::DeprecationNoticeNotification {
+                summary:
+                    "Full-history hydration is deprecated for paginated threads; migrate the client."
+                        .into(),
+                details: None,
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    drain_history(&mut app, &mut tui, &mut events);
+    assert!(app.transcript_cells.is_empty());
+
     let notice = ServerNotification::DeprecationNotice(
         codex_app_server_protocol::DeprecationNoticeNotification {
             summary: "`transcript_v2` is deprecated.".into(),
