@@ -42,9 +42,10 @@
   history to identify the commit that introduced the behavior. Record the
   repair as a real `fixup!` targeting that introducing commit (for example,
   `git commit --fixup=<commit>`), not as an ordinary follow-up commit. Verify
-  the target before publishing, and autosquash fixups before the upstream
-  rebase. Never target a fixup at a commit at or before the upstream
-  merge-base. For independent new work, use a normal commit.
+  the target before publishing. Never target a fixup at a commit at or before
+  the upstream merge-base. Do not rewrite or rearrange commit history during
+  routine work; do that only in a dedicated rearrange task explicitly
+  initiated by the user. For independent new work, use a normal commit.
 
 In the codex-rs folder where the rust code lives:
 
