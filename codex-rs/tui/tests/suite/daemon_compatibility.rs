@@ -19,7 +19,6 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket.parent().unwrap())?;
         let listener = UnixListener::bind(socket.as_path())?;
-        let server_cwd = cwd.clone();
         let server = tokio::spawn(async move {
             let mut socket = loop {
                 let (stream, _) = listener.accept().await?;
@@ -92,7 +91,7 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
         terminal.read_output(std::time::Duration::from_millis(/*millis*/ 200))?;
         terminal.write_input(b"\r")?;
         terminal.wait_for_screen("Model:")?;
-        ensure!(!terminal.screen_contains("unix://"));
+        assert!(!terminal.screen_contains("unix://"));
         tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), server).await???;
     }
     Ok(())

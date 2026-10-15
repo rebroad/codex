@@ -10,9 +10,14 @@ pub(super) async fn check(
     startup: &mut StartupDraft,
     target: &AppServerTarget,
     config: &Config,
+    cli_kv_overrides: &[(String, toml::Value)],
 ) -> io::Result<Option<String>> {
     let result = startup
-        .run_until(daemon_startup::compatibility_warning(target, config))
+        .run_until(daemon_startup::compatibility_warning(
+            target,
+            config,
+            cli_kv_overrides,
+        ))
         .await?;
     Ok(compatibility_note(result))
 }

@@ -294,17 +294,8 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                     ))
                 );
             } else {
-                let error = result.unwrap_err().to_string();
-                assert_eq!(
-                    error,
-                    format!(
-                        "Cannot use the shared background server: {reason}.\n{}",
-                        daemon_startup::FAILURE_HINT
-                    )
-                );
-                if scenario == "explicit enable" {
-                    insta::assert_snapshot!("daemon_feature_mismatch_error", error);
-                }
+                let error = result.unwrap_err();
+                assert_eq!(error.reason, reason);
             }
         }
     }

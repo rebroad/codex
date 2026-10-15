@@ -601,7 +601,13 @@ pub(super) async fn run_main_inner(
         use_embedded_fallback = warning.is_some();
         warning
     } else {
-        daemon_compatibility::check(&mut startup_draft, &app_server_target, &config).await?
+        daemon_compatibility::check(
+            &mut startup_draft,
+            &app_server_target,
+            &config,
+            &cli_kv_overrides,
+        )
+        .await?
     };
     if use_embedded_fallback {
         app_server_target = AppServerTarget::Embedded;
