@@ -43,40 +43,29 @@ function formatTokenCount(value) {
     : "unknown";
 }
 
-function renderUsageSummary(thread) {
-  const summary = $("usageSummary");
-  summary.innerHTML = "";
-  const usage =
-    thread?.tokenUsage?.thread ?? thread?.tokenUsage?.latestResponse;
-  const usageLabel = thread?.tokenUsage?.thread
-    ? "Thread tokens (cumulative)"
-    : "Latest response tokens";
-  const modelNames = thread?.models || [];
-  const model = modelNames.length > 0 ? modelNames.join(", ") : "unknown";
-  const tokens = usage
-    ? `${formatTokenCount(usage.total_tokens)} total · ${formatTokenCount(usage.input_tokens)} input (${formatTokenCount(usage.cached_input_tokens)} cached, ${formatTokenCount(usage.cache_write_input_tokens)} cache write) · ${formatTokenCount(usage.output_tokens)} output (${formatTokenCount(usage.reasoning_output_tokens)} reasoning)`
-    : "No token usage recorded";
-  summary.textContent = `Model: ${model}\n${usageLabel}: ${tokens}`;
-}
-
 function renderThread(thread) {
   const view = $("threadView");
   const meta = $("threadMeta");
+  const ordinalSummary = $("ordinalSummary");
   view.innerHTML = "";
   meta.textContent = "";
+  ordinalSummary.textContent = "";
 
   if (!thread) {
-    renderUsageSummary(null);
     view.innerHTML = `<div class="empty">(no data)</div>`;
     return;
   }
-
-  renderUsageSummary(thread);
 
   meta.textContent =
     `file=${thread.file}\n` +
     `session=${thread.session.id || "(unknown)"} source=${thread.session.source || "(unknown)"} cwd=${thread.session.cwd || "(none)"}\n` +
     `lines=${thread.totals.lines} bytes=${thread.totals.bytes}`;
+  if (thread.ordinalCoverage?.first !== null && thread.ordinalCoverage?.last !== null) {
+    const coverage = thread.ordinalCoverage;
+    ordinalSummary.textContent = coverage.continuous
+      ? `Ordinal coverage ${coverage.first}–${coverage.last}: no ordinal numbers are absent; records not rendered are summarized inline.`
+      : `Ordinal coverage ${coverage.first}–${coverage.last}: some ordinal numbers have no record; see inline summaries.`;
+  }
 
   if (!Array.isArray(thread.turns) || thread.turns.length === 0) {
     view.innerHTML = `<div class="empty">(no turns/messages detected)</div>`;
@@ -90,6 +79,16 @@ function renderThread(thread) {
     turnNode.innerHTML = `<div class="turn-title">Turn ${i + 1} · ${turn.status || "unknown"}</div>`;
 
     for (const item of turn.items || []) {
+      if (item.type === "omissionSummary") {
+        const summary = document.createElement("div");
+        summary.className = "record-meta";
+        const range = item.endOrdinal > item.ordinal
+          ? `${item.ordinal}–${item.endOrdinal}`
+          : String(item.ordinal);
+        summary.textContent = `Not rendered · ordinals ${range}: ${item.summary}`;
+        turnNode.appendChild(summary);
+        continue;
+      }
       const msgNode = document.createElement("div");
       msgNode.className = `msg ${roleClass(item.role || "other")}`;
       if (item.type === "message") {
@@ -106,8 +105,25 @@ function renderThread(thread) {
         msgNode.innerHTML =
           `<span class="kind">reasoning</span>` +
           `${item.text || "(empty reasoning)"}`;
+      } else if (item.type === "tokenUsage") {
+        const usage = item.usage || {};
+        msgNode.classList.add("token-usage");
+        msgNode.textContent =
+          `${item.model || "unknown model"} · ` +
+          `${formatTokenCount(usage.total_tokens)} total · ` +
+          `${formatTokenCount(usage.input_tokens)} input ` +
+          `(${formatTokenCount(usage.cached_input_tokens)} cached, ` +
+          `${formatTokenCount(usage.cache_write_input_tokens)} cache write) · ` +
+          `${formatTokenCount(usage.output_tokens)} output ` +
+          `(${formatTokenCount(usage.reasoning_output_tokens)} reasoning)`;
       } else {
         msgNode.textContent = JSON.stringify(item);
+      }
+      if (item.ordinal !== null || item.timestamp) {
+        const recordMeta = document.createElement("div");
+        recordMeta.className = "record-meta";
+        recordMeta.textContent = `Ordinal ${item.ordinal ?? "?"} · ${item.timestamp || "timestamp unknown"}`;
+        msgNode.prepend(recordMeta);
       }
       turnNode.appendChild(msgNode);
     }
