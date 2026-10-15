@@ -8,6 +8,7 @@ set -euo pipefail
 case "${TARGET}" in
   x86_64-unknown-linux-musl) openssl_target="linux-x86_64" ;;
   aarch64-unknown-linux-musl) openssl_target="linux-aarch64" ;;
+  armv7-unknown-linux-musleabihf) openssl_target="linux-armv4" ;;
   *) echo "Unexpected musl target: ${TARGET}" >&2; exit 1 ;;
 esac
 
