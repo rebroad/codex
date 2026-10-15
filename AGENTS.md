@@ -45,7 +45,10 @@
   the target before publishing. Never target a fixup at a commit at or before
   the upstream merge-base. Do not rewrite or rearrange commit history during
   routine work; do that only in a dedicated rearrange task explicitly
-  initiated by the user. For independent new work, use a normal commit.
+  initiated by the user. For new downstream work, ideally add or update an
+  entry in `DOWNSTREAM.md` describing the request and intended behavior, so
+  future rebase conflict resolution can recover the original intent. For
+  independent new work, use a normal commit.
 
 In the codex-rs folder where the rust code lives:
 
