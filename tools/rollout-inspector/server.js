@@ -268,6 +268,38 @@ async function handleApi(req, res, urlObj, codexHome) {
     return;
   }
 
+  if (urlObj.pathname === "/api/records") {
+    try {
+      const filePath = requireFileParam(urlObj);
+      const from = Number.parseInt(urlObj.searchParams.get("from") ?? "", 10);
+      const to = Number.parseInt(urlObj.searchParams.get("to") ?? "", 10);
+      if (
+        !Number.isInteger(from) ||
+        !Number.isInteger(to) ||
+        from < 0 ||
+        to < from ||
+        to - from > 5000
+      ) {
+        json(res, 400, { error: "from/to must be a valid ordinal range of at most 5001 records" });
+        return;
+      }
+      const records = [];
+      for await (const line of readJsonlLines(filePath)) {
+        const parsed = safeJsonParse(line.line);
+        if (!parsed.ok || !Number.isInteger(parsed.value?.ordinal)) continue;
+        if (parsed.value.ordinal > to) break;
+        if (parsed.value.ordinal >= from) records.push(parsed.value);
+      }
+      json(res, 200, { records });
+    } catch (error) {
+      const statusCode = error?.statusCode ?? 500;
+      json(res, statusCode, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
   if (urlObj.pathname === "/api/analyze") {
     try {
       const filePath = requireFileParam(urlObj);

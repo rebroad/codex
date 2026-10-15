@@ -43,6 +43,156 @@ function formatTokenCount(value) {
     : "unknown";
 }
 
+function makeOrdinalToggle(ordinal, timestamp, body, initialText) {
+  const entry = document.createElement("div");
+  entry.className = "ordinal-entry";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "record-meta ordinal-toggle";
+  toggle.textContent = initialText;
+  toggle.setAttribute("aria-expanded", "true");
+  toggle.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    toggle.setAttribute("aria-expanded", String(!body.hidden));
+    toggle.textContent = body.hidden
+      ? `Ordinal ${ordinal} · ${timestamp || "timestamp unknown"} · Expand`
+      : `Ordinal ${ordinal} · ${timestamp || "timestamp unknown"} · Collapse`;
+  });
+  entry.append(toggle, body);
+  return entry;
+}
+
+function renderItemBody(item) {
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  if (item.type === "message") {
+    body.textContent = item.text || "";
+  } else if (item.type === "toolCall") {
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = `tool call: ${item.name || "(unknown tool)"}`;
+    body.append(kind, document.createTextNode(item.argsPreview || "(no args)"));
+  } else if (item.type === "toolOutput") {
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = `tool output: ${formatBytes(item.outputBytes || 0)}`;
+    body.append(kind, document.createTextNode(item.outputPreview));
+  } else if (item.type === "reasoning") {
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = "reasoning";
+    body.append(kind, document.createTextNode(item.text || "(empty reasoning)"));
+  } else if (item.type === "tokenUsage") {
+    const usage = item.usage || {};
+    body.classList.add("token-usage");
+    body.textContent =
+      `${item.model || "unknown model"} · ` +
+      `${formatTokenCount(usage.total_tokens)} total · ` +
+      `${formatTokenCount(usage.input_tokens)} input ` +
+      `(${formatTokenCount(usage.cached_input_tokens)} cached, ` +
+      `${formatTokenCount(usage.cache_write_input_tokens)} cache write) · ` +
+      `${formatTokenCount(usage.output_tokens)} output ` +
+      `(${formatTokenCount(usage.reasoning_output_tokens)} reasoning)`;
+  } else {
+    body.textContent = JSON.stringify(item);
+  }
+  return body;
+}
+
+function renderOrdinalItem(item) {
+  const message = document.createElement("div");
+  message.className = `msg ${roleClass(item.role || "other")}`;
+  const body = renderItemBody(item);
+  if (item.type === "tokenUsage") body.classList.add("token-usage");
+  if (item.ordinal !== null || item.timestamp) {
+    const range = item.endOrdinal > item.ordinal
+      ? `${item.ordinal}–${item.endOrdinal}`
+      : String(item.ordinal ?? "?");
+    const toggle = makeOrdinalToggle(
+      range,
+      item.timestamp,
+      body,
+      `Ordinal ${range} · ${item.timestamp || "timestamp unknown"} · Collapse`,
+    );
+    message.appendChild(toggle);
+  } else {
+    message.appendChild(body);
+  }
+  return message;
+}
+
+function renderRawRecord(record) {
+  const payload = record.payload || {};
+  const type = payload.type ? `${record.type}/${payload.type}` : record.type;
+  const body = document.createElement("pre");
+  body.className = "raw-record";
+  body.textContent = JSON.stringify(payload, null, 2);
+  const message = document.createElement("div");
+  message.className = "msg role-other expanded-record";
+  const toggle = makeOrdinalToggle(
+    record.ordinal,
+    record.timestamp,
+    body,
+    `Ordinal ${record.ordinal} · ${record.timestamp || "timestamp unknown"} · ${type} · Collapse`,
+  );
+  message.appendChild(toggle);
+  return message;
+}
+
+function renderOmissionSummary(item, filePath) {
+  const entry = document.createElement("div");
+  entry.className = "omission-entry";
+  const records = document.createElement("div");
+  records.className = "omission-records";
+  records.hidden = true;
+  const range = item.endOrdinal > item.ordinal
+    ? `${item.ordinal}–${item.endOrdinal}`
+    : String(item.ordinal);
+  const label = `Not rendered · ordinals ${range}: ${item.summary}`;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "record-meta ordinal-toggle";
+  toggle.textContent = `${label} · Expand`;
+  toggle.setAttribute("aria-expanded", "false");
+  let loaded = false;
+  toggle.addEventListener("click", async () => {
+    if (!loaded && records.hidden) {
+      toggle.disabled = true;
+      toggle.textContent = `${label} · Loading`;
+      try {
+        const params = new URLSearchParams({
+          file: filePath,
+          from: String(item.ordinal),
+          to: String(item.endOrdinal),
+        });
+        const result = await getJson(`/api/records?${params.toString()}`);
+        if (result.records.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "record-meta";
+          empty.textContent = "No JSONL records exist for this ordinal range.";
+          records.appendChild(empty);
+        } else {
+          for (const record of result.records) records.appendChild(renderRawRecord(record));
+        }
+        loaded = true;
+      } catch (error) {
+        const failure = document.createElement("div");
+        failure.className = "record-meta load-error";
+        failure.textContent = error instanceof Error ? error.message : String(error);
+        records.replaceChildren(failure);
+      } finally {
+        toggle.disabled = false;
+      }
+    }
+    records.hidden = !records.hidden;
+    const expanded = !records.hidden;
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.textContent = `${label} · ${expanded ? "Collapse" : "Expand"}`;
+  });
+  entry.append(toggle, records);
+  return entry;
+}
+
 function renderThread(thread) {
   const view = $("threadView");
   const meta = $("threadMeta");
@@ -80,53 +230,10 @@ function renderThread(thread) {
 
     for (const item of turn.items || []) {
       if (item.type === "omissionSummary") {
-        const summary = document.createElement("div");
-        summary.className = "record-meta";
-        const range = item.endOrdinal > item.ordinal
-          ? `${item.ordinal}–${item.endOrdinal}`
-          : String(item.ordinal);
-        summary.textContent = `Not rendered · ordinals ${range}: ${item.summary}`;
-        turnNode.appendChild(summary);
+        turnNode.appendChild(renderOmissionSummary(item, thread.file));
         continue;
       }
-      const msgNode = document.createElement("div");
-      msgNode.className = `msg ${roleClass(item.role || "other")}`;
-      if (item.type === "message") {
-        msgNode.textContent = item.text || "";
-      } else if (item.type === "toolCall") {
-        msgNode.innerHTML =
-          `<span class="kind">tool call: ${item.name || "(unknown)"}</span>` +
-          `${item.argsPreview || "(no args)"}`;
-      } else if (item.type === "toolOutput") {
-        const kind = document.createElement("span");
-        kind.className = "kind";
-        kind.textContent = `tool output: ${formatBytes(item.outputBytes || 0)}`;
-        msgNode.append(kind, document.createTextNode(item.outputPreview));
-      } else if (item.type === "reasoning") {
-        msgNode.innerHTML =
-          `<span class="kind">reasoning</span>` +
-          `${item.text || "(empty reasoning)"}`;
-      } else if (item.type === "tokenUsage") {
-        const usage = item.usage || {};
-        msgNode.classList.add("token-usage");
-        msgNode.textContent =
-          `${item.model || "unknown model"} · ` +
-          `${formatTokenCount(usage.total_tokens)} total · ` +
-          `${formatTokenCount(usage.input_tokens)} input ` +
-          `(${formatTokenCount(usage.cached_input_tokens)} cached, ` +
-          `${formatTokenCount(usage.cache_write_input_tokens)} cache write) · ` +
-          `${formatTokenCount(usage.output_tokens)} output ` +
-          `(${formatTokenCount(usage.reasoning_output_tokens)} reasoning)`;
-      } else {
-        msgNode.textContent = JSON.stringify(item);
-      }
-      if (item.ordinal !== null || item.timestamp) {
-        const recordMeta = document.createElement("div");
-        recordMeta.className = "record-meta";
-        recordMeta.textContent = `Ordinal ${item.ordinal ?? "?"} · ${item.timestamp || "timestamp unknown"}`;
-        msgNode.prepend(recordMeta);
-      }
-      turnNode.appendChild(msgNode);
+      turnNode.appendChild(renderOrdinalItem(item));
     }
 
     view.appendChild(turnNode);
