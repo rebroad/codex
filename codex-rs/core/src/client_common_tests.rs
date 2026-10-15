@@ -80,6 +80,8 @@ fn without_scaffolding_keeps_explicit_developer_instructions_only() {
     let prompt = Prompt {
         input: vec![
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "developer".to_string(),
                 content: vec![
@@ -102,6 +104,8 @@ fn without_scaffolding_keeps_explicit_developer_instructions_only() {
                 ),
             },
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -119,6 +123,8 @@ fn without_scaffolding_keeps_explicit_developer_instructions_only() {
         prompt.input,
         vec![
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -135,6 +141,8 @@ fn without_scaffolding_keeps_explicit_developer_instructions_only() {
                 ),
             },
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {

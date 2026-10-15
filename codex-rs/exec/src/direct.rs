@@ -105,6 +105,7 @@ pub(crate) async fn run(prompt_text: String, config: &Config, json_mode: bool) -
         config
             .features
             .enabled(Feature::ConcurrentReasoningSummaries),
+        config.features.enabled(Feature::OutputTokenReplay),
         None,
         config.http_client_factory(),
         config.workspace_routing_context(),
@@ -165,6 +166,8 @@ fn build_inputs(developer_instructions: Option<&str>, prompt_text: &str) -> Vec<
     let mut inputs = Vec::with_capacity(2);
     if let Some(developer_instructions) = developer_instructions {
         inputs.push(ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -175,6 +178,8 @@ fn build_inputs(developer_instructions: Option<&str>, prompt_text: &str) -> Vec<
         });
     }
     inputs.push(ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
