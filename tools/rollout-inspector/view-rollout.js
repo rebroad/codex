@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const net = require("node:net");
 const { spawn } = require("node:child_process");
 const http = require("node:http");
 const { readJsonlLines, safeJsonParse } = require("./lib/jsonl");
@@ -8,6 +9,34 @@ const { readJsonlLines, safeJsonParse } = require("./lib/jsonl");
 const DEFAULT_PORT = 8787;
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_RETRY_MS = 250;
+const PORT_SEARCH_LIMIT = 100;
+
+async function isPortAvailable(port) {
+  const server = net.createServer();
+  return new Promise((resolve, reject) => {
+    server.once("error", (error) => {
+      if (error.code === "EADDRINUSE") {
+        resolve(false);
+      } else {
+        reject(error);
+      }
+    });
+    server.listen(port, "127.0.0.1", () => {
+      server.close((error) => (error ? reject(error) : resolve(true)));
+    });
+  });
+}
+
+async function findAvailablePort(startPort) {
+  for (let port = startPort; port < startPort + PORT_SEARCH_LIMIT; port += 1) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  throw new Error(
+    `could not find an available port between ${startPort} and ${startPort + PORT_SEARCH_LIMIT - 1}`,
+  );
+}
 
 function usage() {
   console.log(`Usage:
@@ -240,6 +269,13 @@ async function main() {
     args.codexHome || path.join(process.env.HOME || "", ".codex"),
   );
   args.directory = (await fs.stat(args.file)).isDirectory();
+  const requestedPort = args.port;
+  args.port = await findAvailablePort(requestedPort);
+  if (args.port !== requestedPort) {
+    console.error(
+      `Port ${requestedPort} is already in use; using ${args.port} instead.`,
+    );
+  }
   const serverPath = path.join(__dirname, "server.js");
 
   const serverArgs = [serverPath, "--port", String(args.port)];
@@ -296,4 +332,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { findRolloutFile, resolveRolloutFile };
+module.exports = {
+  findRolloutFile,
+  resolveRolloutFile,
+  isPortAvailable,
+  findAvailablePort,
+};
