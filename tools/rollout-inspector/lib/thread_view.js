@@ -61,7 +61,6 @@ async function buildThreadView(filePath, options = {}) {
     sessionMeta: null,
     models: new Set(),
     tokenUsage: null,
-    tokenUsageRecords: [],
     recordMeta: null,
     turns: [],
     currentTurn: null,
@@ -105,11 +104,11 @@ async function buildThreadView(filePath, options = {}) {
         latestResponse: payload.usage ?? null,
         thread: payload.thread_token_usage ?? payload.turn_token_usage ?? null,
       };
-      state.tokenUsageRecords.push({
-        ...state.recordMeta,
+      pushTurnItem(state, {
+        type: "tokenUsage",
         model: payload.effective_model ?? null,
         usage: payload.usage ?? null,
-      });
+      }, "token_usage_record");
       continue;
     }
 
@@ -245,7 +244,6 @@ async function buildThreadView(filePath, options = {}) {
     },
     models: [...state.models],
     tokenUsage: state.tokenUsage,
-    tokenUsageRecords: state.tokenUsageRecords,
     totals: state.totals,
     parseErrors: state.parseErrors,
     turns: state.turns,

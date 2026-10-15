@@ -159,22 +159,6 @@ button:hover {
   white-space: pre-wrap;
 }
 
-.usage-summary {
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin: 8px 0 12px;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.usage-table {
-  margin-top: 8px;
-}
-
 .record-meta {
   color: var(--muted);
   font-size: 11px;
