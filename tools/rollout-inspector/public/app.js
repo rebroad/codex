@@ -57,6 +57,42 @@ function renderUsageSummary(thread) {
     ? `${formatTokenCount(usage.total_tokens)} total · ${formatTokenCount(usage.input_tokens)} input (${formatTokenCount(usage.cached_input_tokens)} cached, ${formatTokenCount(usage.cache_write_input_tokens)} cache write) · ${formatTokenCount(usage.output_tokens)} output (${formatTokenCount(usage.reasoning_output_tokens)} reasoning)`
     : "No token usage recorded";
   summary.textContent = `Model: ${model}\n${usageLabel}: ${tokens}`;
+  const records = thread?.tokenUsageRecords || [];
+  if (records.length > 0) {
+    const heading = document.createElement("h3");
+    heading.textContent = "Per-response token usage";
+    summary.appendChild(heading);
+    const table = document.createElement("table");
+    table.className = "analysis-table usage-table";
+    const columns = [
+      ["Ordinal", (record) => record.ordinal],
+      ["Timestamp (UTC)", (record) => record.timestamp],
+      ["Model", (record) => record.model],
+      ["Input", (record) => record.usage?.input_tokens],
+      ["Cached", (record) => record.usage?.cached_input_tokens],
+      ["Output", (record) => record.usage?.output_tokens],
+      ["Reasoning", (record) => record.usage?.reasoning_output_tokens],
+      ["Total", (record) => record.usage?.total_tokens],
+    ];
+    const head = table.createTHead().insertRow();
+    for (const [label] of columns) {
+      const cell = document.createElement("th");
+      cell.textContent = label;
+      head.appendChild(cell);
+    }
+    const body = table.createTBody();
+    for (const record of records) {
+      const row = body.insertRow();
+      for (const [, value] of columns) {
+        const cell = row.insertCell();
+        const result = value(record);
+        cell.textContent = typeof result === "number" && columns[row.cells.length - 1][0] !== "Ordinal"
+          ? formatTokenCount(result)
+          : result ?? "unknown";
+      }
+    }
+    summary.appendChild(table);
+  }
 }
 
 function renderThread(thread) {
@@ -108,6 +144,12 @@ function renderThread(thread) {
           `${item.text || "(empty reasoning)"}`;
       } else {
         msgNode.textContent = JSON.stringify(item);
+      }
+      if (item.ordinal !== null || item.timestamp) {
+        const recordMeta = document.createElement("div");
+        recordMeta.className = "record-meta";
+        recordMeta.textContent = `Ordinal ${item.ordinal ?? "?"} · ${item.timestamp || "timestamp unknown"}`;
+        msgNode.prepend(recordMeta);
       }
       turnNode.appendChild(msgNode);
     }

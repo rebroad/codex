@@ -171,6 +171,16 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
+.usage-table {
+  margin-top: 8px;
+}
+
+.record-meta {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
 .thread {
   display: flex;
   flex-direction: column;
