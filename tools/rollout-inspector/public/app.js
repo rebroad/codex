@@ -121,14 +121,21 @@ function renderOrdinalItem(item) {
   return message;
 }
 
-function appendRawJson(parent, value, depth = 0, toggleText = false) {
+function appendRawJson(
+  parent,
+  value,
+  depth = 0,
+  path = [],
+  toggleContentText = false,
+  toggleBaseInstructionsText = false,
+) {
   const indent = "  ".repeat(depth);
   const childIndent = "  ".repeat(depth + 1);
   if (Array.isArray(value)) {
     parent.append(document.createTextNode("["));
     value.forEach((item, index) => {
       parent.append(document.createTextNode(`\n${childIndent}`));
-      appendRawJson(parent, item, depth + 1, toggleText);
+      appendRawJson(parent, item, depth + 1, [...path, index], toggleContentText, toggleBaseInstructionsText);
       if (index < value.length - 1) parent.append(document.createTextNode(","));
     });
     if (value.length) parent.append(document.createTextNode(`\n${indent}`));
@@ -138,12 +145,23 @@ function appendRawJson(parent, value, depth = 0, toggleText = false) {
     parent.append(document.createTextNode("{"));
     entries.forEach(([key, item], index) => {
       parent.append(document.createTextNode(`\n${childIndent}${JSON.stringify(key)}: `));
-      appendRawJson(parent, item, depth + 1, toggleText ? key === "text" : key === "content");
+      appendRawJson(
+        parent,
+        item,
+        depth + 1,
+        [...path, key],
+        toggleContentText,
+        toggleBaseInstructionsText,
+      );
       if (index < entries.length - 1) parent.append(document.createTextNode(","));
     });
     if (entries.length) parent.append(document.createTextNode(`\n${indent}`));
     parent.append(document.createTextNode("}"));
-  } else if (toggleText && typeof value === "string") {
+  } else if (
+    typeof value === "string" &&
+    ((toggleContentText && path.length === 3 && path[0] === "content" && path[2] === "text") ||
+      (toggleBaseInstructionsText && path.length === 2 && path[0] === "base_instructions" && path[1] === "text"))
+  ) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "raw-text-toggle";
@@ -170,8 +188,9 @@ function renderRawRecord(record) {
   body.className = "raw-record";
   const readableMessage = payload.type === "message" &&
     ["system", "developer"].includes(payload.role);
-  if (readableMessage) {
-    appendRawJson(body, payload);
+  const hasBaseInstructionsText = typeof payload.base_instructions?.text === "string";
+  if (readableMessage || hasBaseInstructionsText) {
+    appendRawJson(body, payload, 0, [], readableMessage, hasBaseInstructionsText);
   } else {
     body.textContent = JSON.stringify(payload, null, 2);
   }
