@@ -121,12 +121,60 @@ function renderOrdinalItem(item) {
   return message;
 }
 
+function appendRawJson(parent, value, depth = 0, toggleText = false) {
+  const indent = "  ".repeat(depth);
+  const childIndent = "  ".repeat(depth + 1);
+  if (Array.isArray(value)) {
+    parent.append(document.createTextNode("["));
+    value.forEach((item, index) => {
+      parent.append(document.createTextNode(`\n${childIndent}`));
+      appendRawJson(parent, item, depth + 1, toggleText);
+      if (index < value.length - 1) parent.append(document.createTextNode(","));
+    });
+    if (value.length) parent.append(document.createTextNode(`\n${indent}`));
+    parent.append(document.createTextNode("]"));
+  } else if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    parent.append(document.createTextNode("{"));
+    entries.forEach(([key, item], index) => {
+      parent.append(document.createTextNode(`\n${childIndent}${JSON.stringify(key)}: `));
+      appendRawJson(parent, item, depth + 1, toggleText ? key === "text" : key === "content");
+      if (index < entries.length - 1) parent.append(document.createTextNode(","));
+    });
+    if (entries.length) parent.append(document.createTextNode(`\n${indent}`));
+    parent.append(document.createTextNode("}"));
+  } else if (toggleText && typeof value === "string") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "raw-text-toggle";
+    button.textContent = JSON.stringify(value);
+    button.setAttribute("aria-pressed", "false");
+    button.title = "Show text with line breaks";
+    button.addEventListener("click", () => {
+      const readable = button.getAttribute("aria-pressed") !== "true";
+      button.setAttribute("aria-pressed", String(readable));
+      button.classList.toggle("readable", readable);
+      button.title = readable ? "Show escaped text" : "Show text with line breaks";
+      button.textContent = readable ? value : JSON.stringify(value);
+    });
+    parent.append(button);
+  } else {
+    parent.append(document.createTextNode(JSON.stringify(value)));
+  }
+}
+
 function renderRawRecord(record) {
   const payload = record.payload || {};
   const type = payload.type ? `${record.type}/${payload.type}` : record.type;
   const body = document.createElement("pre");
   body.className = "raw-record";
-  body.textContent = JSON.stringify(payload, null, 2);
+  const readableMessage = payload.type === "message" &&
+    ["system", "developer"].includes(payload.role);
+  if (readableMessage) {
+    appendRawJson(body, payload);
+  } else {
+    body.textContent = JSON.stringify(payload, null, 2);
+  }
   const message = document.createElement("div");
   message.className = "msg role-other expanded-record";
   const toggle = makeOrdinalToggle(

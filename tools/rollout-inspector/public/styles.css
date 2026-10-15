@@ -191,6 +191,21 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
+.raw-text-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.raw-text-toggle.readable {
+  white-space: pre-wrap;
+}
+
 .token-usage {
   font-size: 12px;
   line-height: 1.4;
