@@ -39,26 +39,6 @@ use crate::shell_snapshot::ShellSnapshotFile;
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
 const REMOTE_OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(5);
 const TERMINATION_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
-    /// Returns file descriptors that must stay open across the child `exec()`.
-    ///
-    /// The returned descriptors must already be valid in the parent process and
-    /// stay valid until `after_spawn()` runs, which is the first point where
-    /// the parent may release its copies.
-    fn inherited_fds(&self) -> Vec<i32> {
-        Vec::new()
-    }
-
-    fn after_spawn(&mut self) {}
-}
-
-pub(crate) type SpawnLifecycleHandle = Box<dyn SpawnLifecycle>;
-
-#[derive(Debug, Default)]
-/// Spawn lifecycle that performs no extra setup around process launch.
-pub(crate) struct NoopSpawnLifecycle;
-
-impl SpawnLifecycle for NoopSpawnLifecycle {}
 
 /// Output pending model polling and the retained completion transcript.
 /// Append both under the same lock so cancellation cannot split an update.
