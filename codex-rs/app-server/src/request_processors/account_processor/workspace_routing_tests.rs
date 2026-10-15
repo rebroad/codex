@@ -100,6 +100,7 @@ async fn background_routing_skips_config_until_chatgpt_sign_in(
     ));
     let processor = AccountRequestProcessor::new(
         Arc::clone(&auth_manager),
+        Arc::clone(&auth_manager),
         threads,
         outgoing,
         config,
@@ -116,7 +117,9 @@ async fn background_routing_skips_config_until_chatgpt_sign_in(
     }
     assert_eq!(loads.load(Ordering::SeqCst), initial_loads);
 
-    processor.read_account(/*request*/ None).await?;
+    processor
+        .read_account(/*request*/ None, Arc::clone(&auth_manager))
+        .await?;
     assert!(loads.load(Ordering::SeqCst) > initial_loads);
 
     write_chatgpt_auth(
