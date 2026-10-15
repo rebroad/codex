@@ -45,8 +45,11 @@ Useful options:
 
 - `--no-open`: print URL only (do not launch browser)
 - `--no-analyze`: load thread view only
-- `--port <n>`: choose a specific local port
+- `--port <n>`: preferred local port (default: 8787)
 - `--codex-home <path>`: root used for "Recent Files"
+
+If the requested port is occupied, `view-rollout` selects the next available
+port and prints the selected port to stderr.
 
 If you already have a path from `grep`/`find`, pass it directly (with or without
 the `.jsonl` suffix):
