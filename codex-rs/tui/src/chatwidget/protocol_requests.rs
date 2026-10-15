@@ -171,6 +171,13 @@ impl ChatWidget {
     }
 
     pub(super) fn on_deprecation_notice(&mut self, summary: String, details: Option<String>) {
+        if summary.starts_with("Full-history hydration is deprecated for paginated threads;") {
+            tracing::debug!(
+                summary,
+                "not showing app-server history migration notice to user"
+            );
+            return;
+        }
         self.add_to_history(history_cell::new_deprecation_notice(summary, details));
         self.request_redraw();
     }
