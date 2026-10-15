@@ -329,7 +329,11 @@ async fn disconnected_v2_child_lifecycle(unload_delay_secs: u64, ephemeral: bool
         let _: InitializeResponse =
             read_response_from(&mut outgoing, owner_id, /*request_id*/ 1).await;
         processor
-            .connection_initialized(owner_id, owner.request_attestation())
+            .connection_initialized(
+                owner_id,
+                owner.request_attestation(),
+                /*can_handle_dynamic_tools*/ false,
+            )
             .await;
         send_request(
             &processor,
