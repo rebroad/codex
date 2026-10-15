@@ -37,9 +37,14 @@
 - Prefer `scripts/build_codex.sh` from the designated external build tree for
   end-to-end build/install validation.
 - Keep downstream changes aligned with upstream where possible. When a change
-  repairs or adapts a downstream commit, record it as a real `fixup!` targeting
-  that commit, then autosquash it before the upstream rebase. Never target a
-  fixup at a commit at or before the upstream merge-base.
+  repairs a bug or corrects behavior introduced by an existing downstream
+  commit, first use `git blame` on the affected lines and inspect the relevant
+  history to identify the commit that introduced the behavior. Record the
+  repair as a real `fixup!` targeting that introducing commit (for example,
+  `git commit --fixup=<commit>`), not as an ordinary follow-up commit. Verify
+  the target before publishing, and autosquash fixups before the upstream
+  rebase. Never target a fixup at a commit at or before the upstream
+  merge-base. For independent new work, use a normal commit.
 
 In the codex-rs folder where the rust code lives:
 
