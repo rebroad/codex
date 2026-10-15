@@ -1587,12 +1587,12 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
         &mut server,
         &mouse(Down(Left), x + 5, y),
     )?);
-    assert_eq!(
-        app.chat_widget
-            .right_click_paste_target()
-            .map(|(_, cursor)| cursor),
-        Some(5)
-    );
+    let Some(crate::bottom_pane::ClipboardPasteTarget::Draft(_, target)) =
+        app.chat_widget.clipboard_paste_target(None)
+    else {
+        panic!("composer should remain the paste target");
+    };
+    assert_eq!(target.start(), 5);
 
     // A fresh composer click takes ownership away from the transcript selection.
     app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Down(Left), x, y))?;
