@@ -149,6 +149,7 @@ function renderOmissionSummary(item, filePath) {
     ? `${item.ordinal}–${item.endOrdinal}`
     : String(item.ordinal);
   const label = `Not rendered · ordinals ${range}: ${item.summary}`;
+  let renderedLabel = label.replace("Not rendered", "Rendered");
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "record-meta ordinal-toggle";
@@ -167,6 +168,7 @@ function renderOmissionSummary(item, filePath) {
         });
         const result = await getJson(`/api/records?${params.toString()}`);
         if (result.records.length === 0) {
+          renderedLabel = `No records · ordinals ${range}: ${item.summary}`;
           const empty = document.createElement("div");
           empty.className = "record-meta";
           empty.textContent = "No JSONL records exist for this ordinal range.";
@@ -187,7 +189,7 @@ function renderOmissionSummary(item, filePath) {
     records.hidden = !records.hidden;
     const expanded = !records.hidden;
     toggle.setAttribute("aria-expanded", String(expanded));
-    toggle.textContent = `${label} · ${expanded ? "Collapse" : "Expand"}`;
+    toggle.textContent = `${loaded ? renderedLabel : label} · ${expanded ? "Collapse" : "Expand"}`;
   });
   entry.append(toggle, records);
   return entry;
