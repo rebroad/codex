@@ -66,6 +66,7 @@ RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
 LOCKFILE_REGENERATION_REQUIRED="false"
 ALLOW_CONCURRENT_BUILD="false"
+RESTART_APP_SERVER="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -115,6 +116,7 @@ Options:
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced external source tree
   --allow-concurrent-build  Bypass the shared Cargo target lock and share the target directory
+  --restart-if-idle        Restart the app-server after an install when idle
   --jobs N                 Set CARGO_BUILD_JOBS
   --install TARGETS        Build and install to comma-separated SSH targets
   -h, --help               Show this help
@@ -966,7 +968,8 @@ install_binary() {
   echo "Linked ${INSTALL_BIN_DIR}/codex"
   local new_size
   new_size="$(wc -c <"${INSTALL_BIN_DIR}/${name}")"
-  if [[ "${previous_commit}" != "${short}" || "${previous_size}" != "${new_size}" ]]; then
+  if [[ "${RESTART_APP_SERVER}" == true \
+    && ( "${previous_commit}" != "${short}" || "${previous_size}" != "${new_size}" ) ]]; then
     echo "Requesting a graceful app-server restart after active turns finish."
     "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle
   fi
@@ -1445,6 +1448,7 @@ while (($#)); do
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
     --allow-concurrent-build) ALLOW_CONCURRENT_BUILD=true; shift ;;
+    --restart-if-idle) RESTART_APP_SERVER=true; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
     --jobs=*) CARGO_BUILD_JOBS="${1#*=}"; shift ;;
     --install) INSTALL_TARGETS="${2:-}"; shift 2 ;;
