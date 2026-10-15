@@ -41,14 +41,142 @@ function pushTurnItem(state, item, reason) {
 }
 
 function summarizeToolOutput(payload, maxToolChars) {
-  const output = typeof payload.output === "string" ? payload.output : "";
-  const outputBytes = bytesOf(output);
+  const output = payload.output;
+  const outputText = typeof output === "string"
+    ? output
+    : Array.isArray(output)
+      ? output.map((part) => {
+          if (typeof part?.text === "string") return part.text;
+          return part?.type ? `[${part.type} content]` : "[non-text content]";
+        }).join("\n")
+      : output == null
+        ? ""
+        : JSON.stringify(output);
+  const outputBytes = bytesOf(outputText);
   return {
     type: "toolOutput",
     callId: payload.call_id ?? null,
     outputBytes,
-    outputPreview: clip(output, maxToolChars),
+    outputPreview: outputText
+      ? clip(outputText, maxToolChars)
+      : Object.hasOwn(payload, "output")
+        ? "(empty output)"
+        : "(output field missing)",
   };
+}
+
+function omissionReason(record) {
+  const payload = record?.payload ?? {};
+  if (record?.type === "session_meta") return "session metadata shown in header";
+  if (record?.type === "world_state" || record?.type === "turn_context") {
+    return `${record.type} snapshot not rendered`;
+  }
+  if (record?.type === "event_msg") {
+    if (["task_started", "turn_started", "task_complete", "turn_complete"].includes(payload.type)) {
+      return "turn boundary shown by section heading";
+    }
+    if (payload.type === "item_completed") return "item lifecycle event not rendered";
+    if (payload.type === "token_count") return "token/rate telemetry not rendered";
+    if (payload.type === "account_updated") return "account metadata event not rendered";
+    return `event ${payload.type ?? "(unknown)"} not rendered`;
+  }
+  if (record?.type === "response_item") {
+    if (payload.type === "message") {
+      return `${payload.role ?? "other"} message hidden; enable system/developer messages`;
+    }
+    if (payload.type === "reasoning") return "reasoning hidden; enable include reasoning";
+    if (["function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"].includes(payload.type)) {
+      return "tool record hidden; enable include tool calls";
+    }
+    return `response ${payload.type ?? "(unknown)"} not rendered`;
+  }
+  return `record ${record?.type ?? "(unknown)"} not rendered`;
+}
+
+function addOmissionSummaries(state) {
+  const turns = state.turns;
+  const visibleOrdinals = new Set(
+    turns.flatMap((turn) => turn.items.map((item) => item.ordinal))
+      .filter(Number.isInteger),
+  );
+  const catalog = state.recordCatalog.sort((a, b) => a.ordinal - b.ordinal);
+  const entries = catalog
+    .filter((entry) => !visibleOrdinals.has(entry.ordinal))
+    .map((entry) => ({
+      startOrdinal: entry.ordinal,
+      endOrdinal: entry.ordinal,
+      timestamp: entry.timestamp,
+      turnId: entry.turnId,
+      reason: entry.reason,
+    }));
+
+  for (let i = 1; i < catalog.length; i += 1) {
+    const previous = catalog[i - 1];
+    const current = catalog[i];
+    if (current.ordinal > previous.ordinal + 1) {
+      entries.push({
+        startOrdinal: previous.ordinal + 1,
+        endOrdinal: current.ordinal - 1,
+        timestamp: current.timestamp,
+        turnId: current.turnId,
+        reason: "no records exist for these ordinal numbers",
+      });
+    }
+  }
+  entries.sort((a, b) => a.startOrdinal - b.startOrdinal);
+
+  const groups = [];
+  for (const entry of entries) {
+    const previous = groups.at(-1);
+    if (
+      previous &&
+      previous.endOrdinal + 1 === entry.startOrdinal
+    ) {
+      previous.endOrdinal = entry.endOrdinal;
+      previous.reasons[entry.reason] = (previous.reasons[entry.reason] ?? 0) +
+        entry.endOrdinal - entry.startOrdinal + 1;
+    } else {
+      groups.push({
+        ...entry,
+        reasons: {
+          [entry.reason]: entry.endOrdinal - entry.startOrdinal + 1,
+        },
+      });
+    }
+  }
+
+  for (const group of groups) {
+    let turn = turns.find((candidate) => candidate.id === group.turnId);
+    if (!turn) {
+      const following = catalog.find(
+        (entry) =>
+          entry.ordinal >= group.startOrdinal &&
+          turns.some((candidate) => candidate.id === entry.turnId),
+      );
+      turn = turns.find((candidate) => candidate.id === following?.turnId);
+    }
+    turn ??= turns.at(-1);
+    if (turn) {
+      turn.items.push({
+        type: "omissionSummary",
+        ordinal: group.startOrdinal,
+        endOrdinal: group.endOrdinal,
+        timestamp: group.timestamp,
+        summary: Object.entries(group.reasons)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 4)
+          .map(([reason, count]) => `${reason} (${count})`)
+          .concat(Object.keys(group.reasons).length > 4
+            ? [`${Object.keys(group.reasons).length - 4} other omission reasons`]
+            : [])
+          .join("; "),
+      });
+    }
+  }
+
+  for (const turn of turns) {
+    turn.items.sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
+  }
 }
 
 async function buildThreadView(filePath, options = {}) {
@@ -62,6 +190,7 @@ async function buildThreadView(filePath, options = {}) {
     models: new Set(),
     tokenUsage: null,
     recordMeta: null,
+    recordCatalog: [],
     turns: [],
     currentTurn: null,
     totals: {
@@ -90,6 +219,14 @@ async function buildThreadView(filePath, options = {}) {
       ordinal: record?.ordinal ?? null,
       timestamp: record?.timestamp ?? null,
     };
+    if (Number.isInteger(record?.ordinal)) {
+      state.recordCatalog.push({
+        ordinal: record.ordinal,
+        timestamp: record.timestamp ?? null,
+        turnId: payload.turn_id ?? state.currentTurn?.id ?? null,
+        reason: omissionReason(record),
+      });
+    }
 
     if (recordType === "session_meta") {
       state.sessionMeta = payload;
@@ -232,6 +369,15 @@ async function buildThreadView(filePath, options = {}) {
     }
   }
 
+  addOmissionSummaries(state);
+  const ordinalNumbers = state.recordCatalog
+    .map((entry) => entry.ordinal)
+    .sort((a, b) => a - b);
+  const firstOrdinal = ordinalNumbers.length ? Math.min(...ordinalNumbers) : null;
+  const lastOrdinal = ordinalNumbers.length ? Math.max(...ordinalNumbers) : null;
+  const ordinalCount = new Set(ordinalNumbers).size;
+  const continuous = ordinalNumbers.every((ordinal, index) => ordinal === firstOrdinal + index);
+
   return {
     file: path.resolve(filePath),
     session: {
@@ -244,6 +390,12 @@ async function buildThreadView(filePath, options = {}) {
     },
     models: [...state.models],
     tokenUsage: state.tokenUsage,
+    ordinalCoverage: {
+      first: firstOrdinal,
+      last: lastOrdinal,
+      count: ordinalCount,
+      continuous: firstOrdinal === null || continuous,
+    },
     totals: state.totals,
     parseErrors: state.parseErrors,
     turns: state.turns,

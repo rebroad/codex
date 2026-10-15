@@ -46,8 +46,10 @@ function formatTokenCount(value) {
 function renderThread(thread) {
   const view = $("threadView");
   const meta = $("threadMeta");
+  const ordinalSummary = $("ordinalSummary");
   view.innerHTML = "";
   meta.textContent = "";
+  ordinalSummary.textContent = "";
 
   if (!thread) {
     view.innerHTML = `<div class="empty">(no data)</div>`;
@@ -58,6 +60,12 @@ function renderThread(thread) {
     `file=${thread.file}\n` +
     `session=${thread.session.id || "(unknown)"} source=${thread.session.source || "(unknown)"} cwd=${thread.session.cwd || "(none)"}\n` +
     `lines=${thread.totals.lines} bytes=${thread.totals.bytes}`;
+  if (thread.ordinalCoverage?.first !== null && thread.ordinalCoverage?.last !== null) {
+    const coverage = thread.ordinalCoverage;
+    ordinalSummary.textContent = coverage.continuous
+      ? `Ordinal coverage ${coverage.first}–${coverage.last}: no ordinal numbers are absent; records not rendered are summarized inline.`
+      : `Ordinal coverage ${coverage.first}–${coverage.last}: some ordinal numbers have no record; see inline summaries.`;
+  }
 
   if (!Array.isArray(thread.turns) || thread.turns.length === 0) {
     view.innerHTML = `<div class="empty">(no turns/messages detected)</div>`;
@@ -71,6 +79,16 @@ function renderThread(thread) {
     turnNode.innerHTML = `<div class="turn-title">Turn ${i + 1} · ${turn.status || "unknown"}</div>`;
 
     for (const item of turn.items || []) {
+      if (item.type === "omissionSummary") {
+        const summary = document.createElement("div");
+        summary.className = "record-meta";
+        const range = item.endOrdinal > item.ordinal
+          ? `${item.ordinal}–${item.endOrdinal}`
+          : String(item.ordinal);
+        summary.textContent = `Not rendered · ordinals ${range}: ${item.summary}`;
+        turnNode.appendChild(summary);
+        continue;
+      }
       const msgNode = document.createElement("div");
       msgNode.className = `msg ${roleClass(item.role || "other")}`;
       if (item.type === "message") {
@@ -80,27 +98,25 @@ function renderThread(thread) {
           `<span class="kind">tool call: ${item.name || "(unknown)"}</span>` +
           `${item.argsPreview || "(no args)"}`;
       } else if (item.type === "toolOutput") {
-        msgNode.innerHTML =
-          `<span class="kind">tool output: ${formatBytes(item.outputBytes || 0)}</span>` +
-          `${item.outputPreview || "(no output)"}`;
+        const kind = document.createElement("span");
+        kind.className = "kind";
+        kind.textContent = `tool output: ${formatBytes(item.outputBytes || 0)}`;
+        msgNode.append(kind, document.createTextNode(item.outputPreview));
       } else if (item.type === "reasoning") {
         msgNode.innerHTML =
           `<span class="kind">reasoning</span>` +
           `${item.text || "(empty reasoning)"}`;
       } else if (item.type === "tokenUsage") {
         const usage = item.usage || {};
-        const kind = document.createElement("span");
-        kind.className = "kind";
-        kind.textContent = `Token usage${item.model ? ` · ${item.model}` : ""}`;
-        const details = document.createElement("div");
-        details.textContent =
+        msgNode.classList.add("token-usage");
+        msgNode.textContent =
+          `${item.model || "unknown model"} · ` +
           `${formatTokenCount(usage.total_tokens)} total · ` +
           `${formatTokenCount(usage.input_tokens)} input ` +
           `(${formatTokenCount(usage.cached_input_tokens)} cached, ` +
           `${formatTokenCount(usage.cache_write_input_tokens)} cache write) · ` +
           `${formatTokenCount(usage.output_tokens)} output ` +
           `(${formatTokenCount(usage.reasoning_output_tokens)} reasoning)`;
-        msgNode.append(kind, details);
       } else {
         msgNode.textContent = JSON.stringify(item);
       }

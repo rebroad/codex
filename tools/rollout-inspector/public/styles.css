@@ -165,6 +165,12 @@ button:hover {
   margin-bottom: 6px;
 }
 
+.token-usage {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 8px;
+}
+
 .thread {
   display: flex;
   flex-direction: column;
