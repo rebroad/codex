@@ -37,7 +37,7 @@ function ensureTurn(state, reason) {
 
 function pushTurnItem(state, item, reason) {
   const turn = ensureTurn(state, reason);
-  turn.items.push(item);
+  turn.items.push({ ...state.recordMeta, ...item });
 }
 
 function summarizeToolOutput(payload, maxToolChars) {
@@ -61,6 +61,7 @@ async function buildThreadView(filePath, options = {}) {
     sessionMeta: null,
     models: new Set(),
     tokenUsage: null,
+    recordMeta: null,
     turns: [],
     currentTurn: null,
     totals: {
@@ -85,6 +86,10 @@ async function buildThreadView(filePath, options = {}) {
     const record = parsed.value;
     const recordType = record?.type;
     const payload = record?.payload ?? {};
+    state.recordMeta = {
+      ordinal: record?.ordinal ?? null,
+      timestamp: record?.timestamp ?? null,
+    };
 
     if (recordType === "session_meta") {
       state.sessionMeta = payload;
@@ -99,6 +104,11 @@ async function buildThreadView(filePath, options = {}) {
         latestResponse: payload.usage ?? null,
         thread: payload.thread_token_usage ?? payload.turn_token_usage ?? null,
       };
+      pushTurnItem(state, {
+        type: "tokenUsage",
+        model: payload.effective_model ?? null,
+        usage: payload.usage ?? null,
+      }, "token_usage_record");
       continue;
     }
 
