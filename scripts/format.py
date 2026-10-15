@@ -122,14 +122,8 @@ def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def formatter_build_tree() -> Path | None:
-    return next(
-        (
-            candidate
-            for suffix in (".build", ".make")
-            if (candidate := REPO_ROOT.parent / f"{REPO_ROOT.name}{suffix}").is_dir()
-        ),
-        None,
-    )
+    candidate = REPO_ROOT.parent / f"{REPO_ROOT.name}.build"
+    return candidate if candidate.is_dir() else None
 
 
 def ruff_command(
