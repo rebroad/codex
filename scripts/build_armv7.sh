@@ -1531,10 +1531,9 @@ if [[ "${PROFILE}" == "release" && "${FAST_RELEASE_BUILD}" == "true" ]]; then
   echo "Using fast release profile overrides: LTO=thin, codegen-units=16"
 fi
 build_log="$(mktemp /var/tmp/build_armv7.cargo.XXXXXX)"
-# sccache cannot handle the incremental cross-compilation mode used by this
-# builder; disable the wrapper explicitly so host Cargo configuration cannot
-# turn this into a late rustc-probe failure.
-cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0 RUSTC_WRAPPER=)
+# Keep incremental compilation disabled while inheriting the configured
+# sccache wrapper from build_codex.sh.
+cargo_env=(RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_INCREMENTAL=0)
 if [[ -n "${BUILD_JOBS}" ]]; then
   cargo_env+=(CARGO_BUILD_JOBS="${BUILD_JOBS}")
 fi
