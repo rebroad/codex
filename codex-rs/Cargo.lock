@@ -2199,6 +2199,7 @@ dependencies = [
  "codex-protocol",
  "codex-uds",
  "codex-utils-absolute-path",
+ "codex-utils-file-lock",
  "codex-utils-rustls-provider",
  "futures",
  "pretty_assertions",
