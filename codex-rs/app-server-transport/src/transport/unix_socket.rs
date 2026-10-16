@@ -300,7 +300,11 @@ fn protected_socket_path(rendezvous_path: &Path) -> IoResult<std::path::PathBuf>
     })?;
     let path = std::fs::canonicalize(parent)?.join(name);
     let hash = Sha256::digest(path.as_os_str().as_bytes());
-    Ok(codex_uds::shared_daemon_socket_directory()?.join(format!("{hash:x}")))
+    let mut filename = format!("{hash:x}");
+    #[cfg(target_os = "android")]
+    // Termux's deep PREFIX/tmp root leaves room for only a shorter socket name.
+    filename.truncate(32);
+    Ok(codex_uds::shared_daemon_socket_directory()?.join(filename))
 }
 
 pub struct AppServerStartupLock {
