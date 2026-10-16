@@ -395,7 +395,14 @@ mkdir -p "$(dirname "${TARGET_LOCK_FILE}")"
 mkdir -p "${TARGET_DIR}"
 
 if [[ -n "${SCCACHE_BIN}" ]]; then
-  export SCCACHE_DIR="${SCCACHE_DIR:-${HOME}/.cache/sccache}"
+  default_sccache_dir="${HOME}/.cache/sccache"
+  if [[ "$(uname -s)" == Linux ]]; then
+    default_sccache_dir="/var/tmp/sccache"
+    if [[ -n "${PREFIX:-}" ]]; then
+      default_sccache_dir="${PREFIX}/tmp/sccache"
+    fi
+  fi
+  export SCCACHE_DIR="${SCCACHE_DIR:-${default_sccache_dir}}"
   export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-50G}"
   if ! "${SCCACHE_BIN}" --version >/dev/null 2>&1; then
     echo "Unable to run sccache; refusing to run without the configured cache" >&2
