@@ -263,6 +263,21 @@ async fn request_permissions_routes_to_guardian_when_live_reviewer_is_enabled() 
         })
         .await
         .expect("test setup should update the live approvals reviewer");
+    // Step activation publishes persisted reviewer changes to the active turn's next-step view.
+    {
+        let active = session.active_turn.lock().await;
+        let task = active
+            .as_ref()
+            .expect("active turn")
+            .task
+            .as_ref()
+            .expect("active task");
+        let mut settings = task.turn_context.next_step_settings.load_full();
+        update_selected_settings_for_test(Arc::make_mut(&mut settings), |selected| {
+            selected.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        });
+        task.turn_context.next_step_settings.store(settings);
+    }
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
 
     let requested_permissions = RequestPermissionProfile {
