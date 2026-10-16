@@ -109,7 +109,7 @@ In the codex-rs folder where the rust code lives:
     the new implementation so the invariants stay close to the code that owns them.
   - Avoid adding new standalone methods to `codex-rs/tui/src/chatwidget.rs` unless the change is
     trivial; prefer new modules/files and keep `chatwidget.rs` focused on orchestration.
-- When running Rust commands (e.g. `just fix` or `just test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
+- When running Rust commands (e.g. `just fix` or `just test`), be patient; Rust locks can make them slow. Do not kill Cargo or rustc by PID. If an unnecessary diagnostic build must be stopped, interrupt its owning exec session (for example, Ctrl+C) instead, then verify the process tree: sccache may leave a rustc child running after the parent exits. Wait for those children to finish before starting another Cargo operation against the same target directory.
 
 After you have finished making code changes anywhere in this repository, run the tests:
 
