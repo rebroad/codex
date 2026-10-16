@@ -170,6 +170,7 @@ async fn get_snapshot(shell_type: ShellType) -> Result<String> {
 #[cfg(unix)]
 #[tokio::test]
 async fn snapshot_helpers_preserve_thread_without_caching_exec_metadata() -> Result<()> {
+    let home = tempdir()?;
     let output = Command::new(std::env::current_exe()?)
         .arg("--exact")
         .arg("shell_snapshot::tests::snapshot_helper_exec_metadata_child")
@@ -177,6 +178,7 @@ async fn snapshot_helpers_preserve_thread_without_caching_exec_metadata() -> Res
         .env("CODEX_TEST_SNAPSHOT_HELPER_CHILD", "1")
         .env("CODEX_THREAD_ID", "helper-thread")
         .env("CODEX_TOOL_CALL_ID", "stale-call")
+        .env("HOME", home.path())
         .env("BASH_ENV", "/dev/null")
         .output()?;
 
