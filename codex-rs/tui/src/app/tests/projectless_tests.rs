@@ -325,6 +325,21 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
             LoaderOverrides::without_managed_config_for_tests(),
         )
         .await?;
+        let observed_defaults = crate::config_update::read_effective_config_if_supported(
+            server.request_handle(),
+            config.cwd.as_path(),
+        )
+        .await?;
+        eprintln!(
+            "projectless config/read: {}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "config": observed_defaults.as_ref().map(|defaults| &defaults.config),
+                "layers": observed_defaults.as_ref().and_then(|defaults| defaults.layers.as_ref()),
+                "local_active_project": &config.active_project,
+                "local_profile": config.permissions.active_permission_profile(),
+                "local_workspace_roots": &config.workspace_roots,
+            }))?
+        );
         let startup = crate::app::startup::prepare_fresh_startup_config(
             &mut config,
             &server,
