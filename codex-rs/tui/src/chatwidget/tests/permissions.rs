@@ -1088,10 +1088,9 @@ async fn permissions_selection_queues_update_when_selection_changes() {
     }
     assert_eq!(
         cells.len(),
-        1,
-        "permission history must wait for the app-server update"
+        0,
+        "permission history must wait for the app-server acknowledgement"
     );
-    assert!(lines_to_single_string(&cells[0]).contains("Ran printf before"));
     assert!(applied, "expected permission update event");
 }
 
