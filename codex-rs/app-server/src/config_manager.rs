@@ -305,13 +305,12 @@ impl ConfigManager {
         let required_provider = required_provider
             .map(|provider| resolve_model_provider(&current.model_provider_id, provider))
             .transpose()?;
-        // The active Config already contains the resolved built-in provider.
-        // Re-merging it as a sparse override rejects its non-default built-in
-        // fields for Bedrock.
-        let current_provider = current.model_provider.clone();
-        let definition_changed = required_provider
-            .as_ref()
-            .is_some_and(|provider| provider != &current_provider);
+        let definition_changed = if let Some(required_provider) = required_provider {
+            resolve_model_provider(&current.model_provider_id, current.model_provider.clone())?
+                != required_provider
+        } else {
+            false
+        };
         if selection_changed || definition_changed {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
