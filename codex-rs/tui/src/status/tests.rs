@@ -186,17 +186,21 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
-    lines
+    let lines = lines
         .into_iter()
         .map(|line| {
-            let line = if let Some((prefix, value)) = line.split_once("Directory:") {
+            if let Some((prefix, value)) = line.split_once("Directory:") {
                 let padding = &value[..value.len() - value.trim_start().len()];
                 format!("{prefix}Directory:{padding}[[workspace]]")
             } else {
                 line
-            };
-            crate::version::normalize_cli_version_for_snapshot(&line)
+            }
         })
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::version::normalize_cli_version_for_snapshot(&lines)
+        .split('\n')
+        .map(str::to_owned)
         .collect()
 }
 
