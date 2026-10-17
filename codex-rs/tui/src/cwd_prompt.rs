@@ -265,7 +265,13 @@ impl CwdPromptScreen {
             KeyCode::Char('4') if self.allow_remember_current => {
                 self.select(CwdSelection::CurrentAndRemember);
             }
-            KeyCode::Char('5') if matches!(self.action, CwdPromptAction::Resume) => {
+            KeyCode::Char('4') if matches!(self.action, CwdPromptAction::Resume) => {
+                self.select(CwdSelection::CurrentAndRememberForSession);
+            }
+            KeyCode::Char('5')
+                if self.allow_remember_current
+                    && matches!(self.action, CwdPromptAction::Resume) =>
+            {
                 self.select(CwdSelection::CurrentAndRememberForSession);
             }
             KeyCode::Enter => self.select(self.highlighted),
@@ -519,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn cwd_prompt_omits_unusable_remembered_current_choice() {
+    fn cwd_prompt_resume_number_matches_visible_choice_without_remembered_current() {
         let mut screen = CwdPromptScreen::new(
             FrameRequester::test_dummy(),
             CwdPromptAction::Resume,
@@ -529,10 +535,13 @@ mod tests {
             /*allow_remember_current*/ false,
         );
 
-        screen.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
         assert_eq!(screen.selection(), None);
-        screen.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(screen.highlighted, CwdSelection::SessionAndRemember);
+        screen.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+        assert_eq!(
+            screen.selection(),
+            Some(CwdSelection::CurrentAndRememberForSession)
+        );
     }
 
     #[test]
