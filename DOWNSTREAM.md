@@ -42,6 +42,8 @@ The fork's source checkout is edited separately from its mirrored external `.bui
 
 Use `CARGO_INCREMENTAL=0` and sccache by default for local builds and tests. Do not change global `PATH` or the installed sccache setup as a side effect of a rebase. Keep Rust and Bazel locks in sync when dependencies change. Build and test scripts must rebuild the CLI they test or prove that a cached binary matches the source revision; a stale `target/debug/codex` is not valid test evidence.
 
+When updating the Bazel module lock, the local rules_rs patch maps source-less Cargo.lock packages by name and substitutes their manifest version. Cargo.lock keeps workspace package versions at `0.0.0`, while `cargo metadata` reports the release version; exact pair matching misses standalone workspace binaries such as `codex-cli` and `codex-bwrap`.
+
 ## Runtime and platform behavior
 
 | Deviation | Owner / main paths | Rebase rule |
