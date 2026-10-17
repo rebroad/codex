@@ -4,8 +4,7 @@ use super::*;
 use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::encode_id_token;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::ServerRequest;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -119,13 +118,11 @@ async fn login_remote_control(
         codex_home.join("rc-auth.json"),
     )?;
     let request_id = app
-        .send_get_auth_status_request(GetAuthStatusParams {
-            include_token: Some(false),
-            refresh_token: Some(false),
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
         })
         .await?;
-    let _: GetAuthStatusResponse =
-        timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+    let _: Value = timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
     Ok(())
 }
 
@@ -135,13 +132,11 @@ async fn logout_remote_control(
 ) -> Result<()> {
     std::fs::write(codex_home.join("rc-auth.json"), "{}")?;
     let request_id = app
-        .send_get_auth_status_request(GetAuthStatusParams {
-            include_token: Some(false),
-            refresh_token: Some(false),
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
         })
         .await?;
-    let _: GetAuthStatusResponse =
-        timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+    let _: Value = timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
     Ok(())
 }
 
