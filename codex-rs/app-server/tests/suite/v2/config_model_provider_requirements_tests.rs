@@ -12,6 +12,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_config::ConfigRequirementsToml;
+use codex_model_provider_info::ModelProviderInfoOverrides;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
@@ -43,6 +44,18 @@ X-Local = "no"
     )?;
     let expected: ConfigRequirementsToml = toml::from_str(requirements)?;
     let expected_providers = json!(expected.model_providers);
+    let expected_config_providers = json!(
+        expected
+            .model_providers
+            .as_ref()
+            .expect("provider requirements are configured")
+            .iter()
+            .map(|(id, provider)| (
+                id.clone(),
+                ModelProviderInfoOverrides::from(provider.clone())
+            ))
+            .collect::<std::collections::HashMap<_, _>>()
+    );
     let mut server = TestAppServer::builder()
         .with_codex_home(home.path())
         .build()
@@ -76,7 +89,7 @@ X-Local = "no"
             response.config.model_provider.as_deref(),
             response.config.additional.get("model_providers")
         ),
-        (Some("gateway"), Some(&expected_providers))
+        (Some("gateway"), Some(&expected_config_providers))
     );
     assert!(
         !response
