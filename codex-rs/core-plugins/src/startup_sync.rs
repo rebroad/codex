@@ -16,8 +16,6 @@ use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
 use codex_utils_pty::process_group::kill_process_group;
 use http::Method;
 use serde::Deserialize;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use tempfile::TempDir;
 use tracing::warn;
 use zip::ZipArchive;
@@ -689,55 +687,7 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
-    #[cfg(target_os = "linux")]
-    {
-        // Keep a small shell supervisor as the process-group leader. Linux's
-        // parent-death signal only reaches the direct child, so the supervisor
-        // kills the whole group if this process exits unexpectedly. Preserve
-        // the original argv as separate arguments; no shell interpolation is
-        // involved.
-        let original = std::mem::replace(command, Command::new("/bin/sh"));
-        let program = original.get_program().to_os_string();
-        let args = original
-            .get_args()
-            .map(std::ffi::OsStr::to_os_string)
-            .collect::<Vec<_>>();
-        let envs = original
-            .get_envs()
-            .map(|(key, value)| (key.to_os_string(), value.map(std::ffi::OsStr::to_os_string)))
-            .collect::<Vec<_>>();
-        let current_dir = original.get_current_dir().map(std::path::Path::to_path_buf);
-        command
-            .args([
-                "-c",
-                "trap 'kill -KILL 0' TERM; \"$@\" & wait $!",
-                "codex-git-supervisor",
-            ])
-            .arg(program)
-            .args(args);
-        for (key, value) in envs {
-            if let Some(value) = value {
-                command.env(key, value);
-            } else {
-                command.env_remove(key);
-            }
-        }
-        if let Some(current_dir) = current_dir {
-            command.current_dir(current_dir);
-        }
-        command.process_group(0);
-        let parent_pid = std::process::id() as i32;
-        // SAFETY: the hook resets the inherited signal mask and configures a
-        // parent-death signal before exec. The helper also checks the captured
-        // PID to close the fork/exec race.
-        unsafe {
-            command.pre_exec(move || {
-                codex_utils_pty::process_group::set_parent_death_signal(parent_pid)
-            });
-        }
-    }
-    #[cfg(all(unix, not(target_os = "linux")))]
-    command.process_group(0);
+    crate::git_process::supervise_git_command(command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
