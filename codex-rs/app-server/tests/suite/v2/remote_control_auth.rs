@@ -102,7 +102,7 @@ async fn login_remote_control(
     account: &str,
     revision: &str,
 ) -> Result<()> {
-    let auth_home = TempDir::new()?;
+    let auth_home = TempDir::new_in(codex_home)?;
     write_chatgpt_auth(
         auth_home.path(),
         ChatGptAuthFixture::new(format!("{revision}-remote-token"))
@@ -113,9 +113,13 @@ async fn login_remote_control(
             .plan_type("pro"),
         AuthCredentialsStoreMode::File,
     )?;
-    std::fs::copy(
+    let remote_control_auth_file = codex_home.join("rc-auth.json");
+    if remote_control_auth_file.exists() {
+        std::fs::remove_file(&remote_control_auth_file)?;
+    }
+    std::fs::rename(
         auth_home.path().join("auth.json"),
-        codex_home.join("rc-auth.json"),
+        &remote_control_auth_file,
     )?;
     let request_id = app
         .send_get_account_request(GetAccountParams {
