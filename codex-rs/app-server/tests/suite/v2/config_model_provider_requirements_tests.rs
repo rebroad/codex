@@ -11,7 +11,7 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_config::config_toml::ConfigToml;
+use codex_config::ConfigRequirementsToml;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
@@ -41,7 +41,7 @@ env_key = "LOCAL_KEY"
 X-Local = "no"
 "#,
     )?;
-    let expected: ConfigToml = toml::from_str(requirements)?;
+    let expected: ConfigRequirementsToml = toml::from_str(requirements)?;
     let expected_providers = json!(expected.model_providers);
     let mut server = TestAppServer::builder()
         .with_codex_home(home.path())
