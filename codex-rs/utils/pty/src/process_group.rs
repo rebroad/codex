@@ -27,6 +27,24 @@ use tokio::process::Child;
 /// This should run in `pre_exec` and uses `parent_pid` captured before spawn to
 /// avoid a race where the parent exits between fork and exec.
 pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
+    // Do not inherit a blocked or ignored SIGTERM from the caller: in either
+    // state Linux may never deliver the parent-death signal below.
+    let mut signal_set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigemptyset(&mut signal_set) } == -1
+        || unsafe { libc::sigaddset(&mut signal_set, libc::SIGTERM) } == -1
+        || unsafe { libc::sigprocmask(libc::SIG_UNBLOCK, &signal_set, std::ptr::null_mut()) } == -1
+    {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut signal_action: libc::sigaction = unsafe { std::mem::zeroed() };
+    signal_action.sa_sigaction = libc::SIG_DFL;
+    if unsafe { libc::sigemptyset(&mut signal_action.sa_mask) } == -1
+        || unsafe { libc::sigaction(libc::SIGTERM, &signal_action, std::ptr::null_mut()) } == -1
+    {
+        return Err(io::Error::last_os_error());
+    }
+
     if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } == -1 {
         return Err(io::Error::last_os_error());
     }

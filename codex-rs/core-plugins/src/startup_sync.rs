@@ -732,19 +732,6 @@ fn run_git_command_with_timeout(
         // PID to close the fork/exec race.
         unsafe {
             command.pre_exec(move || {
-                let mut signal_set: libc::sigset_t = std::mem::zeroed();
-                let mut signal_action: libc::sigaction = std::mem::zeroed();
-                signal_action.sa_sigaction = libc::SIG_DFL;
-                libc::sigemptyset(&mut signal_action.sa_mask);
-                if libc::sigaction(libc::SIGTERM, &signal_action, std::ptr::null_mut()) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::sigemptyset(&mut signal_set) == -1
-                    || libc::sigaddset(&mut signal_set, libc::SIGTERM) == -1
-                    || libc::sigprocmask(libc::SIG_UNBLOCK, &signal_set, std::ptr::null_mut()) == -1
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
                 codex_utils_pty::process_group::set_parent_death_signal(parent_pid)
             });
         }
