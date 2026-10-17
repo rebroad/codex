@@ -1140,13 +1140,20 @@ fn git_process_dies_when_owner_exits() {
     const MARKER_ENV: &str = "CODEX_TEST_GIT_PARENT_DEATH_MARKER";
     if let Some(marker_path) = std::env::var_os(MARKER_ENV) {
         let marker_path = std::path::PathBuf::from(marker_path);
+        let mut blocked_signals: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigemptyset(&mut blocked_signals);
+            libc::sigaddset(&mut blocked_signals, libc::SIGTERM);
+            assert_eq!(
+                libc::sigprocmask(libc::SIG_BLOCK, &blocked_signals, std::ptr::null_mut()),
+                0,
+                "block SIGTERM in owner to verify child resets inherited mask"
+            );
+        }
         let mut command = std::process::Command::new("/bin/sh");
         command.args([
             "-c",
-            &format!(
-                "printf '%s\\n' $$ > '{}'; exec /bin/sleep 30",
-                marker_path.display()
-            ),
+            &format!("sleep 30 & echo $! > '{}'; wait", marker_path.display()),
         ]);
         let _ = run_git_command_with_timeout(
             &mut command,
@@ -1171,24 +1178,24 @@ fn git_process_dies_when_owner_exits() {
         .spawn()
         .expect("spawn owner process");
 
-    let mut git_pid = None;
+    let mut descendant_pid = None;
     for _ in 0..200 {
         if let Ok(pid) = std::fs::read_to_string(&marker_path).and_then(|pid| {
             pid.trim()
                 .parse::<libc::pid_t>()
                 .map_err(std::io::Error::other)
         }) {
-            git_pid = Some(pid);
+            descendant_pid = Some(pid);
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let git_pid = git_pid.expect("Git child should report its PID");
+    let descendant_pid = descendant_pid.expect("Git descendant should report its PID");
 
     owner.kill().expect("kill owner process");
     owner.wait().expect("wait for owner process");
     for _ in 0..200 {
-        let is_terminated = std::fs::read_to_string(format!("/proc/{git_pid}/stat"))
+        let is_terminated = std::fs::read_to_string(format!("/proc/{descendant_pid}/stat"))
             .map(|stat| {
                 stat.rsplit_once(')')
                     .and_then(|(_, rest)| rest.split_whitespace().next())
@@ -1200,7 +1207,7 @@ fn git_process_dies_when_owner_exits() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("Git child process {git_pid} survived its owner");
+    panic!("Git descendant process {descendant_pid} survived its owner");
 }
 
 #[cfg(unix)]

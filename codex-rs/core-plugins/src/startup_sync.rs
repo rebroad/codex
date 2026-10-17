@@ -689,19 +689,68 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
-    #[cfg(unix)]
-    command.process_group(0);
     #[cfg(target_os = "linux")]
     {
+        // Keep a small shell supervisor as the process-group leader. Linux's
+        // parent-death signal only reaches the direct child, so the supervisor
+        // kills the whole group if this process exits unexpectedly. Preserve
+        // the original argv as separate arguments; no shell interpolation is
+        // involved.
+        let original = std::mem::replace(command, Command::new("/bin/sh"));
+        let program = original.get_program().to_os_string();
+        let args = original
+            .get_args()
+            .map(std::ffi::OsStr::to_os_string)
+            .collect::<Vec<_>>();
+        let envs = original
+            .get_envs()
+            .map(|(key, value)| (key.to_os_string(), value.map(std::ffi::OsStr::to_os_string)))
+            .collect::<Vec<_>>();
+        let current_dir = original.get_current_dir().map(std::path::Path::to_path_buf);
+        command
+            .args([
+                "-c",
+                "trap 'kill -KILL -- -$$ 2>/dev/null' TERM; \"$@\" & wait $!",
+                "codex-git-supervisor",
+            ])
+            .arg(program)
+            .args(args);
+        for (key, value) in envs {
+            if let Some(value) = value {
+                command.env(key, value);
+            } else {
+                command.env_remove(key);
+            }
+        }
+        if let Some(current_dir) = current_dir {
+            command.current_dir(current_dir);
+        }
+        command.process_group(0);
         let parent_pid = std::process::id() as i32;
-        // SAFETY: the hook only configures a parent-death signal before exec.
-        // The helper also checks the captured PID to close the fork/exec race.
+        // SAFETY: the hook resets the inherited signal mask and configures a
+        // parent-death signal before exec. The helper also checks the captured
+        // PID to close the fork/exec race.
         unsafe {
             command.pre_exec(move || {
+                let mut signal_set: libc::sigset_t = std::mem::zeroed();
+                let mut signal_action: libc::sigaction = std::mem::zeroed();
+                signal_action.sa_sigaction = libc::SIG_DFL;
+                libc::sigemptyset(&mut signal_action.sa_mask);
+                if libc::sigaction(libc::SIGTERM, &signal_action, std::ptr::null_mut()) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::sigemptyset(&mut signal_set) == -1
+                    || libc::sigaddset(&mut signal_set, libc::SIGTERM) == -1
+                    || libc::sigprocmask(libc::SIG_UNBLOCK, &signal_set, std::ptr::null_mut()) == -1
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
                 codex_utils_pty::process_group::set_parent_death_signal(parent_pid)
             });
         }
     }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    command.process_group(0);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
