@@ -1,0 +1,28 @@
+# What: map source-less Cargo.lock entries to workspace packages by name and use the manifest version.
+# Scope: rules_rs workspace package resolution when Cargo.lock keeps local package versions at 0.0.0.
+
+diff --git a/rs/private/cargo_workspace_graph.bzl b/rs/private/cargo_workspace_graph.bzl
+--- a/rs/private/cargo_workspace_graph.bzl
++++ b/rs/private/cargo_workspace_graph.bzl
+@@ -329,9 +329,9 @@ def split_lockfile_packages(hub_name, cargo_metadata, workspace_cargo_toml, all_packages, repo_root = None, workspace_package_dir = ""):
+     repo_root = normalize_path(repo_root)
+
+-    workspace_member_keys = {}
++    workspace_member_versions = {}
+     for package in cargo_metadata["packages"]:
+-        workspace_member_keys[(package["name"], package["version"])] = True
++        workspace_member_versions[package["name"]] = package["version"]
+
+     dep_paths_by_name = _cargo_metadata_dep_paths_by_name(cargo_metadata["packages"], repo_root)
+     patch_paths_by_name = _cargo_toml_patch_paths_by_name(workspace_cargo_toml, repo_root, workspace_package_dir)
+@@ -345,9 +345,11 @@ def split_lockfile_packages(hub_name, cargo_metadata, workspace_cargo_toml, all_packages, repo_root = None, workspace_package_dir = ""):
+             continue
+
+-        key = (pkg["name"], pkg["version"])
+-        if key in workspace_member_keys:
++        workspace_version = workspace_member_versions.get(pkg["name"])
++        if workspace_version != None:
++            pkg["version"] = workspace_version
+             workspace_members.append(pkg)
+             continue
+
