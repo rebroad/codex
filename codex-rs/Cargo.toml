@@ -641,6 +641,8 @@ inherits = "test"
 opt-level = 0
 
 [patch.crates-io]
+# Keep rules_rs able to map the standalone workspace binary's 0.0.0 lock entry.
+codex-bwrap = { path = "bwrap" }
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "ed1cdab335221515706178d68495bba2aed1924f" }
