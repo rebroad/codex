@@ -401,6 +401,10 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
     let mut app = TestAppServer::builder()
         .with_codex_home(home.path())
         .without_auto_env()
+        .with_env_overrides(&[(
+            "RUST_LOG",
+            Some("codex_login=info,codex_app_server_transport::transport::remote_control=info"),
+        )])
         .build_initialized()
         .await?;
     login(&mut app, "user-a", "account-a", "initial").await?;
