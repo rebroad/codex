@@ -142,7 +142,7 @@ async fn owner_exit_kills_git_descendants() {
         let mut command = Command::new("/bin/sh");
         command
             .args(["-c", "sleep 60 & echo $! > \"$CHILD_PID_FILE\"; wait"])
-            .env("CHILD_PID_FILE", child_pid_file);
+            .env("CHILD_PID_FILE", &child_pid_file);
         let (_child, _process_tree) = spawn_git_command(&mut command).expect("spawn Git process");
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
