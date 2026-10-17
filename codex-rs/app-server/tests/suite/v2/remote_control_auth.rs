@@ -130,20 +130,6 @@ async fn login_remote_control(
     Ok(())
 }
 
-async fn logout_remote_control(
-    app: &mut TestAppServer,
-    codex_home: &std::path::Path,
-) -> Result<()> {
-    std::fs::write(codex_home.join("rc-auth.json"), "{}")?;
-    let request_id = app
-        .send_get_account_request(GetAccountParams {
-            refresh_token: false,
-        })
-        .await?;
-    let _: Value = timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
-    Ok(())
-}
-
 async fn open_relay(app: &mut TestAppServer, listener: &TcpListener) -> Result<RelayClient> {
     let id = app.send_remote_control_ephemeral_enable_request().await?;
     wait_for_response(app, id).await?;
@@ -326,13 +312,14 @@ async fn client_revoke_retry_stays_with_original_owner() -> Result<()> {
     for refreshed_user in ["user-a", "user-b"] {
         let home = TempDir::new()?;
         let listener = configured_remote_control_listener(home.path()).await?;
+        // This case covers the intentional backend-auth fallback when rc-auth.json is absent.
+        std::fs::remove_file(home.path().join("rc-auth.json"))?;
         let mut app = TestAppServer::builder()
             .with_codex_home(home.path())
             .without_auto_env()
             .build_initialized()
             .await?;
         login(&mut app, "user-a", "account-a", "initial").await?;
-        login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
         let old = app
             .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
                 environment_id: "environment-id".to_string(),
@@ -367,14 +354,6 @@ async fn client_revoke_retry_stays_with_original_owner() -> Result<()> {
             )
             .await??;
             login(&mut app, refreshed_user, "account-a", "refreshed").await?;
-            login_remote_control(
-                &mut app,
-                home.path(),
-                refreshed_user,
-                "account-a",
-                "refreshed",
-            )
-            .await?;
             let id = app
                 .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
                     environment_id: "environment-id".to_string(),
@@ -457,6 +436,8 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
 async fn logout_login_enable_recovers_first_unauthorized_enrollment() -> Result<()> {
     let home = TempDir::new()?;
     let listener = configured_remote_control_listener(home.path()).await?;
+    // This case covers the intentional backend-auth fallback when rc-auth.json is absent.
+    std::fs::remove_file(home.path().join("rc-auth.json"))?;
     let oauth = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::path("/oauth/revoke"))
         .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200))
@@ -485,7 +466,6 @@ async fn logout_login_enable_recovers_first_unauthorized_enrollment() -> Result<
     let mut websocket = timeout(DEFAULT_TIMEOUT, accept_async(stream)).await??;
     let logout = app.send_logout_account_request().await?;
     wait_for_response(&mut app, logout).await?;
-    logout_remote_control(&mut app, home.path()).await?;
     timeout(DEFAULT_TIMEOUT, async {
         loop {
             let notification = app
@@ -518,7 +498,6 @@ async fn logout_login_enable_recovers_first_unauthorized_enrollment() -> Result<
         )
         .await?;
     wait_for_response(&mut app, login).await?;
-    login_remote_control(&mut app, home.path(), "user-b", "account-b", "replacement").await?;
     let enabled = app.send_remote_control_ephemeral_enable_request().await?;
     wait_for_response(&mut app, enabled).await?;
     let (line, reader) = timeout(DEFAULT_TIMEOUT, read_enroll_request(&listener)).await??;
