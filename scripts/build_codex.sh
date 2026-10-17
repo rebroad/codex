@@ -52,6 +52,7 @@ INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
 VERSION=""
 PACKAGE_VERSION=""
 MODE="debug"
+CARGO_PROFILE="debug"
 TARGET_MODE="native"
 ARMV7_BUILD_ENV="${CODEX_ARMV7_BUILD_ENV:-host}"
 PUBLISH="false"
@@ -94,10 +95,11 @@ usage() {
 Usage: scripts/build_codex.sh [options]
 
 Builds from the source checkout into CODEX_BUILD_REPO or the designated
-external build tree, retaining Cargo's incremental cache.
+external build tree, retaining Cargo's target artifacts.
 
 Options:
   --debug                  Build debug (default)
+  --dev-small              Build the unoptimized, stripped dev-small profile
   --release                Build optimized release
   --target <names>         native, musl, armv7, android, all, or comma-separated targets
                            (all means the complete eight-architecture npm candidate)
@@ -555,11 +557,10 @@ configure_rusty_v8_artifacts() {
   local default_profile="ptrcomp_sandbox_release"
   # V8's pointer compression and sandbox require a 64-bit target.
   [[ "${target_mode}" == armv7 ]] && default_profile="release"
-  local profile="${RUSTY_V8_PROFILE:-${default_profile}}"
+  local rusty_v8_profile="${RUSTY_V8_PROFILE:-${default_profile}}"
   local target_dir build_profile build_root
   target_dir="$(target_dir_for "${MODE}" "${target_mode}")"
-  build_profile="${MODE}"
-  [[ "${build_profile}" == release ]] || build_profile="debug"
+  build_profile="${CARGO_PROFILE}"
   build_root="${target_dir}/${build_profile}"
   if [[ "${target_mode}" != native ]]; then
     build_root="${target_dir}/${target}/${build_profile}"
@@ -580,7 +581,7 @@ configure_rusty_v8_artifacts() {
     "--local-repo=${local_repo}"
     "--release-repo=${RUSTY_V8_RELEASE_REPO:-auto}"
     "--release-tag=${release_tag}"
-    "--profile=${profile}"
+    "--profile=${rusty_v8_profile}"
     "--v8-version=${crate_version}"
   )
   local resolved_artifacts
@@ -667,16 +668,19 @@ configure_musl_build_tools() {
 }
 
 build_armv7_bwrap() {
-  local mode="${1}" target_dir="${2}"
+  local profile="${1}" target_dir="${2}"
   local target="armv7-unknown-linux-musleabihf"
-  local cache_dir="${BUILD_REPO}/build/armv7-${mode}/cache"
+  local cache_dir="${target_dir}/cache"
   local env_file="${cache_dir}/musl-env"
   local runner_temp="${cache_dir}/runner"
   local setup_script="${SOURCE_REPO}/.github/scripts/install-musl-build-tools.sh"
   local bwrap_log="${cache_dir}/bwrap-build.log"
   local -a profile_args=()
 
-  [[ "${mode}" == release ]] && profile_args+=(--release)
+  case "${profile}" in
+    release) profile_args+=(--release) ;;
+    dev-small) profile_args+=(--profile dev-small) ;;
+  esac
   mkdir -p "${runner_temp}"
   if [[ ! -s "${env_file}" ]]; then
     [[ -f "${setup_script}" ]] || die "ARMv7 musl build-tool setup script not found: ${setup_script}"
@@ -705,8 +709,13 @@ build_armv7_bwrap() {
 }
 
 cargo_build() {
-  local mode="${1}" target_mode="${2}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir
-  [[ "${mode}" == release ]] && profile_args+=(--release)
+  local mode="${1}" target_mode="${2}" profile="${3:-${CARGO_PROFILE}}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir
+  case "${profile}" in
+    release) profile_args+=(--release) ;;
+    dev-small) profile_args+=(--profile dev-small) ;;
+    debug) ;;
+    *) die "unsupported Cargo profile: ${profile}" ;;
+  esac
   triple="$(target_triple "${target_mode}")"
 
   local shared_env_script="${BUILD_REPO}/scripts/codex_cargo_env.sh"
@@ -726,7 +735,7 @@ cargo_build() {
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_builder="${BUILD_REPO}/scripts/build_armv7.sh"
     [[ -x "${armv7_builder}" ]] || die "ARMv7 builder not found or not executable: ${armv7_builder}"
-    local -a armv7_args=("--${mode}" "--target=${triple}" --no-deploy-remote --no-publish-github --binary-only)
+    local -a armv7_args=("--${profile}" "--target=${triple}" --no-deploy-remote --no-publish-github --binary-only)
     local -a armv7_v8_env=()
     if [[ -z "${RUSTY_V8_ARCHIVE_PATH:-}" || -z "${RUSTY_V8_BINDING_PATH:-}" ]]; then
       configure_rusty_v8_artifacts armv7 \
@@ -740,10 +749,10 @@ cargo_build() {
     armv7_args+=("--build-env=${ARMV7_BUILD_ENV}")
     if ! env CARGO_TARGET_DIR="${target_dir}" "${armv7_v8_env[@]}" \
       "${armv7_builder}" "${armv7_args[@]}" >&2; then
-      die "ARMv7 build failed; refusing to use a possibly stale binary at ${target_dir}/${triple}/${mode}/codex"
+      die "ARMv7 build failed; refusing to use a possibly stale binary at ${target_dir}/${triple}/${profile}/codex"
     fi
-    build_armv7_bwrap "${mode}" "${target_dir}"
-    printf '%s\n' "${target_dir}/${triple}/${mode}/codex"
+    build_armv7_bwrap "${profile}" "${target_dir}"
+    printf '%s\n' "${target_dir}/${triple}/${profile}/codex"
     return 0
   fi
 
@@ -861,7 +870,7 @@ cargo_build() {
   else
     cmd+=(--locked)
   fi
-  echo "Building ${mode} ${target_mode} in ${target_dir} (incremental cache retained)..." >&2
+  echo "Building ${profile} ${target_mode} in ${target_dir} (target artifacts retained)..." >&2
   if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
     if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
       echo "Locked Cargo build failed; retrying online in the build tree without --locked." >&2
@@ -907,9 +916,9 @@ cargo_build() {
   fi
   cache_openssl_artifacts "${target_mode}"
   if [[ -n "${target}" ]]; then
-    echo "${target_dir}/${target}/${mode}/codex"
+    echo "${target_dir}/${target}/${profile}/codex"
   else
-    echo "${target_dir}/${mode}/codex"
+    echo "${target_dir}/${profile}/codex"
   fi
 }
 
@@ -1306,14 +1315,14 @@ install_target() {
     binary="${BUILD_REPO}/build/android-artifact/codex.bin"
     already_stamped=true
   else
-    binary="$(cargo_build "${MODE}" "${target_mode}")" || return $?
+    binary="$(cargo_build "${MODE}" "${target_mode}" "${CARGO_PROFILE}")" || return $?
   fi
   install_remote_binary "${target}" "${binary}" "${VERSION}" "${install_dir}" "${already_stamped}" || return $?
   if [[ "${target_mode}" == armv7 || "${target_mode}" == musl ]]; then
     local bwrap_binary="$(dirname "${binary}")/bwrap"
     if [[ "${target_mode}" == armv7 ]]; then
       local armv7_triple="${ARMV7_TARGET:-armv7-unknown-linux-musleabihf}"
-      bwrap_binary="${binary%/${armv7_triple}/${MODE}/codex}/${armv7_triple}/${MODE}/bwrap"
+      bwrap_binary="${binary%/${armv7_triple}/${CARGO_PROFILE}/codex}/${armv7_triple}/${CARGO_PROFILE}/bwrap"
     fi
     install_remote_auxiliary_binary \
       "${target}" "${bwrap_binary}" \
@@ -1378,7 +1387,7 @@ build_android() {
     fi
   fi
   local binary
-  binary="$(cargo_build "${MODE}" android)" || return $?
+  binary="$(cargo_build "${MODE}" android "${CARGO_PROFILE}")" || return $?
   local stage="${BUILD_REPO}/build/android-artifact"
   mkdir -p "${stage}"
   install -m 0755 "${binary}" "${stage}/codex.bin"
@@ -1430,8 +1439,9 @@ validate_release_checkout() {
 
 while (($#)); do
   case "${1}" in
-    --debug) MODE=debug; shift ;;
-    --release) MODE=release; shift ;;
+    --debug) MODE=debug; CARGO_PROFILE=debug; shift ;;
+    --dev-small) MODE=debug; CARGO_PROFILE=dev-small; shift ;;
+    --release) MODE=release; CARGO_PROFILE=release; shift ;;
     --target) TARGET_MODE="${2:-}"; shift 2 ;;
     --target=*) TARGET_MODE="${1#*=}"; shift ;;
     --armv7) TARGET_MODE=armv7; shift ;;
@@ -1443,7 +1453,7 @@ while (($#)); do
     --package-version) PACKAGE_VERSION="${2:-}"; shift 2 ;;
     --package-version=*) PACKAGE_VERSION="${1#*=}"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
-    --start-github-release|--publish) PUBLISH=true; MODE=release; shift ;;
+    --start-github-release|--publish) PUBLISH=true; MODE=release; CARGO_PROFILE=release; shift ;;
     --skip-build) SKIP_BUILD=true; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
@@ -1485,6 +1495,9 @@ if [[ "${PUBLISH_NPM}" == true ]]; then
     *) die "--publish-npm requires --target all when a target is specified" ;;
   esac
 fi
+
+[[ "${PACKAGE_NPM}" != true || "${CARGO_PROFILE}" != dev-small ]] \
+  || die "--dev-small cannot be used with npm packaging; select --debug or --release"
 
 IFS=',' read -r -a REQUESTED_TARGETS <<<"${TARGET_MODE}"
 [[ "${#REQUESTED_TARGETS[@]}" -gt 0 ]] || die "target must not be empty"
@@ -1643,13 +1656,13 @@ if [[ "${PACKAGE_NPM}" == true ]]; then
     if [[ "${package_target}" == android ]]; then
       build_android
     else
-      cargo_build "${MODE}" "${package_target}" >/dev/null
+      cargo_build "${MODE}" "${package_target}" "${CARGO_PROFILE}" >/dev/null
     fi
   done
 elif [[ "${TARGET_MODE}" == android ]]; then
   build_android
 else
-  binary="$(cargo_build "${MODE}" "${TARGET_MODE}")"
+  binary="$(cargo_build "${MODE}" "${TARGET_MODE}" "${CARGO_PROFILE}")"
   if [[ "${TARGET_MODE}" == native ]]; then
     install_binary "${binary}" "${VERSION}"
     install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
