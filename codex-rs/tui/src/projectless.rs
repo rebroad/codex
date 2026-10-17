@@ -22,32 +22,46 @@ pub(crate) fn apply_defaults(
 ) -> bool {
     let defaults = &response.config;
     let effective = config.config_layer_stack.effective_config();
-    let server_has_explicit_setting = |key: &str| {
-        response.layers.as_ref().is_some_and(|layers| {
-            layers.iter().any(|layer| {
-                layer["config"]
-                    .get(key)
-                    .is_some_and(|value| !value.is_null())
+    let project_trust_decisions = |projects: Option<&serde_json::Value>| {
+        projects
+            .and_then(serde_json::Value::as_object)
+            .map(|projects| {
+                projects
+                    .iter()
+                    .map(|(path, project)| {
+                        (
+                            path.clone(),
+                            project
+                                .get("trust_level")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        )
+                    })
+                    .collect::<serde_json::Map<_, _>>()
             })
-        })
+            .unwrap_or_default()
     };
+    let local_projects = serde_json::to_value(effective.get("projects")).ok();
     if response.layers.as_ref().is_none_or(|layers| layers.iter().any(|layer| {
         layer["name"]["type"] == "project"
     }))
         || app_server.uses_remote_workspace()
-        || [
-            "sandbox_mode",
-            "sandbox_workspace_write",
-            "default_permissions",
-            "permissions",
-            "network",
-        ]
-        .iter()
-        .any(|key| server_has_explicit_setting(key))
+        || defaults.sandbox_mode.is_some()
+        || defaults.sandbox_workspace_write.is_some()
+        || ["default_permissions", "permissions", "network"].iter()
+            .any(|key| defaults.additional.get(*key).is_some_and(|value| !value.is_null()))
         // Reuse local discovery only when server markers and trust decisions agree.
-        || ["project_root_markers", "projects"].iter().any(|key|
-            serde_json::to_value(effective.get(*key)).ok().as_ref()
-                != Some(defaults.additional.get(*key).unwrap_or(&serde_json::Value::Null)))
+        || serde_json::to_value(effective.get("project_root_markers"))
+            .ok()
+            .as_ref()
+            != Some(
+                defaults
+                    .additional
+                    .get("project_root_markers")
+                    .unwrap_or(&serde_json::Value::Null),
+            )
+        || project_trust_decisions(local_projects.as_ref())
+            != project_trust_decisions(defaults.additional.get("projects"))
         || !config.config_layer_stack.is_projectless()
         || config.active_project.trust_level.is_some()
         || config.workspace_roots.len() != 1
