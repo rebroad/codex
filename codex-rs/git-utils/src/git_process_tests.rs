@@ -132,3 +132,80 @@ async fn timed_out_exited_git_wrapper_does_not_leave_child_process_running() {
     )
     .await;
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn owner_exit_kills_git_descendants() {
+    const OWNER_TEST_ENV: &str = "CODEX_GIT_PROCESS_OWNER_TEST";
+    if let Some(child_pid_file) = std::env::var_os(OWNER_TEST_ENV) {
+        let child_pid_file = std::path::PathBuf::from(child_pid_file);
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 60 & echo $! > \"$CHILD_PID_FILE\"; wait"])
+            .env("CHILD_PID_FILE", &child_pid_file);
+        let (_child, _process_tree) = spawn_git_command(&mut command).expect("spawn Git process");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if child_pid_file.exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("wait for Git descendant");
+        std::future::pending::<()>().await;
+        return;
+    }
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let child_pid_file = temp_dir.path().join("child.pid");
+    let mut owner = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "git_process::tests::owner_exit_kills_git_descendants",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(OWNER_TEST_ENV, &child_pid_file)
+        .spawn()
+        .expect("spawn Git process owner");
+
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if child_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("wait for Git descendant to start");
+    let child_pid = std::fs::read_to_string(&child_pid_file)
+        .expect("read Git descendant PID")
+        .trim()
+        .parse::<u32>()
+        .expect("parse Git descendant PID");
+
+    owner.kill().expect("kill Git process owner");
+    owner.wait().expect("reap Git process owner");
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let is_running = std::fs::read_to_string(format!("/proc/{child_pid}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    stat.rsplit_once(')')
+                        .and_then(|(_, fields)| fields.split_whitespace().next())
+                        .map(|state| state != "Z")
+                })
+                .unwrap_or(false);
+            if !is_running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("Git descendant should terminate when its owner exits");
+}
