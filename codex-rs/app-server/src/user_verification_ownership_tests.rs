@@ -167,7 +167,7 @@ async fn verification_without_a_connected_app_has_no_pending_callback() {
     let (_, response) = outgoing
         .send_request_to_connections(Some(&[]), request(thread_id), Some(thread_id))
         .await;
-    assert!(response.await.is_err());
+    assert!(response.await.unwrap().is_err());
     assert!(messages.try_recv().is_err());
     assert!(outgoing.request_id_to_callback.lock().await.is_empty());
 }
