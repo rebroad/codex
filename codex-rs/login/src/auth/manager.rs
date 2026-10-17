@@ -1585,14 +1585,16 @@ async fn load_auth_with_file(
         return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
     }
 
-    // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
-    // first so external auth takes precedence over any persisted credentials.
-    let ephemeral_storage = create_auth_storage(
-        codex_home.to_path_buf(),
-        AuthCredentialsStoreMode::Ephemeral,
-        AuthKeyringBackendKind::default(),
-    );
-    if let Some(auth_dot_json) = ephemeral_storage.load()?
+    // External ChatGPT tokens take precedence for the normal auth manager, but an
+    // explicitly selected file is an isolated credential store (for example,
+    // remote-control auth) and must not be shadowed by the shared ephemeral store.
+    if auth_file.is_none()
+        && let Some(auth_dot_json) = create_auth_storage(
+            codex_home.to_path_buf(),
+            AuthCredentialsStoreMode::Ephemeral,
+            AuthKeyringBackendKind::default(),
+        )
+        .load()?
         && auth_mode_is_allowed(allowed_login_methods, auth_dot_json.resolved_mode())
     {
         if let Some(agent_identity) = auth_dot_json.agent_identity.as_ref() {
