@@ -388,8 +388,11 @@ pub(crate) struct AppServerStartedThread {
 }
 
 pub(crate) fn is_active_writer_error(err: &color_eyre::eyre::Report) -> bool {
-    err.chain()
-        .any(|cause| cause.to_string().contains("already has an active writer"))
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("already has an active writer")
+            || message.contains("active writer belongs to this process")
+    })
 }
 
 pub(crate) fn source_agent_path(source: &SessionSource) -> Option<String> {
