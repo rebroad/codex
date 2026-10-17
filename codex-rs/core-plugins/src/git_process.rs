@@ -1,6 +1,6 @@
 use std::process::Command;
 
-/// Put Git commands in a process group and reap descendants if their owner exits.
+/// Put Git commands in a process group and kill descendants if their owner exits.
 pub(crate) fn supervise_git_command(command: &mut Command) {
     #[cfg(target_os = "linux")]
     {
