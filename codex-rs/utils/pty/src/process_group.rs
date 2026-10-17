@@ -18,6 +18,7 @@
 //! On non-Unix platforms these helpers are no-ops.
 
 use std::io;
+use std::process::Command;
 
 use tokio::process::Child;
 
@@ -62,6 +63,59 @@ pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
 /// No-op on non-Linux platforms.
 pub fn set_parent_death_signal(_parent_pid: i32) -> io::Result<()> {
     Ok(())
+}
+
+/// Configure a command so its process tree is terminated when its owner exits.
+///
+/// On Linux, a small shell supervisor owns a process group and receives a
+/// parent-death signal. Its trap kills the whole group, including Git's remote
+/// helpers. On other Unix platforms, only process-group isolation is applied;
+/// callers can still terminate the group during ordinary cancellation.
+pub fn supervise_process_tree_on_parent_exit(command: &mut Command) {
+    #[cfg(target_os = "linux")]
+    {
+        let original = std::mem::replace(command, Command::new("/bin/sh"));
+        let program = original.get_program().to_os_string();
+        let args = original
+            .get_args()
+            .map(std::ffi::OsStr::to_os_string)
+            .collect::<Vec<_>>();
+        let envs = original
+            .get_envs()
+            .map(|(key, value)| (key.to_os_string(), value.map(std::ffi::OsStr::to_os_string)))
+            .collect::<Vec<_>>();
+        let current_dir = original.get_current_dir().map(std::path::Path::to_path_buf);
+        command
+            .args([
+                "-c",
+                "trap 'kill -KILL 0' TERM; \"$@\" & wait $!",
+                "codex-process-supervisor",
+            ])
+            .arg(program)
+            .args(args);
+        for (key, value) in envs {
+            if let Some(value) = value {
+                command.env(key, value);
+            } else {
+                command.env_remove(key);
+            }
+        }
+        if let Some(current_dir) = current_dir {
+            command.current_dir(current_dir);
+        }
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+        let parent_pid = std::process::id() as i32;
+        // SAFETY: the parent-death signal and PID check close the fork/exec race.
+        unsafe {
+            command.pre_exec(move || set_parent_death_signal(parent_pid));
+        }
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
 }
 
 #[cfg(unix)]
