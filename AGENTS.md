@@ -50,6 +50,11 @@
   entry in `DOWNSTREAM.md` describing the request and intended behavior, so
   future rebase conflict resolution can recover the original intent. For
   independent new work, use a normal commit.
+- Run remote-capable Git commands such as `fetch`, `push`, and `remote show` in
+  a managed foreground terminal session and wait for that session to finish
+  and be reaped before reporting completion. Do not background these commands
+  or abandon a live session; cancellation must stop and reap the whole process
+  group, then verify that no Git or transport-helper descendants remain.
 
 In the codex-rs folder where the rust code lives:
 
