@@ -1,0 +1,18 @@
+# What: map source-less Cargo.lock entries to workspace packages by name and use the manifest version.
+# Scope: rules_rs workspace package resolution when Cargo.lock keeps local package versions at 0.0.0.
+
+diff --git a/rs/private/cargo_workspace_graph.bzl b/rs/private/cargo_workspace_graph.bzl
+--- a/rs/private/cargo_workspace_graph.bzl
++++ b/rs/private/cargo_workspace_graph.bzl
+@@ -332,3 +332,3 @@
+-    workspace_member_keys = {}
++    workspace_member_versions = {}
+     for package in cargo_metadata["packages"]:
+-        workspace_member_keys[(package["name"], package["version"])] = True
++        workspace_member_versions[package["name"]] = package["version"]
+@@ -348,2 +348,3 @@
+-        key = (pkg["name"], pkg["version"])
+-        if key in workspace_member_keys:
++        workspace_version = workspace_member_versions.get(pkg["name"])
++        if workspace_version != None:
++            pkg["version"] = workspace_version
