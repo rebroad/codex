@@ -15,6 +15,7 @@ use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -301,27 +302,15 @@ impl ConfigManager {
             .as_ref()
             .and_then(|providers| providers.get(&current.model_provider_id))
             .cloned();
-        let required_provider = match required_provider {
-            Some(provider)
-                if matches!(
-                    current.model_provider_id.as_str(),
-                    AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
-                ) =>
-            {
-                // Bedrock requirements contain overrides of the built-in provider.
-                merge_configured_model_providers(
-                    built_in_model_providers(/*openai_base_url*/ None),
-                    HashMap::from([(current.model_provider_id.clone(), provider)]),
-                )
-                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?
-                .remove(&current.model_provider_id)
-            }
-            Some(provider) => Some(provider),
-            None => None,
+        let required_provider = required_provider
+            .map(|provider| resolve_model_provider(&current.model_provider_id, provider))
+            .transpose()?;
+        let definition_changed = if let Some(required_provider) = required_provider {
+            resolve_model_provider(&current.model_provider_id, current.model_provider.clone())?
+                != required_provider
+        } else {
+            false
         };
-        let definition_changed = required_provider
-            .as_ref()
-            .is_some_and(|provider| provider != &current.model_provider);
         if selection_changed || definition_changed {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -591,6 +580,31 @@ mod application_network_tests;
 #[cfg(test)]
 #[path = "config_manager_provider_tests.rs"]
 mod provider_tests;
+
+fn resolve_model_provider(
+    provider_id: &str,
+    provider: ModelProviderInfo,
+) -> std::io::Result<ModelProviderInfo> {
+    if !matches!(
+        provider_id,
+        AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+    ) {
+        return Ok(provider);
+    }
+
+    merge_configured_model_providers(
+        built_in_model_providers(/*openai_base_url*/ None),
+        HashMap::from([(provider_id.to_string(), provider)]),
+    )
+    .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?
+    .remove(provider_id)
+    .ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("built-in provider `{provider_id}` is missing"),
+        )
+    })
+}
 
 pub(crate) fn protected_feature_keys(config_layer_stack: &ConfigLayerStack) -> BTreeSet<String> {
     let mut protected_features = config_layer_stack
