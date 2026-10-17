@@ -282,7 +282,7 @@ async fn creation_attaches_to_original_task_and_survives_service_restart_scenari
             .await
             .success
     );
-    // APFS rejects invalid UTF-8 names; exercise this serialization panic on Linux.
+    // APFS rejects invalid UTF-8 names; exercise lossy JSON serialization on Linux.
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::ffi::OsStringExt;
@@ -321,9 +321,15 @@ async fn creation_attaches_to_original_task_and_survives_service_restart_scenari
             }
         })
         .await?;
+        assert!(result.success, "{result:?}");
+        let created = value(result);
+        assert_eq!(created["type"], "created");
         assert!(
-            format!("{result:?}").contains("outcome is uncertain"),
-            "{result:?}"
+            created["worktree"]["root"]
+                .as_str()
+                .is_some_and(|root| root.contains('\u{FFFD}')),
+            "{}",
+            created["worktree"]["root"]
         );
         assert!(
             supervised
