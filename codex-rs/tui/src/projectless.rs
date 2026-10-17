@@ -22,14 +22,28 @@ pub(crate) fn apply_defaults(
 ) -> bool {
     let defaults = &response.config;
     let effective = config.config_layer_stack.effective_config();
+    let server_has_explicit_setting = |key: &str| {
+        response.layers.as_ref().is_some_and(|layers| {
+            layers.iter().any(|layer| {
+                layer["config"]
+                    .get(key)
+                    .is_some_and(|value| !value.is_null())
+            })
+        })
+    };
     if response.layers.as_ref().is_none_or(|layers| layers.iter().any(|layer| {
         layer["name"]["type"] == "project"
     }))
         || app_server.uses_remote_workspace()
-        || defaults.sandbox_mode.is_some()
-        || defaults.sandbox_workspace_write.is_some()
-        || ["default_permissions", "permissions", "network"].iter()
-            .any(|key| defaults.additional.get(*key).is_some_and(|value| !value.is_null()))
+        || [
+            "sandbox_mode",
+            "sandbox_workspace_write",
+            "default_permissions",
+            "permissions",
+            "network",
+        ]
+        .iter()
+        .any(|key| server_has_explicit_setting(key))
         // Reuse local discovery only when server markers and trust decisions agree.
         || ["project_root_markers", "projects"].iter().any(|key|
             serde_json::to_value(effective.get(*key)).ok().as_ref()
