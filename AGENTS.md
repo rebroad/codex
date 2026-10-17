@@ -50,6 +50,18 @@
   entry in `DOWNSTREAM.md` describing the request and intended behavior, so
   future rebase conflict resolution can recover the original intent. For
   independent new work, use a normal commit.
+- Run remote-capable Git commands such as `fetch`, `push`, and `remote show` in
+  a managed foreground terminal session and wait for that session to finish
+  and be reaped before reporting completion. Do not background these commands
+  or abandon a live session; cancellation must stop and reap the whole process
+  group, then verify that no Git or transport-helper descendants remain. When
+  `exec_command` returns a live session ID inside `functions.exec`, keep the
+  outer exec cell alive while awaiting `write_stdin` for that session; return
+  from the outer cell only after the terminal process exits. Do not just return
+  the session ID from the script, since that detaches the still-running Git
+  process from the managed wait. If the session is interrupted or lost, identify
+  and stop its entire process group, wait for it, and verify that no Git or
+  transport-helper descendants remain before retrying the Git command.
 
 In the codex-rs folder where the rust code lives:
 
