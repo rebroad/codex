@@ -1,6 +1,7 @@
 ---
 source: tui/src/app/tests/navigation_reconnect_tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 100)"
+assertion_line: 407
+expression: "crate::version::normalize_cli_version_for_snapshot(&render_bottom_popup(&app.chat_widget,\n100))"
 ---
   Agent command center  Group: Project  g
    All 2   Needs you 0   Working 1   Ready 1   Inactive 0                          tab/⇧tab filter
@@ -25,4 +26,4 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
                                                           │
                                                           │
                                                           │
-  Service v2.0.0 ≠ Codex CLI v0.0.0 · /daemon
+  Service v2.0.0 ≠ Codex CLI v<VERSION> · /daemon
