@@ -4,7 +4,7 @@
 diff --git a/rs/private/cargo_workspace_graph.bzl b/rs/private/cargo_workspace_graph.bzl
 --- a/rs/private/cargo_workspace_graph.bzl
 +++ b/rs/private/cargo_workspace_graph.bzl
-@@ -329,9 +329,9 @@ def split_lockfile_packages(hub_name, cargo_metadata, workspace_cargo_toml, all_packages, repo_root = None, workspace_package_dir = ""):
+@@ -330,8 +330,8 @@ def split_lockfile_packages(hub_name, cargo_metadata, workspace_cargo_toml, all_packages, repo_root = None, workspace_package_dir = ""):
      repo_root = normalize_path(repo_root)
 
 -    workspace_member_keys = {}
@@ -15,7 +15,7 @@ diff --git a/rs/private/cargo_workspace_graph.bzl b/rs/private/cargo_workspace_g
 
      dep_paths_by_name = _cargo_metadata_dep_paths_by_name(cargo_metadata["packages"], repo_root)
      patch_paths_by_name = _cargo_toml_patch_paths_by_name(workspace_cargo_toml, repo_root, workspace_package_dir)
-@@ -345,9 +345,11 @@ def split_lockfile_packages(hub_name, cargo_metadata, workspace_cargo_toml, all_packages, repo_root = None, workspace_package_dir = ""):
+@@ -346,7 +346,9 @@ def split_lockfile_packages(hub_name, cargo_metadata, workspace_cargo_toml, all_packages, repo_root = None, workspace_package_dir = ""):
              continue
 
 -        key = (pkg["name"], pkg["version"])
