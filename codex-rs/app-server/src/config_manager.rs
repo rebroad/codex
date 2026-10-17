@@ -305,8 +305,10 @@ impl ConfigManager {
         let required_provider = required_provider
             .map(|provider| resolve_model_provider(&current.model_provider_id, provider))
             .transpose()?;
-        let current_provider =
-            resolve_model_provider(&current.model_provider_id, current.model_provider.clone())?;
+        // The active Config already contains the resolved built-in provider.
+        // Re-merging it as a sparse override rejects its non-default built-in
+        // fields for Bedrock.
+        let current_provider = current.model_provider.clone();
         let definition_changed = required_provider
             .as_ref()
             .is_some_and(|provider| provider != &current_provider);
