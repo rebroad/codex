@@ -710,7 +710,7 @@ fn run_git_command_with_timeout(
         command
             .args([
                 "-c",
-                "trap 'kill -KILL -- -$$ 2>/dev/null' TERM; \"$@\" & wait $!",
+                "trap 'kill -KILL 0' TERM; \"$@\" & wait $!",
                 "codex-git-supervisor",
             ])
             .arg(program)
