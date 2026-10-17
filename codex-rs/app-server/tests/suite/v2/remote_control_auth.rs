@@ -4,6 +4,8 @@ use super::*;
 use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::encode_id_token;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::GetAuthStatusParams;
+use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::ServerRequest;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -94,6 +96,55 @@ async fn login(app: &mut TestAppServer, user: &str, account: &str, revision: &st
     wait_for_response(app, id).await
 }
 
+async fn login_remote_control(
+    app: &mut TestAppServer,
+    codex_home: &std::path::Path,
+    user: &str,
+    account: &str,
+    revision: &str,
+) -> Result<()> {
+    let auth_home = TempDir::new()?;
+    write_chatgpt_auth(
+        auth_home.path(),
+        ChatGptAuthFixture::new(format!("{revision}-remote-token"))
+            .account_id(account)
+            .chatgpt_account_id(account)
+            .chatgpt_user_id(user)
+            .email(format!("{revision}@example.com"))
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    std::fs::copy(
+        auth_home.path().join("auth.json"),
+        codex_home.join("rc-auth.json"),
+    )?;
+    let request_id = app
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(false),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let _: GetAuthStatusResponse =
+        timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+    Ok(())
+}
+
+async fn logout_remote_control(
+    app: &mut TestAppServer,
+    codex_home: &std::path::Path,
+) -> Result<()> {
+    std::fs::write(codex_home.join("rc-auth.json"), "{}")?;
+    let request_id = app
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(false),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let _: GetAuthStatusResponse =
+        timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+    Ok(())
+}
+
 async fn open_relay(app: &mut TestAppServer, listener: &TcpListener) -> Result<RelayClient> {
     let id = app.send_remote_control_ephemeral_enable_request().await?;
     wait_for_response(app, id).await?;
@@ -178,8 +229,9 @@ async fn same_owner_refresh_preserves_live_relay() -> Result<()> {
         .build_initialized()
         .await?;
     login(&mut app, "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
     let mut relay = open_relay(&mut app, &listener).await?;
-    login(&mut app, "user-a", "account-a", "refreshed").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "refreshed").await?;
     relay.assert_account(&mut app).await
 }
 
@@ -194,9 +246,10 @@ async fn owner_change_retires_live_relay() -> Result<()> {
             .build_initialized()
             .await?;
         login(&mut app, "user-a", "account-a", "initial").await?;
+        login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
         let mut old = open_relay(&mut app, &listener).await?;
         old.assert_account(&mut app).await?;
-        login(&mut app, user, account, "replacement").await?;
+        login_remote_control(&mut app, home.path(), user, account, "replacement").await?;
         old.closed().await?;
         let id = app.send_remote_control_status_read_request().await?;
         let status: RemoteControlStatusReadResponse =
@@ -218,6 +271,7 @@ async fn owner_change_discards_pending_and_queued_pairing() -> Result<()> {
         .build_initialized()
         .await?;
     login(&mut app, "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
     let mut old = open_relay(&mut app, &listener).await?;
     let pending = app
         .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
@@ -232,7 +286,7 @@ async fn owner_change_discards_pending_and_queued_pairing() -> Result<()> {
     .await?;
     // account/read uses another queue. Its response proves the prior pairing RPC was received.
     old.assert_account(&mut app).await?;
-    login(&mut app, "user-b", "account-a", "replacement").await?;
+    login_remote_control(&mut app, home.path(), "user-b", "account-a", "replacement").await?;
     let mut fresh = open_relay(&mut app, &listener).await?;
     let sentinel = app
         .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
@@ -279,6 +333,7 @@ async fn client_revoke_retry_stays_with_original_owner() -> Result<()> {
             .build_initialized()
             .await?;
         login(&mut app, "user-a", "account-a", "initial").await?;
+        login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
         let old = app
             .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
                 environment_id: "environment-id".to_string(),
@@ -313,6 +368,14 @@ async fn client_revoke_retry_stays_with_original_owner() -> Result<()> {
             )
             .await??;
             login(&mut app, refreshed_user, "account-a", "refreshed").await?;
+            login_remote_control(
+                &mut app,
+                home.path(),
+                refreshed_user,
+                "account-a",
+                "refreshed",
+            )
+            .await?;
             let id = app
                 .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
                     environment_id: "environment-id".to_string(),
@@ -418,6 +481,7 @@ async fn logout_login_enable_recovers_first_unauthorized_enrollment() -> Result<
     let mut websocket = timeout(DEFAULT_TIMEOUT, accept_async(stream)).await??;
     let logout = app.send_logout_account_request().await?;
     wait_for_response(&mut app, logout).await?;
+    logout_remote_control(&mut app, home.path()).await?;
     timeout(DEFAULT_TIMEOUT, async {
         loop {
             let notification = app
@@ -450,6 +514,7 @@ async fn logout_login_enable_recovers_first_unauthorized_enrollment() -> Result<
         )
         .await?;
     wait_for_response(&mut app, login).await?;
+    login_remote_control(&mut app, home.path(), "user-b", "account-b", "replacement").await?;
     let enabled = app.send_remote_control_ephemeral_enable_request().await?;
     wait_for_response(&mut app, enabled).await?;
     let (line, reader) = timeout(DEFAULT_TIMEOUT, read_enroll_request(&listener)).await??;
