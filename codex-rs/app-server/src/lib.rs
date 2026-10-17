@@ -986,18 +986,19 @@ pub async fn run_main_with_transport_options(
     };
     drop(unix_socket_startup_lock);
 
-    let remote_control_auth_manager =
-        if let Some(auth_file) = remote_control_auth_file(&config.codex_home) {
-            let mut remote_control_auth_config = config.auth_config();
-            remote_control_auth_config.auth_credentials_store_mode =
-                codex_config::types::AuthCredentialsStoreMode::File;
-            remote_control_auth_config.auth_file = Some(auth_file);
-            AuthManager::shared_from_auth_config(remote_control_auth_config, false)
-                .await
-                .map_err(std::io::Error::other)?
-        } else {
-            Arc::clone(&auth_manager)
-        };
+    let dedicated_remote_control_auth_file = remote_control_auth_file(&config.codex_home);
+    let has_dedicated_remote_control_auth = dedicated_remote_control_auth_file.is_some();
+    let remote_control_auth_manager = if let Some(auth_file) = dedicated_remote_control_auth_file {
+        let mut remote_control_auth_config = config.auth_config();
+        remote_control_auth_config.auth_credentials_store_mode =
+            codex_config::types::AuthCredentialsStoreMode::File;
+        remote_control_auth_config.auth_file = Some(auth_file);
+        AuthManager::shared_from_auth_config(remote_control_auth_config, false)
+            .await
+            .map_err(std::io::Error::other)?
+    } else {
+        Arc::clone(&auth_manager)
+    };
 
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
         && remote_control_explicitly_requested
@@ -1075,6 +1076,34 @@ pub async fn run_main_with_transport_options(
         }
     }
     transport_accept_handles.push(remote_control_accept_handle);
+
+    // A dedicated RC credential owner invalidates the shared application policy.
+    if has_dedicated_remote_control_auth {
+        let mut auth_changes = remote_control_auth_manager.auth_change_state_receiver();
+        let mut owner_generation = auth_changes.borrow_and_update().owner_generation;
+        let config_manager = config_manager.clone();
+        let shutdown_token = transport_shutdown_token.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    changed = auth_changes.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let state = *auth_changes.borrow_and_update();
+                        if state.owner_generation == owner_generation {
+                            continue;
+                        }
+                        owner_generation = state.owner_generation;
+                        if let Err(err) = config_manager.refresh_application_network_policy().await {
+                            warn!(error = %err, "failed to refresh application network policy after remote-control account change");
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     // Only the standalone server measures its local home, not embedded/cloud runtimes.
     if let Some(metrics) = otel.as_ref().and_then(codex_otel::OtelProvider::metrics) {
