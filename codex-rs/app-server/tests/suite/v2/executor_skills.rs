@@ -384,6 +384,7 @@ stream_max_retries = 0
     let request_id = app_server
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            cwd: Some(auto_env.selection().cwd.to_string()),
             config: match scenario {
                 ExecutorSkillScenario::VisibleWithBudgetWarning => Some(HashMap::from([(
                     "skills.max_context_tokens".to_string(),
