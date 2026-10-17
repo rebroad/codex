@@ -329,7 +329,7 @@ impl ThreadGoalRequestProcessor {
             if matches!(access, GoalAccess::Mutate) {
                 ensure_direct_input_allowed(thread.as_ref()).await?;
             }
-            if thread.rollout_path().is_none() {
+            if thread.config_snapshot().await.ephemeral || thread.rollout_path().is_none() {
                 return Err(invalid_request(format!(
                     "ephemeral thread does not support goals: {thread_id}"
                 )));
