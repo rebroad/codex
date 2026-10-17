@@ -11,13 +11,14 @@ pub(crate) fn cli_version_for_display() -> &'static str {
 pub(crate) fn normalize_cli_version_for_snapshot(rendered: &str) -> String {
     use regex_lite::Regex;
 
-    let rendered =
-        Regex::new(r"(OpenAI Codex \(v)[0-9][A-Za-z0-9.+_…-]*(?:\n[ \t]*[A-Za-z0-9.+_…-]+)*(\)?)")
-            .expect("truncated title version regex is valid")
-            .replace_all(&rendered, |captures: &regex_lite::Captures<'_>| {
-                format!("{}<VERSION>{}", &captures[1], &captures[2])
-            })
-            .into_owned();
+    let rendered = Regex::new(
+        r"(OpenAI Codex \(v)[0-9][A-Za-z0-9.+_…-]*(?:\n[ \t]*[0-9][A-Za-z0-9.+_…-]*)*(\)?)",
+    )
+    .expect("truncated title version regex is valid")
+    .replace_all(&rendered, |captures: &regex_lite::Captures<'_>| {
+        format!("{}<VERSION>{}", &captures[1], &captures[2])
+    })
+    .into_owned();
     rendered
         .replace(CODEX_CLI_VERSION, "<VERSION>")
         .replace(CODEX_CLI_DISPLAY_VERSION, "<VERSION>")
