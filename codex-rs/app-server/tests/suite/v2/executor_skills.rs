@@ -160,7 +160,7 @@ stream_max_retries = 0
         .await?;
     let auto_env = app_server.auto_env()?;
     let environment_id = auto_env.selection().environment_id.clone();
-    let auto_env_cwd = auto_env.selection().cwd.to_string();
+    let auto_env_cwd = auto_env.cwd().as_path().display().to_string();
     let plugin_dir = auto_env.selection().cwd.join("plugin")?;
     let manifest_dir = plugin_dir.join(".codex-plugin")?;
     let skill_dir = plugin_dir.join("skills/deploy")?;
