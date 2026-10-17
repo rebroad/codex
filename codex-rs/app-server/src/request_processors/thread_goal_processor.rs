@@ -329,7 +329,7 @@ impl ThreadGoalRequestProcessor {
             if matches!(access, GoalAccess::Mutate) {
                 ensure_direct_input_allowed(thread.as_ref()).await?;
             }
-            if thread.rollout_path().is_none() {
+            if thread.config_snapshot().await.ephemeral || thread.rollout_path().is_none() {
                 return Err(invalid_request(format!(
                     "ephemeral thread does not support goals: {thread_id}"
                 )));
@@ -348,17 +348,20 @@ impl ThreadGoalRequestProcessor {
                 internal_error(format!("failed to locate thread id {thread_id}: {err}"))
             })?
             .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?;
+            let session_meta = codex_rollout::read_session_meta_line(&rollout_path)
+                .await
+                .map_err(|err| internal_error(format!("failed to read thread metadata: {err}")))?;
+            if session_meta.meta.id != thread_id {
+                return Err(invalid_request(
+                    "thread metadata does not match requested id",
+                ));
+            }
+            if session_meta.meta.ephemeral {
+                return Err(invalid_request(format!(
+                    "ephemeral thread does not support goals: {thread_id}"
+                )));
+            }
             if matches!(access, GoalAccess::Mutate) {
-                let session_meta = codex_rollout::read_session_meta_line(&rollout_path)
-                    .await
-                    .map_err(|err| {
-                        internal_error(format!("failed to read thread ownership: {err}"))
-                    })?;
-                if session_meta.meta.id != thread_id {
-                    return Err(invalid_request(
-                        "thread metadata does not match requested id",
-                    ));
-                }
                 if matches!(
                     session_meta.meta.source,
                     SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
