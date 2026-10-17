@@ -182,6 +182,13 @@ enum SocketPeerPolicy {
     #[cfg(windows)]
     NonElevatedCurrentUser,
 }
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ReconnectPolicy {
+    Automatic,
+    CallerManaged,
+}
+
 type Reconnect<S> = Box<
     dyn Fn() -> Pin<Box<dyn Future<Output = IoResult<(String, WebSocketStream<S>)>> + Send>>
         + Send
@@ -190,12 +197,16 @@ type Reconnect<S> = Box<
 
 impl RemoteAppServerClient {
     pub async fn connect(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
-        Self::connect_with_policy(args, SocketPeerPolicy::ExplicitEndpoint).await
+        Self::connect_with_policy(
+            args,
+            SocketPeerPolicy::ExplicitEndpoint,
+            ReconnectPolicy::Automatic,
+        )
+        .await
     }
 
-    /// Connects to an implicitly discovered Windows daemon, verifying its peer
-    /// token before the WebSocket handshake or any session requests.
-    #[cfg(windows)]
+    /// Connects to a local daemon without reconnecting behind its caller's back.
+    /// On Windows, also verifies the daemon peer before the WebSocket handshake.
     pub async fn connect_local_daemon(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
         if !matches!(args.endpoint, RemoteAppServerEndpoint::UnixSocket { .. }) {
             return Err(IoError::new(
@@ -203,12 +214,17 @@ impl RemoteAppServerClient {
                 "local daemon requires a Unix socket",
             ));
         }
-        Self::connect_with_policy(args, SocketPeerPolicy::NonElevatedCurrentUser).await
+        #[cfg(windows)]
+        let peer_policy = SocketPeerPolicy::NonElevatedCurrentUser;
+        #[cfg(not(windows))]
+        let peer_policy = SocketPeerPolicy::ExplicitEndpoint;
+        Self::connect_with_policy(args, peer_policy, ReconnectPolicy::CallerManaged).await
     }
 
     async fn connect_with_policy(
         args: RemoteAppServerConnectArgs,
         peer_policy: SocketPeerPolicy,
+        reconnect_policy: ReconnectPolicy,
     ) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
         let initialize_params = args.initialize_params();
@@ -240,6 +256,7 @@ impl RemoteAppServerClient {
                     stream,
                     initialize_params,
                     reconnect,
+                    reconnect_policy,
                 )
                 .await
             }
@@ -262,6 +279,7 @@ impl RemoteAppServerClient {
                     stream,
                     initialize_params,
                     reconnect,
+                    reconnect_policy,
                 )
                 .await
             }
@@ -290,6 +308,7 @@ impl RemoteAppServerClient {
         stream: WebSocketStream<S>,
         initialize_params: InitializeParams,
         reconnect: Reconnect<S>,
+        reconnect_policy: ReconnectPolicy,
     ) -> IoResult<Self>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -581,7 +600,15 @@ impl RemoteAppServerClient {
                     let _ = response_tx.send(Err(IoError::new(err_kind, err_message.clone())));
                 }
 
-                if !should_reconnect {
+                if !should_reconnect || reconnect_policy == ReconnectPolicy::CallerManaged {
+                    if should_reconnect {
+                        let _ = deliver_event(
+                            &event_tx,
+                            AppServerEvent::Disconnected {
+                                message: err_message.clone(),
+                            },
+                        );
+                    }
                     if let Some((_, response_tx)) = request_to_retry.take() {
                         let _ = response_tx.send(Err(IoError::new(err_kind, err_message.clone())));
                     }

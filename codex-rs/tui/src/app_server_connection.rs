@@ -1,16 +1,11 @@
 //! Applies the selected server's socket policy on initial connections and reconnects.
 
 use crate::AppServerTarget;
-#[cfg(windows)]
 use crate::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use crate::connect_remote_app_server;
-use codex_app_server_client::AppServerClient;
-#[cfg(windows)]
-use codex_app_server_client::RemoteAppServerClient;
-#[cfg(windows)]
-use codex_app_server_client::RemoteAppServerConnectArgs;
-#[cfg(windows)]
-use codex_app_server_client::RemoteAppServerEndpoint;
+use codex_app_server_client::{
+    AppServerClient, RemoteAppServerClient, RemoteAppServerConnectArgs, RemoteAppServerEndpoint,
+};
 #[cfg(windows)]
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -18,6 +13,26 @@ pub(crate) async fn connect(target: &AppServerTarget) -> color_eyre::Result<AppS
     match target {
         AppServerTarget::Embedded => {
             color_eyre::eyre::bail!("embedded sessions have no remote connection");
+        }
+        #[cfg(not(windows))]
+        AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+            ..
+        } => {
+            let app_server =
+                RemoteAppServerClient::connect_local_daemon(RemoteAppServerConnectArgs {
+                    endpoint: RemoteAppServerEndpoint::UnixSocket {
+                        socket_path: socket_path.clone(),
+                    },
+                    client_name: "codex-tui".to_string(),
+                    client_version: env!("CARGO_PKG_VERSION").to_string(),
+                    experimental_api: true,
+                    mcp_server_openai_form_elicitation: false,
+                    opt_out_notification_methods: Vec::new(),
+                    channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+                })
+                .await?;
+            Ok(AppServerClient::Remote(app_server))
         }
         #[cfg(windows)]
         AppServerTarget::LocalDaemon {
