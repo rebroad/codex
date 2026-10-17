@@ -407,7 +407,7 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
         .without_auto_env()
         .with_env_overrides(&[(
             "RUST_LOG",
-            Some("codex_login=info,codex_app_server_transport::transport::remote_control=info"),
+            Some("codex_login=info,codex_app_server=info,codex_app_server_transport::transport::remote_control=info"),
         )])
         .build_initialized()
         .await?;
