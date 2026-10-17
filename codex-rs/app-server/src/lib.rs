@@ -1096,6 +1096,7 @@ pub async fn run_main_with_transport_options(
                             continue;
                         }
                         owner_generation = state.owner_generation;
+                        info!(owner_generation, "remote-control auth owner changed; refreshing application network policy");
                         if let Err(err) = config_manager.refresh_application_network_policy().await {
                             warn!(error = %err, "failed to refresh application network policy after remote-control account change");
                         }
