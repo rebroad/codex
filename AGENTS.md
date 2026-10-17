@@ -27,7 +27,9 @@
   place; do not globally override `TMPDIR` in a way that changes test behavior.
   Tests must respect an explicitly configured `TMPDIR`.
 - Use `/var/tmp` for Linux task artifacts and logs. For lengthy builds/tests,
-  capture full output there and report concise summaries and relevant errors.
+  redirect full output directly to a log there rather than streaming it through
+  `tee`; inspect bounded log excerpts while the job runs and report concise
+  summaries and relevant errors.
   When a temporary path is passed to `rsync`, resolve it physically first so a
   symlink such as `/var/tmp` is not rejected by rsync's path-safety checks.
 - Run Linux tests that exercise Codex's bubblewrap sandbox with an escalated
