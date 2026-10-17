@@ -12,7 +12,7 @@ pub(crate) fn normalize_cli_version_for_snapshot(rendered: &str) -> String {
     use regex_lite::Regex;
 
     let rendered =
-        Regex::new(r"(OpenAI Codex \(v)[0-9][A-Za-z0-9.+_…-]*(?:\n[A-Za-z0-9.+_…-]+)*(\)?)")
+        Regex::new(r"(OpenAI Codex \(v)[0-9][A-Za-z0-9.+_…-]*(?:\n[ \t]*[A-Za-z0-9.+_…-]+)*(\)?)")
             .expect("truncated title version regex is valid")
             .replace_all(&rendered, |captures: &regex_lite::Captures<'_>| {
                 format!("{}<VERSION>{}", &captures[1], &captures[2])

@@ -30,6 +30,7 @@ The fork ships independently and must not silently become an upstream distributi
 
 - Fork package/repository identity and release promotion: `chore: migrate fork distribution identity` (`3387f3f70a`), `build(release): add fork release orchestration` (`78a5024a8a`), and the npm staging/assembly/promotion series (`a7a0843900`, `8e0f6df3f5`, `a9f9da3b4a`).
 - Fork update channels: `feat(updates): follow fork release channels` (`ad7161d361`). Preserve the fork's channel selection and release metadata while adopting upstream's current update implementation and security checks.
+- TUI/CLI displayed-version identity: `Fix TUI/CLI version` (`7cdb861213`). Keep the TUI build stamp available in user-facing output; snapshot normalization must also handle the stamp when terminal wrapping splits it across lines, without changing rendered output.
 - Fork CI ownership/policy: `ci: use hosted runners for fork workflows` (`796211545d`) and `ci: move post-merge policy to stable branch` (`e8b47c96c8`). Keep workflow behavior valid for this fork's configured remotes and branch names.
 - Alpha release promotion: advance the fork's `alpha` branch after a successful alpha release, update the rolling `latest-alpha` release assets, and refresh the `reb.ai/codex/install.sh` bootstrap. Do not substitute upstream's `latest-alpha-cli` canary branch; that is not the fork's release channel.
 
