@@ -406,7 +406,10 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             assert!(history.contains("Unsubmitted title: Keep this task draft!"));
             assert_snapshot!(
                 "daemon_command_center_vanished_rename",
-                render_bottom_popup(&app.chat_widget, /*width*/ 100)
+                crate::version::normalize_cli_version_for_snapshot(&render_bottom_popup(
+                    &app.chat_widget,
+                    /*width*/ 100
+                ))
             );
             app.handle_tui_event(
                 &mut tui,
