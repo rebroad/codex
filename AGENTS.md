@@ -54,7 +54,11 @@
   a managed foreground terminal session and wait for that session to finish
   and be reaped before reporting completion. Do not background these commands
   or abandon a live session; cancellation must stop and reap the whole process
-  group, then verify that no Git or transport-helper descendants remain.
+  group, then verify that no Git or transport-helper descendants remain. When
+  `exec_command` returns a live session ID, keep that session attached and poll
+  it to completion; do not let the enclosing tool call finish while the remote
+  command is still running. If the session is interrupted, stop the entire
+  process group and verify cleanup before retrying the Git command.
 
 In the codex-rs folder where the rust code lives:
 
