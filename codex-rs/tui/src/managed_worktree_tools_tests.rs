@@ -304,25 +304,25 @@ async fn creation_attaches_to_original_task_and_survives_service_restart_scenari
                 )
                 .await,
         );
-        let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 20), async {
+        let created = tokio::time::timeout(Duration::from_secs(/*secs*/ 20), async {
             loop {
-                let result = supervised
-                    .execute(
-                        server.request_handle(),
-                        thread_id.clone(),
-                        "get_worktree_creation_status",
-                        json!({"operationId":pending["operationId"]}),
-                    )
-                    .await;
-                if !result.success {
+                let result = value(
+                    supervised
+                        .execute(
+                            server.request_handle(),
+                            thread_id.clone(),
+                            "get_worktree_creation_status",
+                            json!({"operationId":pending["operationId"]}),
+                        )
+                        .await,
+                );
+                if result["type"] != "pending" {
                     break result;
                 }
                 tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
             }
         })
         .await?;
-        assert!(result.success, "{result:?}");
-        let created = value(result);
         assert_eq!(created["type"], "created");
         assert!(
             created["worktree"]["root"]
