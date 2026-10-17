@@ -404,6 +404,7 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
         .build_initialized()
         .await?;
     login(&mut app, "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
     let mut relay = open_relay(&mut app, &listener).await?;
     let pending = app
         .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
@@ -420,7 +421,7 @@ async fn owner_change_rejects_queued_client_revoke() -> Result<()> {
         )
         .await?;
     relay.assert_account(&mut app).await?;
-    login(&mut app, "user-b", "account-a", "replacement").await?;
+    login_remote_control(&mut app, home.path(), "user-b", "account-a", "replacement").await?;
     let sentinel = app
         .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
             environment_id: "environment-id".to_string(),
