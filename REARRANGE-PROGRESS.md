@@ -14,7 +14,7 @@ No history rearrangement has been performed for these findings. Resolve them onl
 - Branch: `alpha`; starting commit: `ed5dcf09fb1fcb5ccdeecec3a9057210b2471131`; starting tree: `5a210bf77dbab944213c7b4abd22cf9728ff4f58`.
 - Upstream merge base: `e53e932dc855927afb1cafab5f1ae6edf2695e81`.
 - Worktree was clean. The existing `alpha.before-rearrange-20261015-pass1` checkpoint is an earlier state and does not match this starting tree. Create a new unique checkpoint for this exercise before any history rearrangement.
-- Current ownership questions above remain open; the downstream range contains 927 commits, so work must proceed in audited, tree-preserving passes with this record updated as each pass is verified.
+- Current ownership questions above remain open; the downstream range contains hundreds of commits, so work must proceed in audited, tree-preserving passes with this record updated as each pass is verified.
 
 ## Fixup target scan
 
@@ -29,3 +29,6 @@ No history rearrangement has been performed for these findings. Resolve them onl
 - Kept the net projectless-config behavior as standalone commit `fa990b1c0832fed76325a0e043428b22005abcc3` (`fix(tui): honor projectless server settings`); diagnostic add/remove and background-terminal code add/revert pairs were dropped. Folded the two test adjustments into one commit, but its subject still incorrectly names the upstream owner; rename it in the follow-up checkpointed correction.
 - Verification: rebase completed without conflicts; resulting tree `102f6663f2bddccd01d0324d9432ed079fd0f013` matches the checkpoint tree exactly; merge base remains `e53e932dc855927afb1cafab5f1ae6edf2695e81`. The series is now 924 commits. This pass changed history only; no source-tree behavior changed, so tests were not rerun.
 - `alpha` now diverges from `origin/alpha` due to the authorized history rewrite. Do not publish until the full rearrangement audit is complete and the expected remote tip is reverified.
+- Follow-up correction renamed the remaining test adaptation to `c7375af992aa2c11b4c0d78b2eaa46550701302e` (`test(tui): track background terminal lookups`). Verification against the same checkpoint still passes; merge base remains unchanged.
+- Re-scan after the pass: 925 downstream commits remain, with 209 `fixup!` commits; all 209 have a matching downstream subject, so there are no remaining subject-level targets that point only to commits outside the downstream range. This is a screening result, not yet semantic approval of every target.
+- Next ownership pass: resolve the mixed keyboard/source-build/fixture/daemon commit `5f65909dce` by behavior and inspect each candidate owner's history before splitting or attaching changes.
