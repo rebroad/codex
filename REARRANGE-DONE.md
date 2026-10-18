@@ -15,6 +15,12 @@
 - Autosquashed the three audited fixups using the unchanged merge base `c333d755d44d4eb764cffd2bd862d86d790e91e6`. `git range-diff` showed all other commits unchanged and only those three fixups absorbed into their owners.
 - Verification: resulting tree `7fda08ea79e81e10d85729851e59ac9de9889a37` exactly matches the checkpoint; merge base remains `c333d755d44d4eb764cffd2bd862d86d790e91e6`; 610 downstream commits remain; no `fixup!` or `squash!` subjects remain; worktree is clean. The full semantic and repeated-file audit is still in progress. This pass changed history only, so tests were not rerun.
 
+## Generated config-schema ownership audit
+
+- The downstream range touches `codex-rs/core/config.schema.json` 32 times. In `71cc648a0e` (`feat(remote-control): capture websocket traffic`), the schema adds the remote-control diagnostics types and setting, but also removes the old `ModelProviderInfo`, `ModelProviderCapabilities`, and `RemoteCompactionSupport` definitions.
+- `git blame` attributes the removed model-provider definitions to upstream schema commits; the downstream provider-override owner `24c22fec81` changes `ConfigToml.model_providers` from `ModelProviderInfo` to `ModelProviderInfoOverrides`, but its schema update leaves those now-unreferenced definitions behind. The deletion therefore completes the schema change owned by `24c22fec81`; it is independent of remote-control traffic capture.
+- The only intervening schema edits between `24c22fec81` and `71cc648a0e` add `sandbox_log_path` and update the background-terminal timeout description. They do not overlap the provider definitions. The model-provider cleanup is planned as a separate fixup to `24c22fec81`; the remote-control schema addition stays with `71cc648a0e`.
+
 ## Completion status
 
 - No history rewrite has been performed in this continuation yet. The full downstream audit, final checkpoint/tree/base checks, and publication remain outstanding.
