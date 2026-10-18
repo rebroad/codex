@@ -187,6 +187,35 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
 }
 
 #[test]
+fn android_filesystem_fallback_keeps_network_sandbox_unless_explicitly_bypassed() {
+    assert_eq!(
+        preserve_android_network_sandbox(
+            SandboxOverride::NoOverride,
+            /*android_filesystem_sandbox_unavailable*/ true,
+            NetworkSandboxPolicy::Restricted,
+        ),
+        SandboxOverride::NoOverride,
+    );
+    assert_eq!(
+        preserve_android_network_sandbox(
+            SandboxOverride::BypassSandboxFirstAttempt,
+            /*android_filesystem_sandbox_unavailable*/ true,
+            NetworkSandboxPolicy::Restricted,
+        ),
+        SandboxOverride::BypassSandboxFirstAttempt,
+        "explicit escalation must be able to run network commands",
+    );
+    assert_eq!(
+        preserve_android_network_sandbox(
+            SandboxOverride::BypassSandboxFirstAttempt,
+            /*android_filesystem_sandbox_unavailable*/ true,
+            NetworkSandboxPolicy::Enabled,
+        ),
+        SandboxOverride::BypassSandboxFirstAttempt,
+    );
+}
+
+#[test]
 fn deny_read_preserves_the_sandbox_for_explicit_escalation_and_blocks_policy_bypass() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
