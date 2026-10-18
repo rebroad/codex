@@ -1002,10 +1002,17 @@ impl App {
                 .await
                 {
                     Ok(result) => result?,
-                    Err(_) => tracing::warn!(
-                        thread_id = %realtime_thread_id,
-                        "timed out stopping voice conversation"
-                    ),
+                    Err(_) => {
+                        return Err(color_eyre::eyre::Report::new(
+                            codex_app_server_client::TypedRequestError::Transport {
+                                method: "thread/realtime/stop".to_string(),
+                                source: std::io::Error::new(
+                                    std::io::ErrorKind::TimedOut,
+                                    "timed out stopping voice conversation",
+                                ),
+                            },
+                        ));
+                    }
                 }
                 Ok(true)
             }
