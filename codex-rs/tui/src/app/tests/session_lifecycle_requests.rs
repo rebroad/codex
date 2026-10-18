@@ -773,7 +773,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                     } else {
                         let background = request.method == "thread/backgroundTerminals/list" && {
                             inventories += usize::from(inventories > 0);
-                            matches!(inventories, 2 | 4)
+                            matches!(inventories, 2 | 4 | 5 | 7)
                         };
                         let detach = request.method == "thread/unsubscribe";
                         let request = serde_json::from_value::<ClientRequest>(
