@@ -622,8 +622,9 @@ impl RemoteAppServerClient {
                     break 'worker;
                 }
 
+                let delay = reconnect_delay(reconnect_attempt);
                 let reconnect_future = async {
-                    tokio::time::sleep(reconnect_delay(reconnect_attempt)).await;
+                    tokio::time::sleep(delay).await;
                     let (new_endpoint, mut new_stream) = reconnect().await?;
                     let (pending_events, _metadata) = initialize_remote_connection(
                         &mut new_stream,
@@ -663,7 +664,7 @@ impl RemoteAppServerClient {
                     }
                 };
                 match reconnect_result {
-                    Ok((new_endpoint, mut new_stream, pending_events)) => {
+                    Ok((new_endpoint, new_stream, pending_events)) => {
                         if deliver_event(&event_tx, AppServerEvent::Reconnected).is_err() {
                             break 'worker;
                         }
