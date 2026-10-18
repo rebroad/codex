@@ -13,8 +13,14 @@ use crate::temporary_structured_request::TemporaryStructuredThreadOptions;
 use crate::temporary_structured_request::run_temporary_structured_turn;
 use crate::temporary_structured_request::start_temporary_thread;
 use crate::temporary_structured_request::unsubscribe_temporary_thread;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
@@ -27,7 +33,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub(super) const THREAD_TITLE_MAX_CHARS: usize = 36;
-const THREAD_TITLE_MODEL: &str = "gpt-5.6-luna";
+const THREAD_TITLE_MODEL: &str = "gpt-6-luna";
 pub(super) const THREAD_TITLE_PROMPT_MAX_BYTES: usize = 960;
 const THREAD_TITLE_RECENT_MESSAGES: usize = 8;
 
@@ -38,6 +44,59 @@ struct GeneratedThreadTitle {
 }
 
 impl App {
+    pub(super) fn apply_automatic_thread_title(
+        &self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        title: String,
+        cancellation: CancellationToken,
+    ) {
+        let handle = app_server.request_handle();
+        let sender = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let operation = async {
+                let response = handle
+                    .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+                        request_id: RequestId::String(format!(
+                            "thread-title-read-{}",
+                            uuid::Uuid::new_v4()
+                        )),
+                        params: ThreadReadParams {
+                            thread_id: thread_id.to_string(),
+                            include_turns: false,
+                        },
+                    })
+                    .await
+                    .ok()?;
+                if response.thread.name.is_some() || cancellation.is_cancelled() {
+                    return None;
+                }
+                handle
+                    .request_typed::<ThreadSetNameResponse>(ClientRequest::ThreadSetName {
+                        request_id: RequestId::String(format!(
+                            "thread-title-set-{}",
+                            uuid::Uuid::new_v4()
+                        )),
+                        params: ThreadSetNameParams {
+                            thread_id: thread_id.to_string(),
+                            name: title.clone(),
+                        },
+                    })
+                    .await
+                    .ok()?;
+                Some(title)
+            };
+            let title = tokio::select! {
+                _ = cancellation.cancelled() => None,
+                title = operation => title,
+            };
+            sender.send(AppEvent::AutomaticThreadTitleApplied {
+                cancellation,
+                thread_id,
+                title,
+            });
+        });
+    }
     pub(super) fn sync_thread_title_progress(&mut self) {
         let pending = self.chat_widget.thread_id().is_some_and(|thread_id| {
             self.pending_thread_titles
@@ -86,20 +145,24 @@ impl App {
         let cancellation = entry.insert(CancellationToken::new()).clone();
         self.sync_thread_title_progress();
         let request_handle = app_server.request_handle();
-        let model = if self.chat_widget.config_ref().model_provider_id == "openai"
+        let config = self.chat_widget.config_ref();
+        let configured_title_model = config.thread_title_model.as_deref();
+        let title_model = configured_title_model.unwrap_or(THREAD_TITLE_MODEL);
+        let model = if let Some(configured_title_model) = configured_title_model {
+            configured_title_model.to_string()
+        } else if config.model_provider_id == "openai"
             && self.chat_widget.has_chatgpt_account()
             && self
                 .chat_widget
                 .model_catalog()
                 .try_list_models()
-                .is_ok_and(|models| models.iter().any(|model| model.model == THREAD_TITLE_MODEL))
+                .is_ok_and(|models| models.iter().any(|model| model.model == title_model))
         {
-            THREAD_TITLE_MODEL.to_string()
+            title_model.to_string()
         } else {
             self.chat_widget.current_model().to_string()
         };
-        let effort = (model == THREAD_TITLE_MODEL).then_some(ReasoningEffort::Low);
-        let config = self.chat_widget.config_ref();
+        let effort = (model == title_model).then_some(ReasoningEffort::Low);
         let options = TemporaryStructuredThreadOptions {
             thread_source: ThreadSource::Feature("thread_title".to_string()),
             model,
