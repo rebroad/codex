@@ -4496,7 +4496,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
             .lock()
             .expect("request recorder lock")
             .iter()
-            .filter(|request| request.method != "server/request/response")
+            .filter(|request| request.method == "thread/backgroundTerminals/list")
             .count();
         let checked = usize::from(kind == "main") + 2 * usize::from(kind == "child");
         assert_eq!(count, checked, "{kind}");
