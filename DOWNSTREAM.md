@@ -39,7 +39,7 @@ When upstream changes release manifests or updater code, preserve the fork's ide
 
 The fork's source checkout is edited separately from its mirrored external `.build` tree. Build and test recipes must resolve the intended source and external build checkout, keep ignored build output there, and never build in the source tree. Key owners are the build resolver/harness/orchestrator series (`116867a02b`, `c8615efb76`, `b578b8e143`, `1ccc32b9e2`) and the follow-up build-tree fixes. `scripts/build_codex.sh` is the end-to-end build/install entry point. `just test` refreshes `target/debug/codex` with `scripts/build_test_cli_if_needed.sh` before package-scoped tests, because a test in another package may use `cargo_bin("codex")` and otherwise pick up a stale binary from another source revision.
 
-Use `CARGO_INCREMENTAL=1` by default. The sccache launcher remains opt-in; do not change global `PATH`, the installed sccache setup, or project defaults as a side effect of a rebase. Keep Rust and Bazel locks in sync when dependencies change. Build and test scripts must rebuild the CLI they test or prove that a cached binary matches the source revision; a stale `target/debug/codex` is not valid test evidence.
+Use `CARGO_INCREMENTAL=0` and sccache by default for local builds and tests. Do not change global `PATH` or the installed sccache setup as a side effect of a rebase. Keep Rust and Bazel locks in sync when dependencies change. Build and test scripts must rebuild the CLI they test or prove that a cached binary matches the source revision; a stale `target/debug/codex` is not valid test evidence.
 
 ## Runtime and platform behavior
 
