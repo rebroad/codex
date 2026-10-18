@@ -337,17 +337,25 @@ async fn remote_disconnect_retires_voice_before_reconnecting() -> Result<()> {
     let (replacement, _, _, _) = make_chatwidget_manual_with_sender().await;
     app.replace_chat_widget(replacement);
     app.active_thread_id = None;
-    let (mut session, _, proxy) =
-        super::session_lifecycle_requests::start_recording_remote_app_server(&app.config).await?;
+    let (mut session, _, proxy) = tokio::time::timeout(
+        Duration::from_secs(10),
+        super::session_lifecycle_requests::start_recording_remote_app_server(&app.config),
+    )
+    .await
+    .map_err(|_| color_eyre::eyre::eyre!("remote test app-server startup timed out"))??;
     proxy.abort();
     assert!(proxy.await.unwrap_err().is_cancelled());
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    app.handle_event(
-        &mut tui,
-        &mut session,
-        AppEvent::CodexOp(Op::RealtimeConversationStop { thread_id }),
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        app.handle_event(
+            &mut tui,
+            &mut session,
+            AppEvent::CodexOp(Op::RealtimeConversationStop { thread_id }),
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| color_eyre::eyre::eyre!("remote voice stop handling timed out"))??;
     assert_eq!(
         (app.voice_owner_thread_id(), app.active_thread_id),
         (None, None)
@@ -365,7 +373,9 @@ async fn remote_disconnect_retires_voice_before_reconnecting() -> Result<()> {
     assert!(!app.chat_widget.is_current_realtime_attempt(
         thread_id, /*attempt_id*/ 0, /*input_generation*/ 0
     ));
-    session.shutdown().await?;
+    tokio::time::timeout(Duration::from_secs(10), session.shutdown())
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("remote test app-server shutdown timed out"))??;
     Ok(())
 }
 
