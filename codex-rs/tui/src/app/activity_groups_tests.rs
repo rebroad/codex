@@ -268,7 +268,15 @@ async fn failed_exploration_retains_following_reasoning_at_every_page_split() {
         let rendered = |cells: &[Arc<dyn HistoryCell>]| {
             cells
                 .iter()
-                .map(|cell| cell.transcript_hyperlink_lines(/*width*/ 80))
+                .map(|cell| {
+                    let mut lines = cell.transcript_hyperlink_lines(/*width*/ 80);
+                    for span in lines.iter_mut().flat_map(|line| &mut line.line.spans) {
+                        if span.content.len() == 23 && span.content.starts_with(" • 20") {
+                            span.content = " • <timestamp>".into();
+                        }
+                    }
+                    lines
+                })
                 .collect::<Vec<_>>()
         };
         assert_eq!(
