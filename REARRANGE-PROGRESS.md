@@ -32,3 +32,12 @@ No history rearrangement has been performed for these findings. Resolve them onl
 - Follow-up correction renamed the remaining test adaptation to `c7375af992aa2c11b4c0d78b2eaa46550701302e` (`test(tui): track background terminal lookups`). Verification against the same checkpoint still passes; merge base remains unchanged.
 - Re-scan after the pass: 925 downstream commits remain, with 209 `fixup!` commits; all 209 have a matching downstream subject, so there are no remaining subject-level targets that point only to commits outside the downstream range. This is a screening result, not yet semantic approval of every target.
 - Next ownership pass: resolve the mixed keyboard/source-build/fixture/daemon commit `5f65909dce` by behavior and inspect each candidate owner's history before splitting or attaching changes.
+
+## Mixed keyboard commit ownership
+
+- `5f65909dce` combines four behaviors. Keep only the six keyboard implementation and click-ownership test files in `feat(tui): Request soft keyboard on prompt tap`.
+- Move `scripts/resolve_source_repo.py` and `scripts/test_resolve_source_repo.py` changes into a fixup of `bb5dfd5fd905e98a2d8bcaf493f01d8f0a9e2a1a` (`build: resolve source and external build trees`). Move the `justfile` call-site change separately into a fixup of `ce23ac328c96aae5c8e2b22e86b1249054d5b561` (`build: route just recipes through build trees`), since that historical commit owns routing just recipes while the former owns the resolver implementation.
+- Move the two `ephemeral: false` rollout fixture fields into a fixup of `41d3a76d880cb0258f87d7d603caee2bbcf5f9a3` (`feat(core): persist response usage attribution`), which introduced the required metadata field.
+- Move the `CompatibilityError` test construction into a fixup of `e6b0f44733973aface123ed2bd1513367810c9e6` (`fix(tui): fall back for unmanaged daemon mismatch`), which introduced that error type and its `restart_features` field.
+- Keep `b68509b402` as a fixup to the keyboard feature: although the assertion uses the clipboard-paste API introduced later upstream, it still checks that the prompt click remains owned by the composer and retains its paste target. This is part of the added keyboard-click coverage, not an independent clipboard feature.
+- The four separated fixups have different owners and must remain distinct until autosquashed; do not combine them by file count or commit count.
