@@ -20,6 +20,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 pub(crate) use codex_protocol::sandbox::SandboxOverride;
@@ -278,6 +279,23 @@ pub(crate) fn sandbox_override_for_first_attempt(
         SandboxOverride::BypassSandboxFirstAttempt
     } else {
         SandboxOverride::NoOverride
+    }
+}
+
+/// Keep Android's network seccomp filter on filesystem-only fallbacks, while
+/// honoring an explicit approval to run the command without sandboxing.
+pub(crate) fn preserve_android_network_sandbox(
+    sandbox_override: SandboxOverride,
+    android_filesystem_sandbox_unavailable: bool,
+    network_sandbox_policy: NetworkSandboxPolicy,
+) -> SandboxOverride {
+    if android_filesystem_sandbox_unavailable
+        && network_sandbox_policy == NetworkSandboxPolicy::Restricted
+        && sandbox_override != SandboxOverride::BypassSandboxFirstAttempt
+    {
+        SandboxOverride::NoOverride
+    } else {
+        sandbox_override
     }
 }
 

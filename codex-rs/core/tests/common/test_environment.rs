@@ -22,7 +22,7 @@ impl TestTargetOs {
             Self::MacOs
         } else if cfg!(target_os = "windows") {
             Self::Windows
-        } else if cfg!(target_os = "linux") {
+        } else if cfg!(any(target_os = "android", target_os = "linux")) {
             Self::Linux
         } else {
             unreachable!()
