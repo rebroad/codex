@@ -5,7 +5,8 @@
 - Completed pass: folded `9265725b28` (`docs(downstream): clarify active takeover behavior`) into `0786455a8e` (`DOWNSTREAM.md`), the standalone guide update that introduced the row, after `git log -S` confirmed row ownership. The full replay preserved the checkpoint tree and merge base.
 - Before the rewrite, create a new unique `alpha.before-rearrange-*` checkpoint and record its commit and tree; replay from the fixed merge base.
 - Continue the repeated-path ownership audit after this pass, including other historical `DOWNSTREAM.md` row updates and any remaining mixed commits.
-- Next ownership check: `cdbd7a7f9c83` (`docs(downstream): document atomic permission presets`) adds a new `DOWNSTREAM.md` row. Verify whether its behavior owner predates the guide and whether this addition belongs with that owner or with the guide artifact.
+- Reviewed `cdbd7a7f9c83` (`docs(downstream): document atomic permission presets`): the behavior owner `07b07fca04` predates `DOWNSTREAM.md` by 13 days, so the source file cannot be changed at that commit. The later commit is a standalone documentation addition and should remain separate.
+- Next: continue the repeated `DOWNSTREAM.md` ownership scan, including its other standalone row additions, then continue the wider semantic audit.
 - Continue semantic review across the remaining 625 downstream commits, splitting mixed-purpose commits and reviewing repeated file touches by behavior owner; document justified multi-owner touches.
 - Retain relevant downstream functionality and record material omissions or upstream-compatibility trade-offs.
 - Before completion, verify exact checkpoint tree, unchanged merge base, clean `alpha`, and no unattached `fixup!`/`squash!` commits; update durable notes and push only after the full audit is complete.
