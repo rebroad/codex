@@ -15,3 +15,10 @@ No history rearrangement has been performed for these findings. Resolve them onl
 - Upstream merge base: `e53e932dc855927afb1cafab5f1ae6edf2695e81`.
 - Worktree was clean. The existing `alpha.before-rearrange-20261015-pass1` checkpoint is an earlier state and does not match this starting tree. Create a new unique checkpoint for this exercise before any history rearrangement.
 - Current ownership questions above remain open; the downstream range contains 927 commits, so work must proceed in audited, tree-preserving passes with this record updated as each pass is verified.
+
+## Fixup target scan
+
+- The current range has 928 commits, including 216 subjects beginning `fixup!` (the additional commit is the active progress record).
+- A subject-based scan found seven fixups with no downstream commit whose subject matches their target: `4bb90c6f23`, `e7202d91ba`, `0914bba603`, `eab0e9d92a`, `979241d5fe`, `f97c075b69`, and `332f210d60`. All target the upstream `Support projectless TUI sessions with workspace defaults (#49160)` commit, which is at or before the merge base and cannot own downstream fixups.
+- Diff and parent-chain inspection indicates distinct outcomes: `4bb90c6f23` plus `0914bba603` produce a projectless-config behavior change; `e7202d91ba` adds temporary diagnostic output that `0914bba603` removes; `eab0e9d92a` and `979241d5fe` cancel each other's code change; `f97c075b69` and `332f210d60` are test adjustments around background-terminal lookups. Keep the behavior and test purposes in separate commits, and discard only the zero-net temporary experiments after confirming the combined tree effect during the rebase.
+- Candidate ownership for the config behavior and test updates is not an existing downstream feature commit: the relevant symbols/tests are introduced by the upstream projectless-session commit. Treat these as clearly scoped standalone downstream changes, not fixups to the upstream commit. Verify the exact rebase result and checkpoint tree before considering this pass complete.
