@@ -260,16 +260,16 @@ impl App {
                 }
             },
         };
-        if let Some(message) = check_background_terminals(
-            app_server,
-            &self.app_server_target,
-            tracked_ids.iter().copied(),
-        )
-        .await
-        {
-            return self.working_directory_error(message);
-        }
         if config.active_project.trust_level.is_none() {
+            if let Some(message) = check_background_terminals(
+                app_server,
+                &self.app_server_target,
+                tracked_ids.iter().copied(),
+            )
+            .await
+            {
+                return self.working_directory_error(message);
+            }
             if self
                 .confirm_directory_trust(
                     tui,
