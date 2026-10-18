@@ -2124,6 +2124,48 @@ mod tests {
         client.shutdown().await.expect("shutdown should complete");
     }
 
+    #[tokio::test]
+    async fn remote_shutdown_interrupts_reconnect_handshake() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener address");
+        let (reconnect_started_tx, reconnect_started_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("first connection should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("first websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            websocket.close(None).await.expect("close should succeed");
+
+            let (_reconnect_stream, _) = listener
+                .accept()
+                .await
+                .expect("reconnect connection should succeed");
+            reconnect_started_tx
+                .send(())
+                .expect("reconnect observer should still be waiting");
+            std::future::pending::<()>().await;
+        });
+        let websocket_url = format!("ws://{addr}");
+        let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        timeout(Duration::from_secs(3), reconnect_started_rx)
+            .await
+            .expect("client should start reconnecting")
+            .expect("reconnect observer should complete");
+        timeout(Duration::from_secs(2), client.shutdown())
+            .await
+            .expect("shutdown should interrupt reconnect handshake")
+            .expect("shutdown should complete");
+    }
+
     #[test]
     fn typed_request_error_exposes_sources() {
         let transport = TypedRequestError::Transport {

@@ -331,6 +331,7 @@ impl RemoteAppServerClient {
                 Box<JSONRPCRequest>,
                 oneshot::Sender<IoResult<RequestResult>>,
             )> = None;
+            let mut pending_commands = VecDeque::new();
             let mut stream = stream;
             let mut endpoint = endpoint;
             let mut reconnect_attempt = 0u32;
@@ -339,7 +340,13 @@ impl RemoteAppServerClient {
                 let mut should_reconnect = true;
                 loop {
                     tokio::select! {
-                        command = command_rx.recv() => {
+                        command = async {
+                            if let Some(command) = pending_commands.pop_front() {
+                                Some(command)
+                            } else {
+                                command_rx.recv().await
+                            }
+                        } => {
                             let Some(command) = command else {
                                 let _ = stream.close(None).await;
                                 should_reconnect = false;
@@ -615,61 +622,82 @@ impl RemoteAppServerClient {
                     break 'worker;
                 }
 
-                tokio::time::sleep(reconnect_delay(reconnect_attempt)).await;
-                match reconnect().await {
-                    Ok((new_endpoint, mut new_stream)) => {
-                        match initialize_remote_connection(
-                            &mut new_stream,
-                            &new_endpoint,
-                            initialize_params.clone(),
-                            INITIALIZE_TIMEOUT,
-                        )
-                        .await
-                        {
-                            Ok((pending_events, _metadata)) => {
-                                if deliver_event(&event_tx, AppServerEvent::Reconnected).is_err() {
+                let reconnect_future = async {
+                    tokio::time::sleep(reconnect_delay(reconnect_attempt)).await;
+                    let (new_endpoint, mut new_stream) = reconnect().await?;
+                    let (pending_events, _metadata) = initialize_remote_connection(
+                        &mut new_stream,
+                        &new_endpoint,
+                        initialize_params.clone(),
+                        INITIALIZE_TIMEOUT,
+                    )
+                    .await?;
+                    Ok::<_, IoError>((new_endpoint, new_stream, pending_events))
+                };
+                tokio::pin!(reconnect_future);
+                let reconnect_result = loop {
+                    tokio::select! {
+                        result = &mut reconnect_future => break result,
+                        command = command_rx.recv() => {
+                            match command {
+                                Some(RemoteClientCommand::Shutdown { response_tx }) => {
+                                    let close_result = stream.close(None).await.or_else(|err| {
+                                        if websocket_close_error_is_already_closed(&err) {
+                                            Ok(())
+                                        } else {
+                                            Err(IoError::other(format!(
+                                                "failed to close websocket app server `{endpoint}`: {err}"
+                                            )))
+                                        }
+                                    });
+                                    let _ = response_tx.send(close_result);
                                     break 'worker;
                                 }
-                                for event in pending_events {
-                                    if deliver_event(&event_tx, event).is_err() {
-                                        break 'worker;
-                                    }
-                                }
-                                stream = new_stream;
-                                endpoint = new_endpoint;
-                                reconnect_attempt = 0;
-                                if let Some((request, response_tx)) = request_to_retry.take() {
-                                    let request_id = request.id.clone();
-                                    pending_requests.insert(request_id.clone(), response_tx);
-                                    if let Err((err, retryable)) =
-                                        write_jsonrpc_message_with_status(
-                                            &mut stream,
-                                            JSONRPCMessage::Request(request.as_ref().clone()),
-                                            &endpoint,
-                                        )
-                                        .await
-                                    {
-                                        if let Some(response_tx) =
-                                            pending_requests.remove(&request_id)
-                                        {
-                                            if retryable {
-                                                request_to_retry = Some((request, response_tx));
-                                            } else {
-                                                let _ = response_tx.send(Err(err));
-                                            }
-                                        }
-                                        continue 'worker;
-                                    }
+                                Some(command) => pending_commands.push_back(command),
+                                None => {
+                                    let _ = stream.close(None).await;
+                                    break 'worker;
                                 }
                             }
-                            Err(err) => {
-                                warn!(%err, "remote app-server reconnect initialize failed");
-                                reconnect_attempt = reconnect_attempt.saturating_add(1);
+                        }
+                    }
+                };
+                match reconnect_result {
+                    Ok((new_endpoint, mut new_stream, pending_events)) => {
+                        if deliver_event(&event_tx, AppServerEvent::Reconnected).is_err() {
+                            break 'worker;
+                        }
+                        for event in pending_events {
+                            if deliver_event(&event_tx, event).is_err() {
+                                break 'worker;
+                            }
+                        }
+                        stream = new_stream;
+                        endpoint = new_endpoint;
+                        reconnect_attempt = 0;
+                        if let Some((request, response_tx)) = request_to_retry.take() {
+                            let request_id = request.id.clone();
+                            pending_requests.insert(request_id.clone(), response_tx);
+                            if let Err((err, retryable)) = write_jsonrpc_message_with_status(
+                                &mut stream,
+                                JSONRPCMessage::Request(request.as_ref().clone()),
+                                &endpoint,
+                            )
+                            .await
+                            {
+                                if let Some(response_tx) = pending_requests.remove(&request_id) {
+                                    if retryable {
+                                        request_to_retry = Some((request, response_tx));
+                                    } else {
+                                        let _ = response_tx.send(Err(err));
+                                    }
+                                }
+                                continue 'worker;
                             }
                         }
                     }
                     Err(err) => {
-                        warn!(%err, "remote app-server reconnect failed");
+                        warn!(%err, "remote app-server reconnect or initialize failed");
                         reconnect_attempt = reconnect_attempt.saturating_add(1);
                     }
                 }
