@@ -648,6 +648,9 @@ pub struct Config {
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
 
+    /// Model used to generate conversation titles.
+    pub thread_title_model: Option<String>,
+
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
 
@@ -4294,6 +4297,7 @@ impl Config {
         .await?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let review_model = override_review_model.or(cfg.review_model);
+        let thread_title_model = cfg.thread_title_model;
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
@@ -4506,6 +4510,7 @@ impl Config {
             daybreak_enabled: cfg.daybreak.unwrap_or(false),
             service_tier,
             review_model,
+            thread_title_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_auto_compact_token_limit_scope: cfg
