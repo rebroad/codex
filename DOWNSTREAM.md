@@ -72,24 +72,13 @@ The table is a behavior index, not a list of every fork-only commit. Test isolat
 - `codex app-server --analytics-default-enabled` with default stdio transport is treated as an extension-host connection. If its default control socket is already in use, the CLI bridges stdio to the existing server and does not launch a second server or apply the new process's `-c` overrides. The shared server must already have compatible settings, or the extension host needs a separate profile/CODEX_HOME. Capture the exact runtime error before changing this sharing behavior.
 - A recurring `api_key_model_discovery` compatibility prompt means the connecting client's effective value differs from the shared daemon's process-wide value. On the inspected host, the daemon's persisted `app-server-daemon/settings.json` and launch arguments set it to `true`, while the ChatGPT client reports that it requires `false`. The restart option persists the requesting client's complete shared-feature set, so alternating clients can keep changing the daemon's value and recreate the prompt. Align the clients on one value when they share a daemon. Setting it to `false` disables API-key model discovery for other clients; clients that need different values must use separate profiles/CODEX_HOME instances.
 
-## Resume-progress and startup-input review
+## Rebase audit: upstream 0.163.0-alpha.11 (2026-10-15)
 
-- `feat(app-server): stream resume progress` (`760ede5a9f`) adds
-  `rollout_uncompressed_size`; it does not remove `read_rollout_lines`.
-- The later `fix(rollout): scope reader helper to tests` change
-  (`c47f0aaec1`) removes the crate-level re-export and gates the helper behind
-  `cfg(test)`. Its current callers are tests in the same module; no production
-  caller uses it. Keep it test-only unless a production use appears, while
-  retaining the resume-progress implementation and the uncompressed-size
-  reader used by production code.
-- The startup `codex resume` error is currently emitted by terminal-input
-  quarantine. Reproduce the user's terminal state before changing its
-  fail-closed behavior; the reported message says "output", but this source
-  reports "input".
-- `codex app-server --analytics-default-enabled` with default stdio transport
-  is treated as an extension-host connection. If its default control socket
-  is already in use, the CLI bridges stdio to the existing server and does not
-  launch a second server or apply the new process's `-c` overrides. The shared
-  server must already have compatible settings, or the extension host needs a
-  separate profile/CODEX_HOME. Capture the exact runtime error before changing
-  this sharing behavior.
+- Pinned target: `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3` (tree `e3daf9c81cd5d36816ac717ea894fdf15605e759`); merge base with the pre-rebase alpha: `15c477d788a575de432f661def200ae7bc4a835e`.
+- Checkpoint: `alpha.rebasing-onto-0.163.0-alpha.11` at pre-rebase `alpha` `43bc7aa926affeca73464bbe9743821573604bd8`, tree `a62f093d53a9b21b6547c1856541f24a820d9390`.
+- Replayed all 164 downstream commits after that merge base. No commits were skipped. The old zsh fork escalation test was removed where current upstream had removed the zsh execution backend; no production zsh fallback or release-asset references were restored.
+- Conflict decisions: retained the fork-aware Rust V8 asset resolver and release identity while taking current upstream release tooling; retained fork-specific daemon credential routing and updater disablement, then merged `restart-if-idle`; adapted Android sandbox startup to the current `seccomp` module and retained local IPC only for isolated network namespaces; retained auth-aware workspace-routing reads, inherited-call normalization, TUI activation-key handling and pause-before-interrupt ordering, daemon mismatch recovery, Android-only dependency guards, and request cache diagnostics alongside upstream changes.
+- Generated app-server notification unions include both upstream resume-progress and downstream config-reload variants. The session cache diagnostic sidecar is persisted before token attribution; incomplete responses continue through the existing attribution helper.
+- The core test compile exposed unused `SpawnLifecycle` scaffolding carried through the process-group reap conflict; it depended on the retired execve wrapper and had no call sites after replay. Removed that dead scaffolding while retaining the live process termination/reaping behavior.
+- Restricted executor-skill test fixture alignment: `executor_skills.rs` now starts the thread in the same temporary cwd as its auto-selected environment, so its `:workspace_roots` permission applies to the selected plugin fixture. The old test owner (`7c71783135b`) is at the pinned upstream base, so this is a standalone validation-only commit, not a fixup; it changes no product behavior.
+- Validation is pending for this audit entry; record commands and results here after the post-rebase build/test gates complete. The full `just test` workspace suite was not run because repository guidance requires user approval for it.
