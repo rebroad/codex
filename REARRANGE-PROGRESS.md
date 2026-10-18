@@ -6,16 +6,16 @@
 - The `TMUX_REQUEST` formatting hunk from `ae29cf9692` has now been split from the formatter-cache change and autosquashed into the keyboard feature that introduced the constant; the exact checkpoint verification is recorded in the latest completed-pass entry.
 - The pause-before-interrupt change remains its own `fix(tui): pause goals before interrupting` commit. The similarly mentioned `f4193ee1dfa` is the separate Android clipboard-target change and does not own or modify `interaction.rs`.
 
-## Active rearrangement starting point (2026-10-18)
+## Initial rearrangement starting point (2026-10-18)
 
 - Branch: `alpha`; starting commit: `ed5dcf09fb1fcb5ccdeecec3a9057210b2471131`; starting tree: `5a210bf77dbab944213c7b4abd22cf9728ff4f58`.
 - Upstream merge base: `e53e932dc855927afb1cafab5f1ae6edf2695e81`.
 - Worktree was clean. The existing `alpha.before-rearrange-20261015-pass1` checkpoint is an earlier state and does not match this starting tree. Create a new unique checkpoint for this exercise before any history rearrangement.
-- Current ownership questions above remain open; the downstream range contains hundreds of commits, so work must proceed in audited, tree-preserving passes with this record updated as each pass is verified.
+- The initial ownership findings above were later resolved or clarified in the completed passes below. The audit proceeds in checkpointed units, with each result recorded against its exact tree and merge base.
 
-## Fixup target scan
+## Initial fixup target scan (928-commit range)
 
-- The current range has 928 commits, including 216 subjects beginning `fixup!` (the additional commit is the active progress record).
+- At this initial scan, the range had 928 commits, including 216 subjects beginning `fixup!` (the additional commit was the active progress record).
 - A subject-based scan found seven fixups with no downstream commit whose subject matches their target: `4bb90c6f23`, `e7202d91ba`, `0914bba603`, `eab0e9d92a`, `979241d5fe`, `f97c075b69`, and `332f210d60`. All target the upstream `Support projectless TUI sessions with workspace defaults (#49160)` commit, which is at or before the merge base and cannot own downstream fixups.
 - Diff and parent-chain inspection indicates distinct outcomes: `4bb90c6f23` plus `0914bba603` produce a projectless-config behavior change; `e7202d91ba` adds temporary diagnostic output that `0914bba603` removes; `eab0e9d92a` and `979241d5fe` cancel each other's code change; `f97c075b69` and `332f210d60` are test adjustments around background-terminal lookups. Keep the behavior and test purposes in separate commits, and discard only the zero-net temporary experiments after confirming the combined tree effect during the rebase.
 - Candidate ownership for the config behavior and test updates is not an existing downstream feature commit: the relevant symbols/tests are introduced by the upstream projectless-session commit. Treat these as clearly scoped standalone downstream changes, not fixups to the upstream commit. Verify the exact rebase result and checkpoint tree before considering this pass complete.
