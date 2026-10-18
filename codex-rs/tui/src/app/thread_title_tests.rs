@@ -1,4 +1,5 @@
 use super::THREAD_TITLE_MAX_CHARS;
+use super::THREAD_TITLE_MODEL;
 use super::THREAD_TITLE_PROMPT_MAX_BYTES;
 use super::THREAD_TITLE_RECENT_MESSAGES;
 use super::parse_thread_title;
@@ -87,6 +88,11 @@ fn bounds_the_entire_title_prompt_for_dense_unicode() {
             message.chars().next()
         );
     }
+}
+
+#[test]
+fn thread_title_model_defaults_to_gpt_6_luna() {
+    assert_eq!(THREAD_TITLE_MODEL, "gpt-6-luna");
 }
 
 #[tokio::test]
@@ -223,6 +229,7 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
         codex_home.path().join("config.toml"),
         format!(
             "model = \"gpt-5.2\"\n\
+             thread_title_model = \"gpt-6-sol\"\n\
              model_provider = \"{provider_id}\"\n\n\
              [model_providers.{provider_id}]\n\
              name = \"Thread title test\"\n\
@@ -242,6 +249,7 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
     app.config.sqlite =
         codex_state::SqliteConfig::new_for_testing(codex_home.path().to_path_buf().abs());
     app.config.model = Some("gpt-5.2".to_string());
+    app.config.thread_title_model = Some("gpt-6-sol".to_string());
     app.config.model_provider_id = provider_id.to_string();
     app.config.model_provider = ModelProviderInfo {
         name: "Thread title test".to_string(),
@@ -429,6 +437,7 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
     assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 120).contains('⠋'));
 
     let request = response.single_request();
+    assert_eq!(request.body_json()["model"], "gpt-6-sol");
     assert!(
         request
             .body_json()
