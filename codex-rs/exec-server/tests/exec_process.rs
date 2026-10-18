@@ -6,6 +6,8 @@ mod shell_snapshot;
 mod windows_sandbox;
 
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -64,10 +66,69 @@ use tokio::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
+const PROCESS_OUTPUT_EVENT_TIMEOUT: Duration = if cfg!(target_os = "android") {
+    Duration::from_secs(10)
+} else {
+    Duration::from_secs(2)
+};
+
 use common::DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG;
 use common::current_test_binary_helper_paths;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
+
+#[cfg(unix)]
+fn test_shell_path(shell: &str) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        let prefix = std::env::var_os("PREFIX")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/data/data/com.termux/files/usr"));
+        // Exercise Termux's user shells; Android's system mksh formats `set -o`
+        // differently from POSIX shells and does not represent the Termux host.
+        return prefix.join("bin").join(shell);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    PathBuf::from(format!("/bin/{shell}"))
+}
+
+#[cfg(unix)]
+fn test_command_path(command: &str) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        let prefix = std::env::var_os("PREFIX")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/data/data/com.termux/files/usr"));
+        let termux_path = prefix.join("bin").join(command);
+        if termux_path.is_file() {
+            return termux_path;
+        }
+        return PathBuf::from("/system/bin").join(command);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    PathBuf::from(format!("/bin/{command}"))
+}
+
+#[cfg(unix)]
+fn test_default_path() -> String {
+    #[cfg(target_os = "android")]
+    {
+        let prefix = std::env::var_os("PREFIX")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/data/data/com.termux/files/usr"));
+        return format!("{}:/system/bin", prefix.join("bin").display());
+    }
+
+    #[cfg(not(target_os = "android"))]
+    "/usr/bin:/bin".to_string()
+}
+
+#[cfg(unix)]
+fn test_bash_path() -> String {
+    test_shell_path("bash").display().to_string()
+}
 
 struct ProcessContext {
     backend: Arc<dyn ExecBackend>,
@@ -211,6 +272,10 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     automatic_startup: bool,
     shell_name: &str,
 ) -> Result<()> {
+    if cfg!(target_os = "android") && use_sandbox {
+        eprintln!("skipping filesystem sandbox variant: Android has no filesystem sandbox backend");
+        return Ok(());
+    }
     if use_sandbox
         && let Some(warning) = codex_sandboxing::system_bwrap_warning(
             &PermissionProfile::read_only(),
@@ -224,12 +289,12 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
     let (shell_path, profile_name) = match shell_name {
-        "bash" if automatic_startup => ("/bin/bash", ".bash-env"),
-        "bash" => ("/bin/bash", ".bashrc"),
-        "sh" => ("/bin/sh", ".snapshot-env"),
-        "bash-sh" => ("/bin/bash", ".snapshot-env"),
-        "zsh" if automatic_startup => ("/bin/zsh", ".zshenv"),
-        "zsh" => ("/bin/zsh", ".zshrc"),
+        "bash" if automatic_startup => (test_bash_path(), ".bash-env"),
+        "bash" => (test_bash_path(), ".bashrc"),
+        "sh" => (test_shell_path("sh").display().to_string(), ".snapshot-env"),
+        "bash-sh" => (test_bash_path(), ".snapshot-env"),
+        "zsh" if automatic_startup => (test_shell_path("zsh").display().to_string(), ".zshenv"),
+        "zsh" => (test_shell_path("zsh").display().to_string(), ".zshrc"),
         name => anyhow::bail!("unsupported test shell {name}"),
     };
     let profile_path = home.path().join(profile_name);
@@ -237,9 +302,15 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let runtime_path_entry = home.path().join("runtime-bin");
     std::fs::create_dir(&profile_path_entry)?;
     let wc = profile_path_entry.join("wc");
+    let test_sh_path = test_shell_path("sh");
+    let test_wc_path = test_command_path("wc");
     codex_utils_cargo_bin::write_executable(
         &wc,
-        "#!/bin/sh\nprintf x >> \"$HOME/tool-captures\"\nexec /usr/bin/wc \"$@\"\n",
+        &format!(
+            "#!{}\nprintf x >> \"$HOME/tool-captures\"\nexec {} \"$@\"\n",
+            test_sh_path.display(),
+            test_wc_path.display()
+        ),
     )?;
     let posix_shell = matches!(shell_name, "sh" | "bash-sh");
     let padding = if !use_remote && !tty && shell_name == "bash" {
@@ -258,7 +329,8 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     std::fs::write(
         &profile_path,
         format!(
-            "printf x >> \"$HOME/captures\"\nexport PATH=\"$HOME/profile-bin:/usr/bin:/bin\"\nexport PROFILE_ALLOWED=profile\nexport PROFILE_SECRET=secret\nexport PROFILE_DENIED=denied\nprofile_helper() {{ printf helper; }}\nif [ -n \"${{BASH_VERSION-}}\" ]; then\n  shopt -s extglob nocasematch\n  eval 'profile_helper() {{ case $1 in @(foo|bar)*) printf helper ;; *) return 1 ;; esac; }}'\nfi\nset -u\n{shadowed_builtins}{padding}"
+            "printf x >> \"$HOME/captures\"\nexport PATH=\"$HOME/profile-bin:{}\"\nexport PROFILE_ALLOWED=profile\nexport PROFILE_SECRET=secret\nexport PROFILE_DENIED=denied\nprofile_helper() {{ printf helper; }}\nif [ -n \"${{BASH_VERSION-}}\" ]; then\n  shopt -s extglob nocasematch\n  eval 'profile_helper() {{ case $1 in @(foo|bar)*) printf helper ;; *) return 1 ;; esac; }}'\nfi\nset -u\n{shadowed_builtins}{padding}",
+            test_default_path()
         ),
     )?;
     if shell_name == "zsh" && automatic_startup {
@@ -322,9 +394,10 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
         runtime_path_entry.display(),
     );
     let expected_stdout = format!(
-        "{expected_prefix}|profile|missing|missing|{}:{}:/usr/bin:/bin|missing|missing",
+        "{expected_prefix}|profile|missing|missing|{}:{}:{}|missing|missing",
         runtime_path_entry.display(),
         profile_path_entry.display(),
+        test_default_path(),
     );
 
     for attempt in 0..2 {
@@ -387,6 +460,9 @@ async fn exec_metadata_overrides_policy_and_cached_snapshot(
     tty: bool,
     use_sandbox: bool,
 ) -> Result<()> {
+    if use_sandbox && common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if use_sandbox
         && let Some(warning) = codex_sandboxing::system_bwrap_warning(
             &PermissionProfile::workspace_write(),
@@ -439,7 +515,7 @@ async fn exec_metadata_overrides_policy_and_cached_snapshot(
                 }),
                 process_id: ProcessId::from(format!("metadata-snapshot-{attempt}")),
                 argv: vec![
-                    "/bin/bash".into(),
+                    test_bash_path(),
                     "-lc".into(),
                     "printf '%s|%s' \"$CODEX_THREAD_ID\" \"${CODEX_TOOL_CALL_ID-unset}\""
                         .to_string(),
@@ -450,7 +526,7 @@ async fn exec_metadata_overrides_policy_and_cached_snapshot(
                     scope_id: "metadata-attachment".into(),
                     shell: ShellInfo {
                         name: "bash".into(),
-                        path: "/bin/bash".into(),
+                        path: test_bash_path(),
                     },
                 }),
                 env: HashMap::from([
@@ -529,7 +605,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                 metadata: Default::default(),
                 process_id: ProcessId::from(format!("managed-snapshot-{attempt}")),
                 argv: vec![
-                    "/bin/bash".to_string(),
+                    test_bash_path().to_string(),
                     "-lc".to_string(),
                     "profile_helper; printf '|%s|%s|%s' \"$PROFILE_ALLOWED\" \"$CODEX_NETWORK_PROXY_ACTIVE\" \"$HTTP_PROXY\"".to_string(),
                 ],
@@ -539,7 +615,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                     scope_id: "managed-attachment".to_string(),
                     shell: ShellInfo {
                         name: "bash".to_string(),
-                        path: "/bin/bash".to_string(),
+                        path: test_bash_path().to_string(),
                     },
                 }),
                 env: HashMap::new(),
@@ -604,6 +680,9 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
     failures_before_repair: usize,
     failure: CaptureFailure,
 ) -> Result<()> {
+    if use_remote && common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if use_remote
         && let Some(warning) = codex_sandboxing::system_bwrap_warning(
             &PermissionProfile::workspace_write(),
@@ -617,8 +696,8 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
     let (shell_path, profile_name) = match shell_name {
-        "bash" => ("/bin/bash", ".bashrc"),
-        "zsh" => ("/bin/zsh", ".zshrc"),
+        "bash" => (test_bash_path(), ".bashrc"),
+        "zsh" => (test_shell_path("zsh").display().to_string(), ".zshrc"),
         name => anyhow::bail!("unsupported test shell {name}"),
     };
     let child_pids = home.path().join("startup-pids");
@@ -758,6 +837,9 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_sandboxed_process_preserves_custom_arg0() -> Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(
         &PermissionProfile::read_only(),
         &std::env::current_dir()?,
@@ -1042,6 +1124,9 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_process_preserves_empty_workspace_roots() -> Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(
         &PermissionProfile::read_only(),
         &std::env::current_dir()?,
@@ -1147,7 +1232,7 @@ async fn collect_process_output_from_reads(
 async fn collect_process_output_from_events(
     session: Arc<dyn ExecProcess>,
 ) -> Result<(String, String, Option<i32>, bool)> {
-    collect_process_output_from_events_with_timeout(session, Duration::from_secs(2)).await
+    collect_process_output_from_events_with_timeout(session, PROCESS_OUTPUT_EVENT_TIMEOUT).await
 }
 
 async fn collect_process_output_from_events_with_timeout(
@@ -1367,11 +1452,21 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
         .start(ExecParams {
             metadata: Default::default(),
             process_id: process_id.clone().into(),
-            argv: vec![
-                helper_binary.to_string_lossy().into_owned(),
-                DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
-                release_path.to_string_lossy().into_owned(),
-            ],
+            argv: if cfg!(target_os = "android") {
+                vec![
+                    "/system/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "(while [ ! -e \"$1\" ]; do sleep 0.05; done; printf 'late output after exit\\n') & exit 0".to_string(),
+                    "sh".to_string(),
+                    release_path.to_string_lossy().into_owned(),
+                ]
+            } else {
+                vec![
+                    helper_binary.to_string_lossy().into_owned(),
+                    DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
+                    release_path.to_string_lossy().into_owned(),
+                ]
+            },
             cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             shell_snapshot: None,
             env_policy: /*env_policy*/ None,
