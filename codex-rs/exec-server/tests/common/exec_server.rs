@@ -88,7 +88,7 @@ where
     V: AsRef<std::ffi::OsStr>,
 {
     let helper_paths = test_codex_helper_paths()?;
-    let mut child = Command::new(&helper_paths.codex_exe);
+    let mut child = Command::new(helper_paths.codex_exe);
     child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
     child.args(args);
     child.envs(env);
