@@ -4485,7 +4485,11 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         if let Some(pending) = app.pending_working_directory_change.take() {
             Box::pin(app.finish_working_directory_change(&mut tui, &mut server, pending)).await;
         }
-        assert_eq!(app.chat_widget.thread_id(), Some(original), "{kind}");
+        assert_eq!(
+            app.chat_widget.thread_id(),
+            Some(original),
+            "{kind}: {path}"
+        );
         assert_eq!(app.config.cwd, current.clone().abs());
         assert!(app.runtime_working_directory_override.is_none());
         let count = requests
