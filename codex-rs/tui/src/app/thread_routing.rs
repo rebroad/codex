@@ -995,7 +995,18 @@ impl App {
             AppCommand::RealtimeConversationStop {
                 thread_id: realtime_thread_id,
             } => {
-                app_server.thread_realtime_stop(*realtime_thread_id).await?;
+                match tokio::time::timeout(
+                    REALTIME_STOP_TIMEOUT,
+                    app_server.thread_realtime_stop(*realtime_thread_id),
+                )
+                .await
+                {
+                    Ok(result) => result?,
+                    Err(_) => tracing::warn!(
+                        thread_id = %realtime_thread_id,
+                        "timed out stopping voice conversation"
+                    ),
+                }
                 Ok(true)
             }
             AppCommand::RealtimeConversationSpeech {
