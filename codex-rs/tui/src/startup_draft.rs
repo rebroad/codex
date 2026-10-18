@@ -196,6 +196,8 @@ impl StartupDraft {
 
     /// Apply the loaded editing preferences without enabling startup actions or submission.
     pub(crate) fn apply_settings(&mut self, settings: &LocalSettings, cwd: &Path) {
+        self.tui
+            .set_preserve_screen_on_exit(settings.tui.preserve_screen_on_exit);
         self.pump.apply_settings(settings, cwd);
     }
 
