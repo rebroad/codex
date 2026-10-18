@@ -10,6 +10,8 @@ use super::prepare_control_socket_path;
 use super::start_control_socket_acceptor;
 #[cfg(unix)]
 use super::unix_socket::acquire_removable_app_server_startup_lock;
+#[cfg(target_os = "android")]
+use super::unix_socket::protected_socket_path;
 #[cfg(unix)]
 use super::unix_socket::try_acquire_removable_app_server_startup_lock;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -21,6 +23,8 @@ use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use std::io::Result as IoResult;
+#[cfg(target_os = "android")]
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -138,6 +142,18 @@ async fn long_control_socket_paths_connect_to_distinct_daemons() {
         shutdown_token.cancel();
         acceptor.await.expect("acceptor should stop");
     }
+}
+
+#[cfg(target_os = "android")]
+#[test]
+fn protected_control_socket_path_fits_android_sun_path() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let rendezvous_path = temp_dir.path().join("app-server-control.sock");
+    let socket_path = protected_socket_path(&rendezvous_path).expect("protected socket path");
+    let sun_path_len = std::mem::size_of::<libc::sockaddr_un>()
+        - std::mem::offset_of!(libc::sockaddr_un, sun_path);
+
+    assert!(socket_path.as_os_str().as_bytes().len() < sun_path_len);
 }
 
 #[tokio::test]
