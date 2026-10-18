@@ -91,7 +91,7 @@ trap handle_interrupt INT TERM
 
 usage() {
   cat <<'EOF'
-Usage: build_armv7.sh [--release|--debug] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--benchmark-linkers[=N]] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
+Usage: build_armv7.sh [--release|--debug|--dev-small] [--target=<triple>] [--jobs=<n>] [--fast-release-build] [--benchmark-linkers[=N]] [--build-env=<auto|host|docker-buster>] [--ephemeral] [--allow-non-arm-host] [--rusty-v8-release-repo=<owner/repo>] [--rusty-v8-release-tag=<tag>] [--publish-github|--no-publish-github] [--github-release-repo=<owner/repo>] [--github-release-tag=<tag>] [--strip|--no-strip] [--binary-only|--full-artifacts] [--no-deploy-remote] [--allow-gnu-ld]
 
 Build codex-cli and codex-code-mode-host with the same core ARMv7 musl
 environment as release CI:
@@ -101,6 +101,7 @@ environment as release CI:
 Options:
   --release             Build release profile (default)
   --debug               Build debug profile
+  --dev-small           Build the unoptimized, stripped dev-small profile
   --target=<triple>     Override target triple (default: armv7-unknown-linux-musleabihf)
   --jobs=N              Set Cargo build parallelism (default: all detected CPUs)
   --fast-release-build  Use local faster release overrides (thin LTO, codegen-units=16)
@@ -1290,6 +1291,9 @@ for arg in "$@"; do
     --debug)
       PROFILE="debug"
       ;;
+    --dev-small)
+      PROFILE="dev-small"
+      ;;
     --target=*)
       TARGET="${arg#*=}"
       ;;
@@ -1519,6 +1523,8 @@ fi
 cargo_args=(+"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host --target "${TARGET}")
 if [[ "${PROFILE}" == "release" ]]; then
   cargo_args+=(--release)
+elif [[ "${PROFILE}" == "dev-small" ]]; then
+  cargo_args+=(--profile dev-small)
 fi
 if [[ "${cargo_use_locked}" == "true" ]]; then
   cargo_args+=(--locked)
@@ -1572,6 +1578,8 @@ if (( status != 0 )); then
     cargo_args=(+"${TOOLCHAIN}" build -p codex-cli -p codex-code-mode-host --target "${TARGET}")
     if [[ "${PROFILE}" == "release" ]]; then
       cargo_args+=(--release)
+    elif [[ "${PROFILE}" == "dev-small" ]]; then
+      cargo_args+=(--profile dev-small)
     fi
     set +e
     if [[ "${BENCHMARK_LINKERS}" == "true" ]]; then
