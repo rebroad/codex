@@ -79,6 +79,7 @@ mod owned_screen_tests;
 #[path = "tui_panic_tests.rs"]
 mod panic_tests;
 mod screen_size;
+mod screen_snapshot;
 mod scrollback;
 mod selection_clipboard;
 mod size_monitor;
@@ -127,6 +128,9 @@ impl Drop for Tui {
     fn drop(&mut self) {
         if let Err(err) = self.clear_ambient_pet_image() {
             tracing::debug!(error = %err, "failed to clear ambient pet image on TUI drop");
+        }
+        if let Err(err) = self.preserve_screen_for_exit() {
+            tracing::warn!(error = %err, "failed to preserve TUI screen on exit");
         }
     }
 }
@@ -685,6 +689,7 @@ pub struct Tui {
     scrollback: ScrollbackStrategy,
     // When false, overlays stay on the inline screen.
     alt_screen_enabled: bool,
+    preserve_screen_on_exit: bool,
     // Keep the alternate screen alive when an overlay closes.
     owned_screen: bool,
     pub(crate) overlay_input: OverlayInput,
@@ -758,6 +763,7 @@ impl Tui {
             notification_condition: NotificationCondition::default(),
             scrollback,
             alt_screen_enabled: true,
+            preserve_screen_on_exit: false,
             owned_screen: false,
             overlay_input: OverlayInput::Default,
             clipboard: Default::default(),
@@ -771,6 +777,21 @@ impl Tui {
             let _ = self.set_owned_screen(/*owned*/ false);
         }
         self.alt_screen_enabled = enabled;
+    }
+
+    pub(crate) fn set_preserve_screen_on_exit(&mut self, enabled: bool) {
+        self.preserve_screen_on_exit = enabled;
+        self.suspend_context.set_preserve_screen_on_exit(enabled);
+    }
+
+    pub(crate) fn preserve_screen_for_exit(&mut self) -> Result<()> {
+        if !self.preserve_screen_on_exit || !ALTERNATE_SCREEN.is_active() {
+            return Ok(());
+        }
+        let rows = screen_snapshot::rows(self.terminal.previous_buffer());
+        ALTERNATE_SCREEN.leave(self.terminal.backend_mut())?;
+        self.alt_screen_active.store(false, Ordering::Relaxed);
+        screen_snapshot::print(&rows)
     }
 
     /// Defer a fresh fullscreen launch until its first synchronized frame is ready.
@@ -1384,6 +1405,8 @@ impl Tui {
                 draw_fn(frame);
             })
         })??;
+        self.suspend_context
+            .capture_screen(self.terminal.previous_buffer());
         Ok(())
     }
 
@@ -1522,6 +1545,8 @@ impl Tui {
                 draw_fn(frame);
             })
         })??;
+        self.suspend_context
+            .capture_screen(self.terminal.previous_buffer());
         Ok(())
     }
 

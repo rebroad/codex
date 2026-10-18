@@ -74,6 +74,7 @@ impl LocalSettings {
                 copy_on_select_clear_selection: config.tui_copy_on_select_clear_selection,
                 right_click_paste: config.tui_right_click_paste,
                 alternate_screen: config.tui_alternate_screen,
+                preserve_screen_on_exit: config.tui_preserve_screen_on_exit,
                 status_line: config.tui_status_line.clone(),
                 status_line_use_colors: config.tui_status_line_use_colors,
                 terminal_title: config.tui_terminal_title.clone(),
@@ -207,6 +208,7 @@ impl LocalSettings {
         let mut settings = Self::from(config);
         settings.transcript_mode = self.transcript_mode;
         settings.tui.alternate_screen = self.tui.alternate_screen;
+        settings.tui.preserve_screen_on_exit = self.tui.preserve_screen_on_exit;
         // Generic reloads do not update these values in the live UI. The config panel updates
         // both copies when the user changes one.
         settings.tui.animations = self.tui.animations;

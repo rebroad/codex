@@ -196,3 +196,13 @@ fn rendering_preferences_default_individually_and_ignore_animation_switch() {
         );
     }
 }
+
+#[test]
+fn preserve_screen_on_exit_defaults_off_and_is_configurable() {
+    let defaults: Tui = toml::from_str("").expect("default TUI settings");
+    assert!(!defaults.preserve_screen_on_exit);
+
+    let enabled: Tui =
+        toml::from_str("preserve_screen_on_exit = true").expect("preserve-screen setting");
+    assert!(enabled.preserve_screen_on_exit);
+}
