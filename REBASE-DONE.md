@@ -129,6 +129,8 @@ This file records the rebase history, completed work, and validation evidence. T
 
 ## Follow-up triage (2026-10-18)
 
+- Flip7 final debug-device smoke checks passed using `PATH="$HOME/bin:$PATH"`: installed CLI reports `0.163.0-alpha.11-ccec6ae448-202610180357`; `codex-pairing-code` succeeded (the generated pairing code was suppressed); and `codex exec --skip-git-repo-check --bare-prompt "say hi"` returned “Hi!” with 14 tokens. The Pi 3 build and equivalent checks remain open in `REBASE-TODO.md`.
+
 - The local-daemon reconnect test passed at `27446bce42` after making the TUI own reconnect behavior for local daemon connections while preserving automatic reconnect for explicit remote connections.
 - Both projectless tests passed at `0914bba603`. `config/read` materializes an empty `additional_writable_roots` field in each project entry, while the local config representation may omit it; comparing complete project objects therefore rejected matching trust decisions and skipped projectless defaults. The TUI now compares project trust levels and continues to compare project-root markers separately. Focused log: `/var/tmp/codex-alpha-rebase-projectless-trust-fix.log`.
 - The named-session resolution case still fails because two generated session IDs match the `saved-session` label; duplicate-label rejection itself passes. The managed-worktree creation case fails on a non-UTF8 path conversion and a changed model-context snapshot hash. These two cases remain unclassified. Their prior details are in `/var/tmp/codex-alpha-rebase-tui-persistent-failures-elevated.log`; rerun them against the current source before deciding whether either is a regression.
