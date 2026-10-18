@@ -131,6 +131,61 @@ EOF
 die() { echo "build_codex.sh: $*" >&2; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
 
+run_timed_build() {
+  local stage="${1}" target_mode="${2}" profile="${3}" metrics_file status=0
+  shift 3
+  mkdir -p "${BUILD_REPO}/build"
+  local timing_tmpdir
+  if [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == /data/data/*/files/usr ]]; then
+    timing_tmpdir="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
+  else
+    timing_tmpdir="${TMPDIR:-/var/tmp}"
+  fi
+  metrics_file="$(mktemp "${timing_tmpdir}/codex-build-timing.XXXXXX")"
+  if (
+    exec 3>&2
+    exec 2>"${metrics_file}"
+    export LC_NUMERIC=C
+    TIMEFORMAT='%3U %3S %3R'
+    time "$@" 2>&3
+  ); then
+    status=0
+  else
+    status=$?
+  fi
+  local user_cpu system_cpu elapsed
+  read -r user_cpu system_cpu elapsed < <(tail -n 1 "${metrics_file}")
+  sed '$d' "${metrics_file}" >&2
+  rm -f "${metrics_file}"
+  python3 - "${BUILD_REPO}/build/codex-build-timings.jsonl" \
+    "${BUILD_TIMING_TARGET:-${target_mode}}" "${target_mode}" "${profile}" \
+    "${stage}" "${user_cpu:-0}" "${system_cpu:-0}" "${elapsed:-0}" "${status}" <<'PY'
+import fcntl
+import json
+import sys
+from datetime import datetime, timezone
+
+path, install_target, target_mode, profile, stage, user, system, elapsed, status = sys.argv[1:]
+record = {
+    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    "install_target": install_target,
+    "target_mode": target_mode,
+    "profile": profile,
+    "stage": stage,
+    "user_cpu_seconds": float(user),
+    "system_cpu_seconds": float(system),
+    "cpu_seconds": float(user) + float(system),
+    "elapsed_seconds": float(elapsed),
+    "exit_code": int(status),
+}
+with open(path, "a", encoding="utf-8") as output:
+    fcntl.flock(output, fcntl.LOCK_EX)
+    output.write(json.dumps(record, sort_keys=True) + "\n")
+    output.flush()
+PY
+  return "${status}"
+}
+
 refresh_build_provenance() {
   local current_commit current_status
   current_commit="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
@@ -707,7 +762,7 @@ build_armv7_bwrap() {
   done <"${env_file}"
 
   echo "Building bundled bubblewrap for ${target}..." >&2
-  if ! (cd "${BUILD_WORKSPACE}" && env \
+  if ! (cd "${BUILD_WORKSPACE}" && run_timed_build bubblewrap "armv7" "${profile}" env \
     CARGO_TARGET_DIR="${target_dir}" \
     RUSTUP_DISABLE_SELF_UPDATE=1 \
     CODEX_BUILD_TIMESTAMP="0000000000-000000000000" \
@@ -758,7 +813,7 @@ cargo_build() {
     )
     [[ -n "${CARGO_BUILD_JOBS:-}" ]] && armv7_args+=("--jobs=${CARGO_BUILD_JOBS}")
     armv7_args+=("--build-env=${ARMV7_BUILD_ENV}")
-    if ! env CARGO_TARGET_DIR="${target_dir}" "${armv7_v8_env[@]}" \
+    if ! run_timed_build armv7 "${target_mode}" "${profile}" env CARGO_TARGET_DIR="${target_dir}" "${armv7_v8_env[@]}" \
       "${armv7_builder}" "${armv7_args[@]}" >&2; then
       die "ARMv7 build failed; refusing to use a possibly stale binary at ${target_dir}/${triple}/${profile}/codex"
     fi
@@ -889,16 +944,16 @@ cargo_build() {
     cmd+=(--locked)
   fi
   echo "Building ${profile} ${target_mode} in ${target_dir} (target artifacts retained)..." >&2
-  if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
+  if ! (cd "${BUILD_WORKSPACE}" && run_timed_build cargo "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
     if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
       echo "Locked Cargo build failed; retrying online in the build tree without --locked." >&2
       unset 'cmd[-1]'
-      if (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
+      if (cd "${BUILD_WORKSPACE}" && run_timed_build cargo-retry-online "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
         :
       else
         echo "Online Cargo build without --locked failed; retrying offline." >&2
         cmd+=(--offline)
-        if ! (cd "${BUILD_WORKSPACE}" && env "${env_args[@]}" "${cmd[@]}") >&2; then
+        if ! (cd "${BUILD_WORKSPACE}" && run_timed_build cargo-retry-offline "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
           return 1
         fi
       fi
@@ -1306,6 +1361,7 @@ install_target() {
       CARGO_PROFILE=dev-small
     fi
   fi
+  BUILD_TIMING_TARGET="${target}"
   if [[ "${target}" == localhost ]]; then
     target_mode=native
     echo "Installing to localhost ($(native_target_host), native)..." >&2
