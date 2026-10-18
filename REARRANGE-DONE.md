@@ -30,4 +30,4 @@
 
 ## Completion status
 
-- No history rewrite has been performed in this continuation yet. The full downstream audit, final checkpoint/tree/base checks, and publication remain outstanding.
+- `DOWNSTREAM.md` owner-row autosquash completed. Fresh checkpoint `alpha.before-rearrange-20261018-downstream-owner-fixup` was `b1de002d27b05076de8206cc4f4fb149baa79249`, tree `e3396ca8547671d23ca2c944084c667c846db400`. Folded `c04bc0de3d` into the exact row owner `docs: define downstream fork authority` (`65798016fa`); during replay, preserved both the downstream clarification and a later Bedrock policy row in `DOWNSTREAM.md`. Final `alpha` tree exactly matches the checkpoint, merge base remains `c333d755d44d4eb764cffd2bd862d86d790e91e6`, 624 downstream commits remain, no `fixup!`/`squash!` subjects remain, and the worktree is clean. `range-diff` shows the clarification absorbed into the row-creation commit. History-only pass; tests were not rerun. The semantic and repeated-file audit remains outstanding; do not publish yet.
