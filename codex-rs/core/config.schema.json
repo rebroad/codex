@@ -4925,6 +4925,11 @@
           "default": "composer",
           "description": "Where the terminal pet should anchor vertically.\n\nDefaults to `composer`, which follows the current TUI composer viewport."
         },
+        "preserve_screen_on_exit": {
+          "default": false,
+          "description": "Copy the last alternate-screen view to the normal screen on exit and while suspended. Defaults to `false`.",
+          "type": "boolean"
+        },
         "question_esc_back": {
           "default": true,
           "description": "Escape returns from async questions to the composer, preserving the answer draft.",

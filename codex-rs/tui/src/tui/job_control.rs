@@ -43,6 +43,8 @@ pub struct SuspendContext {
     resume_pending: Arc<Mutex<Option<ResumeAction>>>,
     /// Inline viewport cursor row used to place the cursor before yielding during suspend.
     suspend_cursor_y: Arc<AtomicU16>,
+    preserve_screen_on_exit: Arc<AtomicBool>,
+    screen_snapshot: super::screen_snapshot::ScreenSnapshot,
 }
 
 impl SuspendContext {
@@ -50,7 +52,18 @@ impl SuspendContext {
         Self {
             resume_pending: Arc::new(Mutex::new(None)),
             suspend_cursor_y: Arc::new(AtomicU16::new(0)),
+            preserve_screen_on_exit: Arc::new(AtomicBool::new(false)),
+            screen_snapshot: Default::default(),
         }
+    }
+
+    pub(crate) fn set_preserve_screen_on_exit(&self, preserve: bool) {
+        self.preserve_screen_on_exit
+            .store(preserve, Ordering::Relaxed);
+    }
+
+    pub(crate) fn capture_screen(&self, buffer: &ratatui::buffer::Buffer) {
+        self.screen_snapshot.capture(buffer);
     }
 
     /// Capture how to resume, stash cursor position, and temporarily yield during SIGTSTP.
@@ -60,15 +73,28 @@ impl SuspendContext {
     /// - Update the cached inline cursor row so suspend can place the cursor meaningfully.
     /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
     pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
+        let mut preserved_screen = false;
         if alt_screen_active.load(Ordering::Relaxed) {
             // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
-            let _ = super::ALTERNATE_SCREEN.leave(&mut stdout());
+            let left_screen = super::ALTERNATE_SCREEN.leave(&mut stdout());
+            if let Err(err) = left_screen {
+                tracing::warn!(error = %err, "failed to leave alternate screen before suspend");
+            } else if self.preserve_screen_on_exit.load(Ordering::Relaxed) {
+                match self.screen_snapshot.print() {
+                    Ok(()) => preserved_screen = true,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to preserve TUI screen before suspend")
+                    }
+                }
+            }
             self.set_resume_action(ResumeAction::RestoreAlt);
         } else {
             self.set_resume_action(ResumeAction::RealignInline);
         }
-        let y = self.suspend_cursor_y.load(Ordering::Relaxed);
-        let _ = execute!(stdout(), MoveTo(0, y), Show);
+        if !preserved_screen {
+            let y = self.suspend_cursor_y.load(Ordering::Relaxed);
+            let _ = execute!(stdout(), MoveTo(0, y), Show);
+        }
         if let Err(err) = crate::terminal_program_status::clear_terminal_program_status() {
             tracing::debug!(error = %err, "failed to clear terminal program status before suspend");
         }
