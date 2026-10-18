@@ -46,6 +46,8 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py310"
 required-version = ">=0.15.8"
+# Repository formatting overrides this with the external build-tree cache.
+cache-dir = "~/.cache/codex/ruff"
 line-length = 100
 extend-exclude = [
   "notebooks/**",
