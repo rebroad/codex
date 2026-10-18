@@ -11,6 +11,7 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 source_repo := shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " " + quote(justfile_directory()))
 build_repo_override := env_var_or_default("CODEX_BUILD_REPO", "")
 build_repo := if build_repo_override != "" { build_repo_override } else { shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " --resolve-build-repo " + quote(justfile_directory())) }
+export PYTHONPYCACHEPREFIX := build_repo / "build" / "python-cache"
 build_repo_is_inside_source := if build_repo == "" { "true" } else { shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " --is-build-repo-inside-source " + quote(source_repo) + " " + quote(build_repo)) }
 build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
