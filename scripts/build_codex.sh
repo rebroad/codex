@@ -689,7 +689,7 @@ build_armv7_bwrap() {
       GITHUB_ENV="${env_file}" \
       RUNNER_TEMP="${runner_temp}" \
       CODEX_BUILD_TOOLS_DIR="${BUILD_REPO}/build/tools" \
-      bash "${setup_script}"
+      bash "${setup_script}" >&2
   fi
   while IFS= read -r assignment; do
     [[ -n "${assignment}" ]] && export "${assignment}"
