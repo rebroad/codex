@@ -17,3 +17,8 @@ Validation for the current goal:
   1 passed.
 - `just test -p codex-tui thread_title`: 30 passed, including the `gpt-6-luna`
   default and a title-generation request using the configured override.
+- In a disposable `CODEX_HOME`, the wrapper started a managed daemon and
+  `restart-if-idle` replaced it (PID 1604012 to 1604151).
+- `bash -n` and `git diff --check` passed. The user-level desktop entry points
+  to the wrapper. The desktop app still needs a cold-start smoke check after it
+  is fully quit and relaunched.
