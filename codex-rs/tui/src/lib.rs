@@ -2112,6 +2112,7 @@ async fn run_ratatui_app(
     }
 
     let local_settings = crate::local_settings::LocalSettings::for_tui(&config, &tui);
+    tui.set_preserve_screen_on_exit(local_settings.tui.preserve_screen_on_exit);
     crate::markdown_render::preferences::init(local_settings.tui.rendering);
     // Configure syntax highlighting theme from the final config — onboarding
     // and resume/fork can both reload config with a different tui_theme, so
@@ -2263,6 +2264,9 @@ async fn run_ratatui_app(
     ))
     .await;
 
+    if let Err(err) = tui.preserve_screen_for_exit() {
+        tracing::warn!(error = %err, "failed to preserve TUI screen before exit");
+    }
     terminal_restore_guard.restore_silently();
     // Mark the end of the recorded session.
     session_log::log_session_end();
