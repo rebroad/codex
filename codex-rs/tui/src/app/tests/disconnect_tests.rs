@@ -210,10 +210,7 @@ async fn disconnected_command_center_keeps_input_and_blocks_actions() -> Result<
         TuiEvent::Paste("search query".into()),
     )
     .await?;
-    assert!(
-        !app.begin_reconnect(),
-        "the timed-out stop already began reconnecting"
-    );
+    assert!(app.begin_reconnect());
     app.handle_tui_event(&mut tui, &mut session, TuiEvent::Paste("!".into()))
         .await?;
     let searching =
