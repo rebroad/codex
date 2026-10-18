@@ -1360,6 +1360,46 @@ mod walk_tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn workspace_write_policy_allows_unsandboxed_reads_but_requires_sandbox_for_writes()
+    -> io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = PathUri::from_host_native_path(temp.path())?;
+        let file_path = temp.path().join("readable.txt");
+        std::fs::write(&file_path, b"readable")?;
+        let file_uri = PathUri::from_host_native_path(&file_path)?;
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::workspace_write(),
+            root,
+        );
+        let file_system = LocalFileSystem::unsandboxed();
+
+        assert!(!sandbox.should_read_from_sandbox());
+        assert!(sandbox.should_write_into_sandbox());
+        assert_eq!(
+            file_system
+                .read_file(&file_uri, ReadFileOptions::default(), Some(&sandbox))
+                .await?,
+            b"readable",
+        );
+
+        let error = file_system
+            .write_file(
+                &file_uri,
+                b"changed".to_vec(),
+                WriteFileOptions::default(),
+                Some(&sandbox),
+            )
+            .await
+            .expect_err("restricted writes need a configured sandbox");
+        assert_eq!(
+            error.to_string(),
+            "sandboxed filesystem operations require configured runtime paths",
+        );
+        assert_eq!(std::fs::read(&file_path)?, b"readable");
+        Ok(())
+    }
+
     #[test]
     fn sync_walk_cancellation_stops_before_io() -> io::Result<()> {
         let temp = tempfile::tempdir()?;
