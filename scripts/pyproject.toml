@@ -4,6 +4,10 @@ version = "0.0.0"
 requires-python = ">=3.10"
 dependencies = ["ruff>=0.15.8"]
 
+[tool.ruff]
+# Repository formatting overrides this with the external build-tree cache.
+cache-dir = "~/.cache/codex/ruff"
+
 [tool.uv]
 exclude-newer = "7 days"
 index-strategy = "first-index"
