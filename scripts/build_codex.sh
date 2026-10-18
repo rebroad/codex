@@ -68,6 +68,7 @@ RUSTY_V8_BUILD_REPO=""
 LOCKFILE_REGENERATION_REQUIRED="false"
 ALLOW_CONCURRENT_BUILD="false"
 RESTART_APP_SERVER="false"
+PROFILE_OPTION_SET="false"
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -118,10 +119,11 @@ Options:
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced external source tree
   --allow-concurrent-build  Bypass the shared Cargo target lock and share the target directory
-  --restart-if-idle        Restart the app-server after an install when idle
+  --restart-if-idle        Restart local/remote app-servers after changed installs when idle
   --jobs N                 Set CARGO_BUILD_JOBS
-  --install TARGETS        Build and install to comma-separated targets (SSH hosts or localhost)
-                           localhost performs the same local native install as omitting --install
+  --install TARGETS        Build and install to targets (SSH hosts or localhost), optionally
+                           with per-target profiles: localhost:dev,pi3:dev-small
+                           Defaults: localhost=dev, SSH targets=dev-small
   -h, --help               Show this help
 EOF
 }
@@ -1182,13 +1184,26 @@ install_remote_binary() {
     rm -f "${staging}"
     return 75
   fi
-  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- "${install_dir}" "${name}" "${remote_tmp}" <<'REMOTE_INSTALL'
+  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- \
+    "${install_dir}" "${name}" "${remote_tmp}" "${RESTART_APP_SERVER}" <<'REMOTE_INSTALL'
 set -euo pipefail
 install_dir="$1"
 name="$2"
 remote_tmp="$3"
+restart_if_idle="$4"
 mkdir -p "$install_dir"
 remote_size="$(stat -c '%s' "$remote_tmp")"
+previous_commit=""
+previous_size=""
+if [[ -L "$install_dir/codex" ]]; then
+  previous_target="$(readlink "$install_dir/codex")"
+  if [[ "$previous_target" =~ -([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
+    previous_commit="${BASH_REMATCH[1]}"
+  fi
+  if [[ -f "$install_dir/$previous_target" ]]; then
+    previous_size="$(wc -c <"$install_dir/$previous_target")"
+  fi
+fi
 for candidate in "$install_dir"/codex-*; do
   [[ -f "$candidate" && ! -L "$candidate" ]] || continue
   [[ "$(stat -c '%s' "$candidate")" == "$remote_size" ]] || continue
@@ -1202,6 +1217,11 @@ for candidate in "$install_dir"/codex-*; do
 done
 install -m 0755 "$remote_tmp" "$install_dir/$name"
 ln -sfn "$name" "$install_dir/codex"
+new_commit=""
+if [[ "$name" =~ -([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
+  new_commit="${BASH_REMATCH[1]}"
+fi
+new_size="$(wc -c <"$install_dir/$name")"
 case ":${PATH}:" in
   *:"${install_dir}":*) ;;
   *)
@@ -1212,6 +1232,11 @@ case ":${PATH}:" in
 esac
 rm -f "$remote_tmp"
 printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir"
+if [[ "$restart_if_idle" == true \
+  && ( "$previous_commit" != "$new_commit" || "$previous_size" != "$new_size" ) ]]; then
+  printf 'Requesting an idle app-server restart on the remote target.\n'
+  "$install_dir/codex" app-server daemon restart-if-idle
+fi
 REMOTE_INSTALL
   then
     echo "Unable to finish installation on ${target}; deferring it for retry." >&2
@@ -1317,15 +1342,36 @@ cleanup_remote_install_artifacts() {
 }
 
 install_target() {
-  local target="${1}" architecture target_mode binary install_dir already_stamped=false
+  local requested_mode="${MODE}" requested_profile="${CARGO_PROFILE}" target_spec="${1}"
+  local MODE CARGO_PROFILE target architecture target_mode binary install_dir already_stamped=false profile_override=""
+  MODE="${requested_mode}"
+  CARGO_PROFILE="${requested_profile}"
+  target="${target_spec%%:*}"
+  if [[ "${target_spec}" == *:* ]]; then
+    profile_override="${target_spec#*:}"
+    case "${profile_override}" in
+      dev|debug) MODE=debug; CARGO_PROFILE=debug ;;
+      dev-small) MODE=debug; CARGO_PROFILE=dev-small ;;
+      release) MODE=release; CARGO_PROFILE=release ;;
+      *) die "unsupported install profile in ${target_spec}; use dev, dev-small, or release" ;;
+    esac
+  elif [[ "${PROFILE_OPTION_SET}" != true ]]; then
+    if [[ "${target}" == localhost ]]; then
+      MODE=debug
+      CARGO_PROFILE=debug
+    else
+      MODE=debug
+      CARGO_PROFILE=dev-small
+    fi
+  fi
   BUILD_TIMING_TARGET="${target}"
   if [[ "${target}" == localhost ]]; then
     target_mode=native
     echo "Installing to localhost ($(native_target_host), native)..." >&2
     binary="$(cargo_build "${MODE}" "${target_mode}" "${CARGO_PROFILE}")" || return $?
-    install_binary "${binary}" "${VERSION}"
-    install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host"
-    install_test_stdio_server "$(dirname "${binary}")/test_stdio_server"
+    install_binary "${binary}" "${VERSION}" || return $?
+    install_code_mode_host "$(dirname "${binary}")/codex-code-mode-host" || return $?
+    install_test_stdio_server "$(dirname "${binary}")/test_stdio_server" || return $?
     return 0
   fi
   if ! architecture="$(remote_target_architecture "${target}")"; then
@@ -1497,9 +1543,9 @@ validate_release_checkout() {
 
 while (($#)); do
   case "${1}" in
-    --debug) MODE=debug; CARGO_PROFILE=debug; shift ;;
-    --dev-small) MODE=debug; CARGO_PROFILE=dev-small; shift ;;
-    --release) MODE=release; CARGO_PROFILE=release; shift ;;
+    --debug) MODE=debug; CARGO_PROFILE=debug; PROFILE_OPTION_SET=true; shift ;;
+    --dev-small) MODE=debug; CARGO_PROFILE=dev-small; PROFILE_OPTION_SET=true; shift ;;
+    --release) MODE=release; CARGO_PROFILE=release; PROFILE_OPTION_SET=true; shift ;;
     --target) TARGET_MODE="${2:-}"; shift 2 ;;
     --target=*) TARGET_MODE="${1#*=}"; shift ;;
     --armv7) TARGET_MODE=armv7; shift ;;
@@ -1511,7 +1557,7 @@ while (($#)); do
     --package-version) PACKAGE_VERSION="${2:-}"; shift 2 ;;
     --package-version=*) PACKAGE_VERSION="${1#*=}"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
-    --start-github-release|--publish) PUBLISH=true; MODE=release; CARGO_PROFILE=release; shift ;;
+    --start-github-release|--publish) PUBLISH=true; MODE=release; CARGO_PROFILE=release; PROFILE_OPTION_SET=true; shift ;;
     --skip-build) SKIP_BUILD=true; shift ;;
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
@@ -1622,8 +1668,18 @@ if [[ -n "${INSTALL_TARGETS}" ]]; then
   IFS=',' read -r -a INSTALL_TARGET_LIST <<<"${INSTALL_TARGETS}"
   [[ "${#INSTALL_TARGET_LIST[@]}" -gt 0 ]] || die "install target list must not be empty"
   for install_target_name in "${INSTALL_TARGET_LIST[@]}"; do
-    [[ -n "${install_target_name}" ]] || die "install target list contains an empty target"
-    [[ "${install_target_name}" == localhost ]] || require_cmd rsync
+    install_target_host="${install_target_name%%:*}"
+    [[ -n "${install_target_host}" ]] || die "install target list contains an empty target"
+    if [[ "${install_target_name}" == *:* ]]; then
+      install_target_profile="${install_target_name#*:}"
+      [[ "${install_target_profile}" != *:* && -n "${install_target_profile}" ]] \
+        || die "invalid install target specification: ${install_target_name}"
+      case "${install_target_profile}" in
+        dev|debug|dev-small|release) ;;
+        *) die "unsupported install profile in ${install_target_name}; use dev, dev-small, or release" ;;
+      esac
+    fi
+    [[ "${install_target_host}" == localhost ]] || require_cmd rsync
   done
   FAILED_INSTALL_TARGETS=()
   for install_target_name in "${INSTALL_TARGET_LIST[@]}"; do
