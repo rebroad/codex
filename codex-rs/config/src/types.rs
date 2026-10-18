@@ -918,6 +918,11 @@ pub struct Tui {
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
 
+    /// Copy the last alternate-screen view to the normal screen on exit and while suspended.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub preserve_screen_on_exit: bool,
+
     /// Ordered list of status line item identifiers.
     ///
     /// When set, the TUI renders the selected items as the status line.
