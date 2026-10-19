@@ -4,7 +4,7 @@
 
 - User rebased `alpha` onto `rust-v0.163.0-alpha.11` (`5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`) after checkpointing `codex.oops` at `fa08bd2dd52a9d2cd016636d3ecedd2e62013c1f`, tree `5173ba87952048611f8d4e8b561d0dd355ad8e02`. The live `alpha` merge base is now exactly the locked tag commit.
 - Compared the rebased tree with `codex.oops`. Two source deviations were found: the missing custom-tool-call diagnostic in `normalize.rs`, restored as `978a689f1b` (`fix(core): retain missing output diagnostic`), and the missing `git add -f` in the managed-worktree fixture, restored as `508f2e4f40` (`test(tui): force-add worktree fixture files`). Blame/history traced these changes to upstream commits `#52535` and `#50148`, respectively; both are at or before the fixed base, so neither is a valid downstream fixup target. There was no meaningful downstream owner for either narrow correction, so each remains a separate scoped commit as required by the goal.
-- After restoration, both source files match `codex.oops` exactly. The only remaining tracked-tree difference from that checkpoint is the intentional `GOAL-rearrange.md` clarification fixing the base and excluding pre-base commits as squash targets. `git diff --check` passed; no builds or tests were run, consistent with this history-only goal.
+- After restoration, both source files match `codex.oops` exactly. Remaining tracked-tree differences are intentional rearrangement records: the `GOAL-rearrange.md` base clarification and the updated `REARRANGE-TODO.md`/`REARRANGE-DONE.md` post-rebase audit entries. `git diff --check` passed; no builds or tests were run, consistent with this history-only goal.
 
 ## Pre-rebase audit baseline (historical)
 
