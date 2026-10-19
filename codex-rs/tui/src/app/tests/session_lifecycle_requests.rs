@@ -3784,7 +3784,7 @@ git-worktree-root = {}
     fs::write(source.join("AGENTS.md"), "committed worktree instructions")?;
     for args in [
         vec!["init", "--quiet"],
-        vec!["add", "."],
+        vec!["add", "-f", "."],
         vec!["commit", "--quiet", "--no-gpg-sign", "-m", "initial"],
     ] {
         let result = Command::new("git")
