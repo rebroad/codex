@@ -3781,10 +3781,13 @@ git-worktree-root = {}
         toml::Value::String(project_pool.display().to_string()),
     );
     fs::write(source.join(".codex/config.toml"), destination)?;
-    fs::write(source.join("AGENTS.md"), "committed worktree instructions")?;
+    fs::write(
+        source.join("AGENTS.md"),
+        "committed worktree instructions\n",
+    )?;
     for args in [
         vec!["init", "--quiet"],
-        vec!["add", "."],
+        vec!["add", "-f", "."],
         vec!["commit", "--quiet", "--no-gpg-sign", "-m", "initial"],
     ] {
         let result = Command::new("git")
@@ -3803,6 +3806,15 @@ git-worktree-root = {}
             String::from_utf8_lossy(&result.stderr)
         );
     }
+    let committed_agents = Command::new("git")
+        .current_dir(&source)
+        .args(["show", "HEAD:AGENTS.md"])
+        .output()?;
+    assert!(committed_agents.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&committed_agents.stdout),
+        "committed worktree instructions\n"
+    );
     fs::write(
         source.join(".codex/config.toml"),
         r#"developer_instructions = "dirty policy"
@@ -4072,8 +4084,9 @@ terminal_visualization_instructions = true
             Some("committed policy")
         );
         assert_eq!(
-            fs::read_to_string(checkout.cwd.join("AGENTS.md"))?,
-            "committed worktree instructions"
+            fs::read_to_string(checkout.root.join("AGENTS.md"))?,
+            "committed worktree instructions\n",
+            "{mode:?} worktree repository root"
         );
         let fork = matches!(mode, ManagedWorktreeMode::Fork);
         let method = if fork { "thread/fork" } else { "thread/start" };
