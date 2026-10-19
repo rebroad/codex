@@ -6,10 +6,10 @@
 - Compared the rebased tree with `codex.oops`. Two source deviations were found: the missing custom-tool-call diagnostic in `normalize.rs`, restored as `978a689f1b` (`fix(core): retain missing output diagnostic`), and the missing `git add -f` in the managed-worktree fixture, restored as `508f2e4f40` (`test(tui): force-add worktree fixture files`). Blame/history traced these changes to upstream commits `#52535` and `#50148`, respectively; both are at or before the fixed base, so neither is a valid downstream fixup target. There was no meaningful downstream owner for either narrow correction, so each remains a separate scoped commit as required by the goal.
 - After restoration, both source files match `codex.oops` exactly. The only remaining tracked-tree difference from that checkpoint is the intentional `GOAL-rearrange.md` clarification fixing the base and excluding pre-base commits as squash targets. `git diff --check` passed; no builds or tests were run, consistent with this history-only goal.
 
-## Current audit baseline
+## Pre-rebase audit baseline (historical)
 
 - `alpha` started this continuation clean at `399b40798ba0743c5e46c1a160b114600ef92be3`, tree `082e2c224d72181d4a8c9aa5358775c225ea7938`.
-- The current merge base with `upstream/latest-alpha-cli` is `c333d755d44d4eb764cffd2bd862d86d790e91e6`. No upstream rebase or advancement was performed in this continuation.
+- At that pre-rebase continuation, the merge base with `upstream/latest-alpha-cli` was `c333d755d44d4eb764cffd2bd862d86d790e91e6`; no upstream rebase or advancement was performed during that pass.
 - The required `REARRANGE-TODO.md` and `REARRANGE-DONE.md` records were missing at this starting point; this file and the TODO file are being introduced as separate commits per `GOAL-rearrange.md`.
 - `REARRANGE-PROGRESS.md` is a historical log from an earlier pass: it records a 928-commit starting range and merge bases that predate this continuation. Its per-pass evidence may help trace older decisions, but its status and checkpoint claims are stale; use this audit trail plus the live Git state for current verification.
 - Initial current-tip inspection found three `fixup!` commits: `a34d86357a` (rollout cache diagnostics), `67f004c525` (remote app-server reconnect), and `e05d70ed52` (model-instructions scripts). Their patches affect the named feature's code/tests or formatting and are pending exact owner verification and checkpointed autosquash.
