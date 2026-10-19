@@ -56,3 +56,25 @@ Use `CARGO_INCREMENTAL=1` by default. The sccache launcher remains opt-in; do no
 | More conservative execution/security behavior: require an available sandbox backend, preserve sandbox-denied apply-patch handling, and terminate plugin Git descendants. | `fix(core): deny execution without sandbox backend` (`c9db3448c5`), `fix: escalate apply-patch verification outside sandbox` (`658589a503`), `fix(core-plugins): kill descendant git processes` (`f4fa83a753`). | **Preserve, with re-evaluation.** Keep current upstream apply-patch file-update semantics and port only the sandbox fallback. Review filesystem paths and permissions at the current executor boundary. Process cleanup must include descendants without misclassifying them as independent blockers. |
 
 The table is a behavior index, not a list of every fork-only commit. Test isolation, portability, formatting, and build maintenance commits may also be required to keep this fork's validation reliable; preserve them only while their specific upstream failure or local workflow need remains.
+
+## Resume-progress and startup-input review
+
+- `feat(app-server): stream resume progress` (`760ede5a9f`) adds
+  `rollout_uncompressed_size`; it does not remove `read_rollout_lines`.
+- The later `fix(rollout): scope reader helper to tests` change
+  (`c47f0aaec1`) removes the crate-level re-export and gates the helper behind
+  `cfg(test)`. Its current callers are tests in the same module; no production
+  caller uses it. Keep it test-only unless a production use appears, while
+  retaining the resume-progress implementation and the uncompressed-size
+  reader used by production code.
+- The startup `codex resume` error is currently emitted by terminal-input
+  quarantine. Reproduce the user's terminal state before changing its
+  fail-closed behavior; the reported message says "output", but this source
+  reports "input".
+- `codex app-server --analytics-default-enabled` with default stdio transport
+  is treated as an extension-host connection. If its default control socket
+  is already in use, the CLI bridges stdio to the existing server and does not
+  launch a second server or apply the new process's `-c` overrides. The shared
+  server must already have compatible settings, or the extension host needs a
+  separate profile/CODEX_HOME. Capture the exact runtime error before changing
+  this sharing behavior.
