@@ -41,6 +41,20 @@ completion percentages.
 - The same fresh process bound an existing Xfce terminal window and captured a
   78,986-byte screenshot plus an X11 accessibility tree, completing the
   screenshot/state verification gate for the current host.
+- Added `scripts/linux_cua_check.py`, a read-only diagnostic that reads the
+  configured `linux_cua` MCP entry, performs the required CUA initialization,
+  checks the API surface and inventory, and optionally verifies screenshot and
+  accessibility capture. It returns a distinct configuration/display/MCP/window
+  exit code and a bounded JSON result.
+- Ran `python3 scripts/linux_cua_check.py --screenshot` successfully:
+  106 apps, 10 windows, 983 screenshot bytes, and 99 accessibility bytes.
+- Ran the same diagnostic without `DISPLAY` and `WAYLAND_DISPLAY`; it returned
+  exit code 3 with `no DISPLAY or WAYLAND_DISPLAY is set; run from a graphical
+  session`.
+- Python compilation and Ruff checks pass for the diagnostic.
+- Added three standard-library unit tests for missing configuration, invalid
+  TOML, and missing graphical-session handling. All three pass, as do Ruff and
+  `git diff --check`.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.
