@@ -68,6 +68,7 @@ The table is a behavior index, not a list of every fork-only commit. Test isolat
 
 ## Resume-progress and startup-input review
 
+- Indexed compaction resume: preserve the reconstructed model history while avoiding parsing pre-checkpoint records. New compressed rollouts use concatenated independently decodable zstd frames and a versioned sidecar index; old or invalid indexes fall back to full replay. Keep index validity tied to the compressed file and invalidate it when materializing for append.
 - `feat(app-server): stream resume progress` (`760ede5a9f`) adds `rollout_uncompressed_size`; it does not remove `read_rollout_lines`.
 - The later `fix(rollout): scope reader helper to tests` change (`c47f0aaec1`) removes the crate-level re-export and gates the helper behind `cfg(test)`. Its current callers are tests in the same module; no production caller uses it. Keep it test-only unless a production use appears, while retaining the resume-progress implementation and the uncompressed-size reader used by production code.
 - The startup `codex resume` error is currently emitted by terminal-input quarantine. Reproduce the user's terminal state before changing its fail-closed behavior; the reported message says "output", but this source reports "input".
