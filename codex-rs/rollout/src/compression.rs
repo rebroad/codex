@@ -164,6 +164,14 @@ pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result
         output.sync_all()?;
         drop(output);
         let _ = std::fs::remove_file(temp_path.as_path());
+        stage = "remove_seek_index";
+        match std::fs::remove_file(crate::rollout_seek_index::index_path(
+            compressed_path.as_path(),
+        )) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
         stage = "remove_source";
         match std::fs::remove_file(compressed_path.as_path()) {
             Ok(()) => {}
@@ -335,6 +343,8 @@ mod worker {
     use std::fs::FileTimes;
     use std::fs::Permissions;
     use std::io;
+    use std::io::BufRead;
+    use std::io::BufReader;
     use std::io::Write;
     use std::path::Path;
     use std::path::PathBuf;
@@ -351,6 +361,9 @@ mod worker {
 
     use crate::ARCHIVED_SESSIONS_SUBDIR;
     use crate::SESSIONS_SUBDIR;
+    use crate::rollout_seek_index::CheckpointOffset;
+    use crate::rollout_seek_index::FrameOffset;
+    use crate::rollout_seek_index::RolloutSeekIndex;
 
     use super::RolloutCompressionTrigger;
     use super::RolloutFile;
@@ -881,7 +894,7 @@ mod worker {
             .suffix(TEMP_SUFFIX)
             .tempfile_in(temp_dir)
             .inspect_err(|err| FailureMetric::File(trigger).record("create_temp", err))?;
-        encode_zstd_to_writer(path, temp_file.as_file_mut())
+        let mut seek_index = encode_zstd_to_writer(path, temp_file.as_file_mut())
             .inspect_err(|err| FailureMetric::File(trigger).record("encode_and_write", err))?;
         temp_file
             .as_file_mut()
@@ -946,10 +959,21 @@ mod worker {
                 return Err(err.error);
             }
         }
+        if let Err(err) = seek_index
+            .set_compressed_file(compressed_path.as_path())
+            .and_then(|()| seek_index.write_for(compressed_path.as_path()))
+        {
+            let _ = std::fs::remove_file(compressed_path.as_path());
+            FailureMetric::File(trigger).record("write_seek_index", &err);
+            return Err(err);
+        }
         if !same_file_state(path, &before)
             .inspect_err(|err| FailureMetric::File(trigger).record("recheck_source", err))?
         {
             let _ = std::fs::remove_file(compressed_path.as_path());
+            let _ = std::fs::remove_file(crate::rollout_seek_index::index_path(
+                compressed_path.as_path(),
+            ));
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedChanged,
                 source_bytes,
@@ -1007,14 +1031,65 @@ mod worker {
         }
     }
 
-    fn encode_zstd_to_writer(source: &Path, output: impl Write) -> io::Result<()> {
-        let mut input = File::open(source)?;
-        let mut encoder = zstd::stream::write::Encoder::new(output, COMPRESSION_LEVEL)?;
-        // Preserve fast byte-bound checks for paginated history without decoding the whole file.
-        encoder.set_pledged_src_size(Some(input.metadata()?.len()))?;
-        io::copy(&mut input, &mut encoder)?;
-        encoder.finish()?;
-        Ok(())
+    pub(super) fn encode_zstd_to_writer(
+        source: &Path,
+        mut output: impl Write,
+    ) -> io::Result<RolloutSeekIndex> {
+        const FRAME_TARGET_BYTES: usize = 1024 * 1024;
+        let input = File::open(source)?;
+        let uncompressed_size = input.metadata()?.len();
+        let mut input = BufReader::new(input);
+        let mut index = RolloutSeekIndex::new(uncompressed_size);
+        let mut chunk = Vec::with_capacity(FRAME_TARGET_BYTES);
+        let mut line = Vec::new();
+        let mut uncompressed_offset = 0_u64;
+        let mut compressed_offset = 0_u64;
+        loop {
+            line.clear();
+            let bytes = input.read_until(b'\n', &mut line)?;
+            if bytes == 0 {
+                break;
+            }
+            if !chunk.is_empty() && chunk.len().saturating_add(bytes) > FRAME_TARGET_BYTES {
+                let compressed = zstd::stream::encode_all(chunk.as_slice(), COMPRESSION_LEVEL)?;
+                index.frames.push(FrameOffset {
+                    uncompressed_offset: uncompressed_offset - chunk.len() as u64,
+                    compressed_offset,
+                });
+                output.write_all(&compressed)?;
+                compressed_offset += compressed.len() as u64;
+                chunk.clear();
+            }
+            let line_offset = uncompressed_offset;
+            uncompressed_offset = uncompressed_offset.saturating_add(bytes as u64);
+            if let Ok(parsed) = crate::parse_rollout_line_bytes(&line) {
+                match parsed.item {
+                    crate::RolloutItem::SessionMeta(_) if index.session_meta_line.is_none() => {
+                        index.session_meta_line = Some(String::from_utf8_lossy(&line).into_owned());
+                    }
+                    crate::RolloutItem::Compacted(compacted) => {
+                        index.checkpoints.push(CheckpointOffset {
+                            uncompressed_offset: line_offset,
+                            line_checksum: crate::rollout_seek_index::line_checksum(&line),
+                            replacement_history: compacted.replacement_history.is_some(),
+                            window_number: compacted.window_number.is_some(),
+                            resume_metadata: compacted.resume_metadata.is_some(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            chunk.extend_from_slice(&line);
+        }
+        if !chunk.is_empty() {
+            let compressed = zstd::stream::encode_all(chunk.as_slice(), COMPRESSION_LEVEL)?;
+            index.frames.push(FrameOffset {
+                uncompressed_offset: uncompressed_offset - chunk.len() as u64,
+                compressed_offset,
+            });
+            output.write_all(&compressed)?;
+        }
+        Ok(index)
     }
 
     fn verify_zstd(path: &Path) -> io::Result<()> {
@@ -1282,15 +1357,23 @@ pub async fn existing_rollout_path(path: &Path) -> Option<PathBuf> {
 }
 
 /// Returns the decoded byte length when the rollout representation declares it.
-/// Compressed rollout frames written by Codex include this value; older or
-/// externally-produced frames may not, in which case callers can report
-/// indeterminate progress instead of inventing a percentage.
+/// Indexed compressed rollouts provide the complete logical size; legacy or
+/// externally-produced frames may only provide a frame size or no size.
 pub async fn rollout_uncompressed_size(path: &Path) -> io::Result<Option<u64>> {
     let path = path::existing_rollout_path(path)
         .await
         .unwrap_or_else(|| path.to_path_buf());
     if !path::is_compressed_rollout_path(path.as_path()) {
         return Ok(Some(tokio::fs::metadata(path).await?.len()));
+    }
+
+    let index_path = path.clone();
+    if let Ok(Ok(Some(index))) = tokio::task::spawn_blocking(move || {
+        crate::rollout_seek_index::RolloutSeekIndex::read_for(&index_path)
+    })
+    .await
+    {
+        return Ok(Some(index.uncompressed_size));
     }
 
     use tokio::io::AsyncReadExt;
