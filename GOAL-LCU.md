@@ -31,6 +31,14 @@ windows, and perform approved UI interactions.
 - The isolated probe could not validate live windows because this sandbox cannot
   connect to the active `DISPLAY=:0.0`; that is an environment gate, not an API
   failure.
+- An authorized host-context probe reached the X11 session and enumerated the
+  desktop successfully, including `steam.desktop`, running applications, and
+  window IDs.
+- The same probe launched `xfce4-about.desktop`, bound its returned window,
+  and read a 6,215-character AT-SPI accessibility tree.
+- A Mousepad probe completed `typeText`, `Ctrl+A`, and `Backspace` through the
+  Linux CUA surface. The temporary probe process left no Mousepad process
+  running.
 
 ## Scope
 
