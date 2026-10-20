@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
+use std::io::BufRead;
 use std::io::Error as IoError;
 use std::io::Read;
 use std::io::Seek;
@@ -53,6 +54,8 @@ use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
 use super::ordinal::RolloutOrdinalState;
 use super::ordinal::ordinal_state_for_rollout;
+use super::reverse_jsonl_scanner::ReverseJsonlScanner;
+use super::reverse_jsonl_scanner::ScanOutcome;
 use super::rollout_file_name::RolloutFileName;
 use super::session_index::find_thread_names_by_ids;
 use crate::InitialHistory;
@@ -1134,6 +1137,26 @@ impl RolloutRecorder {
         mut on_progress: impl FnMut(u8),
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
+        if let Some(plain_path) = compression::existing_rollout_path(path)
+            .await
+            .filter(|path| path.extension().is_none_or(|extension| extension != "zst"))
+            && let Ok(Ok(Some(loaded))) =
+                tokio::task::spawn_blocking(move || load_plain_indexed_rollout(&plain_path)).await
+        {
+            on_progress(100);
+            return Ok(loaded);
+        }
+        if let Some(compressed_path) = compression::existing_rollout_path(path)
+            .await
+            .filter(|path| path.extension().is_some_and(|extension| extension == "zst"))
+            && let Ok(Some(index)) = crate::RolloutSeekIndex::read_for(&compressed_path)
+            && let Ok(Ok(Some(loaded))) =
+                tokio::task::spawn_blocking(move || load_indexed_rollout(&compressed_path, &index))
+                    .await
+        {
+            on_progress(100);
+            return Ok(loaded);
+        }
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
@@ -1278,6 +1301,163 @@ impl RolloutRecorder {
         }
         Ok(())
     }
+}
+
+fn load_indexed_rollout(
+    path: &Path,
+    index: &crate::RolloutSeekIndex,
+) -> std::io::Result<Option<(Vec<RolloutItem>, Option<ThreadId>, usize)>> {
+    let Some(session_meta_line) = index.session_meta_line.as_deref() else {
+        return Ok(None);
+    };
+    let Ok(session_meta_line) = crate::parse_rollout_line(session_meta_line) else {
+        return Ok(None);
+    };
+    let RolloutItem::SessionMeta(session_meta) = session_meta_line.item else {
+        return Ok(None);
+    };
+    let Some(checkpoint) = index.checkpoints.last() else {
+        return Ok(None);
+    };
+    if !checkpoint.replacement_history
+        || !checkpoint.window_number
+        || (!checkpoint.resume_metadata
+            && !matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated))
+        || checkpoint.uncompressed_offset >= index.uncompressed_size
+    {
+        return Ok(None);
+    }
+    let Some(frame) = index
+        .frames
+        .iter()
+        .rev()
+        .find(|frame| frame.uncompressed_offset <= checkpoint.uncompressed_offset)
+    else {
+        return Ok(None);
+    };
+    let skip_bytes = checkpoint
+        .uncompressed_offset
+        .saturating_sub(frame.uncompressed_offset);
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(frame.compressed_offset))?;
+    let mut decoder = zstd::stream::read::Decoder::new(file)?;
+    if std::io::copy(&mut decoder.by_ref().take(skip_bytes), &mut std::io::sink())? != skip_bytes {
+        return Ok(None);
+    }
+    let reader = std::io::BufReader::new(decoder);
+    load_rollout_suffix(reader, session_meta, Some(checkpoint.line_checksum))
+}
+
+fn load_plain_indexed_rollout(
+    path: &Path,
+) -> std::io::Result<Option<(Vec<RolloutItem>, Option<ThreadId>, usize)>> {
+    let mut file = File::open(path)?;
+    let mut first_line = String::new();
+    if std::io::BufReader::new(&mut file).read_line(&mut first_line)? == 0 {
+        return Ok(None);
+    }
+    let mut value: Value = match serde_json::from_str(&first_line) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    reject_unknown_thread_history_mode(&value)?;
+    let initial_line = match crate::decode_rollout_line(value.take()) {
+        Ok(line) => line,
+        Err(_) => return Ok(None),
+    };
+    let RolloutItem::SessionMeta(session_meta) = initial_line.item else {
+        return Ok(None);
+    };
+
+    let mut scanner = ReverseJsonlScanner::new(file)?;
+    let checkpoint = loop {
+        match scanner.scan_next_rollout_line()? {
+            Some(ScanOutcome::Parsed(line)) => {
+                let RolloutItem::Compacted(compacted) = line.item else {
+                    continue;
+                };
+                if !is_safe_compaction_checkpoint(&compacted, session_meta.meta.history_mode) {
+                    return Ok(None);
+                }
+                let Some(offset) = scanner.last_record_start_offset() else {
+                    return Ok(None);
+                };
+                break offset;
+            }
+            Some(ScanOutcome::Rejected(_)) => {}
+            None => return Ok(None),
+        }
+    };
+    let mut file = scanner.into_inner();
+    file.seek(SeekFrom::Start(checkpoint))?;
+    load_rollout_suffix(std::io::BufReader::new(file), session_meta, None)
+}
+
+fn is_safe_compaction_checkpoint(
+    compacted: &crate::CompactedItem,
+    history_mode: ThreadHistoryMode,
+) -> bool {
+    compacted.replacement_history.is_some()
+        && compacted.window_number.is_some()
+        && (compacted.resume_metadata.is_some()
+            || matches!(history_mode, ThreadHistoryMode::Paginated))
+}
+
+fn load_rollout_suffix(
+    mut reader: impl BufRead,
+    session_meta: SessionMetaLine,
+    expected_first_line_checksum: Option<u64>,
+) -> std::io::Result<Option<(Vec<RolloutItem>, Option<ThreadId>, usize)>> {
+    let mut items = vec![RolloutItem::SessionMeta(session_meta.clone())];
+    let thread_id = Some(session_meta.meta.id);
+    let mut parse_errors = 0usize;
+    let mut line = String::new();
+    while reader.read_line(&mut line)? > 0 {
+        if line.trim().is_empty() {
+            line.clear();
+            continue;
+        }
+        if items.len() == 1
+            && expected_first_line_checksum.is_some_and(|expected| {
+                crate::rollout_seek_index::line_checksum(line.as_bytes()) != expected
+            })
+        {
+            return Ok(None);
+        }
+        let mut value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => {
+                parse_errors = parse_errors.saturating_add(1);
+                line.clear();
+                continue;
+            }
+        };
+        if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
+            line.clear();
+            continue;
+        }
+        let rollout_line = match crate::decode_rollout_line(value) {
+            Ok(rollout_line) => rollout_line,
+            Err(_) => {
+                parse_errors = parse_errors.saturating_add(1);
+                line.clear();
+                continue;
+            }
+        };
+        let item = rollout_line.item;
+        if items.len() == 1
+            && !matches!(&item, RolloutItem::Compacted(compacted)
+                if is_safe_compaction_checkpoint(compacted, session_meta.meta.history_mode))
+        {
+            return Ok(None);
+        }
+        items.push(item);
+        line.clear();
+    }
+    if items.len() == 1 {
+        return Ok(None);
+    }
+    Ok(Some((items, thread_id, parse_errors)))
 }
 
 pub(crate) fn reject_unknown_thread_history_mode(value: &Value) -> std::io::Result<()> {
