@@ -45,6 +45,13 @@ windows, and perform approved UI interactions.
   reports `CUA_REPL_ENABLED_SURFACES=browser` and trusts only the browser
   service. The user-facing desktop session therefore remains browser-only
   until that materialization boundary is changed.
+- Inspection of the installed desktop runtime shows that plugin materialization
+  derives its surfaces from the desktop `computerUse` feature flag. The Linux
+  production build reports that flag as disabled; the available environment
+  override is accepted only by a development build (the Windows override is
+  explicitly platform-specific). This Codex repository does not contain the
+  Electron desktop source, so enabling that production feature gate is an
+  external desktop-runtime change, not a Rust CLI change.
 
 ## Scope
 
