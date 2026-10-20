@@ -1661,6 +1661,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        session.origin == crate::transport::ConnectionOrigin::RemoteControl,
                     )
                     .await
             }
