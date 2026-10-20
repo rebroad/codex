@@ -1,3 +1,4 @@
+timestamp the warnings in the TUI
 `/status` should show the backend account in TUI...?
 `codex resume` issues reporting "Error: account/read failed during TUI bootstrap: account/read failed: workspace routing discovery timed out (code -32603)"
 When Ctrl+{C,Z} in TUI, it should show the captured text in color.
