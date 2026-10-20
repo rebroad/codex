@@ -41,6 +41,39 @@ completion percentages.
 - The same fresh process bound an existing Xfce terminal window and captured a
   78,986-byte screenshot plus an X11 accessibility tree, completing the
   screenshot/state verification gate for the current host.
+- Added `scripts/linux_cua_check.py`, a read-only diagnostic that reads the
+  configured `linux_cua` MCP entry, performs the required CUA initialization,
+  checks the API surface and inventory, and optionally verifies screenshot and
+  accessibility capture. It returns a distinct configuration/display/MCP/window
+  exit code and a bounded JSON result.
+- Ran `python3 scripts/linux_cua_check.py --screenshot` successfully:
+  106 apps, 10 windows, 983 screenshot bytes, and 99 accessibility bytes.
+- Ran the same diagnostic without `DISPLAY` and `WAYLAND_DISPLAY`; it returned
+  exit code 3 with `no DISPLAY or WAYLAND_DISPLAY is set; run from a graphical
+  session`.
+- Python compilation and Ruff checks pass for the diagnostic.
+- Added three standard-library unit tests for missing configuration, invalid
+  TOML, and missing graphical-session handling. All three pass, as do Ruff and
+  `git diff --check`.
+- Refined capability classification so backend messages mentioning X11,
+  Wayland, AT-SPI, accessibility, D-Bus, or display/session setup return the
+  dedicated capability exit code. An unavailable `DISPLAY=:99` was verified
+  to return code 3 with the backend's actionable X11 guidance; the healthy
+  `--screenshot` path still passes afterward.
+- The diagnostic now reports `displayBackend: "x11"`, surfaces structured
+  `cua.getState()` inventory errors, and explicitly rejects an unvalidated
+  Wayland-only session with capability exit code 3. Both the healthy X11 path
+  and the Wayland-only failure path were run successfully.
+- Operating policy: use shell, filesystem, process, and service tools for normal
+  Linux work. Invoke `linux_cua` only for GUI-only applications, visual state,
+  accessibility workflows, or UI input. The backend remains configured so it
+  can be used on demand; no Computer Use calls are needed for shell-first work.
+- A session-bus failure probe was also run. Sky's X11 path remained usable and
+  returned a valid accessibility tree, so D-Bus is not incorrectly treated as
+  a mandatory prerequisite for this X11 backend.
+- Final audit: the live diagnostic returned `status: "ok"` with 106 apps, 10
+  windows, X11 state, screenshot bytes, and accessibility bytes; all five unit
+  tests and Ruff passed. The Codex backend goal is complete for this host.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.
