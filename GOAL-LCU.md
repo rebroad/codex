@@ -18,6 +18,20 @@ windows, and perform approved UI interactions.
 - The generated plugin cache under `~/.codex/plugins/cache` is not an editing
   target; updates may replace it.
 
+## Implementation evidence
+
+- The installed `@oai/cua-repl` launcher accepts `CUA_REPL_ENABLED_SURFACES=
+  browser,computer` and registers `@oai/sky/service` for the computer surface.
+- An isolated MCP probe with those settings exposed `cua.listApps`,
+  `cua.computer.launch_app`, and the Linux `cua.getApp({ windowId })` contract
+  without the previous JavaScript API errors.
+- The local bundled-plugin source manifest is configured for both surfaces and
+  trusts the Sky service. The generated plugin cache still needs to be
+  regenerated or reloaded by the desktop runtime.
+- The isolated probe could not validate live windows because this sandbox cannot
+  connect to the active `DISPLAY=:0.0`; that is an environment gate, not an API
+  failure.
+
 ## Scope
 
 1. Enable the Linux computer surface in the local bundled Computer Use runtime.
