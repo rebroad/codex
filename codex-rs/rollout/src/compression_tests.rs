@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use super::RolloutCompressionTrigger::Startup;
 use super::*;
+use crate::CompactedItem;
 use crate::InitialHistory;
 use crate::RolloutConfig;
 use crate::RolloutItem;
@@ -47,6 +48,149 @@ async fn load_rollout_items_reads_compressed_rollout() -> anyhow::Result<()> {
     assert_eq!(items.len(), 2);
     assert!(!rollout_path.exists());
     assert!(compressed_rollout_path(&rollout_path).exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_skips_pre_compaction_history_for_plain_and_compressed_rollouts()
+-> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(101);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "before compaction")?;
+    let original = fs::read_to_string(&path)?;
+    let mut initial_meta: serde_json::Value =
+        serde_json::from_str(original.lines().next().expect("session metadata"))?;
+    initial_meta["payload"]["history_mode"] = serde_json::json!("legacy");
+    let large_prefix = RolloutLine {
+        timestamp: "2025-01-03T12:00:01Z".to_string(),
+        ordinal: None,
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "x".repeat(2 * 1024 * 1024),
+            ..Default::default()
+        })),
+    };
+
+    let checkpoint = RolloutLine {
+        timestamp: "2025-01-03T12:00:02Z".to_string(),
+        ordinal: None,
+        item: RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(Vec::new()),
+            guardian_history: None,
+            retained_context: None,
+            mcp_resource_origins: None,
+            window_number: Some(1),
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+            compaction_response_id: None,
+            latest_token_usage_record: None,
+            resume_metadata: Some(crate::CompactionResumeMetadata {
+                multi_agent_version: None,
+                last_started_turn_id: None,
+                turn_attribution: None,
+                previous_turn_settings: None,
+            }),
+        }),
+    };
+    let suffix = RolloutLine {
+        timestamp: "2025-01-03T12:00:03Z".to_string(),
+        ordinal: None,
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "after compaction".to_string(),
+            ..Default::default()
+        })),
+    };
+    let content = format!(
+        "{}\n{}\n{}\n{}\n",
+        serde_json::to_string(&initial_meta)?,
+        serde_json::to_string(&large_prefix)?,
+        serde_json::to_string(&checkpoint)?,
+        serde_json::to_string(&suffix)?,
+    );
+    let uncompressed_size = content.len() as u64;
+    fs::write(&path, content)?;
+
+    let (plain_items, plain_thread_id, plain_parse_errors) =
+        RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(plain_thread_id, Some(thread_id));
+    assert_eq!(plain_parse_errors, 0);
+    assert_eq!(plain_items.len(), 3);
+    assert!(matches!(plain_items[1], RolloutItem::Compacted(_)));
+
+    let compressed_path = compressed_rollout_path(&path);
+    let mut output = File::create(&compressed_path)?;
+    let mut index = super::worker::encode_zstd_to_writer(&path, &mut output)?;
+    output.flush()?;
+    index.set_compressed_file(&compressed_path)?;
+    index.write_for(&compressed_path)?;
+    fs::remove_file(&path)?;
+    assert_eq!(
+        super::rollout_uncompressed_size(&path).await?,
+        Some(uncompressed_size)
+    );
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3);
+    assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
+    assert!(matches!(items[1], RolloutItem::Compacted(_)));
+    assert!(matches!(
+        &items[2],
+        RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "after compaction"
+    ));
+
+    let index_path = crate::rollout_seek_index::index_path(&compressed_path);
+    fs::write(&index_path, b"invalid index")?;
+    let (fallback_items, fallback_thread_id, fallback_parse_errors) =
+        RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(fallback_thread_id, Some(thread_id));
+    assert_eq!(fallback_parse_errors, 0);
+    assert_eq!(fallback_items.len(), 4);
+    assert!(matches!(
+        &fallback_items[1],
+        RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message.len() == 2 * 1024 * 1024
+    ));
+
+    let incomplete_checkpoint = RolloutItem::Compacted(CompactedItem {
+        message: "legacy incomplete checkpoint".to_string(),
+        replacement_history: None,
+        guardian_history: None,
+        retained_context: None,
+        mcp_resource_origins: None,
+        window_number: Some(2),
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+        compaction_response_id: None,
+        latest_token_usage_record: None,
+        resume_metadata: None,
+    });
+    append_rollout_item_to_path(&path, &incomplete_checkpoint).await?;
+    assert!(path.exists());
+    assert!(!compressed_path.exists());
+    assert!(!index_path.exists());
+
+    let mut output = File::create(&compressed_path)?;
+    let mut index = super::worker::encode_zstd_to_writer(&path, &mut output)?;
+    output.flush()?;
+    index.set_compressed_file(&compressed_path)?;
+    index.write_for(&compressed_path)?;
+    fs::remove_file(&path)?;
+    let (ineligible_items, ineligible_thread_id, ineligible_parse_errors) =
+        RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(ineligible_thread_id, Some(thread_id));
+    assert_eq!(ineligible_parse_errors, 0);
+    assert_eq!(ineligible_items.len(), 5);
+
+    append_rollout_item_to_path(&path, &suffix.item).await?;
+    assert!(path.exists());
+    assert!(!compressed_path.exists());
+    assert!(!index_path.exists());
     Ok(())
 }
 
