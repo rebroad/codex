@@ -9,7 +9,7 @@ work.
 | Work item | Completion | Remaining work |
 | --- | ---: | --- |
 | Linux Sky backend and CUA surface registration | 100% | None for the current host |
-| Codex app-server MCP configuration and reload | 100% | Confirm tool visibility from a fresh client turn |
+| Codex app-server MCP configuration, reload, and fresh-client visibility | 100% | None for the current host |
 | Linux discovery, launch, window binding, accessibility, and harmless input | 90% | Add explicit screenshot/state verification to the repeatable check |
 | Capability detection and clear display/session/compositor errors | 25% | Implement and test structured failure reporting |
 | Browser Computer Use preservation | 100% | None observed |
