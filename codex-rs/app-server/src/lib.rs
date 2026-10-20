@@ -196,6 +196,7 @@ enum OutboundControlEvent {
     /// Register a new writer for an opened connection.
     Opened {
         connection_id: ConnectionId,
+        origin: ConnectionOrigin,
         writer: mpsc::Sender<QueuedOutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
@@ -1132,6 +1133,7 @@ pub async fn run_main_with_transport_options(
                         match event {
                             OutboundControlEvent::Opened {
                                 connection_id,
+                                origin,
                                 writer,
                                 disconnect_sender,
                                 initialized,
@@ -1146,7 +1148,8 @@ pub async fn run_main_with_transport_options(
                                         experimental_api_enabled,
                                         opted_out_notification_methods,
                                         disconnect_sender,
-                                    ),
+                                    )
+                                    .with_origin(origin),
                                 );
                             }
                             OutboundControlEvent::Closed { connection_id } => {
@@ -1358,6 +1361,7 @@ pub async fn run_main_with_transport_options(
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
+                                        origin,
                                         writer,
                                         disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
