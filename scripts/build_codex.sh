@@ -137,10 +137,12 @@ run_timed_build() {
   mkdir -p "${BUILD_REPO}/build"
   metrics_file="$(mktemp /var/tmp/codex-build-timing.XXXXXX)"
   if (
+    exec 3>&2
+    exec 2>"${metrics_file}"
     export LC_NUMERIC=C
     TIMEFORMAT='%3U %3S %3R'
-    time "$@"
-  ) 2>"${metrics_file}"; then
+    time "$@" 2>&3
+  ); then
     status=0
   else
     status=$?
@@ -1007,6 +1009,7 @@ install_binary() {
   local previous_target=""
   local previous_commit=""
   local previous_size=""
+  local previous_digest=""
   if [[ -L "${INSTALL_BIN_DIR}/codex" ]]; then
     previous_target="$(readlink "${INSTALL_BIN_DIR}/codex")"
     if [[ "${previous_target}" =~ ^codex-.*-([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
@@ -1014,6 +1017,7 @@ install_binary() {
     fi
     if [[ -f "${INSTALL_BIN_DIR}/${previous_target}" ]]; then
       previous_size="$(wc -c <"${INSTALL_BIN_DIR}/${previous_target}")"
+      previous_digest="$(sha256sum "${INSTALL_BIN_DIR}/${previous_target}" | awk '{print $1}')"
     fi
   fi
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
@@ -1027,8 +1031,10 @@ install_binary() {
   echo "Linked ${INSTALL_BIN_DIR}/codex"
   local new_size
   new_size="$(wc -c <"${INSTALL_BIN_DIR}/${name}")"
+  local new_digest
+  new_digest="$(sha256sum "${INSTALL_BIN_DIR}/${name}" | awk '{print $1}')"
   if [[ "${RESTART_APP_SERVER}" == true \
-    && ( "${previous_commit}" != "${short}" || "${previous_size}" != "${new_size}" ) ]]; then
+    && ( "${previous_commit}" != "${short}" || "${previous_size}" != "${new_size}" || "${previous_digest}" != "${new_digest}" ) ]]; then
     echo "Requesting a graceful app-server restart after active turns finish."
     "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle
   fi
