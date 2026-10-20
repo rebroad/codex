@@ -33,6 +33,11 @@ completion percentages.
   running with `CUA_REPL_ENABLED_SURFACES=computer` and
   `NODE_REPL_TRUSTED_SERVICES={"sky":"@oai/sky/service"}`. Existing
   browser-only CUA processes remain separate.
+- After the recent `accept-chatgpt-update.mjs` run, a fresh MCP process using
+  the reloaded backend still exposed `cua.listApps` and
+  `cua.computer.launch_app` and returned bounded Linux app inventory. The
+  update changed `@oai/sky` from 0.7.6 to 0.7.8 and replaced its Linux binary;
+  no Linux CUA regression was observed.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.
