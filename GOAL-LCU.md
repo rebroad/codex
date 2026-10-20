@@ -10,7 +10,7 @@ work.
 | --- | ---: | --- |
 | Linux Sky backend and CUA surface registration | 100% | None for the current host |
 | Codex app-server MCP configuration, reload, and fresh-client visibility | 100% | None for the current host |
-| Linux discovery, launch, window binding, accessibility, and harmless input | 90% | Add explicit screenshot/state verification to the repeatable check |
+| Linux discovery, launch, window binding, accessibility, screenshot, and harmless input | 100% | None for the current X11 host |
 | Capability detection and clear display/session/compositor errors | 25% | Implement and test structured failure reporting |
 | Browser Computer Use preservation | 100% | None observed |
 | On-demand use without affecting shell-first workflows | 75% | Document activation and token-cost policy |
