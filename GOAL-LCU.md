@@ -1,121 +1,49 @@
 # Goal: Linux Computer Use
 
-Enable and validate native Linux Computer Use in the Codex desktop runtime so
-the Linux session can discover desktop applications, launch them, inspect their
-windows, and perform approved UI interactions.
+Enable native Linux Computer Use in the Codex backend for GUI-only and visual
+tasks while keeping shell and API tools as the default for ordinary Linux
+work.
 
-## Current state
+## Completion status
 
-- `~/src/codex` and `/mnt/kingston/@home/rebroad/src/codex` resolve to the same
-  source checkout.
-- The installed `@oai/sky` package already contains a Linux backend and binary
-  with app discovery, app launching, window, screenshot, mouse, keyboard, X11,
-  and accessibility support.
-- The bundled `unified-computer-use` plugin currently exposes only the browser
-  surface. Its runtime therefore omits the `cua.listApps` and
-  `cua.computer.launch_app` interfaces even though the tool documentation can
-  mention them.
-- The generated plugin cache under `~/.codex/plugins/cache` is not an editing
-  target; updates may replace it.
+| Work item | Completion | Remaining work |
+| --- | ---: | --- |
+| Linux Sky backend and CUA surface registration | 100% | None for the current host |
+| Codex app-server MCP configuration and reload | 100% | Confirm tool visibility from a fresh client turn |
+| Linux discovery, launch, window binding, accessibility, and harmless input | 90% | Add explicit screenshot/state verification to the repeatable check |
+| Capability detection and clear display/session/compositor errors | 25% | Implement and test structured failure reporting |
+| Browser Computer Use preservation | 100% | None observed |
+| On-demand use without affecting shell-first workflows | 75% | Document activation and token-cost policy |
+| Codex repository tests and repeatable validation | 20% | Add the narrowest appropriate test/diagnostic workflow and run it |
+| ChatGPT Desktop production integration | 0% | Requires the external Electron runtime source/build owner |
 
-## Implementation evidence
+**Overall estimate: 65%.** The backend is live on this host; remaining work is
+repeatable verification, capability/error handling, and optional Desktop
+production integration.
 
-- The installed `@oai/cua-repl` launcher accepts `CUA_REPL_ENABLED_SURFACES=
-  browser,computer` and registers `@oai/sky/service` for the computer surface.
-- An isolated MCP probe with those settings exposed `cua.listApps`,
-  `cua.computer.launch_app`, and the Linux `cua.getApp({ windowId })` contract
-  without the previous JavaScript API errors.
-- The local bundled-plugin source manifest is configured for both surfaces and
-  trusts the Sky service. The generated plugin cache still needs to be
-  regenerated or reloaded by the desktop runtime.
-- The isolated probe could not validate live windows because this sandbox cannot
-  connect to the active `DISPLAY=:0.0`; that is an environment gate, not an API
-  failure.
-- An authorized host-context probe reached the X11 session and enumerated the
-  desktop successfully, including `steam.desktop`, running applications, and
-  window IDs.
-- The same probe launched `xfce4-about.desktop`, bound its returned window,
-  and read a 6,215-character AT-SPI accessibility tree.
-- A Mousepad probe completed `typeText`, `Ctrl+A`, and `Backspace` through the
-  Linux CUA surface. The temporary probe process left no Mousepad process
-  running.
-- The desktop app's supported bundled-plugin reload path was exercised with
-  `CODEX_ELECTRON_BUNDLED_PLUGINS_FORCE_RELOAD=unified-computer-use`, but the
-  app did not rematerialize the generated cache: its active manifest still
-  reports `CUA_REPL_ENABLED_SURFACES=browser` and trusts only the browser
-  service. The user-facing desktop session therefore remains browser-only
-  until that materialization boundary is changed.
-- Inspection of the installed desktop runtime shows that plugin materialization
-  derives its surfaces from the desktop `computerUse` feature flag. The Linux
-  production build reports that flag as disabled; the available environment
-  override is accepted only by a development build (the Windows override is
-  explicitly platform-specific). This Codex repository does not contain the
-  Electron desktop source, so enabling that production feature gate is an
-  external desktop-runtime change, not a Rust CLI change.
-- The local `chatgpt-window` checkout was checked as a possible desktop source,
-  but it is a small Chrome/ChatGPT bridge and contains no Electron feature gate
-  or bundled-plugin reconciliation code. It is not the owner of this change.
+## Remaining work
 
-## Scope
+1. From a fresh app-server client turn, verify that the reloaded `linux_cua`
+   MCP server is visible and that its JavaScript context exposes
+   `cua.listApps`, `cua.computer.launch_app`, and Linux `cua.getApp`.
+2. Add a repeatable, harmless Linux validation path covering screenshot/state
+   capture in addition to discovery, launch, accessibility, and input.
+3. Add capability checks and structured errors for missing display, session,
+   AT-SPI, and unsupported Wayland/compositor conditions.
+4. Document and enforce shell-first, on-demand Computer Use activation so
+   normal Linux tasks do not pay unnecessary context/tool costs.
+5. Add and run the narrow Codex-side tests or diagnostics needed to protect the
+   Linux MCP configuration and preserve browser-only operation.
+6. If integrated Desktop support is required, obtain the external Electron
+   source/build owner and enable the Linux production `computerUse` feature
+   gate there. Do not edit generated plugin caches.
 
-1. Enable the Linux computer surface in the local bundled Computer Use runtime.
-2. Register the trusted Linux Sky service and preserve the existing browser
-   surface.
-3. Add capability detection and clear failures for missing display, session,
-   accessibility, or compositor permissions.
-4. Validate the public CUA contract on Linux:
-   - enumerate applications;
-   - launch an application by its app identifier;
-   - enumerate and bind its windows;
-   - capture state or screenshots;
-   - perform approved mouse, keyboard, and text actions.
-5. Keep browser-only operation working when native Computer Use is unavailable.
+## Constraints
 
-The first implementation should use the existing Sky Linux backend. A new
-standalone host bridge is out of scope unless the existing runtime cannot be
-enabled or does not meet the required Linux session constraints.
-
-## API details
-
-The Linux surface is expected to use the following shape:
-
-```js
-await cua.listApps();
-await cua.computer.launch_app({ app: "<app name or id>" });
-await cua.getApp({ windowId: "<window id>" });
-```
-
-`launch_app` is a computer-surface operation, not a method on the bound app
-object. Linux app bindings use a window identifier returned by app or window
-enumeration.
-
-## Safety and platform constraints
-
-- Keep the computer surface capability-gated and subject to existing approval
-  and guardian policy checks.
-- Do not expose arbitrary shell execution as a substitute for structured app
-  operations.
-- Detect X11 versus Wayland and report unsupported or unavailable capabilities
-  instead of silently guessing with coordinate input.
-- Do not edit generated plugin caches or external build trees.
-
-## Verification gates
-
-- Browser Computer Use continues to initialize and operate.
-- Linux Computer Use initializes only when the trusted Sky service and an active
-  graphical user session are available.
-- `listApps` returns a bounded, structured result without a JavaScript API
-  error.
-- `launch_app` starts a selected desktop application and returns a usable
-  window handle, or a precise capability/error result.
-- Window inspection, screenshot, and a harmless input action work on each
-  supported display backend tested.
-- The relevant Codex tests pass using the repository build-tree workflow.
-- The source checkout is clean after the change and the final runtime path is
-  documented.
-
-## Non-goals
-
-- Reimplementing the Sky Linux backend from scratch.
-- Promising generic arbitrary-window control on every Wayland compositor.
-- Editing the installed plugin cache as a permanent solution.
+- Use the existing Sky Linux backend; do not reimplement it.
+- Keep computer actions capability-gated and subject to existing approval and
+  guardian policy checks.
+- Do not substitute arbitrary shell execution for structured app operations.
+- Do not promise generic arbitrary-window control on every Wayland compositor.
+- Keep source edits in this checkout and builds in the designated external
+  build tree.
