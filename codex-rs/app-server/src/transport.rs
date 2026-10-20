@@ -77,6 +77,7 @@ impl ConnectionState {
 }
 
 pub(crate) struct OutboundConnectionState {
+    pub(crate) origin: ConnectionOrigin,
     pub(crate) initialized: Arc<AtomicBool>,
     pub(crate) experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
@@ -93,12 +94,18 @@ impl OutboundConnectionState {
         disconnect_sender: Option<CancellationToken>,
     ) -> Self {
         Self {
+            origin: ConnectionOrigin::WebSocket,
             initialized,
             experimental_api_enabled,
             opted_out_notification_methods,
             writer,
             disconnect_sender,
         }
+    }
+
+    pub(crate) fn with_origin(mut self, origin: ConnectionOrigin) -> Self {
+        self.origin = origin;
+        self
     }
 
     fn can_disconnect(&self) -> bool {
@@ -222,9 +229,26 @@ pub(crate) async fn route_outgoing_envelope(
             message,
             write_complete_tx,
         } => {
-            let _ =
-                send_message_to_connection(connections, connection_id, message, write_complete_tx)
-                    .await;
+            let remote_control = connections
+                .get(&connection_id)
+                .is_some_and(|state| state.origin == ConnectionOrigin::RemoteControl);
+            let _ = send_message_to_connection(
+                connections,
+                connection_id,
+                message.clone(),
+                write_complete_tx,
+            )
+            .await;
+            if remote_control && let Some(completion) = remote_control_completion_message(&message)
+            {
+                let _ = send_message_to_connection(
+                    connections,
+                    connection_id,
+                    completion,
+                    /*write_complete_tx*/ None,
+                )
+                .await;
+            }
         }
         OutgoingEnvelope::Broadcast { message } => {
             let target_connections: Vec<ConnectionId> = connections
@@ -241,6 +265,9 @@ pub(crate) async fn route_outgoing_envelope(
                 .collect();
 
             for connection_id in target_connections {
+                let remote_control = connections
+                    .get(&connection_id)
+                    .is_some_and(|state| state.origin == ConnectionOrigin::RemoteControl);
                 let _ = send_message_to_connection(
                     connections,
                     connection_id,
@@ -248,9 +275,61 @@ pub(crate) async fn route_outgoing_envelope(
                     /*write_complete_tx*/ None,
                 )
                 .await;
+                if remote_control
+                    && let Some(completion) = remote_control_completion_message(&message)
+                {
+                    let _ = send_message_to_connection(
+                        connections,
+                        connection_id,
+                        completion,
+                        /*write_complete_tx*/ None,
+                    )
+                    .await;
+                }
             }
         }
     }
+}
+
+fn remote_control_completion_message(message: &OutgoingMessage) -> Option<OutgoingMessage> {
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerNotificationEnvelope;
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnItemsView;
+    use codex_app_server_protocol::TurnStatus;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let OutgoingMessage::AppServerNotification(envelope) = message else {
+        return None;
+    };
+    let ServerNotification::ItemCompleted(item_completed) = &envelope.notification else {
+        return None;
+    };
+    if !matches!(&item_completed.item, ThreadItem::AgentMessage { .. }) {
+        return None;
+    }
+    let completed_at = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
+    Some(OutgoingMessage::AppServerNotification(
+        ServerNotificationEnvelope {
+            notification: ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: item_completed.thread_id.clone(),
+                turn: Turn {
+                    id: item_completed.turn_id.clone(),
+                    root_turn_id: None,
+                    items: vec![item_completed.item.clone()],
+                    items_view: TurnItemsView::Summary,
+                    status: TurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: Some(completed_at),
+                    duration_ms: None,
+                },
+            }),
+            emitted_at_ms: Some(completed_at * 1000),
+        },
+    ))
 }
 
 #[cfg(test)]
