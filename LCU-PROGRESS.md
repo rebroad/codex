@@ -38,6 +38,9 @@ completion percentages.
   `cua.computer.launch_app` and returned bounded Linux app inventory. The
   update changed `@oai/sky` from 0.7.6 to 0.7.8 and replaced its Linux binary;
   no Linux CUA regression was observed.
+- The same fresh process bound an existing Xfce terminal window and captured a
+  78,986-byte screenshot plus an X11 accessibility tree, completing the
+  screenshot/state verification gate for the current host.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.
