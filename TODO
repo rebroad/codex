@@ -1,3 +1,6 @@
+`/status` should show the backend account in TUI...?
+`codex resume` issues reporting "Error: account/read failed during TUI bootstrap: account/read failed: workspace routing discovery timed out (code -32603)"
+When Ctrl+{C,Z} in TUI, it should show the captured text in color.
 enable wildcards per repo, e.g. for codex, `./.git/worktrees/-cpto-*`
 Add Delete to delete queued prompts (esc already steers), or a Ctrl+letter (E?) to edit queued prompts (they can become concetenated if more than one), or Ctrl+C to delete the most recently-queued
 Add a search feature to the transcript view
