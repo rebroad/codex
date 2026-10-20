@@ -180,7 +180,22 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        remote_control: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if remote_control
+            && params.tool_output.is_none()
+            && params.input.len() == 1
+            && matches!(
+                &params.input[0],
+                V2UserInput::Text { text, .. }
+                    if matches!(text.as_str(), "stop" | "Stop" | "Stop.")
+            )
+            && let Some(response) = self
+                .interrupt_remote_control_stop(&request_id, &params.thread_id)
+                .await?
+        {
+            return Ok(Some(response.into()));
+        }
         validate_user_input_image_urls(&params.input)?;
         self.turn_start_inner(
             request_id,
@@ -190,6 +205,27 @@ impl TurnRequestProcessor {
         )
         .await
         .map(|response| Some(response.into()))
+    }
+
+    async fn interrupt_remote_control_stop(
+        &self,
+        request_id: &ConnectionRequestId,
+        thread_id: &str,
+    ) -> Result<Option<TurnStartResponse>, JSONRPCErrorError> {
+        let (thread_uuid, thread) = self.load_thread(thread_id).await?;
+        self.ensure_direct_input_allowed(request_id, thread.as_ref())
+            .await?;
+        let state = self.thread_state_manager.thread_state(thread_uuid).await;
+        let active_turn = state.lock().await.active_turn_snapshot();
+        let Some(active_turn) = active_turn else {
+            return Ok(None);
+        };
+        self.submit_core_op(request_id, thread.as_ref(), Op::Interrupt)
+            .await
+            .map_err(|error| {
+                internal_error(format!("failed to interrupt remote-control turn: {error}"))
+            })?;
+        Ok(Some(TurnStartResponse { turn: active_turn }))
     }
 
     pub(crate) async fn thread_inject_items(
