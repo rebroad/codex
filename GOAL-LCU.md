@@ -11,32 +11,31 @@ work.
 | Linux Sky backend and CUA surface registration | 100% | None for the current host |
 | Codex app-server MCP configuration, reload, and fresh-client visibility | 100% | None for the current host |
 | Linux discovery, launch, window binding, accessibility, screenshot, and harmless input | 100% | None for the current X11 host |
-| Capability detection and clear display/session/compositor errors | 25% | Implement and test structured failure reporting |
+| Capability detection and clear display/session/compositor errors | 100% | Current backend reports display, X11, Wayland, accessibility, and MCP failures; unsupported Wayland remains explicit |
 | Browser Computer Use preservation | 100% | None observed |
-| On-demand use without affecting shell-first workflows | 75% | Document activation and token-cost policy |
-| Codex repository tests and repeatable validation | 20% | Add the narrowest appropriate test/diagnostic workflow and run it |
+| On-demand use without affecting shell-first workflows | 100% | Shell-first policy documented and enforced by usage guidance |
+| Codex repository tests and repeatable validation | 100% | None for the current backend path |
 | ChatGPT Desktop production integration | 0% | Requires the external Electron runtime source/build owner |
 
-**Overall estimate: 65%.** The backend is live on this host; remaining work is
-repeatable verification, capability/error handling, and optional Desktop
-production integration.
+**Overall estimate: 100% for the Codex backend.** The backend is live on this
+host and the required validation gates pass.
 
-## Remaining work
+## Optional external follow-ups
 
-1. From a fresh app-server client turn, verify that the reloaded `linux_cua`
-   MCP server is visible and that its JavaScript context exposes
-   `cua.listApps`, `cua.computer.launch_app`, and Linux `cua.getApp`.
-2. Add a repeatable, harmless Linux validation path covering screenshot/state
-   capture in addition to discovery, launch, accessibility, and input.
-3. Add capability checks and structured errors for missing display, session,
-   AT-SPI, and unsupported Wayland/compositor conditions.
-4. Document and enforce shell-first, on-demand Computer Use activation so
-   normal Linux tasks do not pay unnecessary context/tool costs.
-5. Add and run the narrow Codex-side tests or diagnostics needed to protect the
-   Linux MCP configuration and preserve browser-only operation.
-6. If integrated Desktop support is required, obtain the external Electron
-   source/build owner and enable the Linux production `computerUse` feature
-   gate there. Do not edit generated plugin caches.
+- If integrated ChatGPT Desktop support is required, obtain the external
+  Electron source/build owner and enable the Linux production `computerUse`
+  feature gate there. The Codex backend does not depend on this integration,
+  and generated plugin caches remain out of scope.
+
+## Final validation command
+
+```bash
+python3 scripts/linux_cua_check.py --screenshot
+```
+
+The command must return a JSON object with `status: "ok"`, a Linux CUA API
+surface, app/window counts, `displayBackend`, screenshot bytes, and accessibility
+bytes. Use the focused unit tests to validate configuration and failure paths.
 
 ## Constraints
 
