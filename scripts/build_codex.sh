@@ -1006,20 +1006,6 @@ install_binary() {
   mkdir -p "${INSTALL_BIN_DIR}"
   short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
   local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
-  local previous_target=""
-  local previous_commit=""
-  local previous_size=""
-  local previous_digest=""
-  if [[ -L "${INSTALL_BIN_DIR}/codex" ]]; then
-    previous_target="$(readlink "${INSTALL_BIN_DIR}/codex")"
-    if [[ "${previous_target}" =~ ^codex-.*-([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
-      previous_commit="${BASH_REMATCH[1]}"
-    fi
-    if [[ -f "${INSTALL_BIN_DIR}/${previous_target}" ]]; then
-      previous_size="$(wc -c <"${INSTALL_BIN_DIR}/${previous_target}")"
-      previous_digest="$(sha256sum "${INSTALL_BIN_DIR}/${previous_target}" | awk '{print $1}')"
-    fi
-  fi
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
   if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
     rm -f "${INSTALL_BIN_DIR}/${name}"
@@ -1029,12 +1015,16 @@ install_binary() {
   cleanup_adjacent_same_size_binaries "${INSTALL_BIN_DIR}/${name}"
   echo "Installed ${INSTALL_BIN_DIR}/${name}"
   echo "Linked ${INSTALL_BIN_DIR}/codex"
-  local new_size
-  new_size="$(wc -c <"${INSTALL_BIN_DIR}/${name}")"
-  local new_digest
-  new_digest="$(sha256sum "${INSTALL_BIN_DIR}/${name}" | awk '{print $1}')"
+  local running_version="" running_commit="" daemon_version_output=""
+  if daemon_version_output="$("${INSTALL_BIN_DIR}/codex" app-server daemon version 2>/dev/null)"; then
+    running_version="$(python3 -c 'import json,sys; value=json.load(sys.stdin).get("appServerVersion"); print(value or "")' <<<"${daemon_version_output}")"
+  fi
+  if [[ "${running_version}" =~ -([0-9a-f]{10,12})[-+][0-9]{12}$ ]]; then
+    running_commit="${BASH_REMATCH[1]}"
+  fi
+  local installed_version="${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   if [[ "${RESTART_APP_SERVER}" == true \
-    && ( "${previous_commit}" != "${short}" || "${previous_size}" != "${new_size}" || "${previous_digest}" != "${new_digest}" ) ]]; then
+    && ( "${running_commit}" != "${short}" || "${running_version}" != "${installed_version}" ) ]]; then
     echo "Requesting a graceful app-server restart after active turns finish."
     "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle
   fi
