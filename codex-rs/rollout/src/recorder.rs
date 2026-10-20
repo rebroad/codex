@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
+use std::io::BufRead;
 use std::io::Error as IoError;
 use std::io::Read;
 use std::io::Seek;
@@ -53,6 +54,8 @@ use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
 use super::ordinal::RolloutOrdinalState;
 use super::ordinal::ordinal_state_for_rollout;
+use super::reverse_jsonl_scanner::ReverseJsonlScanner;
+use super::reverse_jsonl_scanner::ScanOutcome;
 use super::rollout_file_name::RolloutFileName;
 use super::session_index::find_thread_names_by_ids;
 use crate::InitialHistory;
@@ -1134,6 +1137,26 @@ impl RolloutRecorder {
         mut on_progress: impl FnMut(u8),
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
+        if let Some(plain_path) = compression::existing_rollout_path(path)
+            .await
+            .filter(|path| path.extension().is_none_or(|extension| extension != "zst"))
+            && let Ok(Ok(Some(loaded))) =
+                tokio::task::spawn_blocking(move || load_plain_indexed_rollout(&plain_path)).await
+        {
+            on_progress(100);
+            return Ok(loaded);
+        }
+        if let Some(compressed_path) = compression::existing_rollout_path(path)
+            .await
+            .filter(|path| path.extension().is_some_and(|extension| extension == "zst"))
+            && let Ok(Some(index)) = crate::RolloutSeekIndex::read_for(&compressed_path)
+            && let Ok(Ok(Some(loaded))) =
+                tokio::task::spawn_blocking(move || load_indexed_rollout(&compressed_path, &index))
+                    .await
+        {
+            on_progress(100);
+            return Ok(loaded);
+        }
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
@@ -1278,6 +1301,193 @@ impl RolloutRecorder {
         }
         Ok(())
     }
+}
+
+fn load_indexed_rollout(
+    path: &Path,
+    index: &crate::RolloutSeekIndex,
+) -> std::io::Result<Option<(Vec<RolloutItem>, Option<ThreadId>, usize)>> {
+    let Some(session_meta_line) = index.session_meta_line.as_deref() else {
+        return Ok(None);
+    };
+    let Ok(session_meta_line) = crate::parse_rollout_line(session_meta_line) else {
+        return Ok(None);
+    };
+    let RolloutItem::SessionMeta(session_meta) = session_meta_line.item else {
+        return Ok(None);
+    };
+    let Some(checkpoint) = index.checkpoints.iter().rev().find(|checkpoint| {
+        checkpoint.replacement_history
+            && checkpoint.window_number
+            && (checkpoint.resume_metadata
+                || matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated))
+            && checkpoint.uncompressed_offset < index.uncompressed_size
+    }) else {
+        return Ok(None);
+    };
+    let Some(frame) = index
+        .frames
+        .iter()
+        .rev()
+        .find(|frame| frame.uncompressed_offset <= checkpoint.uncompressed_offset)
+    else {
+        return Ok(None);
+    };
+    let skip_bytes = checkpoint
+        .uncompressed_offset
+        .saturating_sub(frame.uncompressed_offset);
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(frame.compressed_offset))?;
+    let mut decoder = zstd::stream::read::Decoder::new(file)?;
+    if std::io::copy(&mut decoder.by_ref().take(skip_bytes), &mut std::io::sink())? != skip_bytes {
+        return Ok(None);
+    }
+    let reader = std::io::BufReader::new(decoder);
+    load_rollout_suffix(reader, session_meta, Some(checkpoint.line_checksum))
+}
+
+fn load_plain_indexed_rollout(
+    path: &Path,
+) -> std::io::Result<Option<(Vec<RolloutItem>, Option<ThreadId>, usize)>> {
+    let mut file = File::open(path)?;
+    let mut first_line = String::new();
+    if std::io::BufReader::new(&mut file).read_line(&mut first_line)? == 0 {
+        return Ok(None);
+    }
+    let mut value: Value = match serde_json::from_str(&first_line) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    reject_unknown_thread_history_mode(&value)?;
+    let initial_line = match crate::decode_rollout_line(value.take()) {
+        Ok(line) => line,
+        Err(_) => return Ok(None),
+    };
+    let RolloutItem::SessionMeta(session_meta) = initial_line.item else {
+        return Ok(None);
+    };
+
+    if let Some(checkpoint) =
+        crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::read_for(path)
+        && load_plain_rollout_from_checkpoint(&mut file, checkpoint.offset, &session_meta)?
+    {
+        return load_rollout_suffix(std::io::BufReader::new(file), session_meta, None);
+    }
+
+    let mut scanner = ReverseJsonlScanner::new(file)?;
+    let checkpoint = loop {
+        match scanner.scan_next_rollout_line()? {
+            Some(ScanOutcome::Parsed(line)) => {
+                let RolloutItem::Compacted(compacted) = line.item else {
+                    continue;
+                };
+                if !is_safe_compaction_checkpoint(&compacted, session_meta.meta.history_mode) {
+                    continue;
+                }
+                let Some(offset) = scanner.last_record_start_offset() else {
+                    return Ok(None);
+                };
+                break offset;
+            }
+            Some(ScanOutcome::Rejected(_)) => {}
+            None => return Ok(None),
+        }
+    };
+    let mut file = scanner.into_inner();
+    if let Err(error) =
+        crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::write_for(path, checkpoint)
+    {
+        warn!(
+            "failed to persist rollout compaction checkpoint for {}: {error}",
+            path.display()
+        );
+    }
+    file.seek(SeekFrom::Start(checkpoint))?;
+    load_rollout_suffix(std::io::BufReader::new(file), session_meta, None)
+}
+
+fn load_plain_rollout_from_checkpoint(
+    file: &mut File,
+    offset: u64,
+    session_meta: &SessionMetaLine,
+) -> std::io::Result<bool> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut line = String::new();
+    std::io::BufReader::new(&mut *file).read_line(&mut line)?;
+    let valid = line.ends_with('\n')
+        && crate::parse_rollout_line(&line).is_ok_and(|line| {
+            matches!(line.item, RolloutItem::Compacted(compacted)
+                if is_safe_compaction_checkpoint(&compacted, session_meta.meta.history_mode))
+        });
+    file.seek(SeekFrom::Start(offset))?;
+    Ok(valid)
+}
+
+fn is_safe_compaction_checkpoint(
+    compacted: &crate::CompactedItem,
+    history_mode: ThreadHistoryMode,
+) -> bool {
+    compacted.replacement_history.is_some()
+        && compacted.window_number.is_some()
+        && (compacted.resume_metadata.is_some()
+            || matches!(history_mode, ThreadHistoryMode::Paginated))
+}
+
+fn load_rollout_suffix(
+    mut reader: impl BufRead,
+    session_meta: SessionMetaLine,
+    expected_first_line_checksum: Option<u64>,
+) -> std::io::Result<Option<(Vec<RolloutItem>, Option<ThreadId>, usize)>> {
+    let mut items = vec![RolloutItem::SessionMeta(session_meta.clone())];
+    let thread_id = Some(session_meta.meta.id);
+    let mut parse_errors = 0usize;
+    let mut line = String::new();
+    while reader.read_line(&mut line)? > 0 {
+        if line.trim().is_empty() {
+            line.clear();
+            continue;
+        }
+        if items.len() == 1
+            && expected_first_line_checksum.is_some_and(|expected| {
+                crate::rollout_seek_index::line_checksum(line.as_bytes()) != expected
+            })
+        {
+            return Ok(None);
+        }
+        let mut value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => {
+                parse_errors = parse_errors.saturating_add(1);
+                line.clear();
+                continue;
+            }
+        };
+        if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
+            line.clear();
+            continue;
+        }
+        let rollout_line = match crate::decode_rollout_line(value) {
+            Ok(rollout_line) => rollout_line,
+            Err(_) => {
+                parse_errors = parse_errors.saturating_add(1);
+                line.clear();
+                continue;
+            }
+        };
+        let item = rollout_line.item;
+        if items.len() == 1
+            && !matches!(&item, RolloutItem::Compacted(compacted)
+                if is_safe_compaction_checkpoint(compacted, session_meta.meta.history_mode))
+        {
+            return Ok(None);
+        }
+        items.push(item);
+        line.clear();
+    }
+    if items.len() == 1 {
+        return Ok(None);
+    }
+    Ok(Some((items, thread_id, parse_errors)))
 }
 
 pub(crate) fn reject_unknown_thread_history_mode(value: &Value) -> std::io::Result<()> {
@@ -2006,13 +2216,32 @@ impl RolloutWriterState {
         let mut write_result = Ok(());
         for item in &self.pending_items {
             match self.ordinal_state.current() {
-                Ok(ordinal) => match writer.write_rollout_item(item, ordinal).await {
-                    Ok(()) => self.ordinal_state.advance(),
-                    Err(err) => {
-                        write_result = Err(err);
-                        break;
+                Ok(ordinal) => {
+                    match writer.write_rollout_item(item, ordinal).await {
+                        Ok(offset) => {
+                            let history_mode = match self.ordinal_state {
+                                RolloutOrdinalState::Legacy => ThreadHistoryMode::Legacy,
+                                RolloutOrdinalState::Paginated { .. } => {
+                                    ThreadHistoryMode::Paginated
+                                }
+                            };
+                            if let RolloutItem::Compacted(compacted) = item
+                            && is_safe_compaction_checkpoint(compacted, history_mode)
+                            && let Err(error) = crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::write_for(
+                                &self.rollout_path,
+                                offset,
+                            )
+                        {
+                            warn!("failed to persist rollout compaction checkpoint for {}: {error}", self.rollout_path.display());
+                        }
+                            self.ordinal_state.advance();
+                        }
+                        Err(err) => {
+                            write_result = Err(err);
+                            break;
+                        }
                     }
-                },
+                }
                 Err(err) => {
                     write_result = Err(err);
                     break;
@@ -2103,11 +2332,28 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
-    let (_rollout_path, file, ordinal_state) =
+    let (rollout_path, file, ordinal_state) =
         open_rollout_for_append(rollout_path, /*writer_lock*/ None).await?;
     let ordinal = ordinal_state.current()?;
     let mut writer = JsonlWriter { file };
-    writer.write_rollout_item(item, ordinal).await
+    let offset = writer.write_rollout_item(item, ordinal).await?;
+    let history_mode = match ordinal_state {
+        RolloutOrdinalState::Legacy => ThreadHistoryMode::Legacy,
+        RolloutOrdinalState::Paginated { .. } => ThreadHistoryMode::Paginated,
+    };
+    if let RolloutItem::Compacted(compacted) = item
+        && is_safe_compaction_checkpoint(compacted, history_mode)
+        && let Err(error) = crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::write_for(
+            &rollout_path,
+            offset,
+        )
+    {
+        warn!(
+            "failed to persist rollout compaction checkpoint for {}: {error}",
+            rollout_path.display()
+        );
+    }
+    Ok(())
 }
 
 async fn open_rollout_for_append(
@@ -2189,7 +2435,7 @@ impl JsonlWriter {
         &mut self,
         rollout_item: &RolloutItem,
         ordinal: Option<u64>,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<u64> {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
@@ -2202,7 +2448,9 @@ impl JsonlWriter {
             ordinal,
             item: rollout_item,
         };
-        self.write_line(&line).await
+        let offset = self.file.metadata().await?.len();
+        self.write_line(&line).await?;
+        Ok(offset)
     }
     async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
         let mut json = serde_json::to_string(item)?;

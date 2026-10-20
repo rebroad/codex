@@ -29,6 +29,7 @@ pub struct ReverseJsonlScanner<R> {
     record_reversed: Vec<u8>,
     max_record_bytes: Option<usize>,
     discarding_oversized_record: bool,
+    last_record_start_offset: Option<u64>,
 }
 
 impl<R> ReverseJsonlScanner<R>
@@ -61,6 +62,7 @@ where
             record_reversed: Vec::new(),
             max_record_bytes: None,
             discarding_oversized_record: false,
+            last_record_start_offset: None,
         })
     }
 
@@ -81,6 +83,15 @@ where
         self.scan_start_offset
     }
 
+    /// Returns the start offset of the most recently returned record.
+    pub fn last_record_start_offset(&self) -> Option<u64> {
+        self.last_record_start_offset
+    }
+
+    pub fn into_inner(self) -> R {
+        self.reader
+    }
+
     /// Scans the next nonblank record.
     ///
     /// I/O failures are returned as [`Err`]. Invalid JSON records are returned as
@@ -96,7 +107,11 @@ where
                         self.discarding_oversized_record = false;
                         return Ok(None);
                     }
-                    return Ok(self.finish_record());
+                    let outcome = self.finish_record();
+                    if outcome.is_some() {
+                        self.last_record_start_offset = Some(0);
+                    }
+                    return Ok(outcome);
                 }
 
                 let read_size = usize::try_from(self.next_chunk_end.min(READ_CHUNK_SIZE as u64))
@@ -126,6 +141,8 @@ where
                     continue;
                 }
                 if let Some(outcome) = self.finish_record() {
+                    self.last_record_start_offset =
+                        Some(self.next_chunk_end + newline_position as u64 + 1);
                     return Ok(Some(outcome));
                 }
             } else {
