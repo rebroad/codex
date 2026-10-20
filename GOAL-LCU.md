@@ -39,6 +39,12 @@ windows, and perform approved UI interactions.
 - A Mousepad probe completed `typeText`, `Ctrl+A`, and `Backspace` through the
   Linux CUA surface. The temporary probe process left no Mousepad process
   running.
+- The desktop app's supported bundled-plugin reload path was exercised with
+  `CODEX_ELECTRON_BUNDLED_PLUGINS_FORCE_RELOAD=unified-computer-use`, but the
+  app did not rematerialize the generated cache: its active manifest still
+  reports `CUA_REPL_ENABLED_SURFACES=browser` and trusts only the browser
+  service. The user-facing desktop session therefore remains browser-only
+  until that materialization boundary is changed.
 
 ## Scope
 
