@@ -52,6 +52,9 @@ windows, and perform approved UI interactions.
   explicitly platform-specific). This Codex repository does not contain the
   Electron desktop source, so enabling that production feature gate is an
   external desktop-runtime change, not a Rust CLI change.
+- The local `chatgpt-window` checkout was checked as a possible desktop source,
+  but it is a small Chrome/ChatGPT bridge and contains no Electron feature gate
+  or bundled-plugin reconciliation code. It is not the owner of this change.
 
 ## Scope
 
