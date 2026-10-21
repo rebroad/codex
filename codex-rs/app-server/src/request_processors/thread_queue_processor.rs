@@ -25,9 +25,9 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_core::CodexThread;
 use codex_core::NotSubmittedReason;
-use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
+use codex_core::TurnInputSubmission;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -198,7 +198,7 @@ impl ThreadQueueRequestProcessor {
             .map_err(|error| config_load_error(&error))?;
         let submission = self
             .service()?
-            .start(
+            .start_or_steer(
                 thread.as_ref(),
                 params.queued_submission_id,
                 self.outgoing.request_trace_context(request_id).await,
@@ -206,21 +206,25 @@ impl ThreadQueueRequestProcessor {
             .await
             .map_err(queue_error)?;
         let (turn_id, root_turn_id) = match submission {
-            StartIfIdleSubmission::Started {
+            TurnInputSubmission::Started {
                 turn_id,
                 root_turn_id,
             } => (turn_id, root_turn_id),
-            StartIfIdleSubmission::NotSubmitted {
+            TurnInputSubmission::Steered {
+                turn_id,
+                root_turn_id,
+            } => (turn_id, root_turn_id),
+            TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::ServerDraining,
             } => return Err(crate::error_code::server_draining_error()),
-            StartIfIdleSubmission::NotSubmitted {
+            TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::NotIdle | NotSubmittedReason::PendingTriggerTurn,
             } => {
                 return Err(invalid_request(
                     "thread already has an active or pending turn",
                 ));
             }
-            StartIfIdleSubmission::NotSubmitted { reason } => {
+            TurnInputSubmission::NotSubmitted { reason } => {
                 return Err(internal_error(format!(
                     "Core declined to start queued user message: {reason:?}"
                 )));
