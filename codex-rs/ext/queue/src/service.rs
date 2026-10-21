@@ -10,6 +10,7 @@ use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::TurnStartOptions;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
@@ -397,6 +398,50 @@ impl QueuedItemService {
             ))
             .await?;
         if matches!(submission, StartIfIdleSubmission::Started { .. }) {
+            self.delete_locked(thread_id, queued_item_id).await?;
+        }
+        Ok(submission)
+    }
+
+    /// Starts the selected queued message, or steers the active turn when one exists.
+    ///
+    /// Automatic queue dispatch intentionally remains idle-only; this method is for an
+    /// explicit client request such as the Android resume action.
+    pub async fn start_or_steer(
+        &self,
+        thread: &CodexThread,
+        queued_item_id: Option<String>,
+        trace: Option<W3cTraceContext>,
+    ) -> Result<TurnInputSubmission, QueueServiceError> {
+        let thread_id = thread.startup_metadata().thread_id;
+        let _dispatch_guard = self.dispatch_guard(thread_id).await;
+        let item = self
+            .list(thread_id)
+            .await?
+            .into_iter()
+            .find(|item| queued_item_id.as_ref().is_none_or(|id| item.id == *id))
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: queued_item_id.as_ref().map_or_else(
+                    || "queue is empty".to_string(),
+                    |id| format!("queued submission not found: {id}"),
+                ),
+            })?;
+        let queued_item_id = item.id.clone();
+        let input @ TurnInput::UserInput { .. } = item.input else {
+            return Err(QueueServiceError::InvalidInput);
+        };
+        let submission = thread
+            .start_or_steer_turn(TurnInputRequest::new(input).with_trace(trace).on_start(
+                TurnStartOptions {
+                    turn_trigger: Some("queue".to_string()),
+                    ..Default::default()
+                },
+            ))
+            .await?;
+        if matches!(
+            submission,
+            TurnInputSubmission::Started { .. } | TurnInputSubmission::Steered { .. }
+        ) {
             self.delete_locked(thread_id, queued_item_id).await?;
         }
         Ok(submission)
