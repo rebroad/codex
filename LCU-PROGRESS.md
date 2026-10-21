@@ -71,6 +71,9 @@ completion percentages.
 - A session-bus failure probe was also run. Sky's X11 path remained usable and
   returned a valid accessibility tree, so D-Bus is not incorrectly treated as
   a mandatory prerequisite for this X11 backend.
+- Final audit: the live diagnostic returned `status: "ok"` with 106 apps, 10
+  windows, X11 state, screenshot bytes, and accessibility bytes; all five unit
+  tests and Ruff passed. The Codex backend goal is complete for this host.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.

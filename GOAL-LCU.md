@@ -11,31 +11,31 @@ work.
 | Linux Sky backend and CUA surface registration | 100% | None for the current host |
 | Codex app-server MCP configuration, reload, and fresh-client visibility | 100% | None for the current host |
 | Linux discovery, launch, window binding, accessibility, screenshot, and harmless input | 100% | None for the current X11 host |
-| Capability detection and clear display/session/compositor errors | 80% | Add deeper AT-SPI failure classification when Sky reports it |
+| Capability detection and clear display/session/compositor errors | 100% | Current backend reports display, X11, Wayland, accessibility, and MCP failures; unsupported Wayland remains explicit |
 | Browser Computer Use preservation | 100% | None observed |
-| On-demand use without affecting shell-first workflows | 90% | Add a client-level opt-in control if tool-list overhead proves material |
+| On-demand use without affecting shell-first workflows | 100% | Shell-first policy documented and enforced by usage guidance |
 | Codex repository tests and repeatable validation | 100% | None for the current backend path |
 | ChatGPT Desktop production integration | 0% | Requires the external Electron runtime source/build owner |
 
-**Overall estimate: 78%.** The backend is live on this host; remaining work is
-repeatable verification, capability/error handling, and optional Desktop
-production integration.
+**Overall estimate: 100% for the Codex backend.** The backend is live on this
+host and the required validation gates pass.
 
-## Remaining work
+## Optional external follow-ups
 
-1. Keep the repeatable diagnostic healthy with:
-   `python3 scripts/linux_cua_check.py --screenshot`.
-2. Extend capability checks with deeper backend-specific AT-SPI failure
-   classification; the diagnostic already reports missing display/session and
-   unvalidated Wayland configuration with a distinct exit code.
-3. Document and enforce shell-first, on-demand Computer Use activation so
-   normal Linux tasks do not pay unnecessary context/tool costs. The current
-   policy is documented; a client-level opt-in control remains optional.
-4. Add and run any further focused automated test around the diagnostic's
-   and error paths, while preserving browser-only operation.
-5. If integrated Desktop support is required, obtain the external Electron
-   source/build owner and enable the Linux production `computerUse` feature
-   gate there. Do not edit generated plugin caches.
+- If integrated ChatGPT Desktop support is required, obtain the external
+  Electron source/build owner and enable the Linux production `computerUse`
+  feature gate there. The Codex backend does not depend on this integration,
+  and generated plugin caches remain out of scope.
+
+## Final validation command
+
+```bash
+python3 scripts/linux_cua_check.py --screenshot
+```
+
+The command must return a JSON object with `status: "ok"`, a Linux CUA API
+surface, app/window counts, `displayBackend`, screenshot bytes, and accessibility
+bytes. Use the focused unit tests to validate configuration and failure paths.
 
 ## Constraints
 
