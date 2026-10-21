@@ -64,6 +64,13 @@ completion percentages.
   `cua.getState()` inventory errors, and explicitly rejects an unvalidated
   Wayland-only session with capability exit code 3. Both the healthy X11 path
   and the Wayland-only failure path were run successfully.
+- Operating policy: use shell, filesystem, process, and service tools for normal
+  Linux work. Invoke `linux_cua` only for GUI-only applications, visual state,
+  accessibility workflows, or UI input. The backend remains configured so it
+  can be used on demand; no Computer Use calls are needed for shell-first work.
+- A session-bus failure probe was also run. Sky's X11 path remained usable and
+  returned a valid accessibility tree, so D-Bus is not incorrectly treated as
+  a mandatory prerequisite for this X11 backend.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.

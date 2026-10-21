@@ -13,7 +13,7 @@ work.
 | Linux discovery, launch, window binding, accessibility, screenshot, and harmless input | 100% | None for the current X11 host |
 | Capability detection and clear display/session/compositor errors | 80% | Add deeper AT-SPI failure classification when Sky reports it |
 | Browser Computer Use preservation | 100% | None observed |
-| On-demand use without affecting shell-first workflows | 75% | Document activation and token-cost policy |
+| On-demand use without affecting shell-first workflows | 90% | Add a client-level opt-in control if tool-list overhead proves material |
 | Codex repository tests and repeatable validation | 100% | None for the current backend path |
 | ChatGPT Desktop production integration | 0% | Requires the external Electron runtime source/build owner |
 
@@ -29,7 +29,8 @@ production integration.
    classification; the diagnostic already reports missing display/session and
    unvalidated Wayland configuration with a distinct exit code.
 3. Document and enforce shell-first, on-demand Computer Use activation so
-   normal Linux tasks do not pay unnecessary context/tool costs.
+   normal Linux tasks do not pay unnecessary context/tool costs. The current
+   policy is documented; a client-level opt-in control remains optional.
 4. Add and run any further focused automated test around the diagnostic's
    and error paths, while preserving browser-only operation.
 5. If integrated Desktop support is required, obtain the external Electron
