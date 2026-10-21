@@ -15,12 +15,32 @@ work.
 | Browser Computer Use preservation | 100% | None observed |
 | On-demand use without affecting shell-first workflows | 100% | Shell-first policy documented and enforced by usage guidance |
 | Codex repository tests and repeatable validation | 100% | None for the current backend path |
+| Configurable backend selection: Sky or open X11-style implementation | 0% | Define the configuration contract, implement the alternate backend adapter, and preserve Sky as the default |
+| Cross-backend comparison of token use and runtime behavior | 0% | Create an identical safe workload and record model tokens, tool calls, screenshots, latency, and success/failure results |
 | ChatGPT Desktop production integration | 0% | Requires the external Electron runtime source/build owner |
 
 **Overall estimate: 100% for the Codex backend.** The backend is live on this
 host and the required validation gates pass.
 
 ## Optional external follow-ups
+
+### Open-source backend option
+
+Keep the current Sky backend available, while adding an explicit configuration
+option for an open-source Linux implementation based on the methods used by
+`wieslawsoltes/LinuxComputerUse`:
+
+- retain Sky as the default backend;
+- provide a separate X11/XWayland implementation rather than replacing Sky;
+- select the backend through normal Codex configuration and report the active
+  backend in diagnostics;
+- keep capability and approval checks consistent across both implementations;
+- compare both paths using the same harmless GUI workload before choosing any
+  default or fallback policy.
+
+The alternate implementation should borrow the repository's deterministic
+window targeting and screenshot-before/after verification methods without
+copying its shell driver into the Sky path.
 
 - If integrated ChatGPT Desktop support is required, obtain the external
   Electron source/build owner and enable the Linux production `computerUse`
@@ -39,7 +59,8 @@ bytes. Use the focused unit tests to validate configuration and failure paths.
 
 ## Constraints
 
-- Use the existing Sky Linux backend; do not reimplement it.
+- Keep the existing Sky Linux backend intact and selectable as the default;
+  implement any open-source alternative as a separate backend.
 - Keep computer actions capability-gated and subject to existing approval and
   guardian policy checks.
 - Do not substitute arbitrary shell execution for structured app operations.
