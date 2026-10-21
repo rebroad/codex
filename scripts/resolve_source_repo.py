@@ -65,10 +65,12 @@ def source_for_worktree(build_root: Path) -> Path | None:
 
 
 def is_build_repo_inside_source(source_root: Path, build_root: Path) -> bool:
+    """Return whether the build tree is nested in source, excluding a source alias symlink."""
+    build_repo_is_symlink = build_root.is_symlink()
     source_root = source_root.resolve()
     build_root = build_root.resolve()
     if build_root == source_root:
-        return True
+        return not build_repo_is_symlink
 
     source_path = os.path.normcase(str(source_root))
     build_path = os.path.normcase(str(build_root))
