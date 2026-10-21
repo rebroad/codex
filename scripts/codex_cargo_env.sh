@@ -42,6 +42,7 @@ done
 
 [[ -d "${SOURCE_REPO}/codex-rs" ]] || { echo "source repository not found: ${SOURCE_REPO}" >&2; exit 1; }
 SOURCE_REPO_REAL="$(cd -- "${SOURCE_REPO}" && pwd -P)"
+BUILD_REPO_INPUT="${BUILD_REPO}"
 if [[ "${BUILD_REPO}" != /* ]]; then
   BUILD_REPO="$(cd -- "${BUILD_REPO}" && pwd -P)" || {
     echo "build repository not found: ${BUILD_REPO}" >&2
@@ -50,15 +51,18 @@ if [[ "${BUILD_REPO}" != /* ]]; then
 fi
 [[ -d "${BUILD_REPO}/codex-rs" ]] || { echo "build repository not found: ${BUILD_REPO}" >&2; exit 1; }
 BUILD_REPO_REAL="$(cd -- "${BUILD_REPO}" && pwd -P)"
-case "${BUILD_REPO_REAL}/" in
-  "${SOURCE_REPO_REAL}/"*)
-    echo "build repository must be outside the source checkout: ${BUILD_REPO_REAL}" >&2
-    exit 1
-    ;;
-esac
 if [[ "${SOURCE_REPO_REAL}" == "${BUILD_REPO_REAL}" ]]; then
-  echo "source and build repositories must be different" >&2
-  exit 1
+  [[ -L "${BUILD_REPO_INPUT}" ]] || {
+    echo "source and build repositories must be different unless the build path is an explicit symlink" >&2
+    exit 1
+  }
+else
+  case "${BUILD_REPO_REAL}/" in
+    "${SOURCE_REPO_REAL}/"*)
+      echo "build repository must be outside the source checkout: ${BUILD_REPO_REAL}" >&2
+      exit 1
+      ;;
+  esac
 fi
 SOURCE_REPO="${SOURCE_REPO_REAL}"
 BUILD_REPO="${BUILD_REPO_REAL}"
