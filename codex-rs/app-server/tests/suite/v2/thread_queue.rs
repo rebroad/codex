@@ -698,7 +698,7 @@ async fn interrupt_preserves_queue_and_queue_start_can_resume_a_non_head_item() 
 }
 
 #[tokio::test]
-async fn queue_start_while_active_returns_busy_and_preserves_the_queue() -> Result<()> {
+async fn queue_start_while_active_steers_and_removes_the_queued_message() -> Result<()> {
     skip_if_remote!(
         Ok(()),
         "uses a host-local command and cwd fixture unavailable to remote executors"
@@ -707,7 +707,6 @@ async fn queue_start_while_active_returns_busy_and_preserves_the_queue() -> Resu
     let server = create_mock_responses_server_sequence_unchecked(vec![
         blocked_turn_response()?,
         create_final_assistant_message_sse_response("active turn done")?,
-        create_final_assistant_message_sse_response("queued message done")?,
     ])
     .await;
     let (mut app, _codex_home, _server) = queue_app_with_server(server).await?;
@@ -716,7 +715,7 @@ async fn queue_start_while_active_returns_busy_and_preserves_the_queue() -> Resu
         .await?
         .thread
         .id;
-    let (_, approval_id) = start_blocked_turn(&mut app, &thread_id).await?;
+    let (active_turn, approval_id) = start_blocked_turn(&mut app, &thread_id).await?;
     let queued = queue_item(
         &mut app,
         ThreadQueueAddParams {
@@ -727,20 +726,17 @@ async fn queue_start_while_active_returns_busy_and_preserves_the_queue() -> Resu
     .await?;
     assert_eq!(queued.client_user_message_id, "active-queued-client-id");
 
-    let start_request_id = app
-        .send_raw_request("thread/queue/start", Some(json!({ "threadId": thread_id })))
+    let response: ThreadQueueStartResponse = app
+        .request(|request_id| ClientRequest::ThreadQueueStart {
+            request_id,
+            params: ThreadQueueStartParams {
+                thread_id: thread_id.clone(),
+                queued_submission_id: Some(queued.id.clone()),
+            },
+        })
         .await?;
-    let error: JSONRPCError = timeout(
-        READ_TIMEOUT,
-        app.read_stream_until_error_message(RequestId::Integer(start_request_id)),
-    )
-    .await??;
-    assert_eq!(error.error.code, -32600);
-    assert_eq!(
-        error.error.message,
-        "thread already has an active or pending turn"
-    );
-    assert_eq!(list_queue(&mut app, &thread_id).await?.data, vec![queued]);
+    assert_eq!(response.turn.id, active_turn);
+    assert_eq!(list_queue(&mut app, &thread_id).await?.data, vec![]);
     decline_approval(&mut app, approval_id).await?;
 
     let started_item = loop {
@@ -759,15 +755,15 @@ async fn queue_start_while_active_returns_busy_and_preserves_the_queue() -> Resu
     };
     assert_eq!(client_id.as_deref(), Some("active-queued-client-id"));
 
+    assert_eq!(started_item.turn_id, active_turn);
     let completed = loop {
         let completed: TurnCompletedNotification =
             timeout(READ_TIMEOUT, app.read_notification("turn/completed")).await??;
-        if completed.turn.id == started_item.turn_id {
+        if completed.turn.id == active_turn {
             break completed;
         }
     };
     assert_eq!(completed.turn.status, TurnStatus::Completed);
-    assert!(list_queue(&mut app, &thread_id).await?.data.is_empty());
     Ok(())
 }
 
