@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from linux_cua_check import DISPLAY_ERROR, capability_error_code
 
 SCRIPT = Path(__file__).with_name("linux_cua_check.py")
 
@@ -49,6 +50,11 @@ class LinuxCuaCheckTests(unittest.TestCase):
             code, result = self.run_check(config, display=True)
         self.assertEqual(code, 2)
         self.assertEqual(result["status"], "error")
+
+    def test_graphical_backend_errors_have_capability_code(self) -> None:
+        self.assertEqual(capability_error_code("Could not connect to X11"), DISPLAY_ERROR)
+        self.assertEqual(capability_error_code("AT-SPI accessibility unavailable"), DISPLAY_ERROR)
+        self.assertNotEqual(capability_error_code("MCP protocol error"), DISPLAY_ERROR)
 
 
 if __name__ == "__main__":

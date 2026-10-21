@@ -55,6 +55,11 @@ completion percentages.
 - Added three standard-library unit tests for missing configuration, invalid
   TOML, and missing graphical-session handling. All three pass, as do Ruff and
   `git diff --check`.
+- Refined capability classification so backend messages mentioning X11,
+  Wayland, AT-SPI, accessibility, D-Bus, or display/session setup return the
+  dedicated capability exit code. An unavailable `DISPLAY=:99` was verified
+  to return code 3 with the backend's actionable X11 guidance; the healthy
+  `--screenshot` path still passes afterward.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.

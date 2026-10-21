@@ -30,6 +30,20 @@ def fail(code: int, message: str) -> int:
     return code
 
 
+def capability_error_code(message: str) -> int:
+    lowered = message.lower()
+    capability_markers = (
+        "display",
+        "x11",
+        "wayland",
+        "at-spi",
+        "accessibility",
+        "xdg_runtime",
+        "dbus",
+    )
+    return DISPLAY_ERROR if any(marker in lowered for marker in capability_markers) else MCP_ERROR
+
+
 def read_config(path: Path) -> tuple[str, list[str], dict[str, str]]:
     try:
         with path.open("rb") as stream:
@@ -197,7 +211,8 @@ nodeRepl.write(JSON.stringify(result));
         print(json.dumps({"status": "ok", **result}, sort_keys=True))
         return 0
     except (OSError, RuntimeError, TimeoutError, json.JSONDecodeError) as error:
-        return fail(MCP_ERROR, str(error))
+        message = str(error)
+        return fail(capability_error_code(message), message)
     finally:
         process.terminate()
         try:
