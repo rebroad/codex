@@ -45,20 +45,6 @@ if [[ -z "${SOURCE_REPO}" || ! -d "${SOURCE_REPO}/codex-rs" ]]; then
   exit 1
 fi
 BUILD_REPO="${BUILD_TREE}"
-# A .build/.make sibling symlink back to the source checkout is an explicit
-# request to build in the source tree. Preserve the guard for a direct source
-# path and for build paths that resolve somewhere else.
-allow_source_build_symlink="false"
-case "${BUILD_TREE##*/}" in
-  *.build|*.make)
-    if [[ -L "${BUILD_TREE}" \
-      && "$(cd -- "${BUILD_TREE}" && pwd -P)" == "$(cd -- "${SOURCE_REPO}" && pwd -P)" ]]; then
-      allow_source_build_symlink="true"
-    fi
-    ;;
-esac
-[[ "${BUILD_REPO}" != "${SOURCE_REPO}" || "${allow_source_build_symlink}" == true ]] \
-  || { echo "build_codex.sh: build tree must be a sibling of the source checkout, not the source checkout itself" >&2; exit 1; }
 BUILD_WORKSPACE="${BUILD_REPO}/codex-rs"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
 VERSION=""
@@ -474,6 +460,10 @@ refresh_build_lockfile() {
   local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock" target_dir lock_target_mode
   local build_lock="${BUILD_WORKSPACE}/Cargo.lock"
   local fingerprint_file="${BUILD_REPO}/build/.codex-source-lock-fingerprint"
+  if [[ "$(cd -- "${SOURCE_REPO}" && pwd -P)" == "$(cd -- "${BUILD_REPO}" && pwd -P)" ]]; then
+    echo "Using the source Cargo.lock for the source-tree build." >&2
+    return
+  fi
   # A comma-separated npm target selection has no single Cargo target
   # directory. Use the first selected package target for metadata/lockfile
   # work; each actual build still selects its own target directory below.

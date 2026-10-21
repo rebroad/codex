@@ -20,6 +20,10 @@ if [[ ! -d "${build_repo}/codex-rs" ]]; then
 fi
 source_repo_real="$(cd -- "${source_repo}" && pwd -P)"
 build_repo_real="$(cd -- "${build_repo}" && pwd -P)"
+if [[ "${source_repo_real}" == "${build_repo_real}" && -L "${build_repo}" ]]; then
+  echo "Using source checkout as the build tree via symlink: ${build_repo}" >&2
+  exit 0
+fi
 case "${build_repo_real}/" in
   "${source_repo_real}/"*)
     echo "build tree must be outside the source checkout: ${build_repo_real}" >&2
