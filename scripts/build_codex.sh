@@ -45,8 +45,6 @@ if [[ -z "${SOURCE_REPO}" || ! -d "${SOURCE_REPO}/codex-rs" ]]; then
   exit 1
 fi
 BUILD_REPO="${BUILD_TREE}"
-[[ "${BUILD_REPO}" != "${SOURCE_REPO}" ]] \
-  || { echo "build_codex.sh: build tree must be a sibling of the source checkout, not the source checkout itself" >&2; exit 1; }
 BUILD_WORKSPACE="${BUILD_REPO}/codex-rs"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
 VERSION=""
@@ -69,6 +67,7 @@ LOCKFILE_REGENERATION_REQUIRED="false"
 ALLOW_CONCURRENT_BUILD="false"
 RESTART_APP_SERVER="false"
 PROFILE_OPTION_SET="false"
+SOURCE_LOCK_BACKUP=""
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -252,6 +251,13 @@ release_cargo_target_lock() {
 cleanup_build_process() {
   release_cargo_target_lock
   codex_sccache_server_stop
+  if [[ -n "${SOURCE_LOCK_BACKUP}" && -f "${SOURCE_LOCK_BACKUP}" ]]; then
+    if cp -p "${SOURCE_LOCK_BACKUP}" "${SOURCE_REPO}/codex-rs/Cargo.lock"; then
+      rm -f "${SOURCE_LOCK_BACKUP}"
+    else
+      echo "Unable to restore source Cargo.lock from ${SOURCE_LOCK_BACKUP}" >&2
+    fi
+  fi
   rm -f "${BUILD_PROCESS_RECORD}" "${BUILD_REPO}/build/.native-mold-result-$$"
 }
 
@@ -476,6 +482,14 @@ refresh_build_lockfile() {
   local source_lock="${SOURCE_REPO}/codex-rs/Cargo.lock" target_dir lock_target_mode
   local build_lock="${BUILD_WORKSPACE}/Cargo.lock"
   local fingerprint_file="${BUILD_REPO}/build/.codex-source-lock-fingerprint"
+  if [[ "$(cd -- "${SOURCE_REPO}" && pwd -P)" == "$(cd -- "${BUILD_REPO}" && pwd -P)" ]]; then
+    python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
+      --manifest "${BUILD_WORKSPACE}/Cargo.toml" \
+      --source-lock "${source_lock}" \
+      --build-lock "${source_lock}"
+    echo "Temporarily normalized the source Cargo.lock for the source-tree build." >&2
+    return
+  fi
   # A comma-separated npm target selection has no single Cargo target
   # directory. Use the first selected package target for metadata/lockfile
   # work; each actual build still selects its own target directory below.
@@ -1570,6 +1584,17 @@ done
 export CODEX_ALLOW_CONCURRENT_BUILD="${ALLOW_CONCURRENT_BUILD}"
 export CODEX_BUILD_PID="$$"
 trap cleanup_build_process EXIT
+if [[ "$(cd -- "${SOURCE_REPO}" && pwd -P)" == "$(cd -- "${BUILD_REPO}" && pwd -P)" ]]; then
+  source_lock_backup_root="${PREFIX:+${PREFIX}/tmp}"
+  [[ -d "${source_lock_backup_root}" ]] || source_lock_backup_root=/var/tmp
+  source_lock_backup_candidate="$(mktemp "${source_lock_backup_root%/}/codex-source-Cargo.lock.XXXXXX")"
+  if cp -p "${SOURCE_REPO}/codex-rs/Cargo.lock" "${source_lock_backup_candidate}"; then
+    SOURCE_LOCK_BACKUP="${source_lock_backup_candidate}"
+  else
+    rm -f "${source_lock_backup_candidate}"
+    die "unable to preserve source Cargo.lock before source-tree build"
+  fi
+fi
 
 read_toolchain
 native_target_host() {
