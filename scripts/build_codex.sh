@@ -45,7 +45,19 @@ if [[ -z "${SOURCE_REPO}" || ! -d "${SOURCE_REPO}/codex-rs" ]]; then
   exit 1
 fi
 BUILD_REPO="${BUILD_TREE}"
-[[ "${BUILD_REPO}" != "${SOURCE_REPO}" ]] \
+# A .build/.make sibling symlink back to the source checkout is an explicit
+# request to build in the source tree. Preserve the guard for a direct source
+# path and for build paths that resolve somewhere else.
+allow_source_build_symlink="false"
+case "${BUILD_TREE##*/}" in
+  *.build|*.make)
+    if [[ -L "${BUILD_TREE}" \
+      && "$(cd -- "${BUILD_TREE}" && pwd -P)" == "$(cd -- "${SOURCE_REPO}" && pwd -P)" ]]; then
+      allow_source_build_symlink="true"
+    fi
+    ;;
+esac
+[[ "${BUILD_REPO}" != "${SOURCE_REPO}" || "${allow_source_build_symlink}" == true ]] \
   || { echo "build_codex.sh: build tree must be a sibling of the source checkout, not the source checkout itself" >&2; exit 1; }
 BUILD_WORKSPACE="${BUILD_REPO}/codex-rs"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.cargo/bin}"
