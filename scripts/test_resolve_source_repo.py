@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +20,42 @@ class ResolveSourceRepoTests(unittest.TestCase):
             build_root.mkdir(parents=True)
 
             self.assertTrue(is_build_repo_inside_source(source_root, build_root))
+
+    def test_allows_build_symlink_pointing_to_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_root = root / "codex"
+            source_root.mkdir()
+            build_root = root / "codex.build"
+            build_root.symlink_to(source_root, target_is_directory=True)
+
+            self.assertFalse(is_build_repo_inside_source(source_root, build_root))
+
+    def test_sync_skips_copy_for_build_symlink_to_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_root = root / "codex"
+            (source_root / "codex-rs").mkdir(parents=True)
+            build_root = root / "codex.build"
+            build_root.symlink_to(source_root, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    shutil.which("bash") or "bash",
+                    str(Path(__file__).with_name("sync_build_tree.sh")),
+                    str(source_root),
+                    str(build_root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={"PATH": ""},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "Using source checkout as the build tree via symlink", result.stderr
+            )
 
     def test_resolves_worktree_under_build_container_to_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
