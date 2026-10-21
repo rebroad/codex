@@ -56,6 +56,9 @@ class LinuxCuaCheckTests(unittest.TestCase):
         self.assertEqual(capability_error_code("AT-SPI accessibility unavailable"), DISPLAY_ERROR)
         self.assertNotEqual(capability_error_code("MCP protocol error"), DISPLAY_ERROR)
 
+    def test_wayland_error_has_capability_code(self) -> None:
+        self.assertEqual(capability_error_code("Wayland session is unavailable"), DISPLAY_ERROR)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,6 +60,10 @@ completion percentages.
   dedicated capability exit code. An unavailable `DISPLAY=:99` was verified
   to return code 3 with the backend's actionable X11 guidance; the healthy
   `--screenshot` path still passes afterward.
+- The diagnostic now reports `displayBackend: "x11"`, surfaces structured
+  `cua.getState()` inventory errors, and explicitly rejects an unvalidated
+  Wayland-only session with capability exit code 3. Both the healthy X11 path
+  and the Wayland-only failure path were run successfully.
 - Confirmed that `/mnt/kingston/@home/rebroad/src/chatgpt-window` is not the
   desktop runtime source; it is a small Chrome/ChatGPT bridge with no Electron
   feature gate or plugin reconciliation code.

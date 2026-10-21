@@ -134,12 +134,20 @@ def run(config_path: Path, timeout: float, screenshot: bool) -> int:
     except ValueError as error:
         return fail(CONFIG_ERROR, str(error))
 
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+    display = os.environ.get("DISPLAY")
+    wayland = os.environ.get("WAYLAND_DISPLAY")
+    if not display and not wayland:
         return fail(
             DISPLAY_ERROR,
             "no DISPLAY or WAYLAND_DISPLAY is set; run from a graphical session",
         )
-    if os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("XDG_RUNTIME_DIR"):
+    if wayland and not display:
+        return fail(
+            DISPLAY_ERROR,
+            "Wayland session detected; generic Linux CUA Wayland support is not validated; "
+            "use an X11 display for this backend",
+        )
+    if wayland and not os.environ.get("XDG_RUNTIME_DIR"):
         return fail(DISPLAY_ERROR, "WAYLAND_DISPLAY is set but XDG_RUNTIME_DIR is missing")
     if not Path(command).is_file() or not os.access(command, os.X_OK):
         return fail(CONFIG_ERROR, f"linux_cua.command is not executable: {command}")
@@ -178,7 +186,15 @@ def run(config_path: Path, timeout: float, screenshot: bool) -> int:
         send(process, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
 
         # The CUA REPL requires getState as the first JavaScript operation.
-        call_js(process, 2, "await cua.getState({emit:false})", timeout)
+        state_text = call_js(
+            process,
+            2,
+            "nodeRepl.write(JSON.stringify(await cua.getState({emit:false})))",
+            timeout,
+        )
+        state = json.loads(state_text.strip().splitlines()[-1])
+        if state.get("errors"):
+            return fail(DISPLAY_ERROR, "; ".join(str(error) for error in state["errors"]))
         expression = """
 let apps = await cua.listApps({emit:false});
 let windows = apps.flatMap((app) => app.windows || []);
@@ -188,6 +204,7 @@ let result = {
     launch_app: typeof cua.computer?.launch_app,
     getApp: typeof cua.getApp,
   },
+  displayBackend: DISPLAY_BACKEND,
   appCount: apps.length,
   windowCount: windows.length,
   screenshotBytes: null,
@@ -199,7 +216,9 @@ if (SCREENSHOT && windows.length > 0) {
   result.accessibilityBytes = (await app.getAXState({emit:false})).length;
 }
 nodeRepl.write(JSON.stringify(result));
-""".replace("SCREENSHOT", json.dumps(screenshot))
+""".replace("SCREENSHOT", json.dumps(screenshot)).replace(
+            "DISPLAY_BACKEND", json.dumps("x11" if display else "wayland")
+        )
         payload = call_js(process, 3, expression, timeout)
         result = json.loads(payload.strip().splitlines()[-1])
         if result["api"] != {"listApps": "function", "launch_app": "function", "getApp": "function"}:
