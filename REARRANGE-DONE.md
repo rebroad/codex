@@ -9,6 +9,18 @@
 - This continuation is limited to auditing the 31 newer commits since that baseline. No source or test changes, tests, or builds are permitted. Create a fresh unique checkpoint after the two preparatory audit-record commits and record its exact commit/tree before rewriting.
 - Preliminary owner classification: the 11 new fixups each touch the feature's implementation or its task-specific progress record: build orchestrator (`b61ed36e0b`), source-tree build symlinks (`c8f4f1993d`), remote-control pairing (`910551af29`), build timing (`c82b668e17`, `0628e60bbc`), wait countdown (`f98dcf4a28`), Linux CUA diagnostic (`61789b2b13`, `0ad018af53`, `1a43a82d1e`, `86fdbe1088`), and daemon restart-if-idle (`bcf7f340d5`). The daemon fixup edits the install/restart integration introduced by its named owner. Detailed owner and range-diff verification remains pending.
 
+## Follow-up fixup autosquash completed 2026-10-22
+
+- The fixed tag was resolved again before this follow-up operation: upstream tag object `40f4a054d875a76b18a2b733b6224976cf64a826` peels to the locked commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. Starting `alpha` was clean at `53948a22816fcaf88f5957c9e559407b299fe207`, tree `3b7f52bba1896d6478c34e0292d594849d544088`; the fixed merge base was unchanged.
+- Replayed the complete fixed-base range (638 commits at the checkpoint); the result has 627 downstream commits. All 11 `fixup!` commits were absorbed, and no `fixup!` or `squash!` subject remains. The checkpoint tree is byte-for-byte identical to the result tree, and `alpha` is clean.
+- Range-diff confirms the intended repair owners changed: the Codex build orchestrator, wait countdown, remote-control pairing, daemon restart-if-idle, per-stage build timing, Linux CUA diagnostic, and source-tree build symlink support. The orchestrator fixup moved the native stdio server into the main Cargo invocation; the timing owner consequently no longer records a redundant standalone stdio build stage. The daemon fixup replaced the old installed-binary size/hash check with the running daemon version check. A mixed timing fixup was limited to its stderr-capture correction; its obsolete binary-digest hunk was superseded by the daemon owner fixup.
+- The other 20 commits remain separate: independent Android transcription queue, idle voice controls, rollout checkpoint seeking, and source-tree build support; Linux CUA goal, runtime evidence, diagnostic, configuration option, and chronological progress notes; separate TODO items and rearrangement audit records. The repeated `TODO` additions describe different follow-up ideas and remain separate. The source-tree build support commits are the one remaining owner consolidation for the next pass.
+- No tests or builds were run. `POTENTIAL-ISSUES.md` records one unverified cleanup failure concern found during source inspection, as requested; it is deferred until after this goal.
+
+## Source-tree symlink owner consolidation started 2026-10-22
+
+- Before changing refs or commits, re-resolved the same upstream annotated tag and peeled SHA as above. `alpha` is clean at `53948a22816fcaf88f5957c9e559407b299fe207`, tree `3b7f52bba1896d6478c34e0292d594849d544088`. The task is to attach `5c6bd3e82c` and its `c8f4f1993d` repair to owner `009365f0f5`, preserving that exact tree. This needs a fresh unique checkpoint before rewriting.
+
 ## Post-rebase checkpoint restoration
 
 - User rebased `alpha` onto `rust-v0.163.0-alpha.11` (`5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`) after checkpointing `codex.oops` at `fa08bd2dd52a9d2cd016636d3ecedd2e62013c1f`, tree `5173ba87952048611f8d4e8b561d0dd355ad8e02`. The live `alpha` merge base is now exactly the locked tag commit.
