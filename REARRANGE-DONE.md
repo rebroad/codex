@@ -2,6 +2,13 @@
 
 > Entries before “Post-rebase ownership corrections and repeated-path audit” record earlier branch states. Their counts, commit hashes, and merge-base claims are archival unless explicitly refreshed in that post-rebase section.
 
+## Fixed-base continuation started 2026-10-22
+
+- Before changing refs or commits, resolved `rust-v0.163.0-alpha.11` through authoritative `https://github.com/openai/codex.git`: the annotated tag object is `40f4a054d875a76b18a2b733b6224976cf64a826` and its peeled commit is `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. The local tag ref is absent, but the remote tag resolves to the exact SHA locked by this goal. Use only the peeled SHA as the downstream lower boundary.
+- Starting `alpha` is clean at `b61ed36e0b71946939bafc3469cf98b25eac53de`, tree `0d30156eea3e889bffe47babe0c11e0132ba7eb9`; `origin/alpha` currently points to the same local commit. The range after the locked base contains 636 commits, all on the first-parent chain, and the earlier audit baseline `3ab33f57d7694ab9495e2333707d1e289b893f35` is an ancestor.
+- This continuation is limited to auditing the 31 newer commits since that baseline. No source or test changes, tests, or builds are permitted. Create a fresh unique checkpoint after the two preparatory audit-record commits and record its exact commit/tree before rewriting.
+- Preliminary owner classification: the 11 new fixups each touch the feature's implementation or its task-specific progress record: build orchestrator (`b61ed36e0b`), source-tree build symlinks (`c8f4f1993d`), remote-control pairing (`910551af29`), build timing (`c82b668e17`, `0628e60bbc`), wait countdown (`f98dcf4a28`), Linux CUA diagnostic (`61789b2b13`, `0ad018af53`, `1a43a82d1e`, `86fdbe1088`), and daemon restart-if-idle (`bcf7f340d5`). The daemon fixup edits the install/restart integration introduced by its named owner. Detailed owner and range-diff verification remains pending.
+
 ## Post-rebase checkpoint restoration
 
 - User rebased `alpha` onto `rust-v0.163.0-alpha.11` (`5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`) after checkpointing `codex.oops` at `fa08bd2dd52a9d2cd016636d3ecedd2e62013c1f`, tree `5173ba87952048611f8d4e8b561d0dd355ad8e02`. The live `alpha` merge base is now exactly the locked tag commit.
