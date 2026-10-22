@@ -30,6 +30,59 @@ fn trusted_project_edit_targets_project_trust_level() {
 }
 
 #[tokio::test]
+async fn local_projectless_child_of_trusted_folder_requires_own_trust() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let home = temp_dir.path().join("home");
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&bin)?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(codex_home),
+            ..ConfigOverrides::default()
+        })
+        .build()
+        .await?;
+    let app_server =
+        AppServerClient::InProcess(crate::tests::start_test_embedded_app_server(config).await?);
+    write_trusted_project(app_server.request_handle(), &home).await?;
+    assert_eq!(
+        read_remote_project_trust(app_server.request_handle(), &home, ProjectTrustHost::Local)
+            .await?,
+        None
+    );
+
+    let undecided = Some(RemoteProjectTrust {
+        trust_level: None,
+        cwd: bin.clone(),
+        trust_target: bin.clone(),
+    });
+    assert_eq!(
+        read_remote_project_trust(app_server.request_handle(), &bin, ProjectTrustHost::Local)
+            .await?,
+        undecided
+    );
+    assert_eq!(
+        read_remote_project_trust(app_server.request_handle(), &bin, ProjectTrustHost::Remote)
+            .await?,
+        undecided
+    );
+
+    write_trusted_project(app_server.request_handle(), &bin).await?;
+    for host in [ProjectTrustHost::Local, ProjectTrustHost::Remote] {
+        assert_eq!(
+            read_remote_project_trust(app_server.request_handle(), &bin, host).await?,
+            None
+        );
+    }
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn remote_project_trust_guards_thread_start_and_preserves_repository_decisions() -> Result<()>
 {
     let temp_dir = tempfile::tempdir()?;
@@ -273,13 +326,22 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
             )
             .await?;
         }
-        assert_eq!(
-            read_trust(&canonical_project_cwd, ProjectTrustHost::Local).await?,
-            marked_root.then(|| RemoteProjectTrust {
+        let expected = if marked_root {
+            RemoteProjectTrust {
                 trust_level: Some(TrustLevel::Untrusted),
                 cwd: canonical_project_cwd.clone(),
                 trust_target: PathBuf::from(project_trust_key(&project_root)),
-            })
+            }
+        } else {
+            RemoteProjectTrust {
+                trust_level: None,
+                cwd: canonical_project_cwd.clone(),
+                trust_target: canonical_project_cwd.clone(),
+            }
+        };
+        assert_eq!(
+            read_trust(&canonical_project_cwd, ProjectTrustHost::Local).await?,
+            Some(expected)
         );
     }
     // A gitfile checkout is still a project when configured markers exclude Git.
