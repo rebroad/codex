@@ -278,7 +278,6 @@ pub(crate) async fn read_remote_project_trust(
                     .min_by_key(|(path, _)| *path)
             })
     };
-    let mut projectless = false;
     let local_roots = if host == ProjectTrustHost::Local && project_layers.is_empty() {
         let cwd = AbsolutePathBuf::from_absolute_path(&cwd)?;
         let markers = serde_json::from_value::<Option<Vec<String>>>(
@@ -287,10 +286,6 @@ pub(crate) async fn read_remote_project_trust(
         .unwrap_or_else(default_project_root_markers);
         let project_root = discover_project_root(LOCAL_FS.as_ref(), &cwd, &markers).await?;
         let git_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd).await;
-        projectless = project_root.is_none()
-            && discover_project_root(LOCAL_FS.as_ref(), &cwd, &default_project_root_markers())
-                .await?
-                .is_none();
         Some((
             normalized_project_trust_keys(project_root.as_ref().unwrap_or(&cwd).as_path()),
             git_root.map(|root| normalized_project_trust_keys(root.as_path())),
@@ -354,9 +349,10 @@ pub(crate) async fn read_remote_project_trust(
                         .is_some_and(|suffix| suffix.starts_with(" is marked as untrusted"))
             })
         });
+    // An unmarked working directory still needs its own trust decision; the
+    // local TUI must not silently accept a directory Remote Control rejects.
     if !explicitly_untrusted
         && (trust_level == Some(TrustLevel::Trusted)
-            || trust_level.is_none() && projectless
             || (trust_level.is_none()
                 && disabled_project.is_none()
                 && project_layers
