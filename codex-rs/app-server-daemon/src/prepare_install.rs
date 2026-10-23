@@ -245,8 +245,8 @@ async fn prepare_from_package(
             && std::fs::read(stage.path().join("codex-package.json"))? == manifest_bytes
             && managed_install::executable_identity(&staged_exe)
                 .await?
-                .same_contents(&running_identity),
-        "the CLI package changed while preparing the daemon or differs from the running executable"
+                .same_version(&running_identity),
+        "the CLI package changed while preparing the daemon or has a different version from the running executable"
     );
     // Reverse the WinGet archive's root filenames only after verifying the copied
     // source. Hash the final tree for reuse, since it now differs from the source.

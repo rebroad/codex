@@ -192,43 +192,35 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ExecutableIdentity {
-    digest: [u8; 32],
-    // Distinguish release generations whose executable bytes are identical.
+    // Older daemon PID records stored a content digest here instead.
+    #[serde(default)]
+    version: String,
+    // Distinguish release generations that ship the same CLI version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path_digest: Option<[u8; 32]>,
 }
 
 impl ExecutableIdentity {
-    pub(crate) fn same_contents(&self, other: &Self) -> bool {
-        self.digest == other.digest
+    pub(crate) fn new(version: String, executable: &Path) -> Self {
+        Self {
+            version,
+            path_digest: Some(path_digest(executable)),
+        }
+    }
+
+    pub(crate) fn same_version(&self, other: &Self) -> bool {
+        self.version == other.version
     }
 }
 
 pub(crate) async fn executable_identity(executable: &Path) -> Result<ExecutableIdentity> {
-    let executable = executable.to_path_buf();
-    // Debug executables can be hundreds of MB. Stream the digest off the async
-    // runtime instead of allocating the whole file and blocking a runtime thread.
-    tokio::task::spawn_blocking(move || {
-        let executable = std::fs::canonicalize(&executable).unwrap_or(executable);
-        let mut identity = std::fs::File::open(&executable)
-            .and_then(executable_identity_from_reader)
-            .with_context(|| format!("failed to read executable {}", executable.display()))?;
-        identity.path_digest = Some(path_digest(&executable));
-        Ok(identity)
-    })
-    .await
-    .context("executable identity task failed")?
-}
-
-pub(crate) fn executable_identity_from_reader(
-    reader: impl std::io::Read,
-) -> std::io::Result<ExecutableIdentity> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update_reader(reader)?;
-    Ok(ExecutableIdentity {
-        digest: *hasher.finalize().as_bytes(),
-        path_digest: None,
-    })
+    let executable = fs::canonicalize(executable)
+        .await
+        .unwrap_or_else(|_| executable.to_path_buf());
+    Ok(ExecutableIdentity::new(
+        managed_codex_version(&executable).await?,
+        &executable,
+    ))
 }
 
 fn path_digest(path: &Path) -> [u8; 32] {
