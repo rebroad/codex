@@ -1,26 +1,64 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from build_winget_package import prepare_winget_package
-from codex_package.layout import build_package_dir
-from codex_package.layout import validate_package_dir
-from codex_package.targets import PACKAGE_VARIANTS
-from codex_package.targets import PackageInputs
-from codex_package.targets import TARGET_SPECS
-from codex_package.targets import default_target
+from codex_package.layout import build_package_dir, validate_package_dir
+from codex_package.targets import (
+    PACKAGE_VARIANTS,
+    TARGET_SPECS,
+    PackageInputs,
+    default_target,
+)
 
 
 class PackageLayoutTest(unittest.TestCase):
+    def test_termux_defaults_to_android_target(self) -> None:
+        with (
+            patch("sys.platform", "android"),
+            patch("platform.system", return_value="Linux"),
+            patch("platform.machine", return_value="aarch64"),
+        ):
+            self.assertEqual(default_target(), "aarch64-linux-android")
+
+    def test_android_package_bundles_cxx_runtime_without_bundled_ripgrep(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            package_dir = root / "package"
+            package_dir.mkdir()
+            runtime = root / "libc++_shared.so"
+            runtime.write_bytes(b"Android C++ runtime")
+            inputs = PackageInputs(
+                entrypoint_bin=touch_executable(root / "codex"),
+                code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
+                rg_bin=None,
+                bwrap_bin=None,
+                codex_command_runner_bin=None,
+                codex_windows_sandbox_setup_bin=None,
+                android_cxx_runtime_bin=runtime,
+            )
+            spec = TARGET_SPECS["aarch64-linux-android"]
+
+            build_package_dir(
+                package_dir, "1.2.3", PACKAGE_VARIANTS["codex"], spec, inputs
+            )
+            validate_package_dir(package_dir, PACKAGE_VARIANTS["codex"], spec)
+
+            self.assertFalse((package_dir / "codex-path/rg").exists())
+            self.assertEqual(
+                (package_dir / "bin/libc++_shared.so").read_bytes(),
+                runtime.read_bytes(),
+            )
+
     @unittest.skipIf(sys.platform == "win32", "MSVC symbols are separate PDB files")
     def test_strip_policy_preserves_inputs_and_runs_packaged_executables(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -65,7 +103,7 @@ int main(void) {
                         "--code-mode-host-bin",
                         "--rg-bin",
                     ]
-                    if "linux" in target:
+                    if "-unknown-linux-" in target:
                         flags.append("--bwrap-bin")
                     for flag in flags:
                         command.extend((flag, str(source)))
@@ -84,8 +122,13 @@ int main(void) {
                         else:
                             self.assertLess(executable.stat().st_size, len(original))
                     self.assertEqual(source.read_bytes(), original)
-                    self.assertEqual((package / "codex-path/rg").read_bytes(), original)
-                    if "linux" in target:
+                    if target != "aarch64-linux-android":
+                        self.assertEqual(
+                            (package / "codex-path/rg").read_bytes(), original
+                        )
+                    else:
+                        self.assertTrue((package / "bin/libc++_shared.so").is_file())
+                    if "-unknown-linux-" in target:
                         self.assertEqual(
                             (package / "codex-resources/bwrap").read_bytes(), original
                         )
