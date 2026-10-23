@@ -182,6 +182,7 @@ repo_root="${GITHUB_WORKSPACE:-}"
 if [[ -z "$repo_root" ]]; then
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
+export CODEX_REPO_ROOT="$repo_root"
 
 if command -v python3 >/dev/null 2>&1; then
   python_bin="python3"

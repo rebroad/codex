@@ -7,13 +7,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-_repo_root = os.environ.get("CODEX_REPO_ROOT")
-if _repo_root is None:
-    raise RuntimeError(
-        "CODEX_REPO_ROOT must point to the repository root; "
-        "run `just assemble-codex-package` to set it automatically"
-    )
-REPO_ROOT = Path(_repo_root)
+# Resolve from this module so direct script invocations and inline imports do
+# not depend on being launched through `just` or a workflow with a global env.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+os.environ["CODEX_REPO_ROOT"] = str(REPO_ROOT)
 
 
 @dataclass(frozen=True)
