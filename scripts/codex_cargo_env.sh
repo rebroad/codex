@@ -117,6 +117,18 @@ ensure_build_lockfile
 
 RUSTC_BIN="${RUSTC:-rustc}"
 HOST_TARGET="$(${RUSTC_BIN} -vV | sed -n 's/^host: //p')"
+# Keep the native Android dev profile consistent for builds and tests. These
+# settings reduce debug artifact size and link-time memory pressure on Termux;
+# centralizing them also lets `build_codex.sh` reuse artifacts from `just test`.
+if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
+  export CARGO_PROFILE_DEV_CODEGEN_UNITS="${CARGO_PROFILE_DEV_CODEGEN_UNITS:-1}"
+  if [[ -z "${TMPDIR:-}" ]]; then
+    export TMPDIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
+    mkdir -p "${TMPDIR}"
+    chmod 700 "${TMPDIR}"
+  fi
+fi
 # Use sccache by default for non-incremental builds. It can be disabled
 # explicitly for troubleshooting or toolchain-specific incompatibilities.
 if [[ "${CODEX_CARGO_ENABLE_SCCACHE:-1}" == "1" \
@@ -152,12 +164,6 @@ RUSTFLAGS_VALUE="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-}"
 MOLD_BIN="$(command -v mold || true)"
 NATIVE_LINUX_MOLD_RUSTFLAGS=''
 DENY_WARNINGS_VALUE="${CODEX_DENY_WARNINGS:-1}"
-
-if [[ "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
-  export TMPDIR="${PREFIX}/tmp"
-  mkdir -p "${TMPDIR}"
-  chmod 700 "${TMPDIR}"
-fi
 
 if [[ "${TARGET}" == aarch64-linux-android && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   ANDROID_CLANG="$(command -v aarch64-linux-android-clang || true)"
@@ -428,6 +434,10 @@ record_artifact_operation
 printf '%s\n' 'unset CC CXX AR RANLIB CFLAGS CXXFLAGS TARGET_CC TARGET_CXX TARGET_AR TARGET_RANLIB PKG_CONFIG_ALLOW_CROSS PKG_CONFIG_ALL_STATIC PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_ARGS'
 printf 'export RUSTUP_DISABLE_SELF_UPDATE=1 CARGO_TARGET_DIR=%q CODEX_BUILD_TIMESTAMP=0000000000-000000000000\n' "${TARGET_DIR}"
 printf 'export CARGO_INCREMENTAL=%q\n' "${CARGO_INCREMENTAL}"
+if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  printf 'export CARGO_PROFILE_DEV_DEBUG=%q CARGO_PROFILE_DEV_CODEGEN_UNITS=%q\n' \
+    "${CARGO_PROFILE_DEV_DEBUG}" "${CARGO_PROFILE_DEV_CODEGEN_UNITS}"
+fi
 if ! command -v rustup >/dev/null 2>&1; then
   rustc_path="$(command -v "${RUSTC_BIN}")"
   standalone_toolchain_bin="$(dirname "${rustc_path}")"
@@ -531,7 +541,7 @@ if [[ -n "${SCCACHE_BIN}" ]]; then
 else
   printf 'export RUSTC_WRAPPER= CODEX_SCCACHE_BIN=\n'
 fi
-if [[ -n "${TMPDIR:-}" && "${PURPOSE}" == just-test && "${HOST_TARGET}" == aarch64-linux-android ]]; then
+if [[ -n "${TMPDIR:-}" && "${HOST_TARGET}" == aarch64-linux-android ]]; then
   printf 'export TMPDIR=%q\n' "${TMPDIR}"
 fi
 [[ -n "${CARGO_BUILD_JOBS:-}" ]] && printf 'export CARGO_BUILD_JOBS=%q\n' "${CARGO_BUILD_JOBS}"
