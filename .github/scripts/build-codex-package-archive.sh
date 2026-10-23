@@ -9,6 +9,7 @@ Usage: build-codex-package-archive.sh \
   --entrypoint-dir <dir> \
   --archive-dir <dir> \
   [--bwrap-bin <path>] \
+  [--android-cxx-runtime-bin <path>] \
   [--code-mode-host-bin <path>] \
   [--rg-bin <path>] \
   [--codex-command-runner-bin <path>] \
@@ -52,6 +53,10 @@ while [[ $# -gt 0 ]]; do
     --bwrap-bin)
       resource_args+=(--bwrap-bin "${2:?--bwrap-bin requires a value}")
       bwrap_bin_provided="true"
+      shift 2
+      ;;
+    --android-cxx-runtime-bin)
+      resource_args+=(--android-cxx-runtime-bin "${2:?--android-cxx-runtime-bin requires a value}")
       shift 2
       ;;
     --code-mode-host-bin)
@@ -147,7 +152,7 @@ if [[ "$target_suffixed_entrypoint" == "true" ]]; then
 fi
 
 case "$target" in
-  *linux*)
+  *-unknown-linux-*)
     bwrap_bin="${entrypoint_dir%/}/bwrap"
     if [[ "$bwrap_bin_provided" == "false" && -f "$bwrap_bin" ]]; then
       resource_args+=(--bwrap-bin "$bwrap_bin")
@@ -162,6 +167,14 @@ case "$target" in
     if [[ "$sandbox_setup_bin_provided" == "false" && -f "$sandbox_setup_bin" ]]; then
       resource_args+=(--codex-windows-sandbox-setup-bin "$sandbox_setup_bin")
     fi
+    ;;
+  aarch64-linux-android)
+    if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
+      cxx_runtime="${PREFIX:-}/lib/libc++_shared.so"
+    else
+      cxx_runtime="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+    fi
+    resource_args+=(--android-cxx-runtime-bin "$cxx_runtime")
     ;;
 esac
 
@@ -181,7 +194,15 @@ if ! command -v zstd >/dev/null 2>&1 && [[ -x "${repo_root}/.github/workflows/zs
 fi
 
 mkdir -p "$archive_dir"
-package_dir="${RUNNER_TEMP:-/tmp}/${archive_stem}-${target}"
+runner_temp="${RUNNER_TEMP:-}"
+if [[ -z "$runner_temp" ]]; then
+  if [[ -n "${PREFIX:-}" ]]; then
+    runner_temp="${PREFIX}/tmp"
+  else
+    runner_temp="/var/tmp"
+  fi
+fi
+package_dir="${runner_temp}/${archive_stem}-${target}"
 gzip_archive_path="${archive_dir}/${archive_stem}-${target}.tar.gz"
 zstd_archive_path="${archive_dir}/${archive_stem}-${target}.tar.zst"
 rm -rf "$package_dir"
@@ -209,7 +230,7 @@ if [[ -n "$voice_release_dir" ]]; then
   if [[ "$target" == *-unknown-linux-musl ]]; then
     voice_target="${target%-musl}-gnu"
   fi
-  voice_package="${RUNNER_TEMP:-/tmp}/${archive_stem}-voice-${target}"
+  voice_package="${runner_temp}/${archive_stem}-voice-${target}"
   rm -rf "$voice_package"
   voice_helper="${voice_release_dir%/}/codex-voice-host${exe_suffix}"
   "$python_bin" "${repo_root}/third_party/voice/assemble_package.py" \

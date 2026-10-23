@@ -1,24 +1,25 @@
 """Command-line interface for building Codex package directories."""
 
 import argparse
+import os
 import re
 import tempfile
 from pathlib import Path
 
 from .archive import write_archive
 from .cargo import build_source_binaries
-from .layout import build_package_dir
-from .layout import prepare_package_dir
-from .layout import validate_package_dir
+from .layout import build_package_dir, prepare_package_dir, validate_package_dir
 from .ripgrep import resolve_rg_bin
 from .symbols import strip_binary
-from .targets import PACKAGE_VARIANTS
-from .targets import TARGET_SPECS
-from .targets import PackageInputs
-from .targets import default_target
-from .targets import resolve_input_path
+from .targets import (
+    PACKAGE_VARIANTS,
+    TARGET_SPECS,
+    PackageInputs,
+    TargetSpec,
+    default_target,
+    resolve_input_path,
+)
 from .version import read_workspace_version
-
 
 # Release pipelines run this builder with system Python, so avoid new dependencies.
 SEMVER_PATTERN = re.compile(
@@ -174,6 +175,11 @@ def create_parser() -> argparse.ArgumentParser:
             "scripts/codex_package/rg."
         ),
     )
+    parser.add_argument(
+        "--android-cxx-runtime-bin",
+        type=Path,
+        help="libc++_shared.so to bundle for Android packages.",
+    )
     return parser
 
 
@@ -233,6 +239,9 @@ def assemble_package(args: argparse.Namespace) -> Path:
         bwrap_bin=source_outputs.bwrap_bin,
         codex_command_runner_bin=source_outputs.codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,
+        android_cxx_runtime_bin=resolve_android_cxx_runtime(
+            spec, args.android_cxx_runtime_bin
+        ),
     )
     prepare_package_dir(package_dir, force=args.force)
     build_package_dir(package_dir, args.package_version, variant, spec, inputs)
@@ -248,6 +257,35 @@ def assemble_package(args: argparse.Namespace) -> Path:
             strip_binary(package_dir / "bin" / filename, spec, tool=args.strip_tool)
     validate_package_dir(package_dir, variant, spec)
     return package_dir
+
+
+def resolve_android_cxx_runtime(
+    spec: TargetSpec, explicit_path: Path | None
+) -> Path | None:
+    if explicit_path is not None:
+        return resolve_input_path(
+            explicit_path, "Android C++ runtime", "--android-cxx-runtime-bin"
+        )
+    if not spec.is_android:
+        return None
+
+    candidates = []
+    android_ndk_home = os.environ.get("ANDROID_NDK_HOME")
+    if android_ndk_home:
+        candidates.append(
+            Path(android_ndk_home)
+            / "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+        )
+    prefix = os.environ.get("PREFIX")
+    if prefix:
+        candidates.append(Path(prefix) / "lib/libc++_shared.so")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise RuntimeError(
+        "Android packages require libc++_shared.so; pass "
+        "--android-cxx-runtime-bin or set ANDROID_NDK_HOME/PREFIX."
+    )
 
 
 def archive_package(package_dir: Path, args: argparse.Namespace) -> None:

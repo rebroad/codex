@@ -105,6 +105,7 @@ pub(crate) fn is_stable_standalone_release(codex_home: &Path, codex_bin: &Path) 
         "x86_64-unknown-linux-musl",
         "aarch64-pc-windows-msvc",
         "x86_64-pc-windows-msvc",
+        "aarch64-linux-android",
     ];
     let Some(version) = targets
         .iter()

@@ -5,10 +5,7 @@ import shutil
 import stat
 from pathlib import Path
 
-from .targets import PackageInputs
-from .targets import PackageVariant
-from .targets import TargetSpec
-
+from .targets import PackageInputs, PackageVariant, TargetSpec
 
 LAYOUT_VERSION = 1
 
@@ -55,7 +52,10 @@ def build_package_dir(
         bin_dir / f"codex-code-mode-host{spec.exe_suffix}",
         is_windows=spec.is_windows,
     )
-    copy_executable(inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows)
+    if inputs.rg_bin is not None:
+        copy_executable(
+            inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows
+        )
 
     if inputs.bwrap_bin is not None:
         copy_executable(inputs.bwrap_bin, resources_dir / "bwrap", is_windows=False)
@@ -73,6 +73,9 @@ def build_package_dir(
             resources_dir / "codex-windows-sandbox-setup.exe",
             is_windows=True,
         )
+
+    if inputs.android_cxx_runtime_bin is not None:
+        shutil.copyfile(inputs.android_cxx_runtime_bin, bin_dir / "libc++_shared.so")
 
     metadata = {
         "layoutVersion": LAYOUT_VERSION,
@@ -126,9 +129,15 @@ def validate_package_dir(
     required_files = [
         Path("bin") / variant.entrypoint_name(spec),
         Path("bin") / f"codex-code-mode-host{spec.exe_suffix}",
-        Path("codex-path") / spec.rg_name,
     ]
     executable_files = list(required_files)
+
+    if not spec.is_android:
+        required_files.append(Path("codex-path") / spec.rg_name)
+        executable_files.append(Path("codex-path") / spec.rg_name)
+
+    if spec.is_android:
+        required_files.append(Path("bin/libc++_shared.so"))
 
     if spec.is_linux:
         required_files.append(Path("codex-resources") / "bwrap")

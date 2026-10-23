@@ -899,8 +899,10 @@ install_package_release() {
   tar -xzf "$archive_path" -C "$stage_release"
   chmod 0755 \
     "$stage_release/bin/codex" \
-    "$stage_release/bin/codex-code-mode-host" \
-    "$stage_release/codex-path/rg"
+    "$stage_release/bin/codex-code-mode-host"
+  if [ "$vendor_target" != aarch64-linux-android ]; then
+    chmod 0755 "$stage_release/codex-path/rg"
+  fi
   if [ -f "$stage_release/codex-resources/bwrap" ]; then
     chmod 0755 "$stage_release/codex-resources/bwrap"
   fi
@@ -969,9 +971,13 @@ release_dir_is_complete() {
       [ -f "$release_dir/codex-package.json" ] &&
         [ -x "$release_dir/bin/codex" ] &&
         [ -x "$release_dir/bin/codex-code-mode-host" ] &&
-        [ -x "$release_dir/codex" ] &&
-        [ -x "$release_dir/codex-path/rg" ] ||
+        [ -x "$release_dir/codex" ] ||
         return 1
+      if [ "$expected_target" = aarch64-linux-android ]; then
+        [ -f "$release_dir/bin/libc++_shared.so" ] || return 1
+      else
+        [ -x "$release_dir/codex-path/rg" ] || return 1
+      fi
       ;;
     legacy-platform-npm)
       case "$expected_target" in
