@@ -195,6 +195,24 @@ fn mcp_checkpoint_handles_missing_or_unknown_identity() -> Result<()> {
 }
 
 #[test]
+fn recovered_tool_output_metadata_is_backward_compatible_and_roundtrips() -> Result<()> {
+    let old_metadata: CodexHarnessMetadata = serde_json::from_value(json!({}))?;
+    assert!(!old_metadata.recovered_tool_output);
+
+    let metadata = CodexHarnessMetadata {
+        recovered_tool_output: true,
+        ..Default::default()
+    };
+    let serialized = serde_json::to_value(&metadata)?;
+    assert_eq!(serialized["recovered_tool_output"], true);
+    assert_eq!(
+        serde_json::from_value::<CodexHarnessMetadata>(serialized)?,
+        metadata
+    );
+    Ok(())
+}
+
+#[test]
 fn mcp_error_diagnostics_do_not_invalidate_checkpoints() -> Result<()> {
     let metadata = CodexHarnessMetadata {
         mcp_attribution: Some(McpAttribution {
