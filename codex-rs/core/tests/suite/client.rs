@@ -732,13 +732,35 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
         matches!(event, EventMsg::ShutdownComplete)
     })
     .await;
-    assert!(
-        !std::fs::read_to_string(&session_path)?.contains("\"type\":\"function_call_output\""),
-        "prompt-only repair should not be persisted to the rollout"
-    );
-
-    let second = builder.resume(&server, codex_home, session_path).await?;
+    let second = builder
+        .resume(&server, codex_home, session_path.clone())
+        .await?;
     second.submit_turn("second resume").await?;
+
+    let recovered_outputs = std::fs::read_to_string(&session_path)?
+        .lines()
+        .filter_map(|line| codex_rollout::parse_rollout_line(line).ok())
+        .filter(|line| match &line.item {
+            RolloutItem::ResponseItem(envelope) => {
+                envelope
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.recovered_tool_output)
+                    && matches!(
+                        &envelope.item,
+                        ResponseItem::FunctionCallOutput {
+                            call_id: Some(call_id),
+                            ..
+                        } if call_id == function_call_id
+                    )
+            }
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        recovered_outputs, 1,
+        "repair should be persisted exactly once"
+    );
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
