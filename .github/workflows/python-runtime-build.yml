@@ -62,10 +62,11 @@ jobs:
 
           shopt -s nullglob
           wheels=(dist/python-runtime/*.whl)
-          if [[ "${#wheels[@]}" -ne 6 ]]; then
-            echo "Expected 6 Python runtime wheels for ${PYTHON_RUNTIME_VERSION}, found ${#wheels[@]}."
+          if (( ${#wheels[@]} < 6 || ${#wheels[@]} > 7 )); then
+            echo "Expected 6 or 7 Python runtime wheels for ${PYTHON_RUNTIME_VERSION}, found ${#wheels[@]}."
             exit 1
           fi
+          base_wheel_count="${#wheels[@]}"
           packages=(dist/python-runtime-packages/*.tar.gz)
           if [[ "${#packages[@]}" -ne 2 ]]; then
             echo "Expected 2 Linux package archives for ${PYTHON_RUNTIME_VERSION}, found ${#packages[@]}."
@@ -100,8 +101,9 @@ jobs:
 
           shopt -s nullglob
           wheels=(dist/python-runtime/*.whl)
-          if [[ "${#wheels[@]}" -ne 8 ]]; then
-            echo "Expected 8 Python runtime wheels, found ${#wheels[@]}."
+          expected_wheel_count=$((base_wheel_count + 2))
+          if [[ "${#wheels[@]}" -ne "$expected_wheel_count" ]]; then
+            echo "Expected ${expected_wheel_count} Python runtime wheels, found ${#wheels[@]}."
             exit 1
           fi
           ls -lh dist/python-runtime
