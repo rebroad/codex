@@ -1842,6 +1842,38 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        let recovered_outputs = crate::context_manager::ensure_call_outputs_present(&mut history);
+        let orphaned_outputs = crate::context_manager::remove_orphan_outputs(&mut history);
+        if !recovered_outputs.is_empty() || orphaned_outputs > 0 {
+            let recovery_persisted = !recovered_outputs.is_empty()
+                && self.live_thread().is_some()
+                && self
+                    .persist_rollout_items(
+                        &recovered_outputs
+                            .iter()
+                            .cloned()
+                            .map(RolloutItem::ResponseItem)
+                            .collect::<Vec<_>>(),
+                    )
+                    .await;
+            let message = if !recovered_outputs.is_empty() {
+                let persistence_note = if recovery_persisted {
+                    " Repair saved to the rollout."
+                } else {
+                    " Repair could not be saved; recovery may repeat on resume."
+                };
+                format!(
+                    "Recovered {} incomplete tool result(s); outcome is unknown.{persistence_note}",
+                    recovered_outputs.len(),
+                )
+            } else {
+                format!(
+                    "Codex discarded {orphaned_outputs} orphaned tool output(s) while resuming this thread."
+                )
+            };
+            self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                .await;
+        }
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
         // installing it, so legacy media is processed once for this resume or fork and
         // will be processed again if the rollout is reconstructed in a future session.
