@@ -8,9 +8,12 @@ from .targets import TargetSpec, resolve_input_path
 RG_MANIFEST = Path(__file__).with_name("rg")
 
 
-def resolve_rg_bin(spec: TargetSpec, rg_bin: Path | None) -> Path:
+def resolve_rg_bin(spec: TargetSpec, rg_bin: Path | None) -> Path | None:
     if rg_bin is not None:
         return resolve_input_path(rg_bin, "ripgrep executable", "--rg-bin")
+
+    if spec.is_android:
+        return None
 
     return fetch_rg(spec)
 

@@ -162,8 +162,8 @@ def stage_python_sdk_package(
     if codex_version is not None:
         runtime_version = normalize_codex_version(codex_version)
         pyproject_text, count = re.subn(
-            rf'"{re.escape(RUNTIME_DISTRIBUTION_NAME)}==[^"]+"',
-            f'"{RUNTIME_DISTRIBUTION_NAME}=={runtime_version}"',
+            rf'"{re.escape(RUNTIME_DISTRIBUTION_NAME)}==([^";]+)(;[^"]*)?"',
+            lambda match: f'"{RUNTIME_DISTRIBUTION_NAME}=={runtime_version}{match.group(2) or ""}"',
             pyproject_text,
         )
         if count != 1:
@@ -172,7 +172,8 @@ def stage_python_sdk_package(
                 "in sdk/python/pyproject.toml"
             )
     runtime_versions = re.findall(
-        rf'"{re.escape(RUNTIME_DISTRIBUTION_NAME)}==([^"]+)"', pyproject_text
+        rf'"{re.escape(RUNTIME_DISTRIBUTION_NAME)}==([^";]+)(?:;[^"]*)?"',
+        pyproject_text,
     )
     if len(runtime_versions) != 1:
         raise RuntimeError("Expected exactly one pinned Codex runtime dependency")

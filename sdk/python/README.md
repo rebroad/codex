@@ -11,6 +11,20 @@ Install the SDK:
 pip install openai-codex
 ```
 
+### Android / Termux
+
+On Android 10 or later (API 29+) with ARM64, install the Codex CLI for Termux
+and make sure it is on `PATH` before using the SDK. Android installs omit the
+desktop CLI wheel and use that Termux-managed executable. The `pydantic-core`
+dependency builds its Android wheel from source on first install, so install
+the Termux Rust toolchain first if pip or uv does not already have one
+available:
+
+```bash
+pkg install python rust clang ripgrep
+pip install openai-codex
+```
+
 ## Quickstart
 
 The SDK reuses your existing Codex authentication when one is already

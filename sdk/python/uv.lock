@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10"
 
 [options]
@@ -285,7 +285,7 @@ name = "openai-codex"
 version = "0.0.0.dev0"
 source = { editable = "." }
 dependencies = [
-    { name = "openai-codex-cli-bin" },
+    { name = "openai-codex-cli-bin", marker = "sys_platform != 'android'" },
     { name = "packaging" },
     { name = "pydantic" },
 ]
@@ -294,20 +294,19 @@ dependencies = [
 dev = [
     { name = "datamodel-code-generator" },
     { name = "pytest" },
-    { name = "ruff" },
+    { name = "ruff", marker = "sys_platform != 'android'" },
 ]
 format = [
-    { name = "ruff" },
+    { name = "ruff", marker = "sys_platform != 'android'" },
 ]
 test = [
     { name = "datamodel-code-generator" },
     { name = "pytest" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "openai-codex-cli-bin", specifier = "==0.153.4" },
+    { name = "openai-codex-cli-bin", marker = "sys_platform != 'android'", specifier = "==0.153.4" },
     { name = "packaging", specifier = ">=26.2" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
@@ -316,13 +315,12 @@ requires-dist = [
 dev = [
     { name = "datamodel-code-generator", specifier = "==0.31.2" },
     { name = "pytest", specifier = ">=8.0" },
-    { name = "ruff", specifier = ">=0.15.8" },
+    { name = "ruff", marker = "sys_platform != 'android'", specifier = ">=0.15.8" },
 ]
-format = [{ name = "ruff", specifier = ">=0.15.8" }]
+format = [{ name = "ruff", marker = "sys_platform != 'android'", specifier = ">=0.15.8" }]
 test = [
     { name = "datamodel-code-generator", specifier = "==0.31.2" },
     { name = "pytest", specifier = ">=8.0" },
-    { name = "ruff", specifier = ">=0.15.8" },
 ]
 
 [[package]]
