@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { createRequire } from "node:module";
 
+import { codexTargetTriple } from "./platform";
 import type { CodexConfigObject, CodexConfigValue } from "./codexOptions";
 import { SandboxMode, ModelReasoningEffort, ApprovalMode, WebSearchMode } from "./threadOptions";
 import type { CyberAccessProgram } from "./turnOptions";
@@ -56,6 +57,7 @@ const PLATFORM_PACKAGE_BY_TARGET: Record<string, string> = {
   "aarch64-apple-darwin": "@reb.ai/codex-darwin-arm64",
   "x86_64-pc-windows-msvc": "@reb.ai/codex-win32-x64",
   "aarch64-pc-windows-msvc": "@reb.ai/codex-win32-arm64",
+  "aarch64-linux-android": "@reb.ai/codex-android-arm64",
 };
 
 const moduleRequire = createRequire(import.meta.url);
@@ -355,49 +357,7 @@ function isPlainObject(value: unknown): value is CodexConfigObject {
 
 function findCodexPath(): CodexPathResolution {
   const { platform, arch } = process;
-
-  let targetTriple = null;
-  switch (platform) {
-    case "linux":
-    case "android":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-unknown-linux-musl";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-unknown-linux-musl";
-          break;
-        default:
-          break;
-      }
-      break;
-    case "darwin":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-apple-darwin";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-apple-darwin";
-          break;
-        default:
-          break;
-      }
-      break;
-    case "win32":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-pc-windows-msvc";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-pc-windows-msvc";
-          break;
-        default:
-          break;
-      }
-      break;
-    default:
-      break;
-  }
+  const targetTriple = codexTargetTriple(platform, arch, process.env.PREFIX);
 
   if (!targetTriple) {
     throw new Error(`Unsupported platform: ${platform} (${arch})`);
