@@ -20,6 +20,16 @@ class ResolveSourceRepoTests(unittest.TestCase):
 
             self.assertTrue(is_build_repo_inside_source(source_root, build_root))
 
+    def test_allows_build_symlink_pointing_to_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_root = root / "codex"
+            source_root.mkdir()
+            build_root = root / "codex.build"
+            build_root.symlink_to(source_root, target_is_directory=True)
+
+            self.assertFalse(is_build_repo_inside_source(source_root, build_root))
+
     def test_resolves_worktree_under_build_container_to_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

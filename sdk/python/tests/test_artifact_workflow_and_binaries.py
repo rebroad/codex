@@ -237,7 +237,7 @@ def test_root_format_driver_covers_all_formatter_groups(
         "--config-path",
         str(tmp_path / "codex-rs/rustfmt.toml"),
         "--config",
-        "imports_granularity=Item,skip_children=true",
+        "skip_children=true",
     )
     rust_files = (
         os.path.join("..", "bazel", "rules", "example.rs"),
