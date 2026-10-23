@@ -3,6 +3,7 @@
 import os
 import platform
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,7 @@ class TargetSpec:
     target: str
     is_windows: bool
     is_linux: bool
+    is_android: bool
     dotslash_platform: str
 
     @property
@@ -45,10 +47,11 @@ class PackageVariant:
 class PackageInputs:
     entrypoint_bin: Path
     code_mode_host_bin: Path
-    rg_bin: Path
+    rg_bin: Path | None
     bwrap_bin: Path | None
     codex_command_runner_bin: Path | None
     codex_windows_sandbox_setup_bin: Path | None
+    android_cxx_runtime_bin: Path | None = None
 
 
 PACKAGE_VARIANTS: dict[str, PackageVariant] = {
@@ -70,49 +73,64 @@ TARGET_SPECS: dict[str, TargetSpec] = {
         target="x86_64-unknown-linux-gnu",
         is_windows=False,
         is_linux=True,
+        is_android=False,
         dotslash_platform="linux-x86_64",
     ),
     "x86_64-unknown-linux-musl": TargetSpec(
         target="x86_64-unknown-linux-musl",
         is_windows=False,
         is_linux=True,
+        is_android=False,
         dotslash_platform="linux-x86_64",
     ),
     "aarch64-unknown-linux-gnu": TargetSpec(
         target="aarch64-unknown-linux-gnu",
         is_windows=False,
         is_linux=True,
+        is_android=False,
         dotslash_platform="linux-aarch64",
     ),
     "aarch64-unknown-linux-musl": TargetSpec(
         target="aarch64-unknown-linux-musl",
         is_windows=False,
         is_linux=True,
+        is_android=False,
         dotslash_platform="linux-aarch64",
     ),
     "x86_64-apple-darwin": TargetSpec(
         target="x86_64-apple-darwin",
         is_windows=False,
         is_linux=False,
+        is_android=False,
         dotslash_platform="macos-x86_64",
     ),
     "aarch64-apple-darwin": TargetSpec(
         target="aarch64-apple-darwin",
         is_windows=False,
         is_linux=False,
+        is_android=False,
         dotslash_platform="macos-aarch64",
     ),
     "x86_64-pc-windows-msvc": TargetSpec(
         target="x86_64-pc-windows-msvc",
         is_windows=True,
         is_linux=False,
+        is_android=False,
         dotslash_platform="windows-x86_64",
     ),
     "aarch64-pc-windows-msvc": TargetSpec(
         target="aarch64-pc-windows-msvc",
         is_windows=True,
         is_linux=False,
+        is_android=False,
         dotslash_platform="windows-aarch64",
+    ),
+    "aarch64-linux-android": TargetSpec(
+        target="aarch64-linux-android",
+        is_windows=False,
+        is_linux=False,
+        is_android=True,
+        dotslash_platform="android-arm64",
     ),
 }
 
@@ -122,13 +140,14 @@ HOST_RELEASE_TARGETS: dict[tuple[str, str], str] = {
     ("darwin", "x86_64"): "x86_64-apple-darwin",
     ("linux", "aarch64"): "aarch64-unknown-linux-musl",
     ("linux", "x86_64"): "x86_64-unknown-linux-musl",
+    ("android", "aarch64"): "aarch64-linux-android",
     ("windows", "aarch64"): "aarch64-pc-windows-msvc",
     ("windows", "x86_64"): "x86_64-pc-windows-msvc",
 }
 
 
 def default_target() -> str:
-    system = platform.system().lower()
+    system = "android" if sys.platform == "android" else platform.system().lower()
     machine = normalize_machine(platform.machine())
     target = HOST_RELEASE_TARGETS.get((system, machine))
     if target is None:

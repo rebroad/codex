@@ -1,7 +1,9 @@
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from _thread import LockType
@@ -111,6 +113,11 @@ def _params_dict(
 
 
 def _installed_codex_path() -> Path:
+    if sys.platform == "android":
+        codex_path = shutil.which("codex")
+        if codex_path is not None:
+            return Path(codex_path)
+
     try:
         from codex_cli_bin import bundled_codex_path
     except ImportError as exc:

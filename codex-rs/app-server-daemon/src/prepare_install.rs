@@ -479,16 +479,14 @@ fn validate_package(root: &Path, entrypoint: &str) -> Result<()> {
         "codex-code-mode-host"
     });
     let code_mode_host = code_mode_host.to_string_lossy();
-    let mut names = vec![
-        "codex-package.json",
-        entrypoint,
-        code_mode_host.as_ref(),
-        if cfg!(windows) {
+    let mut names = vec!["codex-package.json", entrypoint, code_mode_host.as_ref()];
+    if !cfg!(target_os = "android") {
+        names.push(if cfg!(windows) {
             "codex-path/rg.exe"
         } else {
             "codex-path/rg"
-        },
-    ];
+        });
+    }
     if cfg!(windows) {
         names.extend([
             "codex-resources/codex-command-runner.exe",
@@ -496,6 +494,8 @@ fn validate_package(root: &Path, entrypoint: &str) -> Result<()> {
         ]);
     } else if cfg!(target_os = "linux") {
         names.push("codex-resources/bwrap");
+    } else if cfg!(target_os = "android") {
+        names.push("bin/libc++_shared.so");
     }
     for name in names {
         if !root.join(name).is_file() {
@@ -504,7 +504,7 @@ fn validate_package(root: &Path, entrypoint: &str) -> Result<()> {
             ));
         }
         #[cfg(unix)]
-        if name != "codex-package.json" {
+        if name != "codex-package.json" && name != "bin/libc++_shared.so" {
             use std::os::unix::fs::PermissionsExt;
             if std::fs::metadata(root.join(name))?.permissions().mode() & 0o111 == 0 {
                 return Err(anyhow!(
@@ -526,6 +526,7 @@ fn platform_target() -> Result<&'static str> {
         ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl"),
         ("windows", "aarch64") => Ok("aarch64-pc-windows-msvc"),
         ("windows", "x86_64") => Ok("x86_64-pc-windows-msvc"),
+        ("android", "aarch64") => Ok("aarch64-linux-android"),
         (os, arch) => Err(anyhow!("unsupported packaged daemon platform {os}/{arch}")),
     }
 }
