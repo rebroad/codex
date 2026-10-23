@@ -650,7 +650,7 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
     }
 
     let details: Result<(bool, bool)> = async {
-        #[cfg(all(any(target_os = "linux", target_os = "macos"), not(target_os = "android")))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
         if let Some(expected) = &record.process_identity {
             return expected.matches_process(record.pid).await;
         }

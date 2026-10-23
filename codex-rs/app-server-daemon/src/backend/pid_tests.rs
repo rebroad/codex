@@ -243,11 +243,16 @@ async fn pid_record_captures_the_resolved_launch_binary() {
     let temp = TempDir::new().expect("temp dir");
     let original = temp.path().join("original-codex");
     let replacement = temp.path().join("replacement-codex");
-    for (path, bytes) in [
-        (&original, "#!/bin/sh\nexec sleep 30\n"),
-        (&replacement, "#!/bin/sh\n# replacement\nexec sleep 30\n"),
-    ] {
-        codex_utils_cargo_bin::write_executable(path, bytes).expect("binary");
+    let script = concat!(
+        "#!/bin/sh\n",
+        "if [ \"$1\" = --version ]; then\n",
+        "  printf '%s\\n' 'codex-cli 0.1.0'\n",
+        "  exit 0\n",
+        "fi\n",
+        "exec sleep 30\n",
+    );
+    for path in [&original, &replacement] {
+        codex_utils_cargo_bin::write_executable(path, script).expect("binary");
     }
     let selected = temp.path().join("current-codex");
     std::os::unix::fs::symlink(&original, &selected).expect("selected binary");
@@ -265,7 +270,7 @@ async fn pid_record_captures_the_resolved_launch_binary() {
         Some(
             crate::managed_install::executable_identity(&original)
                 .await
-                .expect("original digest")
+                .expect("original identity")
         )
     );
     std::fs::remove_file(&selected).expect("remove link");
@@ -275,7 +280,7 @@ async fn pid_record_captures_the_resolved_launch_binary() {
         Some(
             crate::managed_install::executable_identity(&selected)
                 .await
-                .expect("new digest")
+                .expect("replacement identity")
         )
     );
     assert_eq!(
@@ -306,7 +311,7 @@ async fn legacy_start_time_mismatch_preserves_record_and_process() {
         backend.is_starting_or_running().await.map(|_| ()),
         backend.start().await.map(|_| ()),
         backend.stop().await,
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
         backend.promote_legacy_identity().await,
     ] {
         assert!(
@@ -542,14 +547,14 @@ async fn exited_unreaped_updater_is_reaped() {
         .arg("60")
         .spawn()
         .expect("spawn updater shim");
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     let process_identity = Some(
         super::identity::read_process_details(child.id())
             .await
             .unwrap()
             .1,
     );
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     let process_identity = None;
     let record = PidRecord {
         pid: child.id(),
@@ -673,7 +678,7 @@ async fn stale_creation_time_never_stops_reused_pid() {
         temp.path().join("server.pid"),
         /*remote_control_enabled*/ false,
     );
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     let identities = {
         use super::identity::ProcessIdentity;
         let (_, identity) = super::identity::read_process_details(std::process::id())
@@ -697,7 +702,7 @@ async fn stale_creation_time_never_stops_reused_pid() {
         }
         [Some(stale_time), Some(stale_epoch)]
     };
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     let identities = [None];
     for process_identity in identities {
         let record = PidRecord {
