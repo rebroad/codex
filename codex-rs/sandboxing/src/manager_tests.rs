@@ -841,7 +841,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
 }
 #[cfg(target_os = "android")]
 #[test]
-fn android_keeps_process_sandbox_but_fails_closed_for_restricted_filesystem() {
+fn android_keeps_network_sandbox_without_claiming_filesystem_enforcement() {
     assert_eq!(
         super::get_platform_sandbox(false),
         Some(super::SandboxType::LinuxSeccomp)
@@ -849,14 +849,29 @@ fn android_keeps_process_sandbox_but_fails_closed_for_restricted_filesystem() {
     assert!(super::uses_legacy_linux_filesystem_sandbox());
 
     let manager = SandboxManager::new();
+    let network_open = PermissionProfile::from_runtime_permissions(
+        &PermissionProfile::read_only().file_system_sandbox_policy(),
+        codex_protocol::permissions::NetworkSandboxPolicy::Enabled,
+    );
     assert_eq!(
         manager.select_initial(
-            &PermissionProfile::read_only(),
+            &network_open,
             SandboxablePreference::Require,
-            WindowsSandboxLevel::Disabled,
+            SandboxType::None,
             /*has_managed_network_requirements*/ false,
         ),
         SandboxType::None,
         "Android must not claim to enforce restricted filesystem access",
+    );
+
+    assert_eq!(
+        manager.select_initial(
+            &PermissionProfile::read_only(),
+            SandboxablePreference::Require,
+            SandboxType::None,
+            /*has_managed_network_requirements*/ false,
+        ),
+        SandboxType::LinuxSeccomp,
+        "Android should retain seccomp when network restrictions are active",
     );
 }

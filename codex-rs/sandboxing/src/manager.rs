@@ -332,10 +332,15 @@ impl SandboxManager {
                 codex_protocol::permissions::FileSystemSandboxKind::Restricted
             )
         {
-            // Android currently has no filesystem-enforcement backend. Do not
-            // select the LinuxSeccomp process wrapper, whose Android helper
-            // intentionally applies only network restrictions.
-            return SandboxType::None;
+            // Android has no filesystem-enforcement backend. The seccomp
+            // wrapper is still useful when network restrictions are active,
+            // but filesystem access must be approved by the caller first.
+            let (_, network_policy) = permission_profile.to_runtime_permissions();
+            if !has_managed_network_requirements
+                && network_policy == codex_protocol::permissions::NetworkSandboxPolicy::Enabled
+            {
+                return SandboxType::None;
+            }
         }
 
         if !self.should_sandbox(permission_profile, pref, has_managed_network_requirements) {

@@ -229,12 +229,31 @@ impl ToolOrchestrator {
 
         // 2) First attempt under the selected sandbox.
         let unsandboxed_allowed = unsandboxed_execution_allowed(&file_system_sandbox_policy);
-        let sandbox_override = sandbox_override_for_first_attempt(
+        let android_filesystem_sandbox_unavailable = cfg!(target_os = "android")
+            && !executor_managed_process_sandbox
+            && matches!(
+                file_system_sandbox_policy.kind,
+                codex_protocol::permissions::FileSystemSandboxKind::Restricted
+            );
+        if android_filesystem_sandbox_unavailable && !unsandboxed_allowed {
+            return Err(ToolError::Rejected(
+                "Android cannot enforce denied filesystem read restrictions".to_string(),
+            ));
+        }
+        let mut sandbox_override = sandbox_override_for_first_attempt(
             tool.sandbox_permissions(req),
             &requirement,
             &file_system_sandbox_policy,
             already_approved,
         );
+        if android_filesystem_sandbox_unavailable
+            && permission_profile.network_sandbox_policy()
+                == codex_protocol::permissions::NetworkSandboxPolicy::Restricted
+        {
+            // An approval may waive Android's unavailable filesystem sandbox,
+            // but it must not also bypass the available network seccomp filter.
+            sandbox_override = SandboxOverride::NoOverride;
+        }
         let (escalated_profile, writable_root_metadata) = if sandbox_override
             == SandboxOverride::EscalatedSandboxWithRestrictions
         {
@@ -382,27 +401,30 @@ impl ToolOrchestrator {
         };
 
         let initial_attempt_start = Instant::now();
-        let (first_result, first_deferred_network_approval) = if sandbox_requested
-            && !executor_managed_process_sandbox
-            && initial_sandbox == SandboxType::None
-        {
-            let message = "filesystem sandbox is unavailable on this executor; approval is required to run unrestricted";
-            let output = ExecToolCallOutput {
-                exit_code: 1,
-                stderr: StreamOutput::new(message.to_string()),
-                aggregated_output: StreamOutput::new(message.to_string()),
-                ..Default::default()
+        let (first_result, first_deferred_network_approval) =
+            if (android_filesystem_sandbox_unavailable && !already_approved)
+                || (sandbox_requested
+                    && !executor_managed_process_sandbox
+                    && initial_sandbox == SandboxType::None)
+            {
+                let message = "filesystem sandbox is unavailable on this executor; approval is required to run unrestricted";
+                let output = ExecToolCallOutput {
+                    exit_code: 1,
+                    stderr: StreamOutput::new(message.to_string()),
+                    aggregated_output: StreamOutput::new(message.to_string()),
+                    ..Default::default()
+                };
+                (
+                    Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output: Box::new(output),
+                        network_policy_decision: None,
+                    }))),
+                    None,
+                )
+            } else {
+                Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec)
+                    .await
             };
-            (
-                Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                    output: Box::new(output),
-                    network_policy_decision: None,
-                }))),
-                None,
-            )
-        } else {
-            Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await
-        };
         let initial_duration = initial_attempt_start.elapsed();
         match first_result {
             Ok(out) => {
@@ -482,9 +504,10 @@ impl ToolOrchestrator {
                         return Err(ToolError::Codex(err));
                     }
                 }
-                let sandbox_backend_unavailable = sandbox_requested
-                    && !executor_managed_process_sandbox
-                    && initial_sandbox == SandboxType::None;
+                let sandbox_backend_unavailable = android_filesystem_sandbox_unavailable
+                    || sandbox_requested
+                        && !executor_managed_process_sandbox
+                        && initial_sandbox == SandboxType::None;
                 if !unsandboxed_allowed
                     && !sandbox_backend_unavailable
                     && network_approval_context.is_none()
@@ -542,7 +565,7 @@ impl ToolOrchestrator {
                 }
 
                 let retry_sandbox_requested = initial_sandbox != SandboxType::None
-                    && !unsandboxed_allowed
+                    && (!unsandboxed_allowed || android_filesystem_sandbox_unavailable)
                     && sandbox_manager.should_sandbox(
                         initial_permissions,
                         sandbox_preference,
@@ -559,10 +582,10 @@ impl ToolOrchestrator {
                 } else {
                     SandboxType::None
                 };
-                let retry_sandbox_exe = if unsandboxed_allowed {
-                    None
-                } else {
+                let retry_sandbox_exe = if retry_sandbox_requested || !unsandboxed_allowed {
                     codex_sandbox_exe
+                } else {
+                    None
                 };
                 let retry_attempt = SandboxAttempt {
                     sandbox_override,
