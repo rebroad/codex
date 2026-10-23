@@ -5,6 +5,7 @@ use crate::context::world_state::SectionTransition;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSection;
 use crate::context::world_state::WorldStateUpdateContent;
+use crate::context_manager::normalize::MISSING_TOOL_OUTPUT_MESSAGE;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_history::CodexHarnessMetadata;
@@ -2324,10 +2325,11 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
     assert_truncated_message_matches(&truncated, "line-0-", /*expected_removed*/ 17_423);
 }
 
-#[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_function_call() {
     let items = vec![ResponseItem::FunctionCall {
+        encrypted_content: None,
+        status: None,
         id: None,
         name: "do_it".to_string(),
         namespace: None,
@@ -2344,6 +2346,8 @@ fn normalize_adds_missing_output_for_function_call() {
         raw_items(&h),
         vec![
             ResponseItem::FunctionCall {
+                encrypted_content: None,
+                status: None,
                 id: None,
                 name: "do_it".to_string(),
                 namespace: None,
@@ -2357,14 +2361,63 @@ fn normalize_adds_missing_output_for_function_call() {
                 call_id: Some("call-x".to_string()),
                 name: None,
                 namespace: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
+    assert!(
+        h.annotated_items()[1]
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.recovered_tool_output)
+    );
 }
 
-#[cfg_attr(not(debug_assertions), test_case::test_case(false; "local"))]
+#[test]
+fn normalize_restores_persisted_recovery_output_after_its_call() {
+    let call = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: None,
+        status: None,
+        call_id: "tool-x".to_string(),
+        name: "custom".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut recovered_output = ResponseItemEnvelope::new(ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "tool-x".to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text(MISSING_TOOL_OUTPUT_MESSAGE.to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    recovered_output
+        .metadata
+        .get_or_insert_with(CodexHarnessMetadata::default)
+        .recovered_tool_output = true;
+    let mut items = vec![
+        ResponseItemEnvelope::new(call.clone()),
+        ResponseItemEnvelope::new(user_msg("next turn")),
+        recovered_output.clone(),
+    ];
+
+    normalize::ensure_call_outputs_present(&mut items);
+
+    assert_eq!(
+        items,
+        vec![
+            ResponseItemEnvelope::new(call),
+            recovered_output,
+            ResponseItemEnvelope::new(user_msg("next turn")),
+        ]
+    );
+}
+
+#[test_case::test_case(false; "local")]
 #[test_case::test_case(true; "inherited")]
 fn normalize_adds_missing_output_for_custom_tool_call(inherited: bool) {
     let items = vec![ResponseItem::CustomToolCall {
@@ -2402,14 +2455,26 @@ fn normalize_adds_missing_output_for_custom_tool_call(inherited: bool) {
                 id: None,
                 call_id: "tool-x".to_string(),
                 name: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(if inherited {
+                    "aborted".to_string()
+                } else {
+                    MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+                }),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
+    if !inherited {
+        assert!(
+            h.annotated_items()[1]
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.recovered_tool_output)
+        );
+    }
 }
 
-#[cfg_attr(not(debug_assertions), test_case::test_case(false; "local"))]
+#[test_case::test_case(false; "local")]
 #[test_case::test_case(true; "inherited")]
 fn normalize_adds_missing_output_for_local_shell_call_with_id(inherited: bool) {
     let items = vec![ResponseItem::LocalShellCall {
@@ -2456,14 +2521,25 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id(inherited: bool) {
                 call_id: Some("shell-1".to_string()),
                 name: None,
                 namespace: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(if inherited {
+                    "aborted".to_string()
+                } else {
+                    MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+                }),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
+    if !inherited {
+        assert!(
+            h.annotated_items()[1]
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.recovered_tool_output)
+        );
+    }
 }
 
-#[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_function_call_output() {
     let items = vec![ResponseItem::FunctionCallOutput {
@@ -2481,7 +2557,6 @@ fn normalize_removes_orphan_function_call_output() {
     assert_eq!(raw_items(&h), vec![]);
 }
 
-#[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_custom_tool_call_output() {
     let items = vec![ResponseItem::CustomToolCallOutput {
@@ -2498,7 +2573,6 @@ fn normalize_removes_orphan_custom_tool_call_output() {
     assert_eq!(raw_items(&h), vec![]);
 }
 
-#[cfg(not(debug_assertions))]
 #[test]
 fn normalize_mixed_inserts_and_removals() {
     let items = vec![
@@ -2573,7 +2647,9 @@ fn normalize_mixed_inserts_and_removals() {
                 call_id: Some("c1".to_string()),
                 name: None,
                 namespace: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::CustomToolCall {
@@ -2590,7 +2666,9 @@ fn normalize_mixed_inserts_and_removals() {
                 id: None,
                 call_id: "t1".to_string(),
                 name: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::LocalShellCall {
@@ -2612,7 +2690,9 @@ fn normalize_mixed_inserts_and_removals() {
                 call_id: Some("s1".to_string()),
                 name: None,
                 namespace: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
@@ -2653,7 +2733,9 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
                 call_id: Some("call-x".to_string()),
                 name: None,
                 namespace: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
@@ -2762,78 +2844,6 @@ fn normalize_adds_missing_output_for_tool_search_call() {
     );
 }
 
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic]
-fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
-    let items = vec![ResponseItem::CustomToolCall {
-        encrypted_content: None,
-        id: None,
-        status: None,
-        call_id: "tool-x".to_string(),
-        name: "custom".to_string(),
-        namespace: None,
-        input: "{}".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    }];
-    let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic]
-fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() {
-    let items = vec![ResponseItem::LocalShellCall {
-        encrypted_content: None,
-        id: None,
-        call_id: Some("shell-1".to_string()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".to_string(), "hi".to_string()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-        internal_chat_message_metadata_passthrough: None,
-    }];
-    let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic]
-fn normalize_removes_orphan_function_call_output_panics_in_debug() {
-    let items = vec![ResponseItem::FunctionCallOutput {
-        id: None,
-        call_id: Some("orphan-1".to_string()),
-        name: None,
-        namespace: None,
-        output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        internal_chat_message_metadata_passthrough: None,
-    }];
-    let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic]
-fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
-    let items = vec![ResponseItem::CustomToolCallOutput {
-        id: None,
-        call_id: "orphan-2".to_string(),
-        name: None,
-        output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        internal_chat_message_metadata_passthrough: None,
-    }];
-    let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
-}
-
-#[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_client_tool_search_output() {
     let items = vec![ResponseItem::ToolSearchOutput {
@@ -2849,22 +2859,6 @@ fn normalize_removes_orphan_client_tool_search_output() {
     h.normalize_history(&default_input_modalities());
 
     assert_eq!(raw_items(&h), vec![]);
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic]
-fn normalize_removes_orphan_client_tool_search_output_panics_in_debug() {
-    let items = vec![ResponseItem::ToolSearchOutput {
-        id: None,
-        call_id: Some("orphan-search".to_string()),
-        status: "completed".to_string(),
-        execution: "client".to_string(),
-        tools: Vec::new(),
-        internal_chat_message_metadata_passthrough: None,
-    }];
-    let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
 }
 
 #[test]
@@ -2892,59 +2886,6 @@ fn normalize_keeps_server_tool_search_output_without_matching_call() {
             internal_chat_message_metadata_passthrough: None,
         }]
     );
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic]
-fn normalize_mixed_inserts_and_removals_panics_in_debug() {
-    let items = vec![
-        ResponseItem::FunctionCall {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            name: "f1".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: "c1".to_string(),
-            encrypted_function_args: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::FunctionCallOutput {
-            id: None,
-            call_id: Some("c2".to_string()),
-            name: None,
-            namespace: None,
-            output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::CustomToolCall {
-            encrypted_content: None,
-            id: None,
-            status: None,
-            call_id: "t1".to_string(),
-            name: "tool".to_string(),
-            namespace: None,
-            input: "{}".to_string(),
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::LocalShellCall {
-            encrypted_content: None,
-            id: None,
-            call_id: Some("s1".to_string()),
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".to_string()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
-            internal_chat_message_metadata_passthrough: None,
-        },
-    ];
-    let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
 }
 
 #[test]

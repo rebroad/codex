@@ -1,5 +1,6 @@
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
+use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
@@ -12,13 +13,16 @@ use uuid::Uuid;
 
 use crate::context::ContextualUserFragment;
 use crate::context::UnsupportedMedia;
-use crate::util::error_or_panic;
 use tracing::info;
+use tracing::warn;
 
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
-pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>) {
+pub(crate) fn ensure_call_outputs_present(
+    items: &mut Vec<ResponseItemEnvelope>,
+) -> Vec<ResponseItemEnvelope> {
+    restore_recovered_output_order(items);
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
     let mut custom_tool_output_ids = HashSet::new();
@@ -47,24 +51,32 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
     // Store the insertion position (index of call) alongside the item so
     // we can insert in reverse order and avoid index shifting.
     let mut missing_outputs_to_insert: Vec<(usize, ResponseItemEnvelope)> = Vec::new();
+    let mut recovered_outputs = Vec::new();
 
     for (idx, envelope) in items.iter().enumerate() {
         match &envelope.item {
             ResponseItem::FunctionCall { id, call_id, .. }
-                if !function_output_ids.contains(call_id.as_str()) =>
-            {
-                info!("Function call output is missing for call id: {call_id}");
-                missing_outputs_to_insert.push((
-                    idx,
-                    ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
-                        id: synthetic_output_id("fco", id.as_deref()),
-                        call_id: Some(call_id.clone()),
-                        name: None,
-                        namespace: None,
-                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        internal_chat_message_metadata_passthrough: None,
-                    }),
-                ));
+            | ResponseItem::LocalShellCall {
+                id,
+                call_id: Some(call_id),
+                ..
+            } if !function_output_ids.contains(call_id.as_str()) => {
+                info!("Tool call output is missing for call id: {call_id}");
+                let inherited = is_inherited(envelope);
+                let mut output = ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
+                    id: synthetic_output_id("fco", id.as_deref()),
+                    call_id: Some(call_id.clone()),
+                    name: None,
+                    namespace: None,
+                    output: FunctionCallOutputPayload::from_text(missing_tool_output_message(
+                        inherited,
+                    )),
+                    internal_chat_message_metadata_passthrough: None,
+                });
+                if !inherited {
+                    record_recovered_tool_output(&mut output, call_id, &mut recovered_outputs);
+                }
+                missing_outputs_to_insert.push((idx, output));
             }
             ResponseItem::ToolSearchCall {
                 id,
@@ -90,54 +102,20 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                 info!("Custom tool call output is missing for call id: {call_id}");
                 // Preserved-prefix forks mark copied calls as inherited. A call still
                 // running in the parent has no output in the child's snapshot.
-                if !envelope
-                    .metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.inherited_user_message)
-                {
-                    error_or_panic(format!(
-                        "Custom tool call output is missing for call id: {call_id}"
-                    ));
+                let inherited = is_inherited(envelope);
+                let mut output = ResponseItemEnvelope::new(ResponseItem::CustomToolCallOutput {
+                    id: synthetic_output_id("ctco", id.as_deref()),
+                    call_id: call_id.clone(),
+                    name: None,
+                    output: FunctionCallOutputPayload::from_text(missing_tool_output_message(
+                        inherited,
+                    )),
+                    internal_chat_message_metadata_passthrough: None,
+                });
+                if !inherited {
+                    record_recovered_tool_output(&mut output, call_id, &mut recovered_outputs);
                 }
-                missing_outputs_to_insert.push((
-                    idx,
-                    ResponseItemEnvelope::new(ResponseItem::CustomToolCallOutput {
-                        id: synthetic_output_id("ctco", id.as_deref()),
-                        call_id: call_id.clone(),
-                        name: None,
-                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        internal_chat_message_metadata_passthrough: None,
-                    }),
-                ));
-            }
-            // LocalShellCall is represented in upstream streams by a FunctionCallOutput
-            ResponseItem::LocalShellCall {
-                id,
-                call_id: Some(call_id),
-                ..
-            } if !function_output_ids.contains(call_id.as_str()) => {
-                // Preserved-prefix forks mark copied calls as inherited. A call still
-                // running in the parent has no output in the child's snapshot.
-                if !envelope
-                    .metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.inherited_user_message)
-                {
-                    error_or_panic(format!(
-                        "Local shell call output is missing for call id: {call_id}"
-                    ));
-                }
-                missing_outputs_to_insert.push((
-                    idx,
-                    ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
-                        id: synthetic_output_id("fco", id.as_deref()),
-                        call_id: Some(call_id.clone()),
-                        name: None,
-                        namespace: None,
-                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        internal_chat_message_metadata_passthrough: None,
-                    }),
-                ));
+                missing_outputs_to_insert.push((idx, output));
             }
             _ => {}
         }
@@ -152,14 +130,95 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
     for (idx, output_item) in missing_outputs_to_insert.into_iter().rev() {
         items.insert(idx + 1, output_item);
     }
+
+    recovered_outputs
 }
 
-/// Derives a stable ID for a prompt-only output from its source call's item ID.
+pub(crate) const MISSING_TOOL_OUTPUT_MESSAGE: &str = "Codex recovered an incomplete history record. The tool may have run, but its result was not saved. Inspect the current state before trying it again.";
+
+fn missing_tool_output_message(inherited: bool) -> String {
+    if inherited {
+        "aborted".to_string()
+    } else {
+        MISSING_TOOL_OUTPUT_MESSAGE.to_string()
+    }
+}
+
+fn is_inherited(envelope: &ResponseItemEnvelope) -> bool {
+    envelope
+        .metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.inherited_user_message)
+}
+
+fn mark_recovered_tool_output(output: &mut ResponseItemEnvelope) {
+    output
+        .metadata
+        .get_or_insert_with(CodexHarnessMetadata::default)
+        .recovered_tool_output = true;
+}
+
+fn record_recovered_tool_output(
+    output: &mut ResponseItemEnvelope,
+    call_id: &str,
+    recovered_outputs: &mut Vec<ResponseItemEnvelope>,
+) {
+    mark_recovered_tool_output(output);
+    recovered_outputs.push(output.clone());
+    warn!(call_id = %call_id, "recovering missing tool call output");
+}
+
+/// Recovered output records are appended to the rollout so the original JSONL stays immutable.
+/// Move them back beside their calls when reconstructing model history.
+fn restore_recovered_output_order(items: &mut Vec<ResponseItemEnvelope>) {
+    let mut recovered = Vec::new();
+    let mut retained = Vec::with_capacity(items.len());
+    for item in std::mem::take(items) {
+        if item
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.recovered_tool_output)
+        {
+            recovered.push(item);
+        } else {
+            retained.push(item);
+        }
+    }
+    *items = retained;
+
+    for output in recovered {
+        let call_id = match &output.item {
+            ResponseItem::FunctionCallOutput {
+                call_id: Some(call_id),
+                ..
+            }
+            | ResponseItem::CustomToolCallOutput { call_id, .. } => call_id,
+            _ => {
+                items.push(output);
+                continue;
+            }
+        };
+        let call_position = items.iter().position(|envelope| match &envelope.item {
+            ResponseItem::FunctionCall { call_id: id, .. }
+            | ResponseItem::LocalShellCall {
+                call_id: Some(id), ..
+            } => id == call_id,
+            ResponseItem::CustomToolCall { call_id: id, .. } => id == call_id,
+            _ => false,
+        });
+        if let Some(call_position) = call_position {
+            items.insert(call_position + 1, output);
+        } else {
+            items.push(output);
+        }
+    }
+}
+
+/// Derives a stable ID for a synthesized output from its source call's item ID.
 ///
-/// Prompt normalization can run repeatedly without persisting its synthetic
-/// outputs, so the namespace and name format must remain stable across retries
-/// and resumes to preserve prompt-cache reuse. Returning `None` when the source
-/// call has no ID preserves the legacy behavior for older history items.
+/// The namespace and name format must remain stable across retries and resumes
+/// to preserve prompt-cache reuse. Returning `None` when the source call has no
+/// ID preserves the legacy behavior for older history items.
 fn synthetic_output_id(prefix: &str, item_id: Option<&str>) -> Option<ResponseItemId> {
     let source_id = item_id.filter(|id| !id.is_empty())?;
     let name = format!("{prefix}:{source_id}");
@@ -169,7 +228,7 @@ fn synthetic_output_id(prefix: &str, item_id: Option<&str>) -> Option<ResponseIt
     ))
 }
 
-pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
+pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) -> usize {
     let mut function_call_ids = HashSet::new();
     let mut tool_search_call_ids = HashSet::new();
     let mut custom_tool_call_ids = HashSet::new();
@@ -202,17 +261,13 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
                 call_id: Some(call_id),
                 ..
             } if !function_call_ids.contains(call_id.as_str()) => {
-                error_or_panic(format!(
-                    "Orphan function call output for call id: {call_id}"
-                ));
+                warn!(call_id = %call_id, "Orphan function call output");
                 orphan_positions.push(position);
             }
             ResponseItem::CustomToolCallOutput { call_id, .. }
                 if !custom_tool_call_ids.contains(call_id.as_str()) =>
             {
-                error_or_panic(format!(
-                    "Orphan custom tool call output for call id: {call_id}"
-                ));
+                warn!(call_id = %call_id, "Orphan custom tool call output");
                 orphan_positions.push(position);
             }
             ResponseItem::ToolSearchOutput {
@@ -220,7 +275,7 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
                 execution,
                 ..
             } if execution != "server" && !tool_search_call_ids.contains(call_id.as_str()) => {
-                error_or_panic(format!("Orphan tool search output for call id: {call_id}"));
+                warn!(call_id = %call_id, "Orphan tool search output");
                 orphan_positions.push(position);
             }
             _ => {}
@@ -228,6 +283,7 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
     }
 
     if !orphan_positions.is_empty() {
+        let removed_count = orphan_positions.len();
         let mut orphan_positions = orphan_positions.into_iter().peekable();
         let mut position = 0;
         items.retain(|_| {
@@ -238,6 +294,9 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
             position += 1;
             retain
         });
+        removed_count
+    } else {
+        0
     }
 }
 
