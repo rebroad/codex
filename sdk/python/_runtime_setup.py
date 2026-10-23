@@ -100,7 +100,10 @@ def platform_asset_name() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
 
-    if system == "darwin":
+    if sys.platform == "android":
+        if machine in {"aarch64", "arm64"}:
+            return "codex-package-aarch64-linux-android.tar.gz"
+    elif system == "darwin":
         if machine in {"arm64", "aarch64"}:
             return "codex-package-aarch64-apple-darwin.tar.gz"
         if machine in {"x86_64", "amd64"}:
