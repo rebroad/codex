@@ -19,6 +19,17 @@ Run the following on Mac or Linux to install the latest stable Codex CLI:
 curl -fsSL https://reb.ai/codex/install.sh | sh
 ```
 
+On Android 10 or later (API 29+), install [Termux](https://termux.dev/) on an
+ARM64 device, then run:
+
+```shell
+pkg install ripgrep
+curl -fsSL https://reb.ai/codex/install.sh | sh
+```
+
+The Android package uses Termux's `rg` command for file search and includes the
+Android C++ runtime needed by the CLI and its app-server daemon.
+
 Run the following on Windows to install Codex CLI:
 
 ```shell

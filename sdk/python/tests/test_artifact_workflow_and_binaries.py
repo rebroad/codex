@@ -666,24 +666,36 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
 
 
 @pytest.mark.parametrize(
-    ("system", "machine", "asset_name"),
+    ("system", "platform_id", "machine", "asset_name"),
     [
-        ("Darwin", "arm64", "codex-package-aarch64-apple-darwin.tar.gz"),
-        ("Linux", "x86_64", "codex-package-x86_64-unknown-linux-musl.tar.gz"),
-        ("Windows", "AMD64", "codex-package-x86_64-pc-windows-msvc.tar.gz"),
+        ("Darwin", "darwin", "arm64", "codex-package-aarch64-apple-darwin.tar.gz"),
+        ("Linux", "linux", "x86_64", "codex-package-x86_64-unknown-linux-musl.tar.gz"),
+        ("Windows", "win32", "AMD64", "codex-package-x86_64-pc-windows-msvc.tar.gz"),
     ],
 )
 def test_runtime_setup_downloads_codex_package_archives(
     monkeypatch: pytest.MonkeyPatch,
     system: str,
+    platform_id: str,
     machine: str,
     asset_name: str,
 ) -> None:
     runtime_setup = _load_runtime_setup_module()
+    monkeypatch.setattr(runtime_setup.sys, "platform", platform_id)
     monkeypatch.setattr(runtime_setup.platform, "system", lambda: system)
     monkeypatch.setattr(runtime_setup.platform, "machine", lambda: machine)
 
     assert runtime_setup.platform_asset_name() == asset_name
+
+
+def test_runtime_setup_downloads_android_codex_package_archive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_setup = _load_runtime_setup_module()
+    monkeypatch.setattr(runtime_setup.sys, "platform", "android")
+    monkeypatch.setattr(runtime_setup.platform, "machine", lambda: "aarch64")
+
+    assert runtime_setup.platform_asset_name() == "codex-package-aarch64-linux-android.tar.gz"
 
 
 def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
@@ -989,7 +1001,7 @@ def sdk_release_source(tmp_path: Path) -> Path:
     project = source / "pyproject.toml"
     project.write_text(
         re.sub(
-            r"openai-codex-cli-bin==[^\"\s]+", "openai-codex-cli-bin==0.153.0", project.read_text()
+            r"openai-codex-cli-bin==[^\";\s]+", "openai-codex-cli-bin==0.153.0", project.read_text()
         )
     )
     return source
@@ -1056,8 +1068,8 @@ def test_built_sdk_uses_explicit_release_versions(
     source_project = project_path.read_bytes()
     expected_dependencies = {
         *tomllib.loads(source_project.decode())["project"]["dependencies"],
-        "openai-codex-cli-bin==0.154.0",
-    } - {f"openai-codex-cli-bin=={source_runtime}"}
+        "openai-codex-cli-bin==0.154.0 ; sys_platform != 'android'",
+    } - {f"openai-codex-cli-bin=={source_runtime}; sys_platform != 'android'"}
     reviewed_files = {
         path: (sdk_release_source / path).read_bytes()
         for path in (
@@ -1151,7 +1163,7 @@ def test_sdk_release_matches_stable_runtime(
         "sdk_dependencies": [
             "pydantic>=2.12",
             "packaging>=26.2",
-            "openai-codex-cli-bin==0.153.0",
+            "openai-codex-cli-bin==0.153.0; sys_platform != 'android'",
         ],
     }
 
@@ -1192,7 +1204,11 @@ def test_sdk_beta_can_use_a_supported_runtime(
     project = tomllib.loads((staged / "pyproject.toml").read_text())["project"]
     assert (project["version"], project["dependencies"]) == (
         "0.1.0b1",
-        ["pydantic>=2.12", "packaging>=26.2", "openai-codex-cli-bin==0.153.0"],
+        [
+            "pydantic>=2.12",
+            "packaging>=26.2",
+            "openai-codex-cli-bin==0.153.0; sys_platform != 'android'",
+        ],
     )
 
 
@@ -1321,6 +1337,19 @@ def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
         client_module.resolve_codex_bin(client_module.CodexConfig(), ops)
 
 
+def test_android_sdk_uses_termux_codex_from_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai_codex import client as client_module
+
+    monkeypatch.setattr(client_module.sys, "platform", "android")
+    monkeypatch.setattr(
+        client_module.shutil, "which", lambda name: "/data/data/com.termux/files/usr/bin/codex"
+    )
+
+    assert client_module._installed_codex_path() == Path(
+        "/data/data/com.termux/files/usr/bin/codex"
+    )
+
+
 def test_broken_runtime_package_does_not_fall_back() -> None:
     from openai_codex import client as client_module
 
@@ -1391,7 +1420,11 @@ def test_sdk_beta_can_pin_an_independent_runtime(tmp_path: Path) -> None:
     project = tomllib.loads((staged / "pyproject.toml").read_text())["project"]
     assert (project["version"], project["dependencies"]) == (
         "0.1.0b1",
-        ["pydantic>=2.12", "packaging>=26.2", "openai-codex-cli-bin==0.153.0"],
+        [
+            "pydantic>=2.12",
+            "packaging>=26.2",
+            "openai-codex-cli-bin==0.153.0; sys_platform != 'android'",
+        ],
     )
 
 
@@ -1434,7 +1467,7 @@ def test_sdk_release_matches_runtime(
         "sdk_dependencies": [
             "pydantic>=2.12",
             "packaging>=26.2",
-            f"openai-codex-cli-bin=={package_version}",
+            f"openai-codex-cli-bin=={package_version}; sys_platform != 'android'",
         ],
     }
     assert (script.sdk_root() / "pyproject.toml").read_text() == source_pyproject

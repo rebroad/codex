@@ -205,6 +205,27 @@ class InstallShTest(unittest.TestCase):
                 (root / "codex-home/packages/standalone/current/bin/codex").is_file()
             )
 
+    def test_android_install_uses_complete_package_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(
+                root, target="aarch64-linux-android"
+            )
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_platform="android-arm64",
+            )
+
+            current = root / "codex-home/packages/standalone/current"
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((current / "bin/codex").is_file())
+            self.assertTrue((current / "bin/libc++_shared.so").is_file())
+            self.assertTrue((current / "codex").is_symlink())
+
     def test_install_does_not_modify_shell_startup_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1020,7 +1041,7 @@ def run_installer_in(
             "CODEX_TEST_RELEASES_MODE": releases_mode,
             "CODEX_TEST_REQUEST_LOG": str(request_log),
             "HOME": str(home),
-            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}:/usr/bin:/bin",
             "SHELL": "/bin/sh",
         }
     )
@@ -1067,6 +1088,7 @@ def create_package_release(
     *,
     metadata_version: str = VERSION,
     binary_version: str = VERSION,
+    target: str = "aarch64-apple-darwin",
 ) -> tuple[Path, Path, str]:
     package_dir = root / "package"
     (package_dir / "bin").mkdir(parents=True)
@@ -1080,9 +1102,12 @@ def create_package_release(
         package_dir / "bin" / "codex-code-mode-host",
         "#!/bin/sh\nexit 0\n",
     )
-    write_executable(package_dir / "codex-path" / "rg", "#!/bin/sh\nexit 0\n")
+    if target == "aarch64-linux-android":
+        (package_dir / "bin" / "libc++_shared.so").write_bytes(b"Android runtime")
+    else:
+        write_executable(package_dir / "codex-path" / "rg", "#!/bin/sh\nexit 0\n")
 
-    asset = "codex-package-aarch64-apple-darwin.tar.gz"
+    asset = f"codex-package-{target}.tar.gz"
     archive_path = root / asset
     with tarfile.open(archive_path, "w:gz") as archive:
         for path in package_dir.iterdir():

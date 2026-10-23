@@ -16,7 +16,11 @@ classifiers = [
   "Intended Audience :: Developers",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = ["pydantic>=2.12", "packaging>=26.2", "openai-codex-cli-bin==0.153.4"]
+dependencies = [
+  "pydantic>=2.12",
+  "packaging>=26.2",
+  "openai-codex-cli-bin==0.153.4; sys_platform != 'android'",
+]
 
 [project.urls]
 Homepage = "https://github.com/rebroad/codex"
@@ -25,11 +29,10 @@ Issues = "https://github.com/rebroad/codex/issues"
 Documentation = "https://github.com/rebroad/codex/tree/main/sdk/python/docs"
 
 [dependency-groups]
-format = ["ruff>=0.15.8"]
+format = ["ruff>=0.15.8; sys_platform != 'android'"]
 test = [
   "pytest>=8.0",
   "datamodel-code-generator==0.31.2",
-  { include-group = "format" },
 ]
 dev = [
   { include-group = "test" },
