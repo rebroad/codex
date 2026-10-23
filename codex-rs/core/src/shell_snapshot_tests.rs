@@ -19,7 +19,7 @@ use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::models::PermissionProfile;
 #[cfg(unix)]
 use codex_protocol::sandbox::SandboxOverride;
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -148,7 +148,7 @@ fn inherited_provider_context_matches_windows_environment_casing() {
     assert_eq!(env.len(), 1);
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 async fn get_snapshot(shell_type: ShellType) -> Result<String> {
     let dir = tempdir()?;
     let path = dir.path().join("snapshot.sh");
