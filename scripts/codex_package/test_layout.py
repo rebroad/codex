@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,25 @@ from codex_package.targets import (
 
 
 class PackageLayoutTest(unittest.TestCase):
+    def test_package_builder_discovers_root_without_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            env = os.environ.copy()
+            env.pop("CODEX_REPO_ROOT", None)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parents[1] / "build_codex_package.py"),
+                    "--help",
+                ],
+                cwd=temp,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertIn("Build a canonical Codex package", result.stdout)
+
     def test_termux_defaults_to_android_target(self) -> None:
         with (
             patch("sys.platform", "android"),
