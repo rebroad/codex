@@ -14,6 +14,26 @@ fn text_preserves_whitespace_and_rejects_late_or_oversized_reads() {
 }
 
 #[cfg(unix)]
+#[test]
+fn clipboard_command_preserves_text_and_enforces_deadline() {
+    let shell = std::env::var_os("SHELL").unwrap_or_else(|| "sh".into());
+    let shell = std::path::PathBuf::from(shell);
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 5);
+    assert_eq!(
+        read_clipboard_command(&shell, &["-c", "printf '%s' ' café\r\n\t'"], deadline),
+        Ok(" café\r\n\t".into())
+    );
+    assert_eq!(
+        read_clipboard_command(
+            &shell,
+            &["-c", "exec sleep 10"],
+            Instant::now() + Duration::from_millis(/*millis*/ 20)
+        ),
+        Err("clipboard read timed out".into())
+    );
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn command_drains_large_output_and_bounds_waiting() {
     use std::process::Stdio;
