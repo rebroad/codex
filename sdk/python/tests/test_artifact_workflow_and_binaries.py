@@ -896,6 +896,20 @@ def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> Non
     assert 'platform-tag = "manylinux_2_17_x86_64"' in pyproject
 
 
+def test_android_runtime_wheel_api_matches_ndk_target() -> None:
+    for workflow_path in (
+        ROOT.parents[1] / ".github/workflows/rust-ci.yml",
+        ROOT.parents[1] / ".github/workflows/rust-release.yml",
+    ):
+        workflow = workflow_path.read_text()
+        ndk_api = re.search(r"aarch64-linux-android(\d+)-clang", workflow)
+        wheel_api = re.search(r"--platform-tag android_(\d+)_arm64_v8a", workflow)
+
+        assert ndk_api is not None, workflow_path
+        assert wheel_api is not None, workflow_path
+        assert ndk_api.group(1) == wheel_api.group(1), workflow_path
+
+
 @pytest.mark.parametrize("source_name", ["codex-package.tar.gz", "codex-package"])
 def test_stage_runtime_release_rejects_incomplete_package_layout(
     tmp_path: Path, source_name: str
