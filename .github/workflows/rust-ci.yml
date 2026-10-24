@@ -168,6 +168,8 @@ jobs:
           target: aarch64-linux-android
       - name: Build Android CLI binaries
         run: cargo build --locked --target aarch64-linux-android --bin codex --bin codex-code-mode-host
+      - name: Compile Android TUI tests
+        run: cargo test --locked --no-run --target aarch64-linux-android -p codex-tui
       - name: Build and validate Android package and Python runtime wheel
         shell: bash
         run: |
