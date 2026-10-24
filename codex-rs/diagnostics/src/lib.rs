@@ -128,7 +128,7 @@ fn process_snapshot() -> ProcessSnapshot {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn process_snapshot() -> ProcessSnapshot {
     // SAFETY: querying the system page size does not access caller-owned memory.
     let page_size = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })
@@ -191,12 +191,17 @@ fn process_snapshot() -> ProcessSnapshot {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows"
+)))]
 fn process_snapshot() -> ProcessSnapshot {
     empty_process_snapshot()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn empty_process_snapshot() -> ProcessSnapshot {
     ProcessSnapshot {
         id: std::process::id(),
