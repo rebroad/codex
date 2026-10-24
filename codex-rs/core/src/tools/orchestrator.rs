@@ -399,30 +399,28 @@ impl ToolOrchestrator {
         };
 
         let initial_attempt_start = Instant::now();
-        let (first_result, first_deferred_network_approval) =
-            if (android_filesystem_sandbox_unavailable && !already_approved)
-                || (sandbox_requested
-                    && !executor_managed_process_sandbox
-                    && initial_sandbox == SandboxType::None)
-            {
-                let message = "filesystem sandbox is unavailable on this executor; approval is required to run unrestricted";
-                let output = ExecToolCallOutput {
-                    exit_code: 1,
-                    stderr: StreamOutput::new(message.to_string()),
-                    aggregated_output: StreamOutput::new(message.to_string()),
-                    ..Default::default()
-                };
-                (
-                    Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                        output: Box::new(output),
-                        network_policy_decision: None,
-                    }))),
-                    None,
-                )
-            } else {
-                Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec)
-                    .await
+        let (first_result, first_deferred_network_approval) = if sandbox_requested
+            && !executor_managed_process_sandbox
+            && initial_sandbox == SandboxType::None
+            && !(android_filesystem_sandbox_unavailable && unsandboxed_allowed)
+        {
+            let message = "filesystem sandbox is unavailable on this executor; approval is required to run unrestricted";
+            let output = ExecToolCallOutput {
+                exit_code: 1,
+                stderr: StreamOutput::new(message.to_string()),
+                aggregated_output: StreamOutput::new(message.to_string()),
+                ..Default::default()
             };
+            (
+                Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(output),
+                    network_policy_decision: None,
+                }))),
+                None,
+            )
+        } else {
+            Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await
+        };
         let initial_duration = initial_attempt_start.elapsed();
         match first_result {
             Ok(out) => {

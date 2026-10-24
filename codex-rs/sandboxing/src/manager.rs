@@ -333,8 +333,8 @@ impl SandboxManager {
             )
         {
             // Android has no filesystem-enforcement backend. The seccomp
-            // wrapper is still useful when network restrictions are active,
-            // but filesystem access must be approved by the caller first.
+            // wrapper is still useful when network restrictions are active.
+            // Callers must reject policies containing denied-read rules.
             let (_, network_policy) = permission_profile.to_runtime_permissions();
             if !has_managed_network_requirements
                 && network_policy == codex_protocol::permissions::NetworkSandboxPolicy::Enabled
