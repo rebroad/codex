@@ -16,6 +16,7 @@ The workflows in this directory are split so that pull requests get fast, review
   - `cargo shear`
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
+  - Android ARM64 CLI/package builds and `codex-tui` test-target compilation
 
 ## Post-Merge On `stable`
 
