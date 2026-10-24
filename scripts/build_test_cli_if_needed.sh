@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # nextest can reuse target/debug/codex from an older checkout when the selected
-# package does not itself build the CLI binary. Most package selections may
-# contain tests that resolve it through cargo_bin("codex"), so refresh it
-# before those test runs. The daemon crate uses its own executable fixtures.
+# package does not itself build the CLI binary. Refresh it only for packages
+# whose tests resolve codex through cargo_bin("codex").
 selected_packages=()
 build_all_packages=false
+package_spec=""
 while (($#)); do
   case "$1" in
     --workspace|--all)
@@ -14,22 +14,46 @@ while (($#)); do
       ;;
     -p|--package)
       (($# >= 2)) || break
-      selected_packages+=("$2")
+      selected_packages+=("${2%%@*}")
       shift
       ;;
     -p*)
-      selected_packages+=("${1#-p}")
+      package_spec="${1#-p}"
+      selected_packages+=("${package_spec%%@*}")
       ;;
     --package=*)
-      selected_packages+=("${1#--package=}")
+      package_spec="${1#--package=}"
+      selected_packages+=("${package_spec%%@*}")
       ;;
   esac
   shift
 done
 
-if [[ "$build_all_packages" == false \
-  && "${selected_packages[*]}" == codex-app-server-daemon ]]; then
-  echo "Skipping Codex CLI refresh for daemon-only tests."
+codex_cli_test_packages=(
+  codex-app-server
+  codex-cli
+  codex-core
+  codex-mcp
+  codex-rmcp-client
+  codex-tui
+)
+
+build_cli=false
+if [[ "$build_all_packages" == true || ${#selected_packages[@]} -eq 0 ]]; then
+  build_cli=true
+else
+  for selected_package in "${selected_packages[@]}"; do
+    for codex_cli_test_package in "${codex_cli_test_packages[@]}"; do
+      if [[ "$selected_package" == "$codex_cli_test_package" ]]; then
+        build_cli=true
+        break 2
+      fi
+    done
+  done
+fi
+
+if [[ "$build_cli" == false ]]; then
+  echo "Skipping Codex CLI refresh; selected packages do not spawn the CLI."
   exit 0
 fi
 
