@@ -30,6 +30,11 @@ zstd = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 system-configuration = { workspace = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# Android cross-builds need OpenSSL's vendored source because Termux's system
+# libraries are not available to the Android CI toolchain.
+openssl-sys = { workspace = true, features = ["vendored"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 rustls-platform-verifier = "0.7.0"
 windows-sys = { workspace = true, features = [
