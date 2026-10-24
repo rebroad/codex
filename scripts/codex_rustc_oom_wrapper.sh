@@ -14,7 +14,14 @@ fi
 
 codex_compiler_command=("$@")
 if [[ -n "${CODEX_SCCACHE_BIN:-}" ]]; then
-  codex_compiler_command=("${CODEX_SCCACHE_WRAPPER:?CODEX_SCCACHE_WRAPPER must be set}" "$@")
+  codex_sccache_wrapper="${CODEX_SCCACHE_WRAPPER:?CODEX_SCCACHE_WRAPPER must be set}"
+  if [[ -x /system/bin/setsid ]]; then
+    # Android's system `setsid` bypasses Termux's exec shim, so scripts with an
+    # /usr/bin/env shebang cannot be launched directly from this process group.
+    codex_compiler_command=("${PREFIX:-/data/data/com.termux/files/usr}/bin/bash" "$codex_sccache_wrapper" "$@")
+  else
+    codex_compiler_command=("$codex_sccache_wrapper" "$@")
+  fi
 fi
 
 if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD:-0}" != 1 ]]; then
