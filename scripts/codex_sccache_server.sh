@@ -5,7 +5,14 @@ codex_sccache_server_set_oom_score() {
 
   local server_pids=""
   if command -v pgrep >/dev/null 2>&1; then
-    server_pids="$(pgrep -x sccache 2>/dev/null | sort -u)"
+    server_pids="$(
+      {
+        pgrep -x sccache 2>/dev/null || true
+        # Android may expose a truncated executable path in /proc/<pid>/comm
+        # instead of the process name "sccache".
+        pgrep -f '[s]ccache$' 2>/dev/null || true
+      } | sort -u
+    )"
   elif command -v lsof >/dev/null 2>&1; then
     server_pids="$(lsof -nP -t -iTCP:"${SCCACHE_SERVER_PORT:-4226}" -sTCP:LISTEN 2>/dev/null | sort -u)"
   else
@@ -19,13 +26,11 @@ codex_sccache_server_set_oom_score() {
   fi
 
   local server_adjusted=false
-  local server_pid server_comm server_args
+  local server_pid server_args
   while IFS= read -r server_pid; do
-    [[ -n "${server_pid}" && -r "/proc/${server_pid}/comm" ]] || continue
-    IFS= read -r server_comm <"/proc/${server_pid}/comm" || true
-    [[ "${server_comm}" == sccache ]] || continue
+    [[ -n "${server_pid}" && -r "/proc/${server_pid}/cmdline" ]] || continue
     server_args="$(ps -ww -p "${server_pid}" -o args= 2>/dev/null || true)"
-    [[ "${server_args}" == *rustc* ]] && continue
+    [[ "${server_args}" == "${CODEX_SCCACHE_BIN:-sccache}" ]] || continue
     if ! printf '%s\n' "${CODEX_RUSTC_OOM_SCORE_ADJ}" \
       >"/proc/${server_pid}/oom_score_adj" 2>/dev/null; then
       printf 'unable to set sccache server %s oom_score_adj to %s\n' \
