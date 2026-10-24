@@ -51,11 +51,14 @@ default. Edit `CODEX_HOME/app-server-daemon/settings.json` to change this:
 
 ```json
 {
-  "remoteControlEnabled": false,
+  "remoteControlEnabled": true,
   "shutdownGraceSeconds": 60,
   "updater": { "autoUpdateEnabled": false, "updateIntervalMinutes": 120 }
 }
 ```
+
+Remote control defaults to enabled for new or older installations without an
+explicit preference. Set `remoteControlEnabled` to `false` to disable it.
 
 Positive minute intervals have no configured cap. `daemon restart` applies the
 enabled state; the next updater wait reads a new interval. The preference does

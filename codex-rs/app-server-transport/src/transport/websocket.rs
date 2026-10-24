@@ -6,40 +6,69 @@ use super::next_connection_id;
 use super::serialize_outgoing_message;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::QueuedOutgoingMessage;
+#[cfg(feature = "websocket")]
 use axum::Router;
+#[cfg(feature = "websocket")]
 use axum::body::Body;
-use axum::body::Bytes;
+#[cfg(feature = "websocket")]
 use axum::extract::ConnectInfo;
+#[cfg(feature = "websocket")]
 use axum::extract::State;
+#[cfg(feature = "websocket")]
 use axum::extract::ws::Message as AxumWebSocketMessage;
+#[cfg(feature = "websocket")]
 use axum::extract::ws::WebSocketUpgrade;
+#[cfg(feature = "websocket")]
 use axum::http::HeaderMap;
+#[cfg(feature = "websocket")]
 use axum::http::Request;
+#[cfg(feature = "websocket")]
 use axum::http::StatusCode;
+#[cfg(feature = "websocket")]
 use axum::http::header::ORIGIN;
+#[cfg(feature = "websocket")]
 use axum::middleware;
+#[cfg(feature = "websocket")]
 use axum::middleware::Next;
+#[cfg(feature = "websocket")]
 use axum::response::IntoResponse;
+#[cfg(feature = "websocket")]
 use axum::response::Response;
+#[cfg(feature = "websocket")]
 use axum::routing::any;
+#[cfg(feature = "websocket")]
 use axum::routing::get;
+#[cfg(feature = "websocket")]
 use codex_websocket_auth::WebsocketAuthPolicy;
+#[cfg(feature = "websocket")]
 use codex_websocket_auth::authorize_upgrade;
+#[cfg(feature = "websocket")]
 use codex_websocket_auth::is_unauthenticated_non_loopback_listener;
 use futures::SinkExt;
 use futures::StreamExt;
+#[cfg(feature = "websocket")]
 use owo_colors::OwoColorize;
+#[cfg(feature = "websocket")]
 use owo_colors::Stream;
+#[cfg(feature = "websocket")]
 use owo_colors::Style;
+#[cfg(feature = "websocket")]
 use std::io::Result as IoResult;
+#[cfg(feature = "websocket")]
 use std::net::SocketAddr;
+#[cfg(feature = "websocket")]
 use std::sync::Arc;
+#[cfg(feature = "websocket")]
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+#[cfg(feature = "websocket")]
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::Bytes;
 use tokio_tungstenite::tungstenite::Message as TungsteniteWebSocketMessage;
 use tokio_util::sync::CancellationToken;
+#[cfg(feature = "websocket")]
 use tracing::error;
+#[cfg(feature = "websocket")]
 use tracing::info;
 use tracing::warn;
 
@@ -48,12 +77,14 @@ use tracing::warn;
 const WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY: usize = 32 * 1024;
 const _: () = assert!(WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY > CHANNEL_CAPACITY);
 
+#[cfg(feature = "websocket")]
 fn colorize(text: &str, style: Style) -> String {
     text.if_supports_color(Stream::Stderr, |value| value.style(style))
         .to_string()
 }
 
 #[allow(clippy::print_stderr)]
+#[cfg(feature = "websocket")]
 fn print_websocket_startup_banner(addr: SocketAddr) {
     let title = colorize("codex app-server (WebSockets)", Style::new().bold().cyan());
     let listening_label = colorize("listening on:", Style::new().dimmed());
@@ -77,15 +108,18 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "websocket")]
 struct WebSocketListenerState {
     transport_event_tx: mpsc::Sender<TransportEvent>,
     auth_policy: Arc<WebsocketAuthPolicy>,
 }
 
+#[cfg(feature = "websocket")]
 async fn health_check_handler() -> StatusCode {
     StatusCode::OK
 }
 
+#[cfg(feature = "websocket")]
 async fn reject_requests_with_origin_header(
     request: Request<Body>,
     next: Next,
@@ -102,6 +136,7 @@ async fn reject_requests_with_origin_header(
     }
 }
 
+#[cfg(feature = "websocket")]
 async fn websocket_upgrade_handler(
     websocket: WebSocketUpgrade,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
@@ -126,6 +161,7 @@ async fn websocket_upgrade_handler(
         .into_response()
 }
 
+#[cfg(feature = "websocket")]
 pub async fn start_websocket_acceptor(
     bind_address: SocketAddr,
     transport_event_tx: mpsc::Sender<TransportEvent>,
@@ -187,6 +223,7 @@ pub(crate) async fn run_websocket_connection<M, SinkError, StreamError>(
         .send(TransportEvent::ConnectionOpened {
             connection_id,
             origin: ConnectionOrigin::WebSocket,
+            #[cfg(feature = "remote-control")]
             auth: None,
             writer: writer_tx,
             disconnect_sender: Some(disconnect_token.clone()),
@@ -246,6 +283,7 @@ pub(crate) trait AppServerWebSocketMessage: Sized {
     fn into_incoming(self) -> Option<IncomingWebSocketMessage>;
 }
 
+#[cfg(feature = "websocket")]
 impl AppServerWebSocketMessage for AxumWebSocketMessage {
     fn text(text: String) -> Self {
         Self::Text(text.into())
