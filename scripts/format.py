@@ -72,6 +72,59 @@ def just_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def rust_formatter_group(*, check: bool) -> FormatterGroup:
+    prefix = Path(os.environ.get("PREFIX", ""))
+    is_termux = (
+        sys.platform == "android"
+        or os.environ.get("TERMUX_VERSION") is not None
+        or (
+            len(prefix.parts) >= 6
+            and prefix.parts[:3] == ("/", "data", "data")
+            and prefix.parts[-2:] == ("files", "usr")
+        )
+    )
+    rustfmt = shutil.which("rustfmt")
+    if is_termux and rustfmt is not None:
+        tracked_files = subprocess.check_output(
+            [
+                "git",
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
+            cwd=REPO_ROOT,
+        ).split(b"\0")
+        rust_files = sorted(
+            os.fsdecode(path)
+            for path in tracked_files
+            if path.endswith(b".rs") and path.startswith(b"codex-rs/")
+        )
+        rustfmt_options = [
+            rustfmt,
+            "--edition",
+            "2024",
+            "--config",
+            "skip_children=true",
+        ]
+        if check:
+            rustfmt_options.append("--check")
+
+        commands: list[Command] = []
+        chunk: list[str] = []
+        chunk_bytes = 0
+        for rust_file in rust_files:
+            path_bytes = len(os.fsencode(rust_file)) + 1
+            if chunk and chunk_bytes + path_bytes > 32 * 1024:
+                commands.append(Command((*rustfmt_options, *chunk)))
+                chunk = []
+                chunk_bytes = 0
+            chunk.append(rust_file)
+            chunk_bytes += path_bytes
+        if chunk:
+            commands.append(Command((*rustfmt_options, *chunk)))
+        return FormatterGroup("Rust", tuple(commands))
+
     args = ["cargo", "fmt"]
     if check:
         args.append("--check")
