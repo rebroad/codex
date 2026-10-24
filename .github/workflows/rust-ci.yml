@@ -166,11 +166,24 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: aarch64-linux-android
+      - name: Prepare Android build worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_repo="${RUNNER_TEMP}/codex-android-build"
+          git -C "${GITHUB_WORKSPACE}" worktree add --detach "${build_repo}" "${GITHUB_SHA}"
+          python3 "${GITHUB_WORKSPACE}/scripts/normalize_cargo_lock.py" \
+            --manifest "${build_repo}/codex-rs/Cargo.toml" \
+            --source-lock "${GITHUB_WORKSPACE}/codex-rs/Cargo.lock" \
+            --build-lock "${build_repo}/codex-rs/Cargo.lock"
       - name: Build Android CLI binaries
+        working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
         run: cargo build --locked --target aarch64-linux-android --bin codex --bin codex-code-mode-host
       - name: Compile Android TUI tests
+        working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
         run: cargo test --locked --no-run --target aarch64-linux-android -p codex-tui
       - name: Build and validate Android package and Python runtime wheel
+        working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
         shell: bash
         run: |
           set -euo pipefail
