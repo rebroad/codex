@@ -78,28 +78,34 @@ pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
 };
 
 pub(crate) fn current_test_binary_helper_paths() -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
-    let current_exe = env::current_exe()?;
-    let codex_linux_sandbox_exe = if cfg!(any(target_os = "linux", target_os = "android")) {
-        let guard_helper = || {
-            TEST_BINARY_DISPATCH_GUARD
-                .as_ref()
-                .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
-        };
-        let target_helper =
-            || target_debug_directory(&current_exe).map(|dir| dir.join("codex-linux-sandbox"));
-        if cfg!(target_os = "android") {
-            target_helper()
+    #[cfg(target_os = "android")]
+    {
+        return Ok((
+            codex_utils_cargo_bin::cargo_bin("codex-exec-server-test-helper")?,
+            None,
+        ));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let current_exe = env::current_exe()?;
+        let codex_linux_sandbox_exe = if cfg!(target_os = "linux") {
+            let guard_helper = || {
+                TEST_BINARY_DISPATCH_GUARD
+                    .as_ref()
+                    .and_then(|guard| guard.paths().codex_linux_sandbox_exe.clone())
+            };
+            let target_helper =
+                || target_debug_directory(&current_exe).map(|dir| dir.join("codex-linux-sandbox"));
+            guard_helper()
+                .or_else(target_helper)
                 .filter(|path| path.is_file())
-                .or_else(guard_helper)
+                .or_else(|| Some(current_exe.clone()))
         } else {
-            guard_helper().or_else(target_helper)
-        }
-        .filter(|path| path.is_file())
-        .or_else(|| Some(current_exe.clone()))
-    } else {
-        None
-    };
-    Ok((current_exe, codex_linux_sandbox_exe))
+            None
+        };
+        Ok((current_exe, codex_linux_sandbox_exe))
+    }
 }
 
 fn maybe_run_delayed_output_after_exit_from_test_binary() {

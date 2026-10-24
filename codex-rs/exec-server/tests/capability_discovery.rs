@@ -230,6 +230,9 @@ async fn discovers_cursor_plugin_without_reading_default_mcp_for_inline_servers(
 #[tokio::test]
 async fn executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_working()
 -> anyhow::Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let workspace = tempfile::tempdir()?;
     std::fs::write(workspace.path().join("note.txt"), b"contents")?;
     write_file(
@@ -415,6 +418,9 @@ async fn executor_legacy_filesystem_rejects_missing_cwd_for_dynamic_permissions(
 #[cfg(unix)]
 #[tokio::test]
 async fn executor_legacy_filesystem_accepts_cwd_for_dynamic_permissions() -> anyhow::Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let workspace = tempfile::tempdir()?;
     write_file(&workspace.path().join("allowed.txt"), "allowed")?;
     write_file(&workspace.path().join("secret.txt"), "secret")?;
@@ -509,6 +515,9 @@ async fn executor_legacy_filesystem_accepts_cwd_for_dynamic_permissions() -> any
 #[tokio::test]
 async fn executor_legacy_nested_policy_context_cwd_uses_available_fallbacks() -> anyhow::Result<()>
 {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let workspace = tempfile::tempdir()?;
     write_file(&workspace.path().join("allowed.txt"), "allowed")?;
     write_file(&workspace.path().join("secret.txt"), "secret")?;
@@ -653,6 +662,9 @@ async fn executor_legacy_nested_policy_context_cwd_uses_available_fallbacks() ->
 #[cfg(unix)]
 #[tokio::test]
 async fn executor_legacy_exec_uses_process_cwd_for_relative_denials() -> anyhow::Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let workspace = tempfile::tempdir()?;
     std::fs::write(workspace.path().join("allowed.txt"), b"allowed")?;
     std::fs::write(workspace.path().join("secret.txt"), b"secret")?;
@@ -773,6 +785,9 @@ async fn executor_legacy_exec_uses_process_cwd_for_relative_denials() -> anyhow:
 #[tokio::test]
 async fn executor_legacy_filesystem_cwd_keeps_absolute_read_allow_and_deny_rules()
 -> anyhow::Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     let workspace = tempfile::tempdir()?;
     let allowed = workspace.path().join("allowed");
     let denied = workspace.path().join("denied");
@@ -1051,6 +1066,9 @@ async fn v2_helper_batches_roots_and_bounds_its_response() -> anyhow::Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_discovery_batches_roots_without_combining_different_permissions()
 -> anyhow::Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     #[cfg(windows)]
     crate::skip_if_mxc_unavailable!(Ok(()));
     let workspace = tempfile::tempdir()?;

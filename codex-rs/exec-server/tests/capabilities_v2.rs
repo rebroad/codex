@@ -13,7 +13,12 @@ use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server_with_env;
 use pretty_assertions::assert_eq;
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "android",
+    windows
+))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_rpc_refreshes_metadata_and_enforces_sandbox() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
@@ -115,6 +120,7 @@ async fn v2_rpc_refreshes_metadata_and_enforces_sandbox() -> anyhow::Result<()> 
     .context("waiting for discovery refresh")??;
 
     // A restricted request must not reuse the unrestricted context's cached plugin metadata.
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     {
         use codex_exec_server::FileSystemSandboxContext;
         use codex_protocol::models::PermissionProfile;

@@ -663,7 +663,6 @@ mod tests {
     use crate::ExecServerRuntimeOptions;
 
     use super::CODEX_THREAD_ID_ENV_VAR;
-    #[cfg(not(target_os = "android"))]
     use super::FileSystemSandboxRunner;
     use super::SandboxCwd;
     use super::add_helper_runtime_permissions;

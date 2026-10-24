@@ -602,6 +602,9 @@ async fn replace_open_truncates_existing_file() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test]
 async fn writable_open_obeys_sandbox_write_permissions() -> Result<()> {
+    if common::skip_if_android_filesystem_sandbox_unavailable() {
+        return Ok(());
+    }
     use codex_exec_server::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::FileSystemAccessMode;

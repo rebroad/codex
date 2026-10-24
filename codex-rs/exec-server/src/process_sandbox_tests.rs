@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "android")))]
 use codex_file_system::WindowsSandboxSelection;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::ManagedNetworkSandboxContext;
@@ -27,7 +27,7 @@ use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "android")))]
 use tempfile::tempdir;
 #[cfg(windows)]
 use test_case::test_case;
