@@ -156,7 +156,7 @@ async fn spawn_process_with_stdin_mode(
         .process_mode(ProcessMode::NewSession)
         .descriptor_policy(DescriptorPolicy::Explicit)
         .inherit_fds(inherited_fds);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     command.terminate_on_parent_death();
     #[cfg(not(unix))]
     let _ = arg0;

@@ -18,6 +18,20 @@ use test_case::test_case;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
+#[cfg(unix)]
+fn test_shell_path(shell: &str) -> String {
+    #[cfg(target_os = "android")]
+    {
+        let prefix = std::env::var_os("PREFIX")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/data/data/com.termux/files/usr"));
+        return prefix.join("bin").join(shell).display().to_string();
+    }
+
+    #[cfg(not(target_os = "android"))]
+    format!("/bin/{shell}")
+}
+
 fn make_exec_output(
     exit_code: i32,
     stdout: &str,
@@ -1388,13 +1402,13 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
     // prefer /bin/sh to avoid NotFound errors.
     #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
     let command = vec![
-        "/bin/sh".to_string(),
+        test_shell_path("sh"),
         "-c".to_string(),
         "sleep 60 & echo $!; sleep 60".to_string(),
     ];
     #[cfg(all(unix, not(any(target_os = "freebsd", target_os = "openbsd"))))]
     let command = vec![
-        "/bin/bash".to_string(),
+        test_shell_path("bash"),
         "-c".to_string(),
         "sleep 60 & echo $!; sleep 60".to_string(),
     ];
@@ -1504,7 +1518,7 @@ async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<
     // The parent handles TERM and records cleanup, while a TERM-ignoring child
     // proves cancellation still escalates any survivors in the process group.
     let command = vec![
-        "/bin/sh".to_string(),
+        test_shell_path("sh"),
         "-c".to_string(),
         r#"(trap '' TERM; sleep 60) &
 printf '%s' "$!" > "$DESCENDANT_PID_MARKER"
@@ -1608,7 +1622,7 @@ while :; do sleep 1; done"#
 #[cfg(unix)]
 fn long_running_command() -> Vec<String> {
     vec![
-        "/bin/sh".to_string(),
+        test_shell_path("sh"),
         "-c".to_string(),
         "sleep 30".to_string(),
     ]

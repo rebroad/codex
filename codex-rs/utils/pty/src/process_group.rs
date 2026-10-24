@@ -9,9 +9,9 @@
 //! - `kill_process_group_by_pid` targets the whole group (children/grandchildren)
 //! - `kill_process_group` targets a known process group ID directly
 //!   instead of a single PID.
-//! - `set_parent_death_signal` (Linux only) arranges for the child to receive a
-//!   `SIGTERM` when the parent exits, and re-checks the parent PID to avoid
-//!   races during fork/exec.
+//! - `set_parent_death_signal` (Linux and Android) arranges for the child to
+//!   receive a `SIGTERM` when the parent exits, and re-checks the parent PID to
+//!   avoid races during fork/exec.
 //!
 //! On macOS, `terminate_process_group` and `kill_process_group` retry denied
 //! group signals against individual members.
@@ -22,14 +22,14 @@ use std::process::Command;
 
 use tokio::process::Child;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Ensure the child receives SIGTERM when the original parent dies.
 ///
 /// This should run in `pre_exec` and uses `parent_pid` captured before spawn to
 /// avoid a race where the parent exits between fork and exec.
 pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
     // Do not inherit a blocked or ignored SIGTERM from the caller: in either
-    // state Linux may never deliver the parent-death signal below.
+    // state the kernel may never deliver the parent-death signal below.
     let mut signal_set: libc::sigset_t = unsafe { std::mem::zeroed() };
     if unsafe { libc::sigemptyset(&mut signal_set) } == -1
         || unsafe { libc::sigaddset(&mut signal_set, libc::SIGTERM) } == -1
@@ -59,22 +59,26 @@ pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-/// No-op on non-Linux platforms.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+/// No-op on platforms without Linux parent-death signals.
 pub fn set_parent_death_signal(_parent_pid: i32) -> io::Result<()> {
     Ok(())
 }
 
 /// Configure a command so its process tree is terminated when its owner exits.
 ///
-/// On Linux, a small shell supervisor owns a process group and receives a
-/// parent-death signal. Its trap kills the whole group, including Git's remote
-/// helpers. On other Unix platforms, only process-group isolation is applied;
-/// callers can still terminate the group during ordinary cancellation.
+/// On Linux and Android, a small shell supervisor owns a process group and
+/// receives a parent-death signal. Its trap kills the whole group, including
+/// Git's remote helpers. On other Unix platforms, only process-group isolation
+/// is applied; callers can still terminate the group during ordinary cancellation.
 pub fn supervise_process_tree_on_parent_exit(command: &mut Command) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        let original = std::mem::replace(command, Command::new("/bin/sh"));
+        #[cfg(target_os = "linux")]
+        let shell = "/bin/sh";
+        #[cfg(target_os = "android")]
+        let shell = "/system/bin/sh";
+        let original = std::mem::replace(command, Command::new(shell));
         let program = original.get_program().to_os_string();
         let args = original
             .get_args()
@@ -111,7 +115,7 @@ pub fn supervise_process_tree_on_parent_exit(command: &mut Command) {
             command.pre_exec(move || set_parent_death_signal(parent_pid));
         }
     }
-    #[cfg(all(unix, not(target_os = "linux")))]
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);

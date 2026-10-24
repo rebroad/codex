@@ -216,10 +216,15 @@ async fn preserved_descriptor_can_use_the_last_slot_below_the_limit() -> anyhow:
 async fn process_mode_is_preserved_by_both_backends() -> anyhow::Result<()> {
     use crate::ProcessMode;
     let root = tempfile::tempdir()?;
+    #[cfg(not(target_os = "android"))]
     std::os::unix::fs::symlink("/bin/cat", root.path().join("server"))?;
     let script = root.path().join("executable-text");
     codex_utils_cargo_bin::write_executable(&script, "exec /bin/cat\n")?;
-    for program in ["./server", "/bin/cat", "./executable-text"] {
+    #[cfg(target_os = "android")]
+    let programs = ["/bin/cat", "./executable-text"];
+    #[cfg(not(target_os = "android"))]
+    let programs = ["./server", "/bin/cat", "./executable-text"];
+    for program in programs {
         for mode in [
             ProcessMode::Inherit,
             ProcessMode::NewGroup,
@@ -255,7 +260,16 @@ async fn process_mode_is_preserved_by_both_backends() -> anyhow::Result<()> {
                     assert_eq!(error.raw_os_error(), expected.raw_os_error());
                     continue;
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    let mode_name = match mode {
+                        ProcessMode::Inherit => "inherit",
+                        ProcessMode::NewGroup => "new group",
+                        ProcessMode::NewSession => "new session",
+                    };
+                    return Err(anyhow::anyhow!(
+                        "failed to spawn {program:?} in {mode_name} mode: {error}"
+                    ));
+                }
             };
             let pid = child.id().expect("live PID") as libc::pid_t;
             // SAFETY: These calls only inspect the current process.
@@ -332,12 +346,18 @@ async fn preserving_descriptors_keeps_parent_record_locks() -> anyhow::Result<()
 #[tokio::test]
 async fn detached_spawn_preserves_child_path_cwd_environment_and_arg0() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
+    #[cfg(not(target_os = "android"))]
     std::fs::create_dir(root.path().join("bin"))?;
+    #[cfg(not(target_os = "android"))]
     std::os::unix::fs::symlink("/bin/sh", root.path().join("bin/child-shell"))?;
-    let mut command = Command::new("child-shell");
+    #[cfg(target_os = "android")]
+    let (program, path) = ("sh", "/system/bin");
+    #[cfg(not(target_os = "android"))]
+    let (program, path) = ("child-shell", "bin");
+    let mut command = Command::new(program);
     command
         .current_dir(root.path())
-        .env("PATH", "bin")
+        .env("PATH", path)
         .env("MARKER", "child-value")
         .arg0("custom-shell")
         .args(["-c", "printf '%s|%s|' \"$0\" \"$MARKER\"; pwd; read -r line; printf '%s' \"$line\"; printf diagnostic >&2"])
@@ -378,11 +398,21 @@ async fn detached_spawn_preserves_exec_errors_and_executable_text_handling() -> 
     // a shell, whereas musl returns ENOEXEC.
     let mut baseline = tokio::process::Command::new(&program);
     baseline.env_clear().arg("shell fallback");
+    baseline.stdin(std::process::Stdio::piped());
+    baseline
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     // SAFETY: The legacy route only performs async-signal-safe session setup.
     unsafe {
         baseline.pre_exec(crate::process_group::detach_from_tty);
     }
-    let expected = baseline.output().await;
+    let baseline_child = baseline.spawn()?;
+    let expected = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        baseline_child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("baseline executable-text child timed out"))?;
     let mut script = Command::new(&program);
     script
         .arg("shell fallback")
