@@ -126,6 +126,14 @@ HOST_TARGET="$(${RUSTC_BIN} -vV | sed -n 's/^host: //p')"
 # centralizing them also lets `build_codex.sh` reuse artifacts from `just test`.
 if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
   export CODEX_RUSTC_OOM_SCORE_ADJ=800
+  export CODEX_ANDROID_RUSTC_MEMORY_GUARD=1
+  export CODEX_ANDROID_LMK_SWAP_FREE_PERCENT="${CODEX_ANDROID_LMK_SWAP_FREE_PERCENT:-40}"
+  export CODEX_ANDROID_RUSTC_SWAP_FREE_GUARD_PERCENT="${CODEX_ANDROID_RUSTC_SWAP_FREE_GUARD_PERCENT:-$((CODEX_ANDROID_LMK_SWAP_FREE_PERCENT + 10))}"
+  export CODEX_ANDROID_LMK_PSI_MEDIUM_MS="${CODEX_ANDROID_LMK_PSI_MEDIUM_MS:-70}"
+  export CODEX_ANDROID_RUSTC_PSI_SOME_GUARD_MS="${CODEX_ANDROID_RUSTC_PSI_SOME_GUARD_MS:-$((CODEX_ANDROID_LMK_PSI_MEDIUM_MS / 2))}"
+  export CODEX_ANDROID_LMK_PSI_CRITICAL_MS="${CODEX_ANDROID_LMK_PSI_CRITICAL_MS:-120}"
+  export CODEX_ANDROID_RUSTC_PSI_FULL_GUARD_MS="${CODEX_ANDROID_RUSTC_PSI_FULL_GUARD_MS:-$((CODEX_ANDROID_LMK_PSI_CRITICAL_MS / 2))}"
+  export CODEX_ANDROID_RUSTC_MEMAVAILABLE_GUARD_PERCENT="${CODEX_ANDROID_RUSTC_MEMAVAILABLE_GUARD_PERCENT:-20}"
   export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
   export CARGO_PROFILE_DEV_CODEGEN_UNITS="${CARGO_PROFILE_DEV_CODEGEN_UNITS:-1}"
   if [[ -z "${TMPDIR:-}" ]]; then
@@ -523,10 +531,13 @@ elif command -v flock >/dev/null 2>&1; then
   printf '          && "${holder_args}" == *--die-with-parent* \\\n'
   printf '          && "${holder_args}" == *--codex-run-as-fs-helper* ]]; then\n'
   printf '          stale_pids+=("${holder_pid}")\n'
+  printf '        elif [[ "${holder_ppid}" == 1 && "${holder_args}" == *exec-out* \\\n'
+  printf '          && "${holder_args}" == *"/proc/pressure/memory"* ]]; then\n'
+  printf '          stale_pids+=("${holder_pid}")\n'
   printf '        fi\n'
   printf '      done\n'
   printf '      if ((${#stale_pids[@]} > 0)); then\n'
-  printf '        echo %q >&2\n' 'Cleaning orphaned Git or Codex sandbox lock holder(s):'
+  printf '        echo %q >&2\n' 'Cleaning orphaned Git, Codex sandbox, or Android PSI monitor lock holder(s):'
   printf '        for stale_pid in "${stale_pids[@]}"; do\n'
   printf '          ps --cols 120 -o pid,ppid,etime,args -p "${stale_pid}" >&2 || true\n'
   printf '          kill -TERM "${stale_pid}" 2>/dev/null || true\n'
@@ -562,6 +573,19 @@ if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
   else
     printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_WRAPPER= CODEX_SCCACHE_BIN= CODEX_RUSTC_OOM_SCORE_ADJ=800\n' \
       "${BUILD_REPO}/scripts/codex_rustc_oom_wrapper.sh"
+  fi
+  printf 'export CODEX_ANDROID_RUSTC_MEMORY_GUARD=1 CODEX_ANDROID_LMK_SWAP_FREE_PERCENT=%q CODEX_ANDROID_RUSTC_SWAP_FREE_GUARD_PERCENT=%q CODEX_ANDROID_LMK_PSI_MEDIUM_MS=%q CODEX_ANDROID_RUSTC_PSI_SOME_GUARD_MS=%q CODEX_ANDROID_LMK_PSI_CRITICAL_MS=%q CODEX_ANDROID_RUSTC_PSI_FULL_GUARD_MS=%q CODEX_ANDROID_RUSTC_MEMAVAILABLE_GUARD_PERCENT=%q\n' \
+    "${CODEX_ANDROID_LMK_SWAP_FREE_PERCENT}" \
+    "${CODEX_ANDROID_RUSTC_SWAP_FREE_GUARD_PERCENT}" \
+    "${CODEX_ANDROID_LMK_PSI_MEDIUM_MS}" \
+    "${CODEX_ANDROID_RUSTC_PSI_SOME_GUARD_MS}" \
+    "${CODEX_ANDROID_LMK_PSI_CRITICAL_MS}" \
+    "${CODEX_ANDROID_RUSTC_PSI_FULL_GUARD_MS}" \
+    "${CODEX_ANDROID_RUSTC_MEMAVAILABLE_GUARD_PERCENT}"
+  if [[ -n "${SCCACHE_BIN}" ]]; then
+    printf 'export SCCACHE_CLIENT_SIDE=1\n'
+  else
+    printf 'unset SCCACHE_CLIENT_SIDE\n'
   fi
 elif [[ -n "${SCCACHE_BIN}" ]]; then
   printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
