@@ -78,7 +78,9 @@ pub(crate) fn reader() -> impl FnMut(Instant) -> Result<String, String> {
         }
         #[cfg(target_os = "android")]
         {
-            validate(String::new(), deadline)
+            let executable = codex_utils_path::system_executable("termux-clipboard-get")
+                .ok_or_else(|| "termux-clipboard-get is unavailable".to_string())?;
+            read_clipboard_command(&executable, &[], deadline)
         }
     }
 }
@@ -104,6 +106,113 @@ fn validate(text: String, deadline: Instant) -> Result<String, String> {
     } else {
         Ok(text)
     }
+}
+
+#[cfg(any(target_os = "android", all(test, unix)))]
+fn read_clipboard_command(
+    executable: &std::path::Path,
+    args: &[&str],
+    deadline: Instant,
+) -> Result<String, String> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::process::Command;
+    use std::process::Stdio;
+
+    let mut child = Command::new(executable)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "could not start clipboard reader")?;
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("clipboard reader has no output".into());
+    };
+    let fd = stdout.as_raw_fd();
+    // The worker must keep draining stdout while polling child exit, and must
+    // cap captured bytes so a large clipboard cannot consume unbounded memory.
+    // SAFETY: fcntl only reads and updates flags on the owned stdout descriptor.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("could not read clipboard text".into());
+    }
+    let maximum_bytes = MAX_USER_INPUT_TEXT_CHARS.saturating_mul(4);
+    let mut bytes = Vec::with_capacity(maximum_bytes.min(8192));
+    let mut chunk = [0; 8192];
+    let mut status = None;
+    let mut eof = false;
+    while !eof || status.is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("clipboard read timed out".into());
+        }
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(status_result) => status = status_result,
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("could not finish clipboard read".into());
+                }
+            }
+        }
+
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP,
+            revents: 0,
+        };
+        // SAFETY: poll receives one valid descriptor and a pointer to its initialized pollfd.
+        let poll_result = unsafe {
+            libc::poll(&mut pollfd, 1, /*timeout*/ 10)
+        };
+        if poll_result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("could not read clipboard text".into());
+        }
+        if poll_result == 0 {
+            continue;
+        }
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => {
+                    eof = true;
+                    break;
+                }
+                Ok(count) => {
+                    if bytes.len().saturating_add(count) > maximum_bytes {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err("clipboard text exceeds the message size limit".into());
+                    }
+                    bytes.extend_from_slice(&chunk[..count]);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("could not read clipboard text".into());
+                }
+            }
+        }
+    }
+    if !status.is_some_and(|status| status.success()) {
+        return Err("clipboard text is unavailable".into());
+    }
+    let text = String::from_utf8(bytes).map_err(|_| "clipboard text is not UTF-8")?;
+    validate(text, deadline)
 }
 
 #[cfg(target_os = "linux")]
