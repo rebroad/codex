@@ -39,7 +39,12 @@ fn snapshot_includes_process_memory_and_registers_gauges_once() {
     assert_eq!(diagnostics.process.id, std::process::id());
     assert_eq!(registered.len(), 1);
     assert_eq!(registered[0].value, 2);
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "windows"
+    ))]
     assert!(
         diagnostics
             .process
