@@ -91,6 +91,16 @@ async fn copy_export_picker_custom_keys_preserve_payloads_and_composer_draft() {
     assert_eq!(chat.bottom_pane.composer_text(), "Keep this draft");
 
     chat.show_transcript_export_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(/*n*/ 3)));
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::ExportTranscript {
+                destination: TranscriptExportDestination::Clipboard,
+            }
+        ))
+    );
+    chat.show_transcript_export_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::F(/*n*/ 2)));
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok()).all(|event| !matches!(
