@@ -51,16 +51,25 @@ pub(super) async fn reconnect(
     // Connecting already has transport deadlines. Give healthy history/inventory hydration one
     // shared budget instead of repeatedly discarding its progress on a short per-attempt timer.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 120);
-    for delay in [0, 1, 2, 4].into_iter().chain(std::iter::repeat(/*elt*/ 8)) {
+    for (attempt_number, delay) in [0, 1, 2, 4]
+        .into_iter()
+        .chain(std::iter::repeat(/*elt*/ 8))
+        .enumerate()
+    {
+        let attempt_number = attempt_number + 1;
+        let mut failure_stage = "retry_delay";
         let attempt = async {
             tokio::time::sleep(Duration::from_secs(delay)).await;
+            failure_stage = "connect";
             let client = crate::app_server_connection::connect(&target).await?;
             let mut session = AppServerSession::new(client, mode)
                 .with_local_codex_home(&config.codex_home)
                 .with_remote_cwd_override(remote_cwd.clone())
                 .with_thread_tool_transport(task_tools.clone());
+            failure_stage = "bootstrap";
             let bootstrap = session.bootstrap(&config).await?;
             let thread = if let Some(thread_id) = thread_id {
+                failure_stage = "thread_resume";
                 match session
                     .resume_thread(
                         &local_settings,
@@ -113,8 +122,44 @@ pub(super) async fn reconnect(
         let result = tokio::time::timeout_at(deadline, attempt).await;
         match result {
             Ok(Ok(connected)) => return Ok(connected),
-            Ok(Err(_)) => {}
-            Err(_) => break,
+            Ok(Err(error)) => match error.downcast_ref::<TypedRequestError>() {
+                Some(TypedRequestError::Transport { method, .. }) => tracing::debug!(
+                    attempt_number,
+                    failure_stage,
+                    request_method = method,
+                    error_class = "transport",
+                    "app-server reconnect attempt failed"
+                ),
+                Some(TypedRequestError::Server { method, source }) => tracing::debug!(
+                    attempt_number,
+                    failure_stage,
+                    request_method = method,
+                    error_class = "server",
+                    server_error_code = source.code,
+                    "app-server reconnect attempt failed"
+                ),
+                Some(TypedRequestError::Deserialize { method, .. }) => tracing::debug!(
+                    attempt_number,
+                    failure_stage,
+                    request_method = method,
+                    error_class = "deserialize",
+                    "app-server reconnect attempt failed"
+                ),
+                None => tracing::debug!(
+                    attempt_number,
+                    failure_stage,
+                    error_class = "other",
+                    "app-server reconnect attempt failed"
+                ),
+            },
+            Err(_) => {
+                tracing::debug!(
+                    attempt_number,
+                    failure_stage,
+                    "app-server reconnect attempt timed out"
+                );
+                break;
+            }
         }
         // Transport errors can contain endpoint credentials. Do not render or log them.
     }
