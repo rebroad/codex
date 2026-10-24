@@ -1,6 +1,7 @@
 //! Clipboard copy backend for the TUI's `/copy` command and `Ctrl+O` hotkey.
 //!
-//! Local copying uses the native clipboard, or the Windows clipboard directly on WSL.
+//! Local copying uses the native clipboard, Termux:API on Android, or the Windows clipboard
+//! directly on WSL.
 //! In tmux and Herdr, also forward to the attached terminal so clients attached after Codex
 //! started receive the copy. Over SSH without a multiplexer, send OSC 52 directly.
 //!
@@ -119,9 +120,7 @@ fn copy_to_clipboard(
         }
     };
     #[cfg(target_os = "android")]
-    let native_copy = |_text: &str, _html: Option<&str>| {
-        Err("native clipboard unavailable on Android".to_string())
-    };
+    let native_copy = |text: &str, _html: Option<&str>| termux_clipboard_copy(text).map(|()| None);
     // Decide before propagating setup success or failure: either result could otherwise
     // start a native write or fallback long after the user abandoned this request.
     begin_delivery()?;
@@ -134,6 +133,47 @@ fn copy_to_clipboard(
         native_copy,
         |text| wsl::copy(text, wsl_deadline),
     )
+}
+
+#[cfg(target_os = "android")]
+fn termux_clipboard_copy(text: &str) -> Result<(), String> {
+    use std::process::Command;
+    use std::process::Stdio;
+
+    let executable = codex_utils_path::system_executable("termux-clipboard-set")
+        .ok_or_else(|| "termux-clipboard-set is unavailable".to_string())?;
+    let mut child = Command::new(executable)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not start termux-clipboard-set: {error}"))?;
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("termux-clipboard-set has no input".to_string());
+    };
+    let write_result = stdin.write_all(text.as_bytes());
+    drop(stdin);
+    if let Err(error) = write_result {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("could not send clipboard text to Termux: {error}"));
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("could not finish termux-clipboard-set: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            "termux-clipboard-set failed".to_string()
+        } else {
+            format!("termux-clipboard-set failed: {detail}")
+        });
+    }
+    Ok(())
 }
 
 /// Keeps a platform clipboard owner alive when the backend requires one.
