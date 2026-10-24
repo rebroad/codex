@@ -5,7 +5,57 @@ use crate::ThreadPersistenceMetadata;
 use codex_protocol::items::FunctionCallOutputItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn ephemeral_create_skips_state_db_metadata_sync() {
+    let thread_id = ThreadId::new();
+    let mut sync = ThreadMetadataSync::for_create(&CreateThreadParams {
+        creator_user_id: None,
+        creator_account_id: None,
+        session_id: thread_id.into(),
+        thread_id,
+        extra_config: None,
+        forked_from_id: None,
+        parent_thread_id: None,
+        source: codex_protocol::protocol::SessionSource::Exec,
+        thread_source: None,
+        originator: String::new(),
+        base_instructions: codex_protocol::models::BaseInstructions::default(),
+        dynamic_tools: Vec::new(),
+        selected_capability_roots: Vec::new(),
+        multi_agent_version: None,
+        history_mode: codex_protocol::protocol::ThreadHistoryMode::Legacy,
+        history_base: None,
+        subagent_history_start_ordinal: None,
+        initial_window_id: uuid::Uuid::now_v7().to_string(),
+        runtime_workspace_roots: None,
+        metadata: ThreadPersistenceMetadata {
+            ephemeral: true,
+            cwd: None,
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
+        },
+    })
+    .await;
+
+    assert!(sync.take_pending_update().is_none());
+    assert!(
+        sync.observe_appended_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
+            TurnStartedEvent {
+                turn_attribution: None,
+                turn_id: "turn-1".to_string(),
+                root_turn_id: None,
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            },
+        ))])
+        .is_none()
+    );
+}
 
 #[test]
 fn delegated_output_emits_only_first_preview_in_live_patch() {
