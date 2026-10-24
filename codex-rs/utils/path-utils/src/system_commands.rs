@@ -54,7 +54,7 @@ fn executable_in_directories(name: &str, directories: &[PathBuf]) -> Option<Path
 
 #[cfg(unix)]
 fn installation_roots() -> Vec<PathBuf> {
-    [
+    let roots = [
         "/usr/bin",
         "/bin",
         "/usr/sbin",
@@ -68,8 +68,10 @@ fn installation_roots() -> Vec<PathBuf> {
         "/mnt/c/Windows/System32",
     ]
     .into_iter()
-    .map(PathBuf::from)
-    .collect()
+    .map(PathBuf::from);
+    #[cfg(target_os = "android")]
+    let roots = roots.chain(termux_prefix());
+    roots.collect()
 }
 
 fn system_directories() -> Vec<PathBuf> {
@@ -89,6 +91,8 @@ fn system_directories() -> Vec<PathBuf> {
     ]
     .into_iter()
     .map(PathBuf::from);
+    #[cfg(target_os = "android")]
+    let directories = directories.chain(termux_prefix().map(|prefix| prefix.join("bin")));
     #[cfg(target_os = "linux")]
     let directories = directories.chain(
         crate::is_wsl()
@@ -113,6 +117,38 @@ fn system_directories() -> Vec<PathBuf> {
         .filter_map(|directory| dunce::canonicalize(directory).ok())
         .filter(|directory| roots.iter().any(|root| directory.starts_with(root)))
         .collect()
+}
+
+#[cfg(any(target_os = "android", test))]
+fn termux_prefix() -> Option<PathBuf> {
+    let prefix = dunce::canonicalize(std::env::var_os("PREFIX")?).ok()?;
+    is_termux_prefix(&prefix).then_some(prefix)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn is_termux_prefix(path: &Path) -> bool {
+    use std::path::Component;
+
+    let components = path.components().collect::<Vec<_>>();
+    matches!(
+        components.as_slice(),
+        [
+            Component::RootDir,
+            Component::Normal(data_root),
+            Component::Normal(app_root),
+            Component::Normal(package),
+            Component::Normal(files),
+            Component::Normal(usr),
+        ] if *data_root == "data"
+            && *app_root == "data"
+            && package
+                .to_str()
+                .is_some_and(|name| {
+                    name.contains('.') && name.split('.').all(|component| !component.is_empty())
+                })
+            && *files == "files"
+            && *usr == "usr"
+    )
 }
 
 #[cfg(windows)]
