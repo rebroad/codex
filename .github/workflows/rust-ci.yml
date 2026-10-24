@@ -159,6 +159,23 @@ jobs:
           target: aarch64-linux-android
       - name: Build Android CLI binaries
         run: cargo build --locked --target aarch64-linux-android --bin codex --bin codex-code-mode-host
+      - name: Build and validate the Android package
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64"
+          archive="${RUNNER_TEMP}/codex-package-aarch64-linux-android.tar.gz"
+          CODEX_REPO_ROOT="${GITHUB_WORKSPACE}" python3 "${GITHUB_WORKSPACE}/scripts/build_codex_package.py" \
+            --target aarch64-linux-android \
+            --package-version 0.0.0 \
+            --entrypoint-bin "${CARGO_TARGET_DIR}/aarch64-linux-android/debug/codex" \
+            --code-mode-host-bin "${CARGO_TARGET_DIR}/aarch64-linux-android/debug/codex-code-mode-host" \
+            --android-cxx-runtime-bin "${llvm}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+            --package-dir "${RUNNER_TEMP}/codex-package-aarch64-linux-android" \
+            --strip all \
+            --strip-tool "${llvm}/bin/llvm-strip" \
+            --archive-output "${archive}"
+          test -s "${archive}"
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
