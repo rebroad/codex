@@ -20,8 +20,9 @@ bazel_working_directory := build_repo
 cargo_env_script := build_repo / "scripts/codex_cargo_env.sh"
 voice_cargo_wrapper := build_repo / "scripts/with_voice_sdk.sh"
 sync_build_tree := source_repo / "scripts/sync_build_tree.sh"
+cargo_lock_script := source_repo / "scripts/codex_cargo_lock.sh"
 cargo_lock_setup := if os_family() == "windows" { "" } else { "mkdir -p \"" + build_repo + "/build\"; exec 9>\"" + build_repo + "/build/codex-cargo.lock\"; flock 9; " }
-cargo_sccache_setup := if os_family() == "windows" { "" } else { "source \"" + source_repo + "/scripts/codex_sccache_server.sh\"; codex_sccache_server_start || exit $?; trap codex_sccache_server_stop EXIT; " }
+cargo_sccache_setup := if os_family() == "windows" { "" } else { "source \"" + cargo_lock_script + "\"; codex_cargo_lock_backup_source || exit $?; source \"" + source_repo + "/scripts/codex_sccache_server.sh\"; trap 'codex_sccache_server_stop; codex_cargo_lock_restore_source' EXIT; codex_sccache_server_start || exit $?; " }
 cargo_setup := "export CODEX_CARGO_OPERATION=\"${CODEX_CARGO_OPERATION:-$0}\"; codex_cargo_env_output=\"$(bash \"" + cargo_env_script + "\" --source-repo \"" + source_repo + "\" --build-repo \"" + build_repo + "\" --mode debug --target-mode native --purpose \"${CODEX_CARGO_PURPOSE:-just}\" --emit)\" || exit $?; eval \"$codex_cargo_env_output\" || exit $?; " + cargo_sccache_setup
 cargo_target_dir := env_var_or_default("CARGO_TARGET_DIR", build_tree / "target")
 
