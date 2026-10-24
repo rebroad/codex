@@ -125,6 +125,7 @@ HOST_TARGET="$(${RUSTC_BIN} -vV | sed -n 's/^host: //p')"
 # settings reduce debug artifact size and link-time memory pressure on Termux;
 # centralizing them also lets `build_codex.sh` reuse artifacts from `just test`.
 if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  export CODEX_RUSTC_OOM_SCORE_ADJ=800
   export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
   export CARGO_PROFILE_DEV_CODEGEN_UNITS="${CARGO_PROFILE_DEV_CODEGEN_UNITS:-1}"
   if [[ -z "${TMPDIR:-}" ]]; then
@@ -554,7 +555,15 @@ elif command -v flock >/dev/null 2>&1; then
 else
   echo "warning: flock unavailable; Cargo target writes will not be serialized" >&2
 fi
-if [[ -n "${SCCACHE_BIN}" ]]; then
+if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  if [[ -n "${SCCACHE_BIN}" ]]; then
+    printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_WRAPPER=%q CODEX_SCCACHE_BIN=%q CODEX_RUSTC_OOM_SCORE_ADJ=800 SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
+      "${BUILD_REPO}/scripts/codex_rustc_oom_wrapper.sh" "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
+  else
+    printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_WRAPPER= CODEX_SCCACHE_BIN= CODEX_RUSTC_OOM_SCORE_ADJ=800\n' \
+      "${BUILD_REPO}/scripts/codex_rustc_oom_wrapper.sh"
+  fi
+elif [[ -n "${SCCACHE_BIN}" ]]; then
   printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
     "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
 else
