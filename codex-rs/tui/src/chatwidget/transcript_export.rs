@@ -19,7 +19,6 @@ impl ChatWidget {
                 SelectionItem {
                     name: "Copy to clipboard".to_string(),
                     description: Some("Copy the complete Markdown transcript".to_string()),
-                    is_disabled: cfg!(target_os = "android"),
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::ExportTranscript {
                             destination: TranscriptExportDestination::Clipboard,
