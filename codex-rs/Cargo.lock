@@ -2317,6 +2317,8 @@ dependencies = [
  "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-file-lock",
+ "codex-utils-home-dir",
+ "codex-utils-path",
  "codex-utils-rustls-provider",
  "codex-websocket-auth",
  "codex-websocket-client",
