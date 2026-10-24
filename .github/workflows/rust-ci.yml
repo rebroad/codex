@@ -186,6 +186,9 @@ jobs:
       - name: Build Android CLI binaries
         working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
         run: cargo build --locked --target aarch64-linux-android --bin codex --bin codex-code-mode-host
+      - name: Compile Android daemon tests
+        working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
+        run: cargo test --locked --no-run --target aarch64-linux-android -p codex-app-server-daemon
       - name: Compile Android TUI tests
         working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
         run: cargo test --locked --no-run --target aarch64-linux-android -p codex-tui
