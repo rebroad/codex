@@ -42,6 +42,11 @@ codex *args:
 exec *args:
     cd "{{ cargo_working_directory }}" && {{ cargo_setup }} cargo run --locked --bin codex -- exec "$@"
 
+# Probe Android kernel support needed for a filesystem sandbox broker.
+[no-cd]
+android-sandbox-probe:
+    {{ justfile_directory() }}/scripts/android_sandbox_probe.sh
+
 # Start `codex exec-server` and run codex-tui.
 [no-cd]
 [positional-arguments]
