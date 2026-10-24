@@ -12,6 +12,7 @@ jobs:
       argument_comment_lint: ${{ steps.detect.outputs.argument_comment_lint }}
       argument_comment_lint_package: ${{ steps.detect.outputs.argument_comment_lint_package }}
       codex: ${{ steps.detect.outputs.codex }}
+      android: ${{ steps.detect.outputs.android }}
       workflows: ${{ steps.detect.outputs.workflows }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -38,9 +39,20 @@ jobs:
           codex=false
           argument_comment_lint=false
           argument_comment_lint_package=false
+          android=false
           workflows=false
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
+            if [[ $f == codex-rs/* || $f == codex-cli/* \
+              || $f == scripts/build_codex.sh || $f == scripts/build_codex_package.py \
+              || $f == scripts/codex_cargo_env.sh || $f == scripts/codex_package/* \
+              || $f == scripts/install/* || $f == scripts/resolve_rusty_v8_artifacts.sh \
+              || $f == scripts/package_npm.sh || $f == sdk/python/* \
+              || $f == sdk/typescript/* || $f == .github/workflows/rust-ci.yml \
+              || $f == .github/actions/setup-rusty-v8/* \
+              || $f == .github/actions/setup-rust-toolchain/* ]]; then
+              android=true
+            fi
             [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
             [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
@@ -50,6 +62,7 @@ jobs:
           echo "argument_comment_lint=$argument_comment_lint" >> "$GITHUB_OUTPUT"
           echo "argument_comment_lint_package=$argument_comment_lint_package" >> "$GITHUB_OUTPUT"
           echo "codex=$codex" >> "$GITHUB_OUTPUT"
+          echo "android=$android" >> "$GITHUB_OUTPUT"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
       - name: Check for a clean worktree
@@ -108,6 +121,112 @@ jobs:
           tool: cargo-shear@1.11.2
       - name: cargo shear
         run: cargo shear --deny-warnings
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
+  android_build:
+    name: Android arm64 build
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.android == 'true' }}
+    env:
+      ANDROID_NDK_VERSION: "28.2.13676358"
+      CARGO_INCREMENTAL: "0"
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: ./.github/actions/setup-rust-toolchain
+        with:
+          target: aarch64-linux-android
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/cmdline-tools/bin:${PATH}"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          ndk_home="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ndk_home}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ndk_home}" >> "$GITHUB_ENV"
+      - name: Configure Android linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64"
+          builtins="$(find "${llvm}" -name libclang_rt.builtins-aarch64-android.a -print -quit)"
+          test -x "${llvm}/bin/aarch64-linux-android29-clang++"
+          test -n "${builtins}"
+          echo "CC_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=${llvm}/bin/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${llvm}/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=${llvm}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${llvm}/bin/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}" >> "$GITHUB_ENV"
+      - name: Configure Rusty V8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: aarch64-linux-android
+      - name: Prepare Android build worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_repo="${RUNNER_TEMP}/codex-android-build"
+          git -C "${GITHUB_WORKSPACE}" worktree add --detach "${build_repo}" "${GITHUB_SHA}"
+          python3 "${GITHUB_WORKSPACE}/scripts/normalize_cargo_lock.py" \
+            --manifest "${build_repo}/codex-rs/Cargo.toml" \
+            --source-lock "${GITHUB_WORKSPACE}/codex-rs/Cargo.lock" \
+            --build-lock "${build_repo}/codex-rs/Cargo.lock"
+      - name: Build Android CLI binaries
+        working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
+        run: cargo build --locked --target aarch64-linux-android --bin codex --bin codex-code-mode-host
+      - name: Compile Android TUI tests
+        working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
+        run: cargo test --locked --no-run --target aarch64-linux-android -p codex-tui
+      - name: Build and validate Android package and Python runtime wheel
+        working-directory: ${{ runner.temp }}/codex-android-build/codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64"
+          archive="${RUNNER_TEMP}/codex-package-aarch64-linux-android.tar.gz"
+          package_version="$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["workspace"]["package"]["version"])')"
+          CODEX_REPO_ROOT="${GITHUB_WORKSPACE}" python3 "${GITHUB_WORKSPACE}/scripts/build_codex_package.py" \
+            --target aarch64-linux-android \
+            --package-version "${package_version}" \
+            --entrypoint-bin "${CARGO_TARGET_DIR}/aarch64-linux-android/debug/codex" \
+            --code-mode-host-bin "${CARGO_TARGET_DIR}/aarch64-linux-android/debug/codex-code-mode-host" \
+            --android-cxx-runtime-bin "${llvm}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+            --package-dir "${RUNNER_TEMP}/codex-package-aarch64-linux-android" \
+            --strip all \
+            --strip-tool "${llvm}/bin/llvm-strip" \
+            --archive-output "${archive}"
+          test -s "${archive}"
+          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
+          runtime_stage="${RUNNER_TEMP}/openai-codex-cli-bin-aarch64-linux-android"
+          python3 "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
+            stage-runtime "${runtime_stage}" "${RUNNER_TEMP}/codex-package-aarch64-linux-android" \
+            --codex-version "${package_version}" \
+            --platform-tag android_29_arm64_v8a
+          wheel_dir="${RUNNER_TEMP}/python-runtime-aarch64-linux-android"
+          mkdir -p "${wheel_dir}"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build \
+            --wheel --outdir "${wheel_dir}" "${runtime_stage}"
+          python3 - "${wheel_dir}" <<'PY'
+          from pathlib import Path
+          import sys
+          wheels = list(Path(sys.argv[1]).glob("*.whl"))
+          assert len(wheels) == 1, f"expected one Android runtime wheel, found {wheels}"
+          assert "android_29_arm64_v8a" in wheels[0].name, wheels[0].name
+          print(f"Built Android Python runtime wheel: {wheels[0].name}")
+          PY
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
@@ -230,6 +349,7 @@ jobs:
         changed,
         general,
         cargo_shear,
+        android_build,
         argument_comment_lint_package,
         argument_comment_lint_prebuilt,
       ]
@@ -243,10 +363,11 @@ jobs:
           echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
+          echo "android: ${{ needs.android_build.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.
-          if [[ "${NEEDS_CHANGED_OUTPUTS_ARGUMENT_COMMENT_LINT}" != 'true' && "${NEEDS_CHANGED_OUTPUTS_CODEX}" != 'true' && "${NEEDS_CHANGED_OUTPUTS_WORKFLOWS}" != 'true' ]]; then
+          if [[ "${NEEDS_CHANGED_OUTPUTS_ARGUMENT_COMMENT_LINT}" != 'true' && "${NEEDS_CHANGED_OUTPUTS_CODEX}" != 'true' && "${NEEDS_CHANGED_OUTPUTS_ANDROID}" != 'true' && "${NEEDS_CHANGED_OUTPUTS_WORKFLOWS}" != 'true' ]]; then
             echo 'No relevant changes -> CI not required.'
             exit 0
           fi
@@ -263,8 +384,13 @@ jobs:
             [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
             [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           fi
+
+          if [[ "${NEEDS_CHANGED_OUTPUTS_ANDROID}" == 'true' ]]; then
+            [[ '${{ needs.android_build.result }}' == 'success' ]] || { echo 'android_build failed'; exit 1; }
+          fi
         env:
           NEEDS_CHANGED_OUTPUTS_ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
           NEEDS_CHANGED_OUTPUTS_CODEX: ${{ needs.changed.outputs.codex }}
+          NEEDS_CHANGED_OUTPUTS_ANDROID: ${{ needs.changed.outputs.android }}
           NEEDS_CHANGED_OUTPUTS_WORKFLOWS: ${{ needs.changed.outputs.workflows }}
           NEEDS_CHANGED_OUTPUTS_ARGUMENT_COMMENT_LINT_PACKAGE: ${{ needs.changed.outputs.argument_comment_lint_package }}
