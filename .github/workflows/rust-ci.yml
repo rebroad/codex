@@ -192,7 +192,7 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime "${runtime_stage}" "${RUNNER_TEMP}/codex-package-aarch64-linux-android" \
             --codex-version "${package_version}" \
-            --platform-tag android_24_arm64_v8a
+            --platform-tag android_29_arm64_v8a
           wheel_dir="${RUNNER_TEMP}/python-runtime-aarch64-linux-android"
           mkdir -p "${wheel_dir}"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build \
@@ -202,7 +202,7 @@ jobs:
           import sys
           wheels = list(Path(sys.argv[1]).glob("*.whl"))
           assert len(wheels) == 1, f"expected one Android runtime wheel, found {wheels}"
-          assert "android_24_arm64_v8a" in wheels[0].name, wheels[0].name
+          assert "android_29_arm64_v8a" in wheels[0].name, wheels[0].name
           print(f"Built Android Python runtime wheel: {wheels[0].name}")
           PY
 
