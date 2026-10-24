@@ -893,7 +893,7 @@ jobs:
           python3 sdk/python/scripts/update_sdk_artifacts.py \
             stage-runtime "${runtime_stage}" "${package_dir}" \
             --codex-version "${VERSION}" \
-            --platform-tag android_24_arm64_v8a
+            --platform-tag android_29_arm64_v8a
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build \
             --wheel \
             --outdir "${GITHUB_WORKSPACE}/dist/python-runtime/${TARGET}" \
