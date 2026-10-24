@@ -24,6 +24,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use crate::tools::sandboxing::ensure_native_sandbox;
+use crate::tools::sandboxing::preserve_android_network_sandbox;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_otel::ToolDecisionSource;
@@ -240,20 +241,17 @@ impl ToolOrchestrator {
                 "Android cannot enforce denied filesystem read restrictions".to_string(),
             ));
         }
-        let mut sandbox_override = sandbox_override_for_first_attempt(
+        let sandbox_override = sandbox_override_for_first_attempt(
             tool.sandbox_permissions(req),
             &requirement,
             &file_system_sandbox_policy,
             already_approved,
         );
-        if android_filesystem_sandbox_unavailable
-            && permission_profile.network_sandbox_policy()
-                == codex_protocol::permissions::NetworkSandboxPolicy::Restricted
-        {
-            // An approval may waive Android's unavailable filesystem sandbox,
-            // but it must not also bypass the available network seccomp filter.
-            sandbox_override = SandboxOverride::NoOverride;
-        }
+        let sandbox_override = preserve_android_network_sandbox(
+            sandbox_override,
+            android_filesystem_sandbox_unavailable,
+            permission_profile.network_sandbox_policy(),
+        );
         let (escalated_profile, writable_root_metadata) = if sandbox_override
             == SandboxOverride::EscalatedSandboxWithRestrictions
         {
