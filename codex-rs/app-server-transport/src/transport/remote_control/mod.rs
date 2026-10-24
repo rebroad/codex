@@ -96,16 +96,12 @@ pub enum RemoteControlStartupMode {
     EnabledEphemeral,
 }
 
-/// Internal marker used by the daemon to disable remote control without requiring a new CLI flag.
-pub const REMOTE_CONTROL_DISABLED_ENV_VAR: &str =
-    "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED";
-
 /// Reads and removes the daemon's internal disabled-start marker before worker threads start.
 pub fn take_remote_control_disabled_env() -> bool {
     let disabled =
-        std::env::var_os(REMOTE_CONTROL_DISABLED_ENV_VAR).is_some_and(|value| value == "1");
+        std::env::var_os(super::REMOTE_CONTROL_DISABLED_ENV_VAR).is_some_and(|value| value == "1");
     // SAFETY: app-server calls this synchronously at process startup, before spawning threads.
-    unsafe { std::env::remove_var(REMOTE_CONTROL_DISABLED_ENV_VAR) };
+    unsafe { std::env::remove_var(super::REMOTE_CONTROL_DISABLED_ENV_VAR) };
     disabled
 }
 

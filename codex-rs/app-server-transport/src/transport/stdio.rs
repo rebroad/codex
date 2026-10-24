@@ -56,6 +56,7 @@ pub async fn start_stdio_connection(
         .send(TransportEvent::ConnectionOpened {
             connection_id,
             origin: ConnectionOrigin::Stdio,
+            #[cfg(feature = "remote-control")]
             auth: None,
             writer: writer_tx,
             disconnect_sender: None,

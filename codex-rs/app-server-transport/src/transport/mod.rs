@@ -5,8 +5,8 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
-use codex_core::config::find_codex_home;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_home_dir::find_codex_home;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -24,6 +24,7 @@ use tracing::warn;
 pub const CHANNEL_CAPACITY: usize = 128;
 
 mod owner;
+#[cfg(feature = "remote-control")]
 mod remote_control;
 mod stdio;
 mod stdio_proxy;
@@ -38,16 +39,29 @@ pub use owner::AppServerOwnerRecord;
 pub use owner::app_server_owner_record_path_for_profile;
 pub use owner::read_app_server_owner;
 pub use owner::register_app_server_owner;
-pub use remote_control::REMOTE_CONTROL_DISABLED_ENV_VAR;
+/// Internal marker used by the daemon to disable remote control without a CLI flag.
+pub const REMOTE_CONTROL_DISABLED_ENV_VAR: &str =
+    "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED";
+
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlDisabledByRequirements;
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlEnableError;
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlHandle;
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlPolicy;
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlStartConfig;
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlStartupMode;
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlTrafficLogRedaction;
+#[cfg(feature = "remote-control")]
 pub use remote_control::RemoteControlUnavailable;
+#[cfg(feature = "remote-control")]
 pub use remote_control::start_remote_control;
+#[cfg(feature = "remote-control")]
 pub use remote_control::take_remote_control_disabled_env;
 pub use stdio::start_stdio_connection;
 pub use stdio_proxy::run_stdio_to_control_socket;
@@ -56,6 +70,7 @@ pub use unix_socket::DaemonShutdownAccess;
 pub use unix_socket::acquire_app_server_startup_lock;
 pub use unix_socket::prepare_control_socket_path;
 pub use unix_socket::start_control_socket_acceptor;
+#[cfg(feature = "websocket")]
 pub use websocket::start_websocket_acceptor;
 
 const INTERNAL_ERROR_CODE: i64 = -32603;
@@ -214,6 +229,7 @@ pub enum TransportEvent {
     ConnectionOpened {
         connection_id: ConnectionId,
         origin: ConnectionOrigin,
+        #[cfg(feature = "remote-control")]
         auth: Option<crate::ConnectionAuth>,
         writer: mpsc::Sender<QueuedOutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
