@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-app-server-protocol = { workspace = true }
-codex-app-server-transport = { workspace = true, default-features = false }
+codex-app-server-transport = { workspace = true }
 codex-features = { workspace = true }
 codex-install-context = { workspace = true }
 codex-utils-home-dir = { workspace = true }
