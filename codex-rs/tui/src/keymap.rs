@@ -1683,7 +1683,12 @@ impl RuntimeKeymap {
                 ],
                 previous_permission_mode: default_bindings![],
                 next_permission_mode: default_bindings![],
-                edit_queued_message: default_bindings![shift(KeyCode::Left), alt(KeyCode::Up)],
+                // Termux's virtual keyboard sends Shift+Left as plain Left.
+                edit_queued_message: if cfg!(target_os = "android") {
+                    default_bindings![ctrl(KeyCode::Left), alt(KeyCode::Up)]
+                } else {
+                    default_bindings![shift(KeyCode::Left), alt(KeyCode::Up)]
+                },
                 prompt_stack_back: default_bindings![shift(KeyCode::Right), alt(KeyCode::Down)],
                 skip_question: default_bindings![ctrl(KeyCode::Char(']'))],
             },
@@ -2973,7 +2978,14 @@ mod tests {
         );
         assert_eq!(
             runtime.chat.edit_queued_message,
-            vec![key_hint::shift(KeyCode::Left), key_hint::alt(KeyCode::Up)]
+            vec![
+                if cfg!(target_os = "android") {
+                    key_hint::ctrl(KeyCode::Left)
+                } else {
+                    key_hint::shift(KeyCode::Left)
+                },
+                key_hint::alt(KeyCode::Up)
+            ]
         );
         assert_eq!(
             runtime.composer.history_search_previous,
