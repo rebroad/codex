@@ -6,11 +6,12 @@ ADB; the Codex wrapper itself does not call ADB or `dumpsys`.
 
 ## Observed Termux exits
 
-`dumpsys activity exit-info com.termux` retained 16 exits. Eight were reported
+`dumpsys activity exit-info com.termux` retained 17 exits. Nine were reported
 as `LOW_MEMORY`, all with unknown subreason and no trace or description:
 
 | Timestamp | Importance | RSS |
 | --- | ---: | ---: |
+| 2026-10-24 22:25:50 | 125 | 75 MB |
 | 2026-10-24 07:48:42 | 125 | 59 MB |
 | 2026-10-23 22:42:28 | 125 | 62 MB |
 | 2026-10-23 18:25:42 | 125 | 62 MB |
@@ -21,7 +22,7 @@ as `LOW_MEMORY`, all with unknown subreason and no trace or description:
 | 2026-10-06 18:34:03 | 100 | 104 MB |
 
 The Android importance values indicate foreground-service state at 125,
-foreground at 100, and background at 400. Seven of these exits happened while
+foreground at 100, and background at 400. Eight of these exits happened while
 Termux was foreground or running its foreground service; one happened while it
 was background. Exit info does not identify the pressure signal that caused
 these kills, nor does it prove a Rust process caused them.
@@ -30,6 +31,14 @@ The other retained exits were two `TOO MANY EMPTY PROCS` kills (importance 400,
 RSS 0), three package-update stops, and three user-requested force-stops. The
 empty-process kills are process trimming and are not addressed by a compiler
 pressure guard.
+
+The 22:25:50 exit is the newest persisted event. Its associated Codex session transcript
+contains no logged Cargo/Rust compiler run or memory-guard message. This does not prove
+that no unrelated compiler ran, but there is no evidence that the Codex guard was active
+for this kill. The guard is scoped to Rust compiler invocations through `RUSTC_WRAPPER`;
+it cannot protect Termux when no guarded compiler is running. The exit record reports
+only `LOW_MEMORY`, importance 125, and 75 MB RSS; it does not identify the memory
+consumer or expose the exact LMKD trigger at the time.
 
 ## Observed Android pressure policy
 
@@ -50,12 +59,16 @@ LMKD PSI model. Samsung's fields are vendor configuration, so this mapping is
 an inference rather than an exposed contract. See the [AOSP LMKD guide](https://source.android.com/docs/core/perf/lmkd)
 and [AOSP LMKD source](https://android.googlesource.com/platform/system/memory/lmkd/+/refs/heads/main/lmkd.cpp).
 
-The current LMKD statistics snapshot showed 37 kills, all at oom-adj scores
+The initial LMKD statistics snapshot showed 37 kills, all at oom-adj scores
 901–998, all during medium pressure, and all recorded with reason `low_mem`.
-There were no recorded critical kills or kills with the low-swap reason in that
-snapshot. The stats do not name victims, and they do not connect those 37 kills
-to the eight Termux exit-info records. This means the swap percentage alone
-does not describe the Termux failures.
+That snapshot did not name victims or connect those kills to the eight Termux
+exit-info records.
+
+A later cumulative snapshot showed 990 kills: 967 during medium pressure and
+23 during critical pressure. By reason, 899 were `low_mem` and 33 were
+`low_mem_and_swap`. It included seven kills at oom-adj 200 and 15 at 800 or
+lower. These totals cover all packages and are not correlated to the Termux
+exit-info entries, so they cannot identify the trigger for the 22:25 exit.
 
 At the same inspection, physical RAM was 11.0 GiB, `MemAvailable` was 6.4 GiB,
 total swap was 16.0 GiB, and free swap was 14.1 GiB. The Termux process was
