@@ -7,10 +7,12 @@ pub use daemon_shutdown::DAEMON_SHUTDOWN_FILE_ENV;
 pub use daemon_shutdown::daemon_shutdown_signal;
 /// Only managed app-server launches accept the local socket shutdown request.
 pub const DAEMON_SHUTDOWN_SOCKET_ENV: &str = "CODEX_DAEMON_SHUTDOWN_SOCKET";
+#[cfg(feature = "remote-control")]
 mod connection_auth;
 mod outgoing_message;
 mod transport;
 
+#[cfg(feature = "remote-control")]
 pub use connection_auth::ConnectionAuth;
 pub use outgoing_message::ConnectionId;
 pub use outgoing_message::OutgoingError;
@@ -28,13 +30,21 @@ pub use transport::CHANNEL_CAPACITY;
 pub use transport::ConnectionOrigin;
 pub use transport::DaemonShutdownAccess;
 pub use transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlDisabledByRequirements;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlEnableError;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlHandle;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlPolicy;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlStartConfig;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlStartupMode;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlTrafficLogRedaction;
+#[cfg(feature = "remote-control")]
 pub use transport::RemoteControlUnavailable;
 pub use transport::TransportEvent;
 pub use transport::acquire_app_server_startup_lock;
@@ -49,7 +59,10 @@ pub use transport::read_app_server_owner;
 pub use transport::register_app_server_owner;
 pub use transport::run_stdio_to_control_socket;
 pub use transport::start_control_socket_acceptor;
+#[cfg(feature = "remote-control")]
 pub use transport::start_remote_control;
 pub use transport::start_stdio_connection;
+#[cfg(feature = "websocket")]
 pub use transport::start_websocket_acceptor;
+#[cfg(feature = "remote-control")]
 pub use transport::take_remote_control_disabled_env;
