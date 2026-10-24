@@ -5,7 +5,7 @@ expression: popup
   Export conversation
   Save the complete conversation as Markdown
 
-     Copy to clipboard  Copy the complete Markdown transcript
-› 1. Save to file       Choose a Markdown filename
+› 1. Copy to clipboard  Copy the complete Markdown transcript
+  2. Save to file       Choose a Markdown filename
 
-  Press enter to confirm or esc to go back
+  enter select · esc back
