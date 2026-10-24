@@ -96,7 +96,11 @@ ensure_build_lockfile() {
 
   mkdir -p "$(dirname "${marker}")"
   if [[ "${SOURCE_REPO}" == "${BUILD_REPO}" ]]; then
-    echo "Using the source Cargo.lock for the source-tree build." >&2
+    python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
+      --manifest "${BUILD_REPO}/codex-rs/Cargo.toml" \
+      --source-lock "${SOURCE_REPO}/codex-rs/Cargo.lock" \
+      --build-lock "${build_lock}"
+    echo "Synchronizing workspace package versions in the source Cargo.lock." >&2
   else
     cp "${SOURCE_REPO}/codex-rs/Cargo.lock" "${build_lock}"
     python3 "${SOURCE_REPO}/scripts/normalize_cargo_lock.py" \
