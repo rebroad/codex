@@ -865,7 +865,17 @@ async fn questions_and_queued_messages_share_the_resolved_shortcut() {
         .queued_user_messages
         .push_back(UserMessage::from("queued".to_string()).into());
     chat.refresh_pending_input_preview();
-    let forward_hint = key_hint::shift(KeyCode::Left).display_label();
+    let forward_modifier = if cfg!(target_os = "android") {
+        KeyModifiers::CONTROL
+    } else {
+        KeyModifiers::SHIFT
+    };
+    let forward_binding = if cfg!(target_os = "android") {
+        key_hint::ctrl(KeyCode::Left)
+    } else {
+        key_hint::shift(KeyCode::Left)
+    };
+    let forward_hint = forward_binding.display_label();
     let backward_hint = key_hint::shift(KeyCode::Right).display_label();
     assert!(
         render_bottom_popup(&chat, /*width*/ 100)
@@ -878,7 +888,7 @@ async fn questions_and_queued_messages_share_the_resolved_shortcut() {
 
     for (forward, backward) in [
         (
-            KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Left, forward_modifier),
             KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT),
         ),
         (
@@ -891,10 +901,19 @@ async fn questions_and_queued_messages_share_the_resolved_shortcut() {
         assert!(rendered.contains(&format!("{backward_hint} main prompt")));
         assert!(rendered.contains(&format!("{forward_hint} next question")));
         if forward.code == KeyCode::Left {
-            insta::assert_snapshot!(
-                "question_queue_hint_Left",
-                render_bottom_popup(&chat, /*width*/ 100)
-            );
+            if cfg!(target_os = "android") {
+                insta::with_settings!({ snapshot_suffix => "android" }, {
+                    insta::assert_snapshot!(
+                        "question_queue_hint_Left",
+                        render_bottom_popup(&chat, /*width*/ 100)
+                    );
+                });
+            } else {
+                insta::assert_snapshot!(
+                    "question_queue_hint_Left",
+                    render_bottom_popup(&chat, /*width*/ 100)
+                );
+            }
         }
         chat.handle_key_event(forward);
         let rendered = render_bottom_popup(&chat, /*width*/ 100);
