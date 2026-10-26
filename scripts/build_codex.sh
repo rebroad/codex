@@ -939,7 +939,7 @@ cargo_build() {
     fi
   fi
 
-  local -a cmd=("${CARGO_CMD[@]}" build -p codex-cli -p codex-rmcp-client)
+  local -a cmd=("${CARGO_CMD[@]}" build --quiet -p codex-cli -p codex-rmcp-client)
   if [[ "${target_mode}" != armv7 ]]; then
     cmd+=(-p codex-code-mode-host)
   fi
