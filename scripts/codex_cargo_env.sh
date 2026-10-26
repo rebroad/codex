@@ -147,9 +147,25 @@ fi
 if [[ "${CODEX_CARGO_ENABLE_SCCACHE:-1}" == "1" \
   && "${CODEX_CARGO_DISABLE_SCCACHE:-0}" != "1" \
   && "${CARGO_INCREMENTAL:-0}" != "1" ]]; then
-  SCCACHE_BIN="$(command -v sccache || true)"
+  SCCACHE_BIN="${CODEX_SCCACHE_BIN:-$(command -v sccache || true)}"
 else
   SCCACHE_BIN=""
+fi
+SCCACHE_IN_PROCESS=""
+if [[ -n "${SCCACHE_BIN}" \
+  && "${SCCACHE_BIN}" == "${HOME}/.cargo/bin/sccache" ]]; then
+  SCCACHE_IN_PROCESS=1
+fi
+if [[ "${HOST_TARGET}" == aarch64-linux-android \
+  && -n "${SCCACHE_BIN}" ]]; then
+  sccache_version="$("${SCCACHE_BIN}" --version | sed -n 's/^sccache \([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\).*$/\1.\2.\3/p')"
+  if [[ "${sccache_version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
+    && ((BASH_REMATCH[1] > 0 || BASH_REMATCH[2] >= 19)); then
+    SCCACHE_IN_PROCESS=1
+  else
+    echo "Android sandbox builds require the Codex sccache fork 0.19 or newer for in-process caching" >&2
+    exit 1
+  fi
 fi
 SCCACHE_WRAPPER="${BUILD_REPO}/scripts/codex_sccache_wrapper.sh"
 case "${TARGET_MODE}" in
@@ -431,6 +447,7 @@ if [[ -n "${SCCACHE_BIN}" ]]; then
   fi
   export SCCACHE_DIR="${SCCACHE_DIR:-${default_sccache_dir}}"
   export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-50G}"
+  export SCCACHE_SERVER_UDS="${SCCACHE_SERVER_UDS:-${SCCACHE_DIR%/}/server.sock}"
   if ! "${SCCACHE_BIN}" --version >/dev/null 2>&1; then
     echo "Unable to run sccache; refusing to run without the configured cache" >&2
     exit 1
@@ -568,8 +585,8 @@ else
 fi
 if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
   if [[ -n "${SCCACHE_BIN}" ]]; then
-    printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_WRAPPER=%q CODEX_SCCACHE_BIN=%q CODEX_RUSTC_OOM_SCORE_ADJ=800 SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
-      "${BUILD_REPO}/scripts/codex_rustc_oom_wrapper.sh" "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
+    printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_WRAPPER=%q CODEX_SCCACHE_BIN=%q CODEX_RUSTC_OOM_SCORE_ADJ=800 SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q SCCACHE_SERVER_UDS=%q SCCACHE_IN_PROCESS=%q\n' \
+      "${BUILD_REPO}/scripts/codex_rustc_oom_wrapper.sh" "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}" "${SCCACHE_SERVER_UDS}" "${SCCACHE_IN_PROCESS}"
   else
     printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_WRAPPER= CODEX_SCCACHE_BIN= CODEX_RUSTC_OOM_SCORE_ADJ=800\n' \
       "${BUILD_REPO}/scripts/codex_rustc_oom_wrapper.sh"
@@ -588,8 +605,8 @@ if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
     printf 'unset SCCACHE_CLIENT_SIDE\n'
   fi
 elif [[ -n "${SCCACHE_BIN}" ]]; then
-  printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q\n' \
-    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}"
+  printf 'export RUSTC_WRAPPER=%q CODEX_SCCACHE_BIN=%q SCCACHE_DIR=%q SCCACHE_CACHE_SIZE=%q SCCACHE_SERVER_UDS=%q SCCACHE_IN_PROCESS=%q\n' \
+    "${SCCACHE_WRAPPER}" "${SCCACHE_BIN}" "${SCCACHE_DIR}" "${SCCACHE_CACHE_SIZE}" "${SCCACHE_SERVER_UDS}" "${SCCACHE_IN_PROCESS}"
 else
   printf 'export RUSTC_WRAPPER= CODEX_SCCACHE_BIN=\n'
 fi

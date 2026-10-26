@@ -4,6 +4,23 @@ set -euo pipefail
 # Cargo holds file descriptor 9 for the shared target lock. Close it before
 # starting sccache so a daemonized sccache server cannot retain that lock.
 exec 9>&- || true
+# Keep cache internals quiet during normal builds. Set CODEX_SCCACHE_LOG to opt in.
+export SCCACHE_LOG="${CODEX_SCCACHE_LOG:-error}"
+# Cargo asks rustc for version and target metadata before compiling crates.
+# These requests have no cacheable inputs. Run them directly so sccache's
+# in-process compile path stays focused on actual compilations and does not
+# need to spawn an uncacheable fallback process.
+rustc_command="${1:-}"
+shift || true
+for arg in "$@"; do
+  case "${arg}" in
+    -vV|--version|--print|--print=*)
+      exec "${rustc_command}" "$@"
+      ;;
+  esac
+done
+set -- "${rustc_command}" "$@"
+
 # Cargo emits `-C extra-filename=...` for dependency artifacts, but also emits
 # `-o` for final binaries. Rustc ignores the former in that combination and
 # warns; remove only that redundant pair so warning-deny builds stay quiet.
