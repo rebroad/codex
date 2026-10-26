@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+codex_psi_notice_probe=false
+if [[ "${1:-}" == --codex-psi-notice-probe ]]; then
+  codex_psi_notice_probe=true
+  shift
+fi
+
 # On Android, mark this compiler invocation as an early memory-pressure kill
 # candidate. The score survives exec and is inherited by rustc's children.
 if [[ -n "${CODEX_RUSTC_OOM_SCORE_ADJ:-}" ]]; then
@@ -168,6 +174,13 @@ if codex_read_psi; then
   codex_previous_full_total_us="$codex_psi_full_total_us"
   codex_some_deltas=()
   codex_full_deltas=()
+fi
+if [[ "$codex_psi_notice_probe" == true ]]; then
+  codex_stop_psi_stream
+  if [[ "$codex_psi_available" == true ]]; then
+    exit 0
+  fi
+  exit 10
 fi
 
 codex_memory_guard_reason() {
