@@ -99,3 +99,29 @@ async fn stream_retry_preserves_deadline_across_delayed_notification() {
         "retry resumed at {resumed_at:?}, expected {advice:?}"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn server_overload_without_advice_retries_after_fixed_cooloff() {
+    let (session, turn_context) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn_context));
+    let mut client_session = session.services.model_client.new_session();
+    let mut retry_state = ResponsesStreamRetryState::default();
+    let started = Instant::now();
+
+    let retry = handle_response_stream_error(
+        &mut retry_state,
+        /*max_retries*/ 0,
+        CodexErr::ServerOverloaded,
+        &mut client_session,
+        &session,
+        &step_context,
+        ResponsesStreamRequest::Sampling,
+    );
+    tokio::pin!(retry);
+    assert!(futures::poll!(&mut retry).is_pending());
+    tokio::time::advance(Duration::from_secs(19)).await;
+    assert!(futures::poll!(&mut retry).is_pending());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    retry.await.expect("server overload should be retried");
+    assert_eq!(Instant::now() - started, Duration::from_secs(20));
+}
