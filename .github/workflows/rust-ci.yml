@@ -43,7 +43,16 @@ jobs:
           workflows=false
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
-            [[ $f == codex-rs/* || $f == scripts/build_codex.sh || $f == scripts/build_codex_package.py || $f == scripts/codex_cargo_env.sh || $f == scripts/resolve_rusty_v8_artifacts.sh || $f == .github/workflows/rust-ci.yml || $f == .github/actions/setup-rusty-v8/* || $f == .github/actions/setup-rust-toolchain/* ]] && android=true
+            if [[ $f == codex-rs/* || $f == codex-cli/* \
+              || $f == scripts/build_codex.sh || $f == scripts/build_codex_package.py \
+              || $f == scripts/codex_cargo_env.sh || $f == scripts/codex_package/* \
+              || $f == scripts/install/* || $f == scripts/resolve_rusty_v8_artifacts.sh \
+              || $f == scripts/package_npm.sh || $f == sdk/python/* \
+              || $f == sdk/typescript/* || $f == .github/workflows/rust-ci.yml \
+              || $f == .github/actions/setup-rusty-v8/* \
+              || $f == .github/actions/setup-rust-toolchain/* ]]; then
+              android=true
+            fi
             [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
             [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
@@ -220,7 +229,7 @@ jobs:
           assert len(wheels) == 1, f"expected one Android runtime wheel, found {wheels}"
           assert "android_29_arm64_v8a" in wheels[0].name, wheels[0].name
           print(f"Built Android Python runtime wheel: {wheels[0].name}")
-           PY
+          PY
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
