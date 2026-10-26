@@ -230,3 +230,4 @@
 - Verified against canonical upstream with `git ls-remote --tags https://github.com/openai/codex.git`: annotated tag object `40f4a054d875a76b18a2b733b6224976cf64a826` peels to the locked commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. This is the sole lower boundary for this continuation.
 - No refs were changed during tag investigation. The prior `REARRANGE-DONE.md` audit is retained intact below this continuation's evidence; the checkpoint and full 704-commit downstream audit remain pending.
 - No source/test changes, tests, or builds were made or run.
+- Preparatory clean-tree checkpoint: branch `alpha.before-rearrange-20261026-continuation-704` points to `b0537dc500241df0e5c6d2061840c56e27fead45`, tree `8a78fe4279b646e9289228a31777a0a2d9537c27`. The checkpoint was created only after verifying clean `alpha`; merge-base remains the locked SHA. The fixed-base range at this point contains 705 commits (including the separately committed record update).
