@@ -68,6 +68,7 @@ ALLOW_CONCURRENT_BUILD="false"
 RESTART_APP_SERVER="false"
 PROFILE_OPTION_SET="false"
 SOURCE_LOCK_BACKUP=""
+ANDROID_PSI_NOTICE_DIR=""
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -251,6 +252,9 @@ release_cargo_target_lock() {
 cleanup_build_process() {
   release_cargo_target_lock
   codex_sccache_server_stop
+  if [[ -n "${ANDROID_PSI_NOTICE_DIR}" ]]; then
+    rm -rf "${ANDROID_PSI_NOTICE_DIR}"
+  fi
   if [[ -n "${SOURCE_LOCK_BACKUP}" && -f "${SOURCE_LOCK_BACKUP}" ]]; then
     if cp -p "${SOURCE_LOCK_BACKUP}" "${SOURCE_REPO}/codex-rs/Cargo.lock"; then
       rm -f "${SOURCE_LOCK_BACKUP}"
@@ -789,7 +793,7 @@ build_armv7_bwrap() {
 }
 
 cargo_build() {
-  local mode="${1}" target_mode="${2}" profile="${3:-${CARGO_PROFILE}}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir
+  local mode="${1}" target_mode="${2}" profile="${3:-${CARGO_PROFILE}}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir psi_probe_status
   case "${profile}" in
     release) profile_args+=(--release) ;;
     dev-small) profile_args+=(--profile dev-small) ;;
@@ -809,8 +813,43 @@ cargo_build() {
     --purpose "${purpose}" \
     --emit)" || return $?
   eval "${cargo_env_output}" || return $?
-  codex_sccache_server_start || return $?
   target_dir="${CARGO_TARGET_DIR}"
+  if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD:-0}" == 1 ]]; then
+    python3 - "${target_dir}" <<'PY'
+from pathlib import Path
+import sys
+
+target_dir = Path(sys.argv[1])
+notice = b"Android Rust memory guard: PSI unavailable; using RAM and swap guards only"
+fingerprint_dirs = list(target_dir.glob("*/.fingerprint"))
+fingerprint_dirs.extend(target_dir.glob("*/*/.fingerprint"))
+removed = 0
+for fingerprint_dir in fingerprint_dirs:
+    for output in fingerprint_dir.glob("*/output-*"):
+        try:
+            original = output.read_bytes()
+        except OSError:
+            continue
+        lines = original.splitlines(keepends=True)
+        kept = [line for line in lines if line.rstrip(b"\r\n") != notice]
+        if len(kept) != len(lines):
+            output.write_bytes(b"".join(kept))
+            removed += len(lines) - len(kept)
+if removed:
+    print(f"Removed {removed} stale PSI fallback notice(s) from Cargo fingerprints.", file=sys.stderr)
+PY
+    if [[ -n "${ANDROID_PSI_NOTICE_DIR}" ]] \
+      && mkdir "${ANDROID_PSI_NOTICE_DIR}/probed" 2>/dev/null; then
+      psi_probe_status=0
+      "${RUSTC_WRAPPER}" --codex-psi-notice-probe /bin/true || psi_probe_status=$?
+      if [[ "${psi_probe_status}" == 10 ]]; then
+        echo 'Android Rust memory guard: PSI unavailable; using RAM and swap guards only' >&2
+      elif [[ "${psi_probe_status}" != 0 ]]; then
+        echo "Android Rust memory guard PSI notice probe failed; compiler memory guards remain enabled" >&2
+      fi
+    fi
+  fi
+  codex_sccache_server_start || return $?
 
   if [[ "${target_mode}" == armv7 ]]; then
     local armv7_builder="${BUILD_REPO}/scripts/build_armv7.sh"
@@ -939,7 +978,7 @@ cargo_build() {
     fi
   fi
 
-  local -a cmd=("${CARGO_CMD[@]}" build --quiet -p codex-cli -p codex-rmcp-client)
+  local -a cmd=("${CARGO_CMD[@]}" build -p codex-cli -p codex-rmcp-client)
   if [[ "${target_mode}" != armv7 ]]; then
     cmd+=(-p codex-code-mode-host)
   fi
@@ -957,17 +996,71 @@ cargo_build() {
   else
     cmd+=(--locked)
   fi
+  run_cargo_build() {
+    local stage="${1}" stderr_log status=0
+    shift
+    if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD:-0}" != 1 ]]; then
+      (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2
+      return $?
+    fi
+
+    local temp_root="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
+    stderr_log="$(mktemp "${temp_root}/codex-cargo-stderr.XXXXXX")"
+    if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") 2>&1 \
+      | tee "${stderr_log}" \
+      | awk '
+        function flush_cause() {
+          if (cause !~ /exit status: 75/ || !watcher_killed) {
+            printf "%s", cause
+            fflush()
+          }
+          cause = ""
+        }
+        {
+          if (in_cause) {
+            if ($0 == "" || /^error:/ || /^warning:/) {
+              flush_cause()
+              in_cause = 0
+            } else {
+              cause = cause $0 ORS
+              next
+            }
+          }
+          if (/stopping Rust compile before Android low-memory kill:/) {
+            watcher_killed = 1
+          }
+          if ($0 == "Caused by:") {
+            cause = $0 ORS
+            in_cause = 1
+            next
+          }
+          print
+          fflush()
+        }
+        END {
+          if (in_cause) {
+            flush_cause()
+          }
+        }
+      ' >&2; then
+      status=0
+    else
+      status=$?
+    fi
+    rm -f "${stderr_log}"
+    return "${status}"
+  }
   echo "Building ${profile} ${target_mode} in ${target_dir} (target artifacts retained)..." >&2
-  if ! (cd "${BUILD_WORKSPACE}" && run_timed_build cargo "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
+  if ! run_cargo_build cargo; then
     if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
       echo "Locked Cargo build failed; retrying online in the build tree without --locked." >&2
       unset 'cmd[-1]'
-      if (cd "${BUILD_WORKSPACE}" && run_timed_build cargo-retry-online "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
+      if run_cargo_build cargo-retry-online; then
         :
       else
         echo "Online Cargo build without --locked failed; retrying offline." >&2
         cmd+=(--offline)
-        if ! (cd "${BUILD_WORKSPACE}" && run_timed_build cargo-retry-offline "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
+        if ! run_cargo_build cargo-retry-offline; then
           return 1
         fi
       fi
@@ -1622,6 +1715,9 @@ done
 export CODEX_ALLOW_CONCURRENT_BUILD="${ALLOW_CONCURRENT_BUILD}"
 export CODEX_BUILD_PID="$$"
 trap cleanup_build_process EXIT
+if [[ -n "${PREFIX:-}" && -d "${PREFIX}/tmp" ]]; then
+  ANDROID_PSI_NOTICE_DIR="$(mktemp -d "${PREFIX}/tmp/codex-android-psi-notice.XXXXXX")"
+fi
 if [[ "$(cd -- "${SOURCE_REPO}" && pwd -P)" == "$(cd -- "${BUILD_REPO}" && pwd -P)" ]]; then
   source_lock_backup_root="${PREFIX:+${PREFIX}/tmp}"
   [[ -d "${source_lock_backup_root}" ]] || source_lock_backup_root=/var/tmp
