@@ -976,17 +976,71 @@ PY
   else
     cmd+=(--locked)
   fi
+  run_cargo_build() {
+    local stage="${1}" stderr_log status=0
+    shift
+    if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD:-0}" != 1 ]]; then
+      (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2
+      return $?
+    fi
+
+    local temp_root="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
+    stderr_log="$(mktemp "${temp_root}/codex-cargo-stderr.XXXXXX")"
+    if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") 2>&1 \
+      | tee "${stderr_log}" \
+      | awk '
+        function flush_cause() {
+          if (cause !~ /exit status: 75/ || !watcher_killed) {
+            printf "%s", cause
+            fflush()
+          }
+          cause = ""
+        }
+        {
+          if (in_cause) {
+            if ($0 == "" || /^error:/ || /^warning:/) {
+              flush_cause()
+              in_cause = 0
+            } else {
+              cause = cause $0 ORS
+              next
+            }
+          }
+          if (/stopping Rust compile before Android low-memory kill:/) {
+            watcher_killed = 1
+          }
+          if ($0 == "Caused by:") {
+            cause = $0 ORS
+            in_cause = 1
+            next
+          }
+          print
+          fflush()
+        }
+        END {
+          if (in_cause) {
+            flush_cause()
+          }
+        }
+      ' >&2; then
+      status=0
+    else
+      status=$?
+    fi
+    rm -f "${stderr_log}"
+    return "${status}"
+  }
   echo "Building ${profile} ${target_mode} in ${target_dir} (target artifacts retained)..." >&2
-  if ! (cd "${BUILD_WORKSPACE}" && run_timed_build cargo "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
+  if ! run_cargo_build cargo; then
     if [[ "${LOCKFILE_REGENERATION_REQUIRED}" != true ]]; then
       echo "Locked Cargo build failed; retrying online in the build tree without --locked." >&2
       unset 'cmd[-1]'
-      if (cd "${BUILD_WORKSPACE}" && run_timed_build cargo-retry-online "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
+      if run_cargo_build cargo-retry-online; then
         :
       else
         echo "Online Cargo build without --locked failed; retrying offline." >&2
         cmd+=(--offline)
-        if ! (cd "${BUILD_WORKSPACE}" && run_timed_build cargo-retry-offline "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") >&2; then
+        if ! run_cargo_build cargo-retry-offline; then
           return 1
         fi
       fi
