@@ -1,5 +1,9 @@
 codex_sccache_server_pid=""
 
+codex_sccache_server_available() {
+  "$CODEX_SCCACHE_BIN" --show-stats >/dev/null 2>&1
+}
+
 codex_sccache_server_set_oom_score() {
   [[ -n "${CODEX_RUSTC_OOM_SCORE_ADJ:-}" ]] || return 0
 
@@ -48,7 +52,8 @@ codex_sccache_server_set_oom_score() {
 
 codex_sccache_server_start() {
   [[ -n "${CODEX_SCCACHE_BIN:-}" ]] || return 0
-  if (exec 8<>/dev/tcp/127.0.0.1/${SCCACHE_SERVER_PORT:-4226}) 2>/dev/null; then
+  [[ "${SCCACHE_IN_PROCESS:-0}" != 1 ]] || return 0
+  if codex_sccache_server_available; then
     codex_sccache_server_set_oom_score || return $?
     return 0
   fi
@@ -68,7 +73,7 @@ codex_sccache_server_start() {
   ) >/dev/null 2>&1 &
   codex_sccache_server_pid=$!
   for attempt in {1..50}; do
-    if (exec 8<>/dev/tcp/127.0.0.1/${SCCACHE_SERVER_PORT:-4226}) 2>/dev/null; then
+    if codex_sccache_server_available; then
       if ! codex_sccache_server_set_oom_score; then
         codex_sccache_server_stop
         return 1
