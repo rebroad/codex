@@ -1013,17 +1013,13 @@ PY
           if (!guard_transition_count) {
             return
           }
-          elapsed_seconds = systime() - guard_build_started
+          running_seconds = guard_running_seconds
           paused_seconds = guard_paused_seconds
+          state_elapsed = systime() - guard_state_updated_at
           if (guard_transition_state == "paused") {
-            paused_seconds += guard_current_pause_seconds + systime() - guard_pause_report_epoch
-          }
-          if (paused_seconds > elapsed_seconds) {
-            paused_seconds = elapsed_seconds
-          }
-          running_seconds = elapsed_seconds - paused_seconds
-          if (running_seconds < 0) {
-            running_seconds = 0
+            paused_seconds += state_elapsed
+          } else {
+            running_seconds += state_elapsed
           }
           if (guard_transition_state == "paused") {
             summary = "⏸ Rust paused"
@@ -1034,15 +1030,12 @@ PY
             summary = summary "; " guard_transition_count " changes"
           }
           summary = summary "; build " duration_text(running_seconds) " running, " duration_text(paused_seconds) " paused"
-          if (guard_transition_time != "") {
-            summary = summary " at " guard_transition_time
-          }
-          print summary
+          timestamp = guard_transition_time != "" ? guard_transition_time : strftime("%H:%M:%S")
+          print "[" timestamp "] " summary
           fflush()
           guard_transition_count = 0
           guard_transition_first_second = 0
           guard_transition_last = ""
-          guard_transition_duration = ""
           guard_transition_time = ""
         }
         function duration_text(seconds, minutes, whole_seconds) {
@@ -1055,7 +1048,9 @@ PY
           return minutes "m" sprintf("%02ds", whole_seconds)
         }
         BEGIN {
-          guard_build_started = systime()
+          guard_state_updated_at = systime()
+          guard_running_seconds = 0
+          guard_paused_seconds = 0
           guard_transition_state = "running"
         }
         function flush_cause() {
@@ -1097,47 +1092,29 @@ PY
             }
             guard_transition_count += transition_count
             guard_transition_last = $0
+            previous_state = guard_transition_state
+            now = systime()
+            elapsed_since_report = now - guard_state_updated_at
+            if (elapsed_since_report < 0) {
+              elapsed_since_report = 0
+            }
+            if (previous_state == "paused") {
+              guard_paused_seconds += elapsed_since_report
+            } else {
+              guard_running_seconds += elapsed_since_report
+            }
             if (/suspending Rust compile|⏸ Rust paused/) {
               guard_transition_state = "paused"
             } else if (/resuming Rust compile|▶️ Rust (resumed|running)/) {
-              guard_transition_state = "resumed"
+              guard_transition_state = "running"
             } else if (/now retrying/) {
               guard_transition_state = "paused"
             } else if (/now paused/) {
               guard_transition_state = "paused"
             } else if (/now running/) {
-              guard_transition_state = "resumed"
+              guard_transition_state = "running"
             }
-            if (match($0, /current pause [0-9]+[.][0-9]+s/)) {
-              guard_transition_duration = substr($0, RSTART, RLENGTH)
-              sub(/^current pause /, "", guard_transition_duration)
-              guard_current_pause_seconds = guard_transition_duration + 0
-            } else if (match($0, /last pause [0-9]+[.][0-9]+s/)) {
-              guard_transition_duration = substr($0, RSTART, RLENGTH)
-              sub(/^last pause /, "", guard_transition_duration)
-              guard_paused_seconds += guard_transition_duration + 0
-              guard_current_pause_seconds = 0
-            } else if (match($0, /paused [0-9]+[.][0-9]+s/)) {
-              guard_transition_duration = substr($0, RSTART, RLENGTH)
-              sub(/^paused /, "", guard_transition_duration)
-              guard_current_pause_seconds = guard_transition_duration + 0
-            } else if (match($0, /completed pauses totaled [0-9]+[.][0-9]+s/)) {
-              guard_transition_duration = substr($0, RSTART, RLENGTH)
-              sub(/^completed pauses totaled /, "", guard_transition_duration)
-              guard_paused_seconds += guard_transition_duration + 0
-              if (guard_transition_state == "resumed") {
-                guard_current_pause_seconds = 0
-              }
-            }
-            if (guard_transition_state == "paused" && match($0, /now paused for [0-9]+[.][0-9]+s/)) {
-              guard_current_pause_seconds = substr($0, RSTART, RLENGTH)
-              sub(/^now paused for /, "", guard_current_pause_seconds)
-              sub(/s$/, "", guard_current_pause_seconds)
-              guard_current_pause_seconds += 0
-            }
-            if (guard_transition_state == "paused") {
-              guard_pause_report_epoch = systime()
-            }
+            guard_state_updated_at = now
             timestamp_text = $0
             if (match(timestamp_text, /at [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
               guard_transition_time = substr(timestamp_text, RSTART + 14, 8)
@@ -1151,7 +1128,7 @@ PY
           }
           if (/memory PSI (some|full) stall/) {
             if (ENVIRON["CODEX_ANDROID_RUSTC_MEMORY_GUARD_VERBOSE"] == "1") {
-              print
+              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
               fflush()
               next
             }
@@ -1161,7 +1138,7 @@ PY
               event = "stopping"
             }
             if (!guard_event_seen[event]++) {
-              print
+              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
               fflush()
             }
             next
@@ -1176,19 +1153,15 @@ PY
         }
         END {
           flush_guard_transitions()
-          elapsed_seconds = systime() - guard_build_started
+          running_seconds = guard_running_seconds
           paused_seconds = guard_paused_seconds
+          state_elapsed = systime() - guard_state_updated_at
           if (guard_transition_state == "paused") {
-            paused_seconds += guard_current_pause_seconds + systime() - guard_pause_report_epoch
+            paused_seconds += state_elapsed
+          } else {
+            running_seconds += state_elapsed
           }
-          if (paused_seconds > elapsed_seconds) {
-            paused_seconds = elapsed_seconds
-          }
-          running_seconds = elapsed_seconds - paused_seconds
-          if (running_seconds < 0) {
-            running_seconds = 0
-          }
-          printf "⏱ Rust totals: %s running, %s paused\n", duration_text(running_seconds), duration_text(paused_seconds)
+          printf "[%s] ⏱ Rust totals: %s running, %s paused\n", strftime("%H:%M:%S"), duration_text(running_seconds), duration_text(paused_seconds)
           if (in_cause) {
             flush_cause()
           }
