@@ -42,6 +42,64 @@ use crate::protocol::FsOpenMode;
 use crate::regular_file;
 use crate::sandboxed_file_system::SandboxedFileSystem;
 
+fn filesystem_host_path(path: &PathUri) -> io::Result<AbsolutePathBuf> {
+    let path = path.to_abs_path()?;
+    #[cfg(target_os = "android")]
+    {
+        if !path.as_path().starts_with("/tmp") {
+            return Ok(path);
+        }
+        let temporary_root =
+            android_temporary_root(std::env::var_os("TMPDIR"), std::env::var_os("PREFIX"))?;
+        return Ok(remap_android_temporary_path(path.as_path(), &temporary_root)?.unwrap_or(path));
+    }
+    #[cfg(not(target_os = "android"))]
+    Ok(path)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn android_temporary_root(
+    tmpdir: Option<std::ffi::OsString>,
+    prefix: Option<std::ffi::OsString>,
+) -> io::Result<PathBuf> {
+    tmpdir
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            prefix
+                .filter(|prefix| !prefix.is_empty())
+                .map(|prefix| PathBuf::from(prefix).join("tmp"))
+        })
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "Termux PREFIX or TMPDIR is required to resolve /tmp paths",
+            )
+        })
+}
+
+fn filesystem_host_uri(path: &PathUri) -> io::Result<PathUri> {
+    #[cfg(target_os = "android")]
+    {
+        Ok(PathUri::from_abs_path(&filesystem_host_path(path)?))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(path.clone())
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn remap_android_temporary_path(
+    path: &Path,
+    temporary_root: &Path,
+) -> io::Result<Option<AbsolutePathBuf>> {
+    let Ok(relative_path) = path.strip_prefix("/tmp") else {
+        return Ok(None);
+    };
+    AbsolutePathBuf::from_absolute_path(temporary_root.join(relative_path)).map(Some)
+}
+
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem::unsandboxed()) });
 
@@ -132,10 +190,14 @@ impl LocalFileSystem {
                 FsOpenMode::Replace => sandbox.should_write_into_sandbox(),
             };
             if needs_sandbox {
-                return self.sandboxed()?.open_file(path, mode, Some(sandbox)).await;
+                let path = filesystem_host_uri(path)?;
+                return self
+                    .sandboxed()?
+                    .open_file(&path, mode, Some(sandbox))
+                    .await;
             }
         }
-        regular_file::open(path.to_abs_path()?.as_path(), mode).await
+        regular_file::open(filesystem_host_path(path)?.as_path(), mode).await
     }
 
     async fn canonicalize(
@@ -143,8 +205,9 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<PathUri> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
-        file_system.canonicalize(path, sandbox).await
+        file_system.canonicalize(&path, sandbox).await
     }
 
     #[tracing::instrument(
@@ -158,8 +221,9 @@ impl LocalFileSystem {
         options: ReadFileOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
-        file_system.read_file(path, options, sandbox).await
+        file_system.read_file(&path, options, sandbox).await
     }
 
     async fn read_file_stream(
@@ -167,8 +231,9 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileSystemReadStream> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
-        file_system.read_file_stream(path, sandbox).await
+        file_system.read_file_stream(&path, sandbox).await
     }
 
     async fn write_file(
@@ -178,9 +243,10 @@ impl LocalFileSystem {
         options: WriteFileOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system
-            .write_file(path, contents, options, sandbox)
+            .write_file(&path, contents, options, sandbox)
             .await
     }
 
@@ -190,8 +256,9 @@ impl LocalFileSystem {
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
-        file_system.create_directory(path, options, sandbox).await
+        file_system.create_directory(&path, options, sandbox).await
     }
 
     #[tracing::instrument(
@@ -205,8 +272,9 @@ impl LocalFileSystem {
         options: GetMetadataOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
-        file_system.get_metadata(path, options, sandbox).await
+        file_system.get_metadata(&path, options, sandbox).await
     }
 
     async fn read_directory(
@@ -214,8 +282,9 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
-        file_system.read_directory(path, sandbox).await
+        file_system.read_directory(&path, sandbox).await
     }
 
     async fn walk(
@@ -224,8 +293,9 @@ impl LocalFileSystem {
         options: WalkOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<WalkOutcome> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
-        file_system.walk(path, options, sandbox).await
+        file_system.walk(&path, options, sandbox).await
     }
 
     async fn remove(
@@ -234,8 +304,9 @@ impl LocalFileSystem {
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        let path = filesystem_host_uri(path)?;
         let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
-        file_system.remove(path, options, sandbox).await
+        file_system.remove(&path, options, sandbox).await
     }
 
     async fn copy(
@@ -245,9 +316,11 @@ impl LocalFileSystem {
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        let source_path = filesystem_host_uri(source_path)?;
+        let destination_path = filesystem_host_uri(destination_path)?;
         let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system
-            .copy(source_path, destination_path, options, sandbox)
+            .copy(&source_path, &destination_path, options, sandbox)
             .await
     }
 }
@@ -580,7 +653,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<tokio::fs::File> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         regular_file::open(path.as_path(), FsOpenMode::Read).await
     }
 
@@ -590,7 +663,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<PathUri> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         let canonicalized =
             AbsolutePathBuf::from_absolute_path(tokio::fs::canonicalize(path.as_path()).await?)?;
         Ok(PathUri::from_abs_path(&canonicalized))
@@ -603,7 +676,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         crate::local_file_system_read::read_file(path, options).await
     }
 
@@ -627,7 +700,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         if options.follow_symlinks {
             tokio::fs::write(path.as_path(), contents).await
         } else {
@@ -642,7 +715,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         if !options.follow_symlinks {
             return no_follow::create_directory(path.as_path(), options.recursive).await;
         }
@@ -661,7 +734,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         if !options.follow_symlinks {
             return no_follow::metadata(path.as_path()).await;
         }
@@ -681,7 +754,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
@@ -869,7 +942,7 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
+        let path = filesystem_host_path(path)?;
         if !options.follow_symlinks {
             return no_follow::remove(path.as_path(), options.recursive, options.force).await;
         }
@@ -900,8 +973,8 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        let source_path = source_path.to_abs_path()?.into_path_buf();
-        let destination_path = destination_path.to_abs_path()?.into_path_buf();
+        let source_path = filesystem_host_path(source_path)?.into_path_buf();
+        let destination_path = filesystem_host_path(destination_path)?.into_path_buf();
         tokio::task::spawn_blocking(move || -> FileSystemResult<()> {
             let metadata = std::fs::symlink_metadata(source_path.as_path())?;
             let file_type = metadata.file_type();
@@ -1066,7 +1139,7 @@ fn check_walk_cancelled(cancelled: &CancellationToken) -> io::Result<()> {
 }
 
 fn walk_metadata(path: &PathUri) -> io::Result<(std::fs::Metadata, bool)> {
-    let path = path.to_abs_path()?;
+    let path = filesystem_host_path(path)?;
     let metadata = std::fs::symlink_metadata(path.as_path())?;
     let is_symlink = metadata.is_symlink();
     let metadata = if is_symlink {
@@ -1078,7 +1151,7 @@ fn walk_metadata(path: &PathUri) -> io::Result<(std::fs::Metadata, bool)> {
 }
 
 fn walk_canonicalize(path: &PathUri) -> io::Result<PathUri> {
-    let path = path.to_abs_path()?;
+    let path = filesystem_host_path(path)?;
     let canonicalized =
         AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(path.as_path())?)?;
     Ok(PathUri::from_abs_path(&canonicalized))
@@ -1086,7 +1159,7 @@ fn walk_canonicalize(path: &PathUri) -> io::Result<PathUri> {
 
 fn walk_read_directory(path: &PathUri, cancelled: &CancellationToken) -> io::Result<Vec<String>> {
     check_walk_cancelled(cancelled)?;
-    let path = path.to_abs_path()?;
+    let path = filesystem_host_path(path)?;
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(path.as_path())? {
         check_walk_cancelled(cancelled)?;
@@ -1270,6 +1343,42 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn android_temporary_root_prefers_tmpdir_and_falls_back_to_prefix() -> io::Result<()> {
+        assert_eq!(
+            android_temporary_root(
+                Some("/custom/tmp".into()),
+                Some("/data/data/com.termux/files/usr".into()),
+            )?,
+            PathBuf::from("/custom/tmp"),
+        );
+        assert_eq!(
+            android_temporary_root(None, Some("/data/data/com.termux/files/usr".into()),)?,
+            PathBuf::from("/data/data/com.termux/files/usr/tmp"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn android_tmp_paths_remap_to_termux_temp_root() -> io::Result<()> {
+        let mapped = remap_android_temporary_path(
+            Path::new("/tmp/codex-remote-attachments/image.png"),
+            Path::new("/data/data/com.termux/files/usr/tmp"),
+        )?;
+        assert_eq!(
+            mapped.expect("/tmp path should be remapped").as_path(),
+            Path::new("/data/data/com.termux/files/usr/tmp/codex-remote-attachments/image.png"),
+        );
+        assert_eq!(
+            remap_android_temporary_path(
+                Path::new("/data/data/com.termux/files/home/image.png"),
+                Path::new("/data/data/com.termux/files/usr/tmp"),
+            )?,
+            None,
+        );
+        Ok(())
+    }
 
     #[test]
     fn resolve_existing_path_handles_symlink_parent_dotdot_escape() -> io::Result<()> {
