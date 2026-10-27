@@ -1044,6 +1044,11 @@ PY
             } else {
               event = "stopping"
             }
+            if (event == "suspending" || event == "resuming") {
+              print
+              fflush()
+              next
+            }
             if (!guard_event_seen[event]++) {
               print
               fflush()

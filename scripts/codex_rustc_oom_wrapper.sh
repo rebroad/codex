@@ -235,6 +235,8 @@ codex_memory_guard_reason() {
 }
 
 codex_compiler_pid=""
+codex_compiler_suspended_at=""
+codex_compiler_suspended_at_epoch_us=""
 declare -A codex_guard_log_events=()
 codex_log_guard_event() {
   local event="$1" message="$2"
@@ -312,8 +314,9 @@ while true; do
     if codex_memory_guard_reason; then
       if [[ "$codex_guard_reason" == memory\ PSI\ some\ stall* ]]; then
         if [[ "$codex_compiler_suspended" == false ]]; then
-          codex_log_guard_event suspending \
-            "suspending Rust compile during Android memory pressure: $codex_guard_reason"
+          codex_compiler_suspended_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+          codex_compiler_suspended_at_epoch_us="${EPOCHREALTIME/./}"
+          echo "suspending Rust compile during Android memory pressure at $codex_compiler_suspended_at: $codex_guard_reason" >&2
           kill -STOP -- "-$codex_compiler_pid" 2>/dev/null || true
           codex_compiler_suspended=true
         fi
@@ -327,7 +330,12 @@ while true; do
         break
       fi
     elif [[ "$codex_compiler_suspended" == true ]]; then
-      codex_log_guard_event resuming 'resuming Rust compile after Android memory pressure eased'
+      codex_resumed_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+      codex_resumed_at_epoch_us="${EPOCHREALTIME/./}"
+      codex_pause_duration_us=$((codex_resumed_at_epoch_us - codex_compiler_suspended_at_epoch_us))
+      printf -v codex_pause_duration '%d.%06ds' \
+        "$((codex_pause_duration_us / 1000000))" "$((codex_pause_duration_us % 1000000))"
+      echo "resuming Rust compile after Android memory pressure eased at $codex_resumed_at (paused $codex_pause_duration since $codex_compiler_suspended_at)" >&2
       kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
       codex_compiler_suspended=false
     fi
