@@ -59,6 +59,8 @@ for codex_threshold in \
     exit 2
   fi
 done
+codex_psi_some_resume_guard_us_per_second=$((codex_psi_some_guard_ms * 750))
+codex_psi_resume_clear_windows_required=3
 
 codex_read_memory() {
   codex_mem_total_kb=0
@@ -168,6 +170,8 @@ if ! codex_read_memory; then
   exit 1
 fi
 codex_psi_available=false
+codex_recent_some_us_per_second=0
+codex_recent_full_us_per_second=0
 if codex_read_psi; then
   codex_psi_available=true
   codex_previous_some_total_us="$codex_psi_some_total_us"
@@ -203,6 +207,8 @@ codex_memory_guard_reason() {
     ((codex_some_delta_us >= 0 && codex_full_delta_us >= 0)) || {
       codex_some_deltas=()
       codex_full_deltas=()
+      codex_recent_some_us_per_second=0
+      codex_recent_full_us_per_second=0
       codex_some_delta_us=0
       codex_full_delta_us=0
     }
@@ -221,12 +227,15 @@ codex_memory_guard_reason() {
       for codex_delta in "${codex_full_deltas[@]}"; do
         codex_recent_full_us=$((codex_recent_full_us + codex_delta))
       done
-      if ((codex_recent_full_us >= codex_psi_full_guard_ms * 1000)); then
-        codex_guard_reason="memory PSI full stall ${codex_recent_full_us}us per second >= ${codex_psi_full_guard_ms}ms"
+      # Five 250ms samples cover 1.25s; normalize their sum to a per-second rate.
+      codex_recent_some_us_per_second=$((codex_recent_some_us * 4 / 5))
+      codex_recent_full_us_per_second=$((codex_recent_full_us * 4 / 5))
+      if ((codex_recent_full_us_per_second >= codex_psi_full_guard_ms * 1000)); then
+        codex_guard_reason="memory PSI full stall ${codex_recent_full_us_per_second}us per second >= ${codex_psi_full_guard_ms}ms"
         return 0
       fi
-      if ((codex_recent_some_us >= codex_psi_some_guard_ms * 1000)); then
-        codex_guard_reason="memory PSI some stall ${codex_recent_some_us}us per second >= ${codex_psi_some_guard_ms}ms"
+      if ((codex_recent_some_us_per_second >= codex_psi_some_guard_ms * 1000)); then
+        codex_guard_reason="memory PSI some stall ${codex_recent_some_us_per_second}us per second >= ${codex_psi_some_guard_ms}ms"
         return 0
       fi
     fi
@@ -235,6 +244,103 @@ codex_memory_guard_reason() {
 }
 
 codex_compiler_pid=""
+codex_compiler_suspended_at=""
+codex_guard_report_window_started_us="${EPOCHREALTIME/./}"
+codex_guard_pending_transition_count=0
+codex_guard_pending_suspend_count=0
+codex_guard_pending_resume_count=0
+codex_guard_pending_completed_pause_us=0
+codex_guard_pending_first_at=""
+codex_guard_pending_last_at=""
+codex_guard_pending_last_reason=""
+codex_guard_pending_last_pause_duration=""
+codex_guard_pending_last_pause_started_at=""
+codex_guard_compiler_state=running
+codex_guard_compile_state=running
+codex_guard_pause_started_at=""
+codex_guard_pause_started_epoch_us=""
+codex_resume_clear_windows=0
+declare -A codex_guard_log_events=()
+codex_log_guard_event() {
+  local event="$1" message="$2"
+  if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD_VERBOSE:-0}" == 1 \
+    || -z "${codex_guard_log_events[$event]:-}" ]]; then
+    echo "$message" >&2
+    codex_guard_log_events["$event"]=1
+  fi
+}
+
+codex_guard_mark_paused() {
+  local reason="$1"
+  [[ "$codex_guard_compile_state" == paused ]] && return 0
+  codex_guard_compile_state=paused
+  codex_guard_pause_started_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+  codex_guard_pause_started_epoch_us="${EPOCHREALTIME/./}"
+  ((codex_guard_pending_transition_count += 1))
+  ((codex_guard_pending_suspend_count += 1))
+  [[ -n "$codex_guard_pending_first_at" ]] || codex_guard_pending_first_at="$codex_guard_pause_started_at"
+  codex_guard_pending_last_at="$codex_guard_pause_started_at"
+  codex_guard_pending_last_reason="$reason"
+  codex_guard_compiler_state=paused
+}
+
+codex_guard_mark_running() {
+  [[ "$codex_guard_compile_state" == paused ]] || return 0
+  local resumed_at resumed_at_epoch_us pause_duration_us pause_duration
+  resumed_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+  resumed_at_epoch_us="${EPOCHREALTIME/./}"
+  pause_duration_us=$((resumed_at_epoch_us - codex_guard_pause_started_epoch_us))
+  printf -v pause_duration '%d.%06ds' \
+    "$((pause_duration_us / 1000000))" "$((pause_duration_us % 1000000))"
+  ((codex_guard_pending_transition_count += 1))
+  ((codex_guard_pending_resume_count += 1))
+  ((codex_guard_pending_completed_pause_us += pause_duration_us))
+  [[ -n "$codex_guard_pending_first_at" ]] || codex_guard_pending_first_at="$resumed_at"
+  codex_guard_pending_last_at="$resumed_at"
+  codex_guard_pending_last_pause_duration="$pause_duration"
+  codex_guard_pending_last_pause_started_at="$codex_guard_pause_started_at"
+  codex_guard_compile_state=running
+  codex_guard_compiler_state=running
+}
+
+codex_report_guard_transitions() {
+  local codex_now_epoch_us codex_pause_duration_us codex_pause_duration
+  local codex_current_pause_us codex_current_pause_duration
+  codex_now_epoch_us="${EPOCHREALTIME/./}"
+  ((codex_now_epoch_us - codex_guard_report_window_started_us >= 1000000)) || return 0
+  if ((codex_guard_pending_transition_count == 1)); then
+    if ((codex_guard_pending_suspend_count == 1)); then
+      codex_pause_duration_us=$((codex_now_epoch_us - codex_guard_pause_started_epoch_us))
+      printf -v codex_pause_duration '%d.%06ds' \
+        "$((codex_pause_duration_us / 1000000))" "$((codex_pause_duration_us % 1000000))"
+      echo "⏸ Rust paused at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current pause $codex_pause_duration)" >&2
+    else
+      echo "▶️ Rust running at $codex_guard_pending_last_at (last pause $codex_guard_pending_last_pause_duration; began $codex_guard_pending_last_pause_started_at)" >&2
+    fi
+  elif ((codex_guard_pending_transition_count > 1)); then
+    codex_current_pause_duration=""
+    if [[ "$codex_compiler_suspended" == true ]]; then
+      codex_current_pause_us=$((codex_now_epoch_us - codex_guard_pause_started_epoch_us))
+      printf -v codex_current_pause_duration '%d.%06ds' \
+        "$((codex_current_pause_us / 1000000))" "$((codex_current_pause_us % 1000000))"
+    fi
+    printf -v codex_pause_duration '%d.%06ds' \
+      "$((codex_guard_pending_completed_pause_us / 1000000))" \
+      "$((codex_guard_pending_completed_pause_us % 1000000))"
+    echo "🔄 Rust state changed ${codex_guard_pending_transition_count} times (${codex_guard_pending_suspend_count} pauses, ${codex_guard_pending_resume_count} resumes; completed pauses totaled $codex_pause_duration); now $codex_guard_compiler_state${codex_current_pause_duration:+ for $codex_current_pause_duration} ($codex_guard_pending_first_at–$codex_guard_pending_last_at)" >&2
+  fi
+  codex_guard_report_window_started_us="$codex_now_epoch_us"
+  codex_guard_pending_transition_count=0
+  codex_guard_pending_suspend_count=0
+  codex_guard_pending_resume_count=0
+  codex_guard_pending_completed_pause_us=0
+  codex_guard_pending_first_at=""
+  codex_guard_pending_last_at=""
+  codex_guard_pending_last_reason=""
+  codex_guard_pending_last_pause_duration=""
+  codex_guard_pending_last_pause_started_at=""
+}
+
 codex_stop_compiler() {
   [[ -n "$codex_compiler_pid" ]] || return 0
   kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
@@ -250,7 +356,6 @@ trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]]
 trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; exit 129' HUP
 
 codex_wait_for_memory() {
-  local announced=false
   while true; do
     codex_read_memory || {
       echo 'Android Rust memory guard cannot read required /proc/meminfo fields' >&2
@@ -268,10 +373,10 @@ codex_wait_for_memory() {
     if ! codex_memory_guard_reason; then
       return 0
     fi
-    if [[ "$announced" == false ]]; then
-      echo "waiting for Android memory pressure to ease before (re)starting Rust compile: $codex_guard_reason" >&2
-      announced=true
-    fi
+    codex_guard_mark_paused "$codex_guard_reason"
+    codex_log_guard_event waiting \
+      "waiting for Android memory pressure to ease before (re)starting Rust compile: $codex_guard_reason"
+    codex_report_guard_transitions
     sleep 1
   done
 }
@@ -281,10 +386,13 @@ while true; do
     codex_stop_psi_stream
     exit 1
   fi
+  codex_guard_mark_running
   /system/bin/setsid "${codex_compiler_command[@]}" &
   codex_compiler_pid=$!
   codex_restart_compiler=false
   codex_compiler_suspended=false
+  codex_guard_compiler_state=running
+  codex_resume_clear_windows=0
   while kill -0 "$codex_compiler_pid" 2>/dev/null; do
     codex_read_memory || {
       echo 'Android Rust memory guard lost access to /proc/meminfo; stopping the compiler' >&2
@@ -304,25 +412,45 @@ while true; do
     fi
     if codex_memory_guard_reason; then
       if [[ "$codex_guard_reason" == memory\ PSI\ some\ stall* ]]; then
+        codex_resume_clear_windows=0
         if [[ "$codex_compiler_suspended" == false ]]; then
-          echo "suspending Rust compile during Android memory pressure: $codex_guard_reason" >&2
+          codex_compiler_suspended_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+          codex_guard_mark_paused "$codex_guard_reason"
           kill -STOP -- "-$codex_compiler_pid" 2>/dev/null || true
           codex_compiler_suspended=true
         fi
       else
-        echo "stopping Rust compile before Android low-memory kill: $codex_guard_reason; waiting to retry" >&2
+        codex_log_guard_event stopping \
+          "stopping Rust compile before Android low-memory kill: $codex_guard_reason; waiting to retry"
+        codex_guard_mark_paused "$codex_guard_reason"
+        codex_compiler_suspended=false
         codex_stop_compiler
         wait "$codex_compiler_pid" 2>/dev/null || true
         codex_compiler_pid=""
         codex_restart_compiler=true
         break
       fi
+    # Require sustained relief below the pause threshold before resuming, to avoid PSI flapping.
     elif [[ "$codex_compiler_suspended" == true ]]; then
-      echo 'resuming Rust compile after Android memory pressure eased' >&2
-      kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
-      codex_compiler_suspended=false
+      if [[ "$codex_psi_available" == false ]] \
+        || ((codex_recent_some_us_per_second < codex_psi_some_resume_guard_us_per_second)); then
+        ((codex_resume_clear_windows += 1))
+      else
+        codex_resume_clear_windows=0
+      fi
+      if [[ "$codex_psi_available" == false ]] || ((codex_resume_clear_windows >= codex_psi_resume_clear_windows_required)); then
+        codex_guard_mark_running
+        kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
+        codex_compiler_suspended=false
+        codex_resume_clear_windows=0
+      fi
     fi
+    codex_report_guard_transitions
     sleep 0.25
+  done
+  while ((codex_guard_pending_transition_count > 0)); do
+    codex_report_guard_transitions
+    ((codex_guard_pending_transition_count == 0)) || sleep 0.25
   done
   if [[ "$codex_restart_compiler" == true ]]; then
     continue
