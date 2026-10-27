@@ -107,15 +107,17 @@ install:
     Set-Location "{{ cargo_working_directory }}"; $env:CODEX_BUILD_TIMESTAMP = "0000000000-000000000000"; cargo fetch --locked
     exit $LASTEXITCODE
 
-# Run nextest with --no-fail-fast so all tests are run.
+# Run tests with --no-fail-fast so all tests are run. Android uses Cargo's
+# runner because nextest's Tokio child waiter can leave exited test processes
+# unreaped on Android.
 #
-# Run `cargo install --locked cargo-nextest` if you don't have it installed.
-# Prefer this for routine local runs. Workspace crate features are banned, so
-# there should be no need to add `--all-features`.
+# Run `cargo install --locked cargo-nextest` if you don't have it installed on
+# a non-Android host. Workspace crate features are banned, so there should be
+# no need to add `--all-features`.
 [unix]
 test *args:
     @bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"
-    @cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test CODEX_DENY_WARNINGS=1 CARGO_INCREMENTAL={{ cargo_incremental }}; {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_DEV_CODEGEN_UNITS CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; bash "{{ source_repo }}/scripts/build_test_cli_if_needed.sh" "$@" || exit $?; NEXTEST_PROFILE=local bash "{{ voice_cargo_wrapper }}" --build-repo "{{ build_repo }}" -- cargo nextest run --locked --no-fail-fast "$@"
+    @cd "{{ cargo_working_directory }}" && export CODEX_CARGO_PURPOSE=just-test CODEX_DENY_WARNINGS=1 CARGO_INCREMENTAL={{ cargo_incremental }}; {{ cargo_setup }} RUST_MIN_STACK={{ rust_min_stack }}; export CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_DEV_CODEGEN_UNITS CARGO_TARGET_DIR RUST_MIN_STACK RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH; bash "{{ source_repo }}/scripts/build_test_cli_if_needed.sh" "$@" || exit $?; bash "{{ voice_cargo_wrapper }}" --build-repo "{{ build_repo }}" -- bash "{{ source_repo }}/scripts/codex_test_runner.sh" "$@"
 [windows]
 test *args:
     @bash "{{ sync_build_tree }}" "{{ source_repo }}" "{{ build_repo }}"; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Set-Location "{{ cargo_working_directory }}"; $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; bash "{{ source_repo }}/scripts/build_test_cli_if_needed.sh" @($args | Select-Object -Skip 1); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; cargo nextest run --locked --no-fail-fast @($args | Select-Object -Skip 1)
