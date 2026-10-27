@@ -1029,6 +1029,11 @@ PY
           if (/stopping Rust compile before Android low-memory kill:/) {
             watcher_killed = 1
           }
+          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped/) {
+            print
+            fflush()
+            next
+          }
           if (/memory PSI (some|full) stall/) {
             if (ENVIRON["CODEX_ANDROID_RUSTC_MEMORY_GUARD_VERBOSE"] == "1") {
               print
@@ -1037,17 +1042,8 @@ PY
             }
             if (/waiting for Android memory pressure/) {
               event = "waiting"
-            } else if (/suspending Rust compile/) {
-              event = "suspending"
-            } else if (/resuming Rust compile/) {
-              event = "resuming"
             } else {
               event = "stopping"
-            }
-            if (event == "suspending" || event == "resuming") {
-              print
-              fflush()
-              next
             }
             if (!guard_event_seen[event]++) {
               print
