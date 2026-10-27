@@ -235,6 +235,16 @@ codex_memory_guard_reason() {
 }
 
 codex_compiler_pid=""
+declare -A codex_guard_log_events=()
+codex_log_guard_event() {
+  local event="$1" message="$2"
+  if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD_VERBOSE:-0}" == 1 \
+    || -z "${codex_guard_log_events[$event]:-}" ]]; then
+    echo "$message" >&2
+    codex_guard_log_events["$event"]=1
+  fi
+}
+
 codex_stop_compiler() {
   [[ -n "$codex_compiler_pid" ]] || return 0
   kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
@@ -250,7 +260,6 @@ trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]]
 trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; exit 129' HUP
 
 codex_wait_for_memory() {
-  local announced=false
   while true; do
     codex_read_memory || {
       echo 'Android Rust memory guard cannot read required /proc/meminfo fields' >&2
@@ -268,10 +277,8 @@ codex_wait_for_memory() {
     if ! codex_memory_guard_reason; then
       return 0
     fi
-    if [[ "$announced" == false ]]; then
-      echo "waiting for Android memory pressure to ease before (re)starting Rust compile: $codex_guard_reason" >&2
-      announced=true
-    fi
+    codex_log_guard_event waiting \
+      "waiting for Android memory pressure to ease before (re)starting Rust compile: $codex_guard_reason"
     sleep 1
   done
 }
@@ -305,12 +312,14 @@ while true; do
     if codex_memory_guard_reason; then
       if [[ "$codex_guard_reason" == memory\ PSI\ some\ stall* ]]; then
         if [[ "$codex_compiler_suspended" == false ]]; then
-          echo "suspending Rust compile during Android memory pressure: $codex_guard_reason" >&2
+          codex_log_guard_event suspending \
+            "suspending Rust compile during Android memory pressure: $codex_guard_reason"
           kill -STOP -- "-$codex_compiler_pid" 2>/dev/null || true
           codex_compiler_suspended=true
         fi
       else
-        echo "stopping Rust compile before Android low-memory kill: $codex_guard_reason; waiting to retry" >&2
+        codex_log_guard_event stopping \
+          "stopping Rust compile before Android low-memory kill: $codex_guard_reason; waiting to retry"
         codex_stop_compiler
         wait "$codex_compiler_pid" 2>/dev/null || true
         codex_compiler_pid=""
@@ -318,7 +327,7 @@ while true; do
         break
       fi
     elif [[ "$codex_compiler_suspended" == true ]]; then
-      echo 'resuming Rust compile after Android memory pressure eased' >&2
+      codex_log_guard_event resuming 'resuming Rust compile after Android memory pressure eased'
       kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
       codex_compiler_suspended=false
     fi

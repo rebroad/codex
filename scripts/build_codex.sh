@@ -1029,6 +1029,27 @@ PY
           if (/stopping Rust compile before Android low-memory kill:/) {
             watcher_killed = 1
           }
+          if (/memory PSI (some|full) stall/) {
+            if (ENVIRON["CODEX_ANDROID_RUSTC_MEMORY_GUARD_VERBOSE"] == "1") {
+              print
+              fflush()
+              next
+            }
+            if (/waiting for Android memory pressure/) {
+              event = "waiting"
+            } else if (/suspending Rust compile/) {
+              event = "suspending"
+            } else if (/resuming Rust compile/) {
+              event = "resuming"
+            } else {
+              event = "stopping"
+            }
+            if (!guard_event_seen[event]++) {
+              print
+              fflush()
+            }
+            next
+          }
           if ($0 == "Caused by:") {
             cause = $0 ORS
             in_cause = 1
