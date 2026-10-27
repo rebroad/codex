@@ -1009,6 +1009,16 @@ PY
     if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
       | awk '
+        function flush_guard_transitions() {
+          if (!guard_transition_count) {
+            return
+          }
+          printf "Android Rust compile state changes coalesced (%d transitions); latest: %s\n", guard_transition_count, guard_transition_last
+          fflush()
+          guard_transition_count = 0
+          guard_transition_first_second = 0
+          guard_transition_last = ""
+        }
         function flush_cause() {
           if (cause !~ /exit status: 75/ || !watcher_killed) {
             printf "%s", cause
@@ -1017,6 +1027,9 @@ PY
           cause = ""
         }
         {
+          if (guard_transition_count && systime() - guard_transition_first_second >= 1) {
+            flush_guard_transitions()
+          }
           if (in_cause) {
             if ($0 == "" || /^error:/ || /^warning:/) {
               flush_cause()
@@ -1029,9 +1042,22 @@ PY
           if (/stopping Rust compile before Android low-memory kill:/) {
             watcher_killed = 1
           }
-          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped/) {
-            print
-            fflush()
+          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped|Android Rust compile state changed/) {
+            if (!guard_transition_count) {
+              guard_transition_first_second = systime()
+            }
+            transition_count = 1
+            if (match($0, /flapped [0-9]+ times/)) {
+              transition_count = substr($0, RSTART, RLENGTH)
+              sub(/^flapped /, "", transition_count)
+              sub(/ times$/, "", transition_count)
+            } else if (match($0, /changed [0-9]+ times/)) {
+              transition_count = substr($0, RSTART, RLENGTH)
+              sub(/^changed /, "", transition_count)
+              sub(/ times$/, "", transition_count)
+            }
+            guard_transition_count += transition_count
+            guard_transition_last = $0
             next
           }
           if (/memory PSI (some|full) stall/) {
@@ -1060,6 +1086,7 @@ PY
           fflush()
         }
         END {
+          flush_guard_transitions()
           if (in_cause) {
             flush_cause()
           }
