@@ -1013,11 +1013,38 @@ PY
           if (!guard_transition_count) {
             return
           }
-          printf "Android Rust compile state changes coalesced (%d transitions); latest: %s\n", guard_transition_count, guard_transition_last
+          if (guard_transition_state == "paused") {
+            summary = "⏸ Rust paused"
+            if (guard_transition_duration != "") {
+              summary = summary " (current pause " guard_transition_duration ")"
+            }
+          } else if (guard_transition_state == "resumed") {
+            summary = "▶️ Rust resumed"
+            if (guard_transition_duration != "") {
+              summary = summary " (last pause " guard_transition_duration ")"
+            }
+          } else if (guard_transition_state == "retrying") {
+            summary = "🔁 Rust retrying"
+            if (guard_transition_duration != "") {
+              summary = summary " (paused " guard_transition_duration " this report)"
+            }
+          } else {
+            summary = "🔄 Rust state changed"
+          }
+          if (guard_transition_count > 1) {
+            summary = summary "; " guard_transition_count " transitions"
+          }
+          if (guard_transition_time != "") {
+            summary = summary " at " guard_transition_time
+          }
+          print summary
           fflush()
           guard_transition_count = 0
           guard_transition_first_second = 0
           guard_transition_last = ""
+          guard_transition_state = ""
+          guard_transition_duration = ""
+          guard_transition_time = ""
         }
         function flush_cause() {
           if (cause !~ /exit status: 75/ || !watcher_killed) {
@@ -1042,7 +1069,7 @@ PY
           if (/stopping Rust compile before Android low-memory kill:/) {
             watcher_killed = 1
           }
-          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped|Android Rust compile state changed/) {
+          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped|Android Rust compile state changed|⏸ Rust paused|▶️ Rust resumed|🔁 Rust state flapped/) {
             if (!guard_transition_count) {
               guard_transition_first_second = systime()
             }
@@ -1058,6 +1085,29 @@ PY
             }
             guard_transition_count += transition_count
             guard_transition_last = $0
+            if (/suspending Rust compile|⏸ Rust paused/) {
+              guard_transition_state = "paused"
+            } else if (/resuming Rust compile|▶️ Rust resumed/) {
+              guard_transition_state = "resumed"
+            } else if (/now retrying/) {
+              guard_transition_state = "retrying"
+            } else if (/now paused/) {
+              guard_transition_state = "paused"
+            } else if (/now running/) {
+              guard_transition_state = "resumed"
+            }
+            if (match($0, /current pause [0-9]+[.][0-9]+s|last pause [0-9]+[.][0-9]+s|paused [0-9]+[.][0-9]+s/)) {
+              guard_transition_duration = substr($0, RSTART, RLENGTH)
+              sub(/^(current pause|last pause|paused) /, "", guard_transition_duration)
+            } else if (match($0, /completed pauses totaled [0-9]+[.][0-9]+s/)) {
+              guard_transition_duration = substr($0, RSTART, RLENGTH)
+              sub(/^completed pauses totaled /, "", guard_transition_duration)
+            }
+            timestamp_text = $0
+            while (match(timestamp_text, /[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
+              guard_transition_time = substr(timestamp_text, RSTART + 11, 8)
+              timestamp_text = substr(timestamp_text, RSTART + RLENGTH)
+            }
             next
           }
           if (/memory PSI (some|full) stall/) {

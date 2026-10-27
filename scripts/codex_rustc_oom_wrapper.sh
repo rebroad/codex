@@ -279,9 +279,9 @@ codex_report_guard_transitions() {
       codex_pause_duration_us=$((codex_now_epoch_us - codex_compiler_suspended_at_epoch_us))
       printf -v codex_pause_duration '%d.%06ds' \
         "$((codex_pause_duration_us / 1000000))" "$((codex_pause_duration_us % 1000000))"
-      echo "suspending Rust compile during Android memory pressure at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (paused $codex_pause_duration so far)" >&2
+      echo "⏸ Rust paused at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current pause $codex_pause_duration)" >&2
     else
-      echo "resuming Rust compile after Android memory pressure eased at $codex_guard_pending_last_at (paused $codex_guard_pending_last_pause_duration since $codex_guard_pending_last_pause_started_at)" >&2
+      echo "▶️ Rust resumed at $codex_guard_pending_last_at (last pause $codex_guard_pending_last_pause_duration; began $codex_guard_pending_last_pause_started_at)" >&2
     fi
   elif ((codex_guard_pending_transition_count > 1)); then
     codex_current_pause_duration=""
@@ -293,7 +293,7 @@ codex_report_guard_transitions() {
     printf -v codex_pause_duration '%d.%06ds' \
       "$((codex_guard_pending_completed_pause_us / 1000000))" \
       "$((codex_guard_pending_completed_pause_us % 1000000))"
-    echo "Android Rust compile state flapped ${codex_guard_pending_transition_count} times in the last second (${codex_guard_pending_suspend_count} pauses, ${codex_guard_pending_resume_count} resumes, ${codex_guard_pending_stop_count} stops; completed pauses totaled $codex_pause_duration); now $codex_guard_compiler_state${codex_current_pause_duration:+ for $codex_current_pause_duration} (from $codex_guard_pending_first_at to $codex_guard_pending_last_at)" >&2
+    echo "🔁 Rust state flapped ${codex_guard_pending_transition_count} times (${codex_guard_pending_suspend_count} pauses, ${codex_guard_pending_resume_count} resumes, ${codex_guard_pending_stop_count} retries; completed pauses totaled $codex_pause_duration); now $codex_guard_compiler_state${codex_current_pause_duration:+ for $codex_current_pause_duration} ($codex_guard_pending_first_at–$codex_guard_pending_last_at)" >&2
   fi
   codex_guard_report_window_started_us="$codex_now_epoch_us"
   codex_guard_pending_transition_count=0
