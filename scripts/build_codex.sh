@@ -1013,27 +1013,27 @@ PY
           if (!guard_transition_count) {
             return
           }
+          elapsed_seconds = systime() - guard_build_started
+          paused_seconds = guard_paused_seconds
+          if (guard_transition_state == "paused") {
+            paused_seconds += guard_current_pause_seconds + systime() - guard_pause_report_epoch
+          }
+          if (paused_seconds > elapsed_seconds) {
+            paused_seconds = elapsed_seconds
+          }
+          running_seconds = elapsed_seconds - paused_seconds
+          if (running_seconds < 0) {
+            running_seconds = 0
+          }
           if (guard_transition_state == "paused") {
             summary = "⏸ Rust paused"
-            if (guard_transition_duration != "") {
-              summary = summary " (current pause " guard_transition_duration ")"
-            }
-          } else if (guard_transition_state == "resumed") {
-            summary = "▶️ Rust resumed"
-            if (guard_transition_duration != "") {
-              summary = summary " (last pause " guard_transition_duration ")"
-            }
-          } else if (guard_transition_state == "retrying") {
-            summary = "🔁 Rust retrying"
-            if (guard_transition_duration != "") {
-              summary = summary " (paused " guard_transition_duration " this report)"
-            }
           } else {
-            summary = "🔄 Rust state changed"
+            summary = "▶️ Rust running"
           }
           if (guard_transition_count > 1) {
-            summary = summary "; " guard_transition_count " transitions"
+            summary = summary "; " guard_transition_count " changes"
           }
+          summary = summary "; build " duration_text(running_seconds) " running, " duration_text(paused_seconds) " paused"
           if (guard_transition_time != "") {
             summary = summary " at " guard_transition_time
           }
@@ -1042,9 +1042,21 @@ PY
           guard_transition_count = 0
           guard_transition_first_second = 0
           guard_transition_last = ""
-          guard_transition_state = ""
           guard_transition_duration = ""
           guard_transition_time = ""
+        }
+        function duration_text(seconds, minutes, whole_seconds) {
+          whole_seconds = int(seconds)
+          minutes = int(whole_seconds / 60)
+          whole_seconds %= 60
+          if (!minutes) {
+            return whole_seconds "s"
+          }
+          return minutes "m" sprintf("%02ds", whole_seconds)
+        }
+        BEGIN {
+          guard_build_started = systime()
+          guard_transition_state = "running"
         }
         function flush_cause() {
           if (cause !~ /exit status: 75/ || !watcher_killed) {
@@ -1069,7 +1081,7 @@ PY
           if (/stopping Rust compile before Android low-memory kill:/) {
             watcher_killed = 1
           }
-          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped|Android Rust compile state changed|⏸ Rust paused|▶️ Rust resumed|🔁 Rust state flapped/) {
+          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped|Android Rust compile state changed|⏸ Rust paused|▶️ Rust (resumed|running)|🔁 Rust state flapped|🔄 Rust state changed/) {
             if (!guard_transition_count) {
               guard_transition_first_second = systime()
             }
@@ -1087,26 +1099,53 @@ PY
             guard_transition_last = $0
             if (/suspending Rust compile|⏸ Rust paused/) {
               guard_transition_state = "paused"
-            } else if (/resuming Rust compile|▶️ Rust resumed/) {
+            } else if (/resuming Rust compile|▶️ Rust (resumed|running)/) {
               guard_transition_state = "resumed"
             } else if (/now retrying/) {
-              guard_transition_state = "retrying"
+              guard_transition_state = "paused"
             } else if (/now paused/) {
               guard_transition_state = "paused"
             } else if (/now running/) {
               guard_transition_state = "resumed"
             }
-            if (match($0, /current pause [0-9]+[.][0-9]+s|last pause [0-9]+[.][0-9]+s|paused [0-9]+[.][0-9]+s/)) {
+            if (match($0, /current pause [0-9]+[.][0-9]+s/)) {
               guard_transition_duration = substr($0, RSTART, RLENGTH)
-              sub(/^(current pause|last pause|paused) /, "", guard_transition_duration)
+              sub(/^current pause /, "", guard_transition_duration)
+              guard_current_pause_seconds = guard_transition_duration + 0
+            } else if (match($0, /last pause [0-9]+[.][0-9]+s/)) {
+              guard_transition_duration = substr($0, RSTART, RLENGTH)
+              sub(/^last pause /, "", guard_transition_duration)
+              guard_paused_seconds += guard_transition_duration + 0
+              guard_current_pause_seconds = 0
+            } else if (match($0, /paused [0-9]+[.][0-9]+s/)) {
+              guard_transition_duration = substr($0, RSTART, RLENGTH)
+              sub(/^paused /, "", guard_transition_duration)
+              guard_current_pause_seconds = guard_transition_duration + 0
             } else if (match($0, /completed pauses totaled [0-9]+[.][0-9]+s/)) {
               guard_transition_duration = substr($0, RSTART, RLENGTH)
               sub(/^completed pauses totaled /, "", guard_transition_duration)
+              guard_paused_seconds += guard_transition_duration + 0
+              if (guard_transition_state == "resumed") {
+                guard_current_pause_seconds = 0
+              }
+            }
+            if (guard_transition_state == "paused" && match($0, /now paused for [0-9]+[.][0-9]+s/)) {
+              guard_current_pause_seconds = substr($0, RSTART, RLENGTH)
+              sub(/^now paused for /, "", guard_current_pause_seconds)
+              sub(/s$/, "", guard_current_pause_seconds)
+              guard_current_pause_seconds += 0
+            }
+            if (guard_transition_state == "paused") {
+              guard_pause_report_epoch = systime()
             }
             timestamp_text = $0
-            while (match(timestamp_text, /[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
-              guard_transition_time = substr(timestamp_text, RSTART + 11, 8)
-              timestamp_text = substr(timestamp_text, RSTART + RLENGTH)
+            if (match(timestamp_text, /at [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
+              guard_transition_time = substr(timestamp_text, RSTART + 14, 8)
+            } else {
+              while (match(timestamp_text, /[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
+                guard_transition_time = substr(timestamp_text, RSTART + 11, 8)
+                timestamp_text = substr(timestamp_text, RSTART + RLENGTH)
+              }
             }
             next
           }
@@ -1137,6 +1176,19 @@ PY
         }
         END {
           flush_guard_transitions()
+          elapsed_seconds = systime() - guard_build_started
+          paused_seconds = guard_paused_seconds
+          if (guard_transition_state == "paused") {
+            paused_seconds += guard_current_pause_seconds + systime() - guard_pause_report_epoch
+          }
+          if (paused_seconds > elapsed_seconds) {
+            paused_seconds = elapsed_seconds
+          }
+          running_seconds = elapsed_seconds - paused_seconds
+          if (running_seconds < 0) {
+            running_seconds = 0
+          }
+          printf "⏱ Rust totals: %s running, %s paused\n", duration_text(running_seconds), duration_text(paused_seconds)
           if (in_cause) {
             flush_cause()
           }
