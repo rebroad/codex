@@ -1009,6 +1009,50 @@ PY
     if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
       | awk '
+        function flush_guard_transitions() {
+          if (!guard_transition_count) {
+            return
+          }
+          running_seconds = guard_running_seconds
+          paused_seconds = guard_paused_seconds
+          state_elapsed = systime() - guard_state_updated_at
+          if (guard_transition_state == "paused") {
+            paused_seconds += state_elapsed
+          } else {
+            running_seconds += state_elapsed
+          }
+          if (guard_transition_state == "paused") {
+            summary = "⏸ Rust paused"
+          } else {
+            summary = "▶️ Rust running"
+          }
+          if (guard_transition_count > 1) {
+            summary = summary "; " guard_transition_count " changes"
+          }
+          summary = summary "; build " duration_text(running_seconds) " running, " duration_text(paused_seconds) " paused"
+          timestamp = guard_transition_time != "" ? guard_transition_time : strftime("%H:%M:%S")
+          print "[" timestamp "] " summary
+          fflush()
+          guard_transition_count = 0
+          guard_transition_first_second = 0
+          guard_transition_last = ""
+          guard_transition_time = ""
+        }
+        function duration_text(seconds, minutes, whole_seconds) {
+          whole_seconds = int(seconds)
+          minutes = int(whole_seconds / 60)
+          whole_seconds %= 60
+          if (!minutes) {
+            return whole_seconds "s"
+          }
+          return minutes "m" sprintf("%02ds", whole_seconds)
+        }
+        BEGIN {
+          guard_state_updated_at = systime()
+          guard_running_seconds = 0
+          guard_paused_seconds = 0
+          guard_transition_state = "running"
+        }
         function flush_cause() {
           if (cause !~ /exit status: 75/ || !watcher_killed) {
             printf "%s", cause
@@ -1017,6 +1061,9 @@ PY
           cause = ""
         }
         {
+          if (guard_transition_count && systime() - guard_transition_first_second >= 1) {
+            flush_guard_transitions()
+          }
           if (in_cause) {
             if ($0 == "" || /^error:/ || /^warning:/) {
               flush_cause()
@@ -1029,6 +1076,73 @@ PY
           if (/stopping Rust compile before Android low-memory kill:/) {
             watcher_killed = 1
           }
+          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped|Android Rust compile state changed|⏸ Rust paused|▶️ Rust (resumed|running)|🔁 Rust state flapped|🔄 Rust state changed/) {
+            if (!guard_transition_count) {
+              guard_transition_first_second = systime()
+            }
+            transition_count = 1
+            if (match($0, /flapped [0-9]+ times/)) {
+              transition_count = substr($0, RSTART, RLENGTH)
+              sub(/^flapped /, "", transition_count)
+              sub(/ times$/, "", transition_count)
+            } else if (match($0, /changed [0-9]+ times/)) {
+              transition_count = substr($0, RSTART, RLENGTH)
+              sub(/^changed /, "", transition_count)
+              sub(/ times$/, "", transition_count)
+            }
+            guard_transition_count += transition_count
+            guard_transition_last = $0
+            previous_state = guard_transition_state
+            now = systime()
+            elapsed_since_report = now - guard_state_updated_at
+            if (elapsed_since_report < 0) {
+              elapsed_since_report = 0
+            }
+            if (previous_state == "paused") {
+              guard_paused_seconds += elapsed_since_report
+            } else {
+              guard_running_seconds += elapsed_since_report
+            }
+            if (/suspending Rust compile|⏸ Rust paused/) {
+              guard_transition_state = "paused"
+            } else if (/resuming Rust compile|▶️ Rust (resumed|running)/) {
+              guard_transition_state = "running"
+            } else if (/now retrying/) {
+              guard_transition_state = "paused"
+            } else if (/now paused/) {
+              guard_transition_state = "paused"
+            } else if (/now running/) {
+              guard_transition_state = "running"
+            }
+            guard_state_updated_at = now
+            timestamp_text = $0
+            if (match(timestamp_text, /at [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
+              guard_transition_time = substr(timestamp_text, RSTART + 14, 8)
+            } else {
+              while (match(timestamp_text, /[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
+                guard_transition_time = substr(timestamp_text, RSTART + 11, 8)
+                timestamp_text = substr(timestamp_text, RSTART + RLENGTH)
+              }
+            }
+            next
+          }
+          if (/memory PSI (some|full) stall/) {
+            if (ENVIRON["CODEX_ANDROID_RUSTC_MEMORY_GUARD_VERBOSE"] == "1") {
+              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
+              fflush()
+              next
+            }
+            if (/waiting for Android memory pressure/) {
+              event = "waiting"
+            } else {
+              event = "stopping"
+            }
+            if (!guard_event_seen[event]++) {
+              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
+              fflush()
+            }
+            next
+          }
           if ($0 == "Caused by:") {
             cause = $0 ORS
             in_cause = 1
@@ -1038,6 +1152,16 @@ PY
           fflush()
         }
         END {
+          flush_guard_transitions()
+          running_seconds = guard_running_seconds
+          paused_seconds = guard_paused_seconds
+          state_elapsed = systime() - guard_state_updated_at
+          if (guard_transition_state == "paused") {
+            paused_seconds += state_elapsed
+          } else {
+            running_seconds += state_elapsed
+          }
+          printf "[%s] ⏱ Rust totals: %s running, %s paused\n", strftime("%H:%M:%S"), duration_text(running_seconds), duration_text(paused_seconds)
           if (in_cause) {
             flush_cause()
           }
