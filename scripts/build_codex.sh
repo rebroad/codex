@@ -1313,7 +1313,8 @@ install_binary() {
   if [[ "${RESTART_APP_SERVER}" == true \
     && ( "${running_commit}" != "${short}" || "${running_version}" != "${installed_version}" ) ]]; then
     echo "Requesting a graceful app-server restart after active turns finish."
-    "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle
+    nohup "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle \
+      </dev/null >/dev/null 2>&1 &
   fi
 }
 
@@ -1526,7 +1527,8 @@ printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir
 if [[ "$restart_if_idle" == true \
   && ( "$previous_commit" != "$new_commit" || "$previous_size" != "$new_size" ) ]]; then
   printf 'Requesting an idle app-server restart on the remote target.\n'
-  "$install_dir/codex" app-server daemon restart-if-idle
+  nohup "$install_dir/codex" app-server daemon restart-if-idle \
+    </dev/null >/dev/null 2>&1 &
 fi
 REMOTE_INSTALL
   then
