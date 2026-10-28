@@ -230,16 +230,12 @@ codex_ballast_request_relief() {
 
 # This file belongs to the build-wide controller. Every compiler shares the
 # same counters; the build's awk output deduplicates concurrent status reports.
-codex_ballast_last_telemetry_us=0
+# Called only alongside the shared Rust timing snapshot. The build-wide
+# output filter controls frequency; this does not print on every 8 MiB change.
 codex_report_ballast_telemetry() {
   local telemetry_file="${CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE:-}"
-  local now_us held_mb max_mb released_mb refilled_mb psi_some psi_full
+  local held_mb max_mb released_mb refilled_mb psi_some psi_full
   [[ -n "${telemetry_file}" && -r "${telemetry_file}" ]] || return 0
-  now_us="${EPOCHREALTIME/./}"
-  if ((codex_ballast_last_telemetry_us > 0 \
-    && now_us - codex_ballast_last_telemetry_us < 15000000)); then
-    return 0
-  fi
   if ! read -r held_mb max_mb released_mb refilled_mb <"${telemetry_file}"; then
     return 0
   fi
@@ -258,7 +254,6 @@ codex_report_ballast_telemetry() {
   printf '🧠 Ballast: %s/%s MiB held | released %s MiB | refilled %s MiB | MemAvailable %s MiB | PSI some %s, full %s\n' \
     "${held_mb}" "${max_mb}" "${released_mb}" "${refilled_mb}" \
     "$((codex_mem_available_kb / 1024))" "${psi_some}" "${psi_full}" >&2
-  codex_ballast_last_telemetry_us="${now_us}"
 }
 
 codex_memory_guard_reason() {
@@ -454,7 +449,6 @@ codex_wait_for_memory() {
         codex_stop_psi_stream
       fi
     fi
-    codex_report_ballast_telemetry
     if codex_memory_guard_reason; then
       codex_lmkd_clear_windows=0
     elif [[ "$codex_lmkd_reclaim_active" == true ]]; then
@@ -522,7 +516,6 @@ while true; do
         codex_stop_psi_stream
       fi
     fi
-    codex_report_ballast_telemetry
     if [[ "$codex_lmkd_reclaim_active" == true ]]; then
       codex_guard_reason="LMKD reclaimed ${codex_lmkd_reclaim_process:-another app}"
       codex_ballast_request_relief
