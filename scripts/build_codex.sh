@@ -1055,7 +1055,12 @@ PY
       return $?
     fi
 
-    local -a ballast_env_args=()
+    # Clear any inherited controller reference if ballast is disabled or
+    # cannot initialize; never signal a stale PID from another build.
+    local -a ballast_env_args=(
+      CODEX_ANDROID_RUSTC_BALLAST_PID=
+      CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE=
+    )
     if start_android_ballast; then
       ballast_env_args=(
         CODEX_ANDROID_RUSTC_BALLAST_PID="${ANDROID_BALLAST_PID}"
