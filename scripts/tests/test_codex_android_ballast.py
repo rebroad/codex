@@ -163,10 +163,10 @@ class BallastTest(unittest.TestCase):
                 self.assertEqual(telemetry.read_text(), "8 16 8 0\n")
                 # Release outcome should pair the recent before/after ADB
                 # PSI samples without requiring a direct /proc/pressure read.
-                time.sleep(1.1)
+                time.sleep(1.7)
                 psi.write_text(f"{time.time_ns() // 1000} 2000 0\n",
                                encoding="ascii")
-                time.sleep(1.6)
+                time.sleep(1.1)
                 proc.send_signal(signal.SIGUSR1)
                 time.sleep(0.15)
                 # The second release is intentionally more than one second
