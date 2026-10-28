@@ -1,5 +1,6 @@
 """Tests for the standalone Android RAM ballast controller."""
 
+import json
 from pathlib import Path
 import signal
 import subprocess
@@ -10,7 +11,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from codex_android_ballast import (
-    MIB, atomic_status, chunk_action, read_tuning, record_tuning, tune_next_mb,
+    MIB, atomic_status, chunk_action, read_psi_sample, read_tuning,
+    record_tuning, recovery_refill_decision, tune_next_mb,
 )
 
 
@@ -30,6 +32,43 @@ class BallastTest(unittest.TestCase):
 
     def test_no_refill_at_capacity(self):
         self.assertEqual(chunk_action(480*MIB, 440*MIB, 32, 32, 100*MIB, 8*MIB, 16*MIB, True), 0)
+
+    def test_psi_samples_must_be_fresh(self):
+        with tempfile.TemporaryDirectory() as d:
+            sample = Path(d, "psi")
+            sample.write_text("99000000 12000 3000\n", encoding="ascii")
+            self.assertEqual(read_psi_sample(sample, now_wall=100),
+                             (99000000, 12000, 3000))
+            self.assertIsNone(read_psi_sample(sample, now_wall=105))
+            sample.write_text("101000000 12000 3000\n", encoding="ascii")
+            self.assertIsNone(read_psi_sample(sample, now_wall=100))
+            sample.write_text("not a valid sample\n", encoding="ascii")
+            self.assertIsNone(read_psi_sample(sample, now_wall=100))
+
+    def test_adaptive_refill_recovers_after_stable_low_psi(self):
+        floor = 1300 * MIB
+        available = 6000 * MIB
+        chunk = 8 * MIB
+        quiet = (99_000_000, 0, 0)
+        allowed = lambda seconds, sample: recovery_refill_decision(
+            available, floor, chunk, 0, 32, 20, seconds, sample)
+        self.assertEqual(allowed(10, quiet), (False, "quiet"))
+        self.assertEqual(allowed(31, quiet), (True, "safe"))
+        self.assertEqual(allowed(59, None), (False, "quiet"))
+        self.assertEqual(allowed(61, None), (True, "safe"))
+        self.assertEqual(allowed(31, (99_000_000, 12000, 0)),
+                         (False, "psi"))
+        self.assertEqual(allowed(31, (99_000_000, 0, 3000)),
+                         (False, "psi"))
+        self.assertEqual(recovery_refill_decision(
+            (floor + 256 * MIB), floor, chunk, 0, 32, 20, 120, quiet),
+            (False, "headroom"))
+        self.assertEqual(recovery_refill_decision(
+            available, floor, chunk, 32, 32, 20, 120, quiet),
+            (False, "full"))
+        self.assertEqual(recovery_refill_decision(
+            available, floor, chunk, 0, 32, 4, 120, quiet),
+            (False, "cooldown"))
 
     def test_autotune_step_with_clean_build(self):
         self.assertEqual(tune_next_mb(256, 256, 0, 3, 180, True, 0, 384)[0], 288)
@@ -73,10 +112,12 @@ class BallastTest(unittest.TestCase):
             ready = Path(d, "ready")
             status = Path(d, "status")
             telemetry = Path(d, "telemetry")
+            session = Path(d, "session.json")
             proc = subprocess.Popen([
                 sys.executable, str(Path(__file__).resolve().parents[1] / "codex_android_ballast.py"),
                 "--ready-file", str(ready), "--status-file", str(status),
                 "--telemetry-file", str(telemetry),
+                "--session-stats-file", str(session),
                 "--max-mb", "16", "--chunk-mb", "8", "--ramp-ms", "25",
                 "--interval-ms", "25", "--pressure-release-mb", "8",
             ], stderr=subprocess.PIPE, text=True)
@@ -111,6 +152,13 @@ class BallastTest(unittest.TestCase):
             self.assertFalse(ready.exists())
             self.assertFalse(status.exists())
             self.assertFalse(telemetry.exists())
+            saved = json.loads(session.read_text(encoding="utf-8"))
+            self.assertTrue(saved["completed"])
+            self.assertEqual(saved["initial_mb"], 16)
+            self.assertGreaterEqual(saved["pressure_signals"], 1)
+            self.assertIn("zero_held_seconds", saved)
+            self.assertIn("release_observations", saved)
+            self.assertIn("refill_opportunity_samples", saved)
 
 
 if __name__ == "__main__":
