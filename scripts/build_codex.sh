@@ -51,6 +51,7 @@ SOURCE_LOCK_BACKUP=""
 ANDROID_PSI_NOTICE_DIR=""
 ANDROID_BALLAST_PID=""
 ANDROID_BALLAST_DIR=""
+ANDROID_RUST_TIMING_DIR=""
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -285,6 +286,10 @@ start_android_ballast() {
 }
 cleanup_build_process() {
   stop_android_ballast
+  if [[ -n "${ANDROID_RUST_TIMING_DIR}" ]]; then
+    rm -rf -- "${ANDROID_RUST_TIMING_DIR}"
+    ANDROID_RUST_TIMING_DIR=""
+  fi
   release_cargo_target_lock
   codex_sccache_server_stop
   if [[ -n "${ANDROID_PSI_NOTICE_DIR}" ]]; then
@@ -1046,185 +1051,47 @@ PY
       CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE=
       CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE=
     )
+    local temp_root="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
+    mkdir -p -- "${temp_root}"
+    # A new shared ledger for each Cargo stage, including concurrent rustc
+    # processes. Avoid /proc/<pid>/stat, which Android may not permit reading.
+    ANDROID_RUST_TIMING_DIR="$(mktemp -d "${temp_root%/}/codex-rust-timing.XXXXXX")" || return 1
+    ballast_env_args+=(CODEX_ANDROID_RUSTC_TIMING_DIR="${ANDROID_RUST_TIMING_DIR}")
     if start_android_ballast; then
-      ballast_env_args=(
+      ballast_env_args+=(
         CODEX_ANDROID_RUSTC_BALLAST_PID="${ANDROID_BALLAST_PID}"
         CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE="${ANDROID_BALLAST_DIR}/status"
         CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE="${ANDROID_BALLAST_DIR}/telemetry"
       )
+      echo "🧠 Ballast enabled for ${stage}: controller ${ANDROID_BALLAST_PID}, ${CODEX_ANDROID_RUSTC_BALLAST_MB:-256} MiB ceiling; live reports at most once/minute" >&2
+    else
+      echo "🧠 Ballast inactive for ${stage}; Rust PSI/RAM safeguards remain enabled" >&2
     fi
-    local temp_root="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
-    stderr_log="$(mktemp "${temp_root}/codex-cargo-stderr.XXXXXX")"
+    [[ -f "${RUSTC_WRAPPER}" ]] || die "Android rustc wrapper missing: ${RUSTC_WRAPPER}"
+    [[ -f "${RUSTC_WRAPPER%/*}/codex_rustc_timing.sh" ]] || die "Android rustc timing helper missing next to ${RUSTC_WRAPPER}"
+    echo "Android Rust wrapper: ${RUSTC_WRAPPER} (sha256 $(sha256sum "${RUSTC_WRAPPER}" | cut -c1-12)); timing ledger ${ANDROID_RUST_TIMING_DIR}" >&2
+    stderr_log="$(mktemp "${temp_root%/}/codex-cargo-stderr.XXXXXX")"
     if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${ballast_env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
       | awk '
-        function flush_guard_transitions() {
-          if (!guard_transition_count) {
-            return
-          }
-          running_seconds = guard_running_seconds
-          paused_seconds = guard_paused_seconds
-          state_elapsed = systime() - guard_state_updated_at
-          if (guard_transition_state == "paused") {
-            paused_seconds += state_elapsed
-          } else {
-            running_seconds += state_elapsed
-          }
-          if (guard_transition_state == "paused") {
-            summary = "⏸ Rust paused"
-          } else {
-            summary = "▶️ Rust running"
-          }
-          if (guard_transition_count > 1) {
-            summary = summary "; " guard_transition_count " changes"
-          }
-          summary = summary "; build " duration_text(running_seconds) " running, " duration_text(paused_seconds) " paused"
-          timestamp = guard_transition_time != "" ? guard_transition_time : strftime("%H:%M:%S")
-          print "[" timestamp "] " summary
-          fflush()
-          guard_transition_count = 0
-          guard_transition_first_second = 0
-          guard_transition_last = ""
-          guard_transition_time = ""
-        }
-        function duration_text(seconds, minutes, whole_seconds) {
-          whole_seconds = int(seconds)
-          minutes = int(whole_seconds / 60)
-          whole_seconds %= 60
-          if (!minutes) {
-            return whole_seconds "s"
-          }
-          return minutes "m" sprintf("%02ds", whole_seconds)
-        }
-        BEGIN {
-          guard_state_updated_at = systime()
-          guard_running_seconds = 0
-          guard_paused_seconds = 0
-          guard_transition_state = "running"
-        }
-        function flush_cause() {
-          if (cause !~ /exit status: 75/ || !watcher_killed) {
-            printf "%s", cause
-            fflush()
-          }
-          cause = ""
-        }
         {
-          # All rustc wrappers share one ballast; show at most one snapshot
-          # per 15 seconds for the entire Cargo stage.
+          # A single line per minute for the whole Cargo stage, even when
+          # Cargo runs many independent rustc wrapper processes.
           if (index($0, "🧠 Ballast:") == 1) {
             now = systime()
-            if (!ballast_last_report_at || now - ballast_last_report_at >= 15) {
-              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
-              fflush()
-              ballast_last_report_at = now
-            }
-            next
-          }
-          if (guard_transition_count && systime() - guard_transition_first_second >= 1) {
-            flush_guard_transitions()
-          }
-          if (in_cause) {
-            if ($0 == "" || /^error:/ || /^warning:/) {
-              flush_cause()
-              in_cause = 0
-            } else {
-              cause = cause $0 ORS
-              next
-            }
-          }
-          if (/stopping Rust compile before Android low-memory kill:/) {
-            watcher_killed = 1
-          }
-          if (/suspending Rust compile|resuming Rust compile|Android Rust compile state flapped|Android Rust compile state changed|⏸ Rust paused|▶️ Rust (resumed|running)|🔁 Rust state flapped|🔄 Rust state changed/) {
-            if (!guard_transition_count) {
-              guard_transition_first_second = systime()
-            }
-            transition_count = 1
-            if (match($0, /flapped [0-9]+ times/)) {
-              transition_count = substr($0, RSTART, RLENGTH)
-              sub(/^flapped /, "", transition_count)
-              sub(/ times$/, "", transition_count)
-            } else if (match($0, /changed [0-9]+ times/)) {
-              transition_count = substr($0, RSTART, RLENGTH)
-              sub(/^changed /, "", transition_count)
-              sub(/ times$/, "", transition_count)
-            }
-            guard_transition_count += transition_count
-            guard_transition_last = $0
-            previous_state = guard_transition_state
+            if (last_ballast && now - last_ballast < 60) next
+            last_ballast = now
+            printf "[%s] %s\n", strftime("%H:%M:%S"), $0
+          } else if (index($0, "Rust time: kept ") == 1) {
+            # Frequent short rustc invocations should not flood the log.
             now = systime()
-            elapsed_since_report = now - guard_state_updated_at
-            if (elapsed_since_report < 0) {
-              elapsed_since_report = 0
-            }
-            if (previous_state == "paused") {
-              guard_paused_seconds += elapsed_since_report
-            } else {
-              guard_running_seconds += elapsed_since_report
-            }
-            if (/suspending Rust compile|⏸ Rust paused/) {
-              guard_transition_state = "paused"
-            } else if (/resuming Rust compile|▶️ Rust (resumed|running)/) {
-              guard_transition_state = "running"
-            } else if (/now retrying/) {
-              guard_transition_state = "paused"
-            } else if (/now paused/) {
-              guard_transition_state = "paused"
-            } else if (/now running/) {
-              guard_transition_state = "running"
-            }
-            guard_state_updated_at = now
-            timestamp_text = $0
-            if (match(timestamp_text, /at [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
-              guard_transition_time = substr(timestamp_text, RSTART + 14, 8)
-            } else {
-              while (match(timestamp_text, /[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+[+-][0-9]{4}/)) {
-                guard_transition_time = substr(timestamp_text, RSTART + 11, 8)
-                timestamp_text = substr(timestamp_text, RSTART + RLENGTH)
-              }
-            }
-            next
-          }
-          if (/memory PSI (some|full) stall/) {
-            if (ENVIRON["CODEX_ANDROID_RUSTC_MEMORY_GUARD_VERBOSE"] == "1") {
-              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
-              fflush()
-              next
-            }
-            if (/waiting for Android memory pressure/) {
-              event = "waiting"
-            } else {
-              event = "stopping"
-            }
-            if (!guard_event_seen[event]++) {
-              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
-              fflush()
-            }
-            next
-          }
-          if ($0 == "Caused by:") {
-            cause = $0 ORS
-            in_cause = 1
-            next
-          }
-          print
-          fflush()
-        }
-        END {
-          flush_guard_transitions()
-          running_seconds = guard_running_seconds
-          paused_seconds = guard_paused_seconds
-          state_elapsed = systime() - guard_state_updated_at
-          if (guard_transition_state == "paused") {
-            paused_seconds += state_elapsed
+            if (last_timing && now - last_timing < 60) next
+            last_timing = now
+            print
           } else {
-            running_seconds += state_elapsed
+            print
           }
-          printf "[%s] ⏱ Rust totals: %s running, %s paused\n", strftime("%H:%M:%S"), duration_text(running_seconds), duration_text(paused_seconds)
-          if (in_cause) {
-            flush_cause()
-          }
+          fflush()
         }
       ' >&2; then
       status=0
@@ -1232,7 +1099,32 @@ PY
       status=$?
     fi
     rm -f "${stderr_log}"
+    # Always print the final shared ledger before deleting the stage runtime,
+    # including short stages whose progress snapshots were throttled.
+    # A fully cached Cargo stage may launch no rustc wrappers, and therefore
+    # create no timing ledger. Keep all values initialized with set -u.
+    local kept_us=0 suspended_us=0 lost_us=0
+    if [[ -r "${ANDROID_RUST_TIMING_DIR}/totals" ]] \
+      && read -r kept_us suspended_us lost_us <"${ANDROID_RUST_TIMING_DIR}/totals" \
+      && [[ "${kept_us}" =~ ^[0-9]+$ && "${suspended_us}" =~ ^[0-9]+$ \
+         && "${lost_us}" =~ ^[0-9]+$ ]]; then
+      local k=$((kept_us / 1000000)) p=$((suspended_us / 1000000)) l=$((lost_us / 1000000))
+      printf '⏱ Rust totals (%s): kept %02d:%02d:%02d; suspended %02d:%02d:%02d; lost %02d:%02d:%02d\n' \
+        "${stage}" "$((k / 3600))" "$(((k / 60) % 60))" "$((k % 60))" \
+        "$((p / 3600))" "$(((p / 60) % 60))" "$((p % 60))" \
+        "$((l / 3600))" "$(((l / 60) % 60))" "$((l % 60))" >&2
+    else
+      # An absent or malformed ledger must not leave an unset/invalid value
+      # in the ballast build-result file.
+      kept_us=0
+      suspended_us=0
+      lost_us=0
+    fi
     stop_android_ballast
+    if [[ -n "${ANDROID_RUST_TIMING_DIR}" ]]; then
+      rm -rf -- "${ANDROID_RUST_TIMING_DIR}"
+      ANDROID_RUST_TIMING_DIR=""
+    fi
     return "${status}"
   }
   echo "Building ${profile} ${target_mode} in ${target_dir} (target artifacts retained)..." >&2
@@ -1843,6 +1735,9 @@ run_preflight() {
     cd "${SOURCE_REPO}"
     bash -n \
       scripts/build_codex.sh \
+      scripts/codex_rustc_oom_wrapper.sh \
+      scripts/codex_rustc_timing.sh \
+      scripts/tests/test_codex_rustc_timing.sh \
       scripts/build_armv7.sh \
       scripts/resolve_rusty_v8_artifacts.sh \
       scripts/package_npm.sh \
