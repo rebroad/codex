@@ -269,12 +269,24 @@ start_android_ballast() {
   local max_mb="${CODEX_ANDROID_RUSTC_BALLAST_MB:-256}"
   local temp_root="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
   local attempt held_mb
+  local -a tune_args=()
   [[ "${max_mb}" =~ ^[0-9]+$ ]] || die "CODEX_ANDROID_RUSTC_BALLAST_MB must be a non-negative integer"
   ((max_mb > 0)) || return 1
   if ! mkdir -p -- "${temp_root}" \
     || ! ANDROID_BALLAST_DIR="$(mktemp -d "${temp_root%/}/codex-android-ballast.XXXXXX")"; then
     echo "Unable to create Android RAM ballast runtime directory; continuing without ballast." >&2
     return 1
+  fi
+  # An explicit ballast size is a manual override and disables learning.
+  # By default, clean Cargo runs can tune the next reserve in 32 MiB steps.
+  if [[ "${CODEX_ANDROID_RUSTC_BALLAST_AUTOTUNE:-1}" == 1 \
+        && ! -v CODEX_ANDROID_RUSTC_BALLAST_MB ]]; then
+    mkdir -p -- "${BUILD_REPO}/build"
+    tune_args=(
+      --history-file "${BUILD_REPO}/build/codex-android-ballast-autotune.json"
+      --build-result-file "${ANDROID_BALLAST_DIR}/build-result"
+      --autotune-cap-mb "${CODEX_ANDROID_RUSTC_BALLAST_AUTOTUNE_CAP_MB:-384}"
+    )
   fi
   python3 -u "${SOURCE_REPO}/scripts/codex_android_ballast.py" \
     --max-mb "${max_mb}" \
@@ -283,7 +295,8 @@ start_android_ballast() {
     --floor-percent "${CODEX_ANDROID_RUSTC_BALLAST_FLOOR_PERCENT:-12}" \
     --ready-file "${ANDROID_BALLAST_DIR}/ready" \
     --status-file "${ANDROID_BALLAST_DIR}/status" \
-    --telemetry-file "${ANDROID_BALLAST_DIR}/telemetry" 9>&- &
+    --telemetry-file "${ANDROID_BALLAST_DIR}/telemetry" \
+    "${tune_args[@]}" 9>&- &
   ANDROID_BALLAST_PID=$!
   for ((attempt = 0; attempt < 160; attempt++)); do
     [[ -f "${ANDROID_BALLAST_DIR}/ready" ]] && break
@@ -1083,7 +1096,7 @@ PY
         CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE="${ANDROID_BALLAST_DIR}/status"
         CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE="${ANDROID_BALLAST_DIR}/telemetry"
       )
-      echo "🧠 Ballast enabled for ${stage}: controller ${ANDROID_BALLAST_PID}, ${CODEX_ANDROID_RUSTC_BALLAST_MB:-256} MiB ceiling; live reports at most once/minute" >&2
+      echo "🧠 Ballast enabled for ${stage}: controller ${ANDROID_BALLAST_PID}, base reserve ${CODEX_ANDROID_RUSTC_BALLAST_MB:-256} MiB; live reports at most once/minute" >&2
     else
       echo "🧠 Ballast inactive for ${stage}; Rust PSI/RAM safeguards remain enabled" >&2
     fi
@@ -1131,6 +1144,9 @@ PY
         "${stage}" "$((k / 3600))" "$(((k / 60) % 60))" "$((k % 60))" \
         "$((p / 3600))" "$(((p / 60) % 60))" "$((p % 60))" \
         "$((l / 3600))" "$(((l / 60) % 60))" "$((l % 60))" >&2
+    fi
+    if [[ -n "${ANDROID_BALLAST_DIR}" && -d "${ANDROID_BALLAST_DIR}" ]]; then
+      printf '%s %s\n' "${status}" "${lost_us}" >"${ANDROID_BALLAST_DIR}/build-result"
     fi
     stop_android_ballast
     if [[ -n "${ANDROID_RUST_TIMING_DIR}" ]]; then
