@@ -32,6 +32,9 @@ codex_timing_init() {
   codex_timing_local_running_us=0
   codex_timing_local_suspended_us=0
   codex_timing_local_lost_us=0
+  # Tracks non-suspended work on the current invocation alone. On failure,
+  # classify exactly this amount as discarded; never subtract from running.
+  codex_timing_attempt_running_us=0
   codex_timing_state_lock_fd=""
   if [[ "${owner_start}" =~ ^[0-9]+$ ]] && command -v flock >/dev/null 2>&1; then
     local state_dir="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
@@ -63,7 +66,7 @@ codex_timing_emit() {
 # as lost and/or emit a report. Emit under the same ledger lock to guarantee
 # consistent ordering between concurrently running compiler wrappers.
 codex_timing_update() {
-  local lost_delta_us="${1:-0}" report="${2:-false}"
+  local completion="${1:-none}" report="${2:-false}" lost_delta_us=0
   local now_us elapsed_us=0 running_delta_us=0 suspended_delta_us=0
   local running_total suspended_total lost_total
   codex_timing_get_now
@@ -77,6 +80,13 @@ codex_timing_update() {
     suspended_delta_us="${elapsed_us}"
   elif [[ -n "${codex_compiler_pid:-}" ]]; then
     running_delta_us="${elapsed_us}"
+  fi
+  codex_timing_attempt_running_us=$((codex_timing_attempt_running_us + running_delta_us))
+  if [[ "${completion}" == lost ]]; then
+    lost_delta_us="${codex_timing_attempt_running_us}"
+    codex_timing_attempt_running_us=0
+  elif [[ "${completion}" == complete ]]; then
+    codex_timing_attempt_running_us=0
   fi
   if [[ -z "${codex_timing_state_file}" ]]; then
     codex_timing_local_running_us=$((codex_timing_local_running_us + running_delta_us))
@@ -131,9 +141,13 @@ codex_timing_tick() {
 }
 
 codex_report_timing_counters() {
-  codex_timing_update 0 true
+  codex_timing_update none true
 }
 
 codex_commit_timing_counters() {
-  codex_timing_update
+  codex_timing_update complete
+}
+
+codex_timing_mark_lost() {
+  codex_timing_update lost
 }
