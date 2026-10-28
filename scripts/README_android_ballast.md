@@ -21,7 +21,12 @@ report. The build-wide output filter limits both to **at most one update
 per minute**, even when Cargo runs multiple rustc processes. Pause/resume
 events themselves are emitted once at each state transition, not periodically.
 The controller can continue adjusting memory every 250 ms without flooding
-the terminal:
+the terminal. **All Rust guard status messages** (including waiting-to-retry,
+waiting-for-memory, suspended and resumed messages) are prefixed with a local
+timestamp and limited to **one visible message per second across the entire
+Cargo stage**. Rapid state updates are combined into the most recent status
+with a count of coalesced updates. Cargo compiler diagnostics are not
+throttled:
 
 ```text
 Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this rustc) 00:01:32
@@ -181,6 +186,12 @@ The in-progress field is local to the reporting rustc, not a build-wide total.
 All values refer to time, not CPU instruction counts. The split is based on
 whether the wrapper keeps an invocation's output; it cannot measure partially
 reusable intermediate work within a terminated rustc process.
+
+Test the shared timestamped guard-message throttle:
+
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_codex_rust_guard_output.py' -v
+```
 
 Run the deterministic timing tests on a Linux/Termux shell with Bash and flock:
 
