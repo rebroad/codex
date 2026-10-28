@@ -126,12 +126,14 @@ class BallastTest(unittest.TestCase):
             ready = Path(d, "ready")
             status = Path(d, "status")
             telemetry = Path(d, "telemetry")
+            psi = Path(d, "psi-sample")
             session = Path(d, "session.json")
             proc = subprocess.Popen([
                 sys.executable, str(Path(__file__).resolve().parents[1] / "codex_android_ballast.py"),
                 "--ready-file", str(ready), "--status-file", str(status),
                 "--telemetry-file", str(telemetry),
                 "--session-stats-file", str(session),
+                "--psi-status-file", str(psi),
                 "--max-mb", "16", "--chunk-mb", "8", "--ramp-ms", "25",
                 "--interval-ms", "25", "--pressure-release-mb", "8",
             ], stderr=subprocess.PIPE, text=True)
@@ -146,6 +148,8 @@ class BallastTest(unittest.TestCase):
                     self.skipTest("Insufficient test host memory for a ballast")
                 self.assertEqual(int(status.read_text()), 16)
                 self.assertEqual(telemetry.read_text(), "16 16 0 0\n")
+                psi.write_text(f"{time.time_ns() // 1000} 45000 1200\n",
+                               encoding="ascii")
                 proc.send_signal(signal.SIGUSR1)
                 for _ in range(150):
                     # The two files are individually atomic, but not updated
@@ -157,6 +161,12 @@ class BallastTest(unittest.TestCase):
                     time.sleep(0.02)
                 self.assertEqual(status.read_text(), "8\n")
                 self.assertEqual(telemetry.read_text(), "8 16 8 0\n")
+                # Release outcome should pair the recent before/after ADB
+                # PSI samples without requiring a direct /proc/pressure read.
+                time.sleep(1.1)
+                psi.write_text(f"{time.time_ns() // 1000} 2000 0\n",
+                               encoding="ascii")
+                time.sleep(1.6)
                 proc.send_signal(signal.SIGUSR1)
                 time.sleep(0.1)
                 self.assertEqual(int(status.read_text()), 8)
@@ -172,6 +182,7 @@ class BallastTest(unittest.TestCase):
             self.assertGreaterEqual(saved["pressure_signals"], 1)
             self.assertIn("zero_held_seconds", saved)
             self.assertIn("release_observations", saved)
+            self.assertGreaterEqual(saved["release_observations"]["paired_psi_samples"], 1)
             self.assertIn("refill_opportunity_samples", saved)
             self.assertIn("refill_blocked_available_mb_avg", saved)
             self.assertIn("empty_with_safe_headroom_samples", saved)
