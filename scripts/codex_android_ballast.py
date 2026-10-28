@@ -80,6 +80,14 @@ def record_tuning(path, result_file, stats, cap_mb):
             stats["max_mb"], stats["initial_mb"], stats["lowest_mb"],
             stats["pressure_signals"], stats["elapsed_s"],
             cargo_status == 0, lost_us, cap_mb)
+        # Long periods at zero without any successful refill are evidence
+        # that the *policy* is unhealthy, not proof a larger allocation helps.
+        # Save this evidence; never increase RAM solely to chase that symptom.
+        if (proposed > stats["max_mb"]
+                and stats.get("zero_held_seconds", 0) >= 45
+                and stats.get("refilled_mb", 0) == 0):
+            proposed = stats["max_mb"]
+            reason = "unchanged (long empty reserve; assess refill evidence)"
         # Avoid promoting stale device-specific observations.
         if previous.get("system_ram_mb") != stats["system_ram_mb"]:
             previous = {}
