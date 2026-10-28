@@ -256,6 +256,27 @@ codex_report_ballast_telemetry() {
     "$((codex_mem_available_kb / 1024))" "${psi_some}" "${psi_full}" >&2
 }
 
+# Share a recent, system-wide PSI rate with the ballast controller. Android
+# restricts direct /proc/pressure reads in Termux; this uses the PSI already
+# obtained through the existing adb stream, with one atomic write per second
+# per rustc wrapper. Stale samples are rejected by the controller.
+codex_ballast_last_psi_sample_us=0
+codex_publish_ballast_psi() {
+  local path="${CODEX_ANDROID_RUSTC_BALLAST_PSI_FILE:-}" now_us tmp
+  [[ -n "$path" && "$codex_psi_available" == true ]] || return 0
+  now_us="${EPOCHREALTIME/./}"
+  if ((codex_ballast_last_psi_sample_us > 0 \
+    && now_us - codex_ballast_last_psi_sample_us < 1000000)); then
+    return 0
+  fi
+  tmp="$path.$"
+  if printf '%s %s %s\n' "$now_us" \
+      "$codex_recent_some_us_per_second" "$codex_recent_full_us_per_second" >"$tmp"; then
+    mv -f -- "$tmp" "$path" 2>/dev/null || rm -f -- "$tmp"
+    codex_ballast_last_psi_sample_us="$now_us"
+  fi
+}
+
 codex_memory_guard_reason() {
   if ((codex_mem_available_kb * 100 <= codex_mem_total_kb * codex_memavailable_critical_percent)); then
     codex_guard_reason="MemAvailable ${codex_mem_available_kb}kB <= ${codex_memavailable_critical_percent}% critical RAM floor"
@@ -303,6 +324,7 @@ codex_memory_guard_reason() {
       # Five 250ms samples cover 1.25s; normalize their sum to a per-second rate.
       codex_recent_some_us_per_second=$((codex_recent_some_us * 4 / 5))
       codex_recent_full_us_per_second=$((codex_recent_full_us * 4 / 5))
+      codex_publish_ballast_psi
       # Relieve pressure before reaching the existing suspend/stop threshold.
       # A release cannot guarantee lower PSI; keep all guard limits unchanged.
       if ((codex_recent_some_us_per_second >= codex_psi_some_guard_ms * 500 \
