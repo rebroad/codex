@@ -363,7 +363,6 @@ codex_guard_mark_paused() {
     # A killed suspended process is a new event. Continuing to wait isn't.
     if [[ "$mode" == stopped && "$codex_guard_pause_mode" != stopped ]]; then
       echo "⏹ Rust attempt stopped: $reason; waiting to retry" >&2
-      codex_report_timing_counters
     fi
     codex_guard_pause_mode="$mode"
     return 0
@@ -381,7 +380,6 @@ codex_guard_mark_paused() {
     *)
       echo "⏸ Rust suspended at $codex_guard_pause_started_at: $reason" >&2 ;;
   esac
-  codex_report_timing_counters
 }
 
 codex_guard_mark_running() {
@@ -396,7 +394,6 @@ codex_guard_mark_running() {
   codex_guard_compile_state=running
   codex_guard_pause_mode=running
   echo "▶️ Rust resumed at $(date '+%Y-%m-%dT%H:%M:%S%z') (paused $duration)" >&2
-  codex_report_timing_counters
 }
 
 codex_stop_compiler() {
@@ -583,6 +580,7 @@ while true; do
         codex_resume_clear_windows=0
       fi
     fi
+    codex_timing_periodic_report
     sleep 0.25
   done
   if [[ "$codex_restart_compiler" == true ]]; then
