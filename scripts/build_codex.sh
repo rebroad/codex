@@ -1107,31 +1107,12 @@ PY
     fi
     [[ -f "${RUSTC_WRAPPER}" ]] || die "Android rustc wrapper missing: ${RUSTC_WRAPPER}"
     [[ -f "${RUSTC_WRAPPER%/*}/codex_rustc_timing.sh" ]] || die "Android rustc timing helper missing next to ${RUSTC_WRAPPER}"
+    [[ -f "${SOURCE_REPO}/scripts/codex_rust_guard_output.py" ]] || die "Android Rust output filter missing from ${SOURCE_REPO}"
     echo "Android Rust wrapper: ${RUSTC_WRAPPER} (sha256 $(sha256sum "${RUSTC_WRAPPER}" | cut -c1-12)); timing ledger ${ANDROID_RUST_TIMING_DIR}" >&2
     stderr_log="$(mktemp "${temp_root%/}/codex-cargo-stderr.XXXXXX")"
     if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${ballast_env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
-      | awk '
-        {
-          # A single line per minute for the whole Cargo stage, even when
-          # Cargo runs many independent rustc wrapper processes.
-          if (index($0, "🧠 Ballast:") == 1) {
-            now = systime()
-            if (last_ballast && now - last_ballast < 60) next
-            last_ballast = now
-            printf "[%s] %s\n", strftime("%H:%M:%S"), $0
-          } else if (index($0, "Rust time: kept ") == 1) {
-            # Frequent short rustc invocations should not flood the log.
-            now = systime()
-            if (last_timing && now - last_timing < 60) next
-            last_timing = now
-            print
-          } else {
-            print
-          }
-          fflush()
-        }
-      ' >&2; then
+      | python3 -u "${SOURCE_REPO}/scripts/codex_rust_guard_output.py" >&2; then
       status=0
     else
       status=$?
@@ -1765,6 +1746,7 @@ run_preflight() {
       scripts/codex_rustc_oom_wrapper.sh \
       scripts/codex_rustc_timing.sh \
       scripts/tests/test_codex_rustc_timing.sh \
+      scripts/tests/test_codex_rust_guard_output.py \
       scripts/build_armv7.sh \
       scripts/resolve_rusty_v8_artifacts.sh \
       scripts/package_npm.sh \
