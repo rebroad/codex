@@ -445,7 +445,7 @@ codex_guard_mark_running() {
   codex_guard_pause_mode=running
   # Allow a window of forward progress after PSI-only pauses, while always
   # letting actual RAM/swap/LMKD emergencies terminate a compiler.
-  codex_psi_resume_grace_until_epoch_us=$((now + codex_psi_resume_grace_seconds * 1000000))
+  codex_psi_resume_grace_until_epoch_us=$((now + ${codex_psi_resume_grace_seconds:-30} * 1000000))
   # Re-arm the PSI suspension path after each successful resume. Otherwise
   # the next pressure spike sees a stale 'true' and never sends SIGSTOP.
   codex_compiler_suspended=false
