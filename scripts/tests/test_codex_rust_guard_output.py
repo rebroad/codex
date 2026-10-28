@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Tests for build-wide Rust guard output throttling and timestamps."""
+
+import io
+from pathlib import Path
+import subprocess
+import sys
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from codex_rust_guard_output import CargoLogFilter, guard_status
+
+
+class FakeTime:
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+
+class GuardOutputTest(unittest.TestCase):
+    def setUp(self):
+        self.clock = FakeTime()
+        self.buffer = io.StringIO()
+        self.f = CargoLogFilter(output=self.buffer, now=self.clock,
+                                date_stamp=lambda: "2026-10-28T23:30:01+01:00")
+
+    def test_legacy_wait_and_stop_timestamped_once_per_second(self):
+        self.f.process_line(
+            "stopping Rust compile before Android low-memory kill: PSI; waiting to retry")
+        self.clock.t += .15
+        self.f.process_line(
+            "waiting for Android memory pressure to ease before (re)starting Rust compile: PSI")
+        self.clock.t += .2
+        self.f.process_line(
+            "stopping Rust compile before Android low-memory kill: PSI; waiting to retry")
+        self.assertEqual(self.buffer.getvalue().count("2026-10-28T23:30:01"), 1)
+        self.assertTrue(self.buffer.getvalue().startswith(
+            "[2026-10-28T23:30:01+01:00] stopping Rust compile"))
+        self.clock.t += .64
+        self.f.flush_due()
+        self.assertEqual(len(self.buffer.getvalue().splitlines()), 1)
+        self.clock.t += .02
+        self.f.flush_due()
+        lines = self.buffer.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("coalesced 2 rapid guard updates", lines[1])
+        self.assertTrue(lines[1].startswith("[2026-10-28T23:30:01+01:00]"))
+
+    def test_fast_suspend_resume_keeps_latest_state(self):
+        self.f.process_line("⏸ Rust suspended at 23:30:01: PSI")
+        self.clock.t += .2
+        self.f.process_line("▶️ Rust resumed at 23:30:01 (paused 0.2s)")
+        self.assertEqual(len(self.buffer.getvalue().splitlines()), 1)
+        self.clock.t += .8
+        self.f.flush_due()
+        self.assertEqual(len(self.buffer.getvalue().splitlines()), 2)
+        self.assertIn("▶️ Rust resumed", self.buffer.getvalue().splitlines()[1])
+
+    def test_other_build_output_passes_through_immediately(self):
+        self.f.process_line("⏹ Rust attempt stopped: PSI; waiting to retry")
+        self.clock.t += .01
+        self.f.process_line("   Compiling codex-core v0.2")
+        self.assertIn("   Compiling codex-core", self.buffer.getvalue())
+        self.assertEqual(self.buffer.getvalue().count("2026-10-28"), 1)
+        self.assertTrue(guard_status("⏹ Rust attempt stopped at some time"))
+        self.assertFalse(guard_status("   Compiling codex-core"))
+
+    def test_timing_and_ballast_preserve_one_minute_rate(self):
+        self.f.process_line("Rust time: kept 00:01:00; suspended 0; lost 0")
+        self.f.process_line("🧠 Ballast: 32/256 MiB held")
+        self.clock.t += 4
+        self.f.process_line("Rust time: kept 00:01:04; suspended 0; lost 0")
+        self.f.process_line("🧠 Ballast: 0/256 MiB held")
+        self.clock.t += 56
+        self.f.process_line("Rust time: kept 00:02:00; suspended 0; lost 0")
+        self.f.process_line("🧠 Ballast: 64/256 MiB held")
+        text = self.buffer.getvalue()
+        self.assertEqual(text.count("Rust time: kept"), 2)
+        self.assertEqual(text.count("🧠 Ballast:"), 2)
+        self.assertNotIn("0/256 MiB held", text)
+
+    def test_multiline_status_has_global_throttle(self):
+        self.f.process_line("⏹ Rust attempt stopped: full PSI; waiting to retry")
+        for _ in range(12):
+            self.clock.t += .05
+            self.f.process_line("⏸ Rust waiting at now: PSI some")
+        self.assertEqual(len(self.buffer.getvalue().splitlines()), 1)
+        self.clock.t += .5
+        self.f.flush_due()
+        self.assertEqual(len(self.buffer.getvalue().splitlines()), 2)
+        self.assertIn("coalesced 12 rapid guard updates", self.buffer.getvalue())
+
+    def test_pipe_idle_flushes_queued_resume(self):
+        script = Path(__file__).resolve().parents[1] / "codex_rust_guard_output.py"
+        proc = subprocess.Popen([sys.executable, "-u", str(script)],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        try:
+            proc.stdin.write("⏸ Rust suspended at now: PSI\n")
+            proc.stdin.write("▶️ Rust resumed at now: PSI\n")
+            proc.stdin.flush()
+            proc.stdin.close()
+            proc.wait(timeout=5)
+            output = proc.stdout.read()
+            self.assertEqual(proc.returncode, 0, proc.stderr.read())
+            self.assertIn("⏸ Rust suspended", output)
+            self.assertIn("▶️ Rust resumed", output)
+            self.assertEqual(len(output.splitlines()), 2)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+
+
+if __name__ == "__main__":
+    unittest.main()
