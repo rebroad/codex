@@ -33,6 +33,7 @@ codex_timing_init() {
   codex_timing_local_lost_us=0
   codex_timing_now
   codex_timing_previous_us="${CODEX_TIMING_NOW_US}"
+  codex_timing_last_periodic_us="${CODEX_TIMING_NOW_US}"
 }
 codex_timing_format() {
   local seconds=$(( $1 / 1000000 ))
@@ -139,4 +140,15 @@ codex_timing_launch() { codex_timing_event launch; }
 codex_timing_success() { codex_timing_event success; }
 codex_timing_lost() { codex_timing_event lost; }
 codex_report_timing_counters() { codex_timing_event tick true; }
+
+# Periodic snapshots only during active work. Suspended/waiting is announced
+# once at the transition, never reiterated every poll.
+codex_timing_periodic_report() {
+  [[ "${codex_timing_mode}" == active ]] || return 0
+  codex_timing_now
+  if ((CODEX_TIMING_NOW_US - codex_timing_last_periodic_us >= 60000000)); then
+    codex_timing_last_periodic_us="${CODEX_TIMING_NOW_US}"
+    codex_report_timing_counters
+  fi
+}
 
