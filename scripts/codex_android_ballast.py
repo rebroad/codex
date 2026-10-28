@@ -537,7 +537,12 @@ def run(args):
 
             update_empty_time(now)
             if session_path is not None and now - last_session_snapshot >= 30:
-                atomic_json(session_path, snapshot(now))
+                try:
+                    atomic_json(session_path, snapshot(now))
+                except OSError as exc:
+                    # Diagnostics must not make an otherwise healthy ballast fail.
+                    print(f"Android RAM ballast stats checkpoint unavailable: {exc}",
+                          file=sys.stderr, flush=True)
                 last_session_snapshot = now
             time.sleep(args.interval_ms / 1000)
     finally:
