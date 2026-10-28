@@ -338,6 +338,12 @@ codex_compiler_suspended_total_us=0
 # when we know whether its output was retained.
 source "${BASH_SOURCE[0]%/*}/codex_rustc_timing.sh"
 codex_timing_init
+# Confirm a compiler actually loaded this implementation, once per Cargo
+# stage. The build's wrapper-path banner alone cannot prove execution.
+if [[ -n "${CODEX_ANDROID_RUSTC_TIMING_DIR:-}" ]] \
+  && mkdir "${CODEX_ANDROID_RUSTC_TIMING_DIR}/wrapper-started" 2>/dev/null; then
+  echo "Android Rust guard active: Kept/Suspended/Lost timing; event-only pause/resume" >&2
+fi
 codex_compiler_stdout=""
 codex_compiler_stderr=""
 # One observable pause/resume notification per actual state transition. The
