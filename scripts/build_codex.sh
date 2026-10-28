@@ -281,7 +281,8 @@ start_android_ballast() {
     --ramp-ms "${CODEX_ANDROID_RUSTC_BALLAST_RAMP_MS:-250}" \
     --floor-percent "${CODEX_ANDROID_RUSTC_BALLAST_FLOOR_PERCENT:-12}" \
     --ready-file "${ANDROID_BALLAST_DIR}/ready" \
-    --status-file "${ANDROID_BALLAST_DIR}/status" 9>&- &
+    --status-file "${ANDROID_BALLAST_DIR}/status" \
+    --telemetry-file "${ANDROID_BALLAST_DIR}/telemetry" 9>&- &
   ANDROID_BALLAST_PID=$!
   for ((attempt = 0; attempt < 160; attempt++)); do
     [[ -f "${ANDROID_BALLAST_DIR}/ready" ]] && break
@@ -1063,11 +1064,13 @@ PY
     local -a ballast_env_args=(
       CODEX_ANDROID_RUSTC_BALLAST_PID=
       CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE=
+      CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE=
     )
     if start_android_ballast; then
       ballast_env_args=(
         CODEX_ANDROID_RUSTC_BALLAST_PID="${ANDROID_BALLAST_PID}"
         CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE="${ANDROID_BALLAST_DIR}/status"
+        CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE="${ANDROID_BALLAST_DIR}/telemetry"
       )
     fi
     local temp_root="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
@@ -1127,6 +1130,17 @@ PY
           cause = ""
         }
         {
+          # All rustc wrappers share one ballast; show at most one snapshot
+          # per 15 seconds for the entire Cargo stage.
+          if (index($0, "🧠 Ballast:") == 1) {
+            now = systime()
+            if (!ballast_last_report_at || now - ballast_last_report_at >= 15) {
+              printf "[%s] %s\n", strftime("%H:%M:%S"), $0
+              fflush()
+              ballast_last_report_at = now
+            }
+            next
+          }
           if (guard_transition_count && systime() - guard_transition_first_second >= 1) {
             flush_guard_transitions()
           }
