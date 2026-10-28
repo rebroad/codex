@@ -167,6 +167,61 @@ def atomic_status(path, chunks, chunk_size, telemetry_path=None, max_mb=0,
         os.replace(telemetry_staging, telemetry_path)
 
 
+
+def read_psi_sample(path, now_wall=None):
+    """Return recent (timestamp_us, some_us/s, full_us/s) from Rust's ADB PSI.
+
+    No direct /proc/pressure read: Android/Termux may not allow it.
+    """
+    if path is None:
+        return None
+    try:
+        timestamp, some, full = map(int, path.read_text(encoding="ascii").split())
+        now_us = int((time.time() if now_wall is None else now_wall) * 1000000)
+        if (0 <= now_us - timestamp <= 4_000_000
+                and 0 <= some <= 1_000_000 and 0 <= full <= 1_000_000):
+            return timestamp, some, full
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def recovery_refill_decision(available, floor, chunk, held_chunks, max_chunks,
+                             seconds_since_release, seconds_since_pressure,
+                             psi_sample, cooldown_s=15):
+    """Can we cautiously recover an emptied reserve, ignoring an old target?
+
+    Release decisions remain unchanged. A refill never violates the available
+    RAM floor, always observes a quiet period, and respects sampled PSI when
+    ADB is available. Without PSI, wait longer and require more headroom.
+    """
+    if held_chunks >= max_chunks:
+        return False, "full"
+    if seconds_since_release < cooldown_s:
+        return False, "cooldown"
+    if psi_sample is None:
+        if seconds_since_pressure < 60:
+            return False, "quiet"
+        if available < floor + 1024 * MIB + chunk:
+            return False, "headroom"
+    else:
+        if psi_sample[1] >= 10_000 or psi_sample[2] >= 2_000:
+            return False, "psi"
+        if seconds_since_pressure < 30:
+            return False, "quiet"
+        if available < floor + 512 * MIB + chunk:
+            return False, "headroom"
+    return True, "safe"
+
+
+def atomic_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def run(args):
     ready = Path(args.ready_file)
     status = Path(args.status_file)
@@ -304,6 +359,8 @@ def main():
     parser.add_argument("--ready-file", required=True)
     parser.add_argument("--status-file", required=True)
     parser.add_argument("--telemetry-file", help="atomic held/max/released/refilled MiB snapshot")
+    parser.add_argument("--psi-status-file", help="recent ADB PSI sampled by Rust guard")
+    parser.add_argument("--session-stats-file", help="periodic persistent ballast measurements")
     parser.add_argument("--history-file", help="persistent next-build autotuning history")
     parser.add_argument("--build-result-file", help="status and lost microseconds recorded after Cargo exits")
     parser.add_argument("--autotune-cap-mb", type=positive_int, default=384)
