@@ -296,6 +296,7 @@ start_android_ballast() {
     --ready-file "${ANDROID_BALLAST_DIR}/ready" \
     --status-file "${ANDROID_BALLAST_DIR}/status" \
     --telemetry-file "${ANDROID_BALLAST_DIR}/telemetry" \
+    --psi-status-file "${ANDROID_BALLAST_DIR}/psi-sample" \
     "${tune_args[@]}" 9>&- &
   ANDROID_BALLAST_PID=$!
   for ((attempt = 0; attempt < 160; attempt++)); do
@@ -1083,6 +1084,7 @@ PY
       CODEX_ANDROID_RUSTC_BALLAST_PID=
       CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE=
       CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE=
+      CODEX_ANDROID_RUSTC_BALLAST_PSI_FILE=
     )
     local temp_root="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
     mkdir -p -- "${temp_root}"
@@ -1095,6 +1097,7 @@ PY
         CODEX_ANDROID_RUSTC_BALLAST_PID="${ANDROID_BALLAST_PID}"
         CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE="${ANDROID_BALLAST_DIR}/status"
         CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE="${ANDROID_BALLAST_DIR}/telemetry"
+        CODEX_ANDROID_RUSTC_BALLAST_PSI_FILE="${ANDROID_BALLAST_DIR}/psi-sample"
       )
       echo "🧠 Ballast enabled for ${stage}: controller ${ANDROID_BALLAST_PID}, base reserve ${CODEX_ANDROID_RUSTC_BALLAST_MB:-256} MiB; live reports at most once/minute" >&2
     else
