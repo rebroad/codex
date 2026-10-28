@@ -118,6 +118,11 @@ codex_start_psi_stream() {
     fi
     ADB_SERVER_SOCKET="$codex_adb_server_socket" \
       exec "$codex_adb_bin" -s "$codex_adb_serial" exec-out sh -c '
+      since="$(date +%s.%3N)"
+      logcat -T "$since" -v epoch -s lmkd:I |
+        while IFS= read -r line; do
+          printf "L %s\n" "$line"
+        done &
       while :; do
         some=0
         full=0
@@ -133,7 +138,7 @@ codex_start_psi_stream() {
             esac
           done
         done </proc/pressure/memory
-        printf "%s %s\n" "$some" "$full"
+        printf "P %s %s\n" "$some" "$full"
         sleep 0.25
       done
     ' 2>/dev/null
@@ -154,15 +159,37 @@ codex_stop_psi_stream() {
   fi
 }
 
+codex_lmkd_reclaim_active=false
+codex_lmkd_reclaim_process=""
+codex_lmkd_clear_windows=0
 codex_start_psi_stream || true
 
 codex_read_psi() {
+  local codex_record_kind codex_record_value codex_record_rest codex_lmkd_line
   codex_psi_some_total_us=0
   codex_psi_full_total_us=0
   [[ -n "$codex_psi_stream_fd" ]] || return 1
-  IFS=' ' read -r -t 1 codex_psi_some_total_us codex_psi_full_total_us \
-    <&"$codex_psi_stream_fd" || return 1
-  codex_uint "$codex_psi_some_total_us" && codex_uint "$codex_psi_full_total_us"
+  while IFS=' ' read -r -t 1 codex_record_kind codex_record_value codex_record_rest \
+    <&"$codex_psi_stream_fd"; do
+    case "$codex_record_kind" in
+      P)
+        codex_psi_some_total_us="$codex_record_value"
+        codex_psi_full_total_us="$codex_record_rest"
+        codex_uint "$codex_psi_some_total_us" && codex_uint "$codex_psi_full_total_us"
+        return
+        ;;
+      L)
+        codex_lmkd_line="$codex_record_value $codex_record_rest"
+        if [[ "$codex_lmkd_line" == *"Reclaim '"* ]]; then
+          codex_lmkd_reclaim_process=${codex_lmkd_line#*Reclaim \'}
+          codex_lmkd_reclaim_process=${codex_lmkd_reclaim_process%%\'*}
+          codex_lmkd_reclaim_active=true
+          codex_lmkd_clear_windows=0
+        fi
+        ;;
+    esac
+  done
+  return 1
 }
 
 if ! codex_read_memory; then
@@ -259,6 +286,7 @@ codex_guard_pending_last_pause_duration=""
 codex_guard_pending_last_pause_started_at=""
 codex_guard_compiler_state=running
 codex_guard_compile_state=running
+codex_guard_pause_mode=running
 codex_guard_pause_started_at=""
 codex_guard_pause_started_epoch_us=""
 codex_resume_clear_windows=0
@@ -273,8 +301,12 @@ codex_log_guard_event() {
 }
 
 codex_guard_mark_paused() {
-  local reason="$1"
-  [[ "$codex_guard_compile_state" == paused ]] && return 0
+  local reason="$1" mode="${2:-waiting}"
+  if [[ "$codex_guard_compile_state" == paused ]]; then
+    codex_guard_pause_mode="$mode"
+    codex_guard_compiler_state="$mode"
+    return 0
+  fi
   codex_guard_compile_state=paused
   codex_guard_pause_started_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
   codex_guard_pause_started_epoch_us="${EPOCHREALTIME/./}"
@@ -283,7 +315,8 @@ codex_guard_mark_paused() {
   [[ -n "$codex_guard_pending_first_at" ]] || codex_guard_pending_first_at="$codex_guard_pause_started_at"
   codex_guard_pending_last_at="$codex_guard_pause_started_at"
   codex_guard_pending_last_reason="$reason"
-  codex_guard_compiler_state=paused
+  codex_guard_pause_mode="$mode"
+  codex_guard_compiler_state="$mode"
 }
 
 codex_guard_mark_running() {
@@ -303,6 +336,7 @@ codex_guard_mark_running() {
   codex_guard_pending_last_pause_started_at="$codex_guard_pause_started_at"
   codex_guard_compile_state=running
   codex_guard_compiler_state=running
+  codex_guard_pause_mode=running
 }
 
 codex_report_guard_transitions() {
@@ -315,7 +349,19 @@ codex_report_guard_transitions() {
       codex_pause_duration_us=$((codex_now_epoch_us - codex_guard_pause_started_epoch_us))
       printf -v codex_pause_duration '%d.%06ds' \
         "$((codex_pause_duration_us / 1000000))" "$((codex_pause_duration_us % 1000000))"
-      echo "⏸ Rust paused at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current pause $codex_pause_duration)" >&2
+      case "$codex_guard_pause_mode" in
+        suspended)
+          echo "⏸ Rust suspended at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current pause $codex_pause_duration)" >&2
+          ;;
+        stopped)
+          echo "⏹ Rust attempt stopped at $codex_guard_pending_last_at: $codex_guard_pending_last_reason; retrying (current wait $codex_pause_duration)" >&2
+          ;;
+        waiting)
+          echo "⏸ Rust waiting at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current wait $codex_pause_duration)" >&2
+          ;;
+        running)
+          ;;
+      esac
     else
       echo "▶️ Rust running at $codex_guard_pending_last_at (last pause $codex_guard_pending_last_pause_duration; began $codex_guard_pending_last_pause_started_at)" >&2
     fi
@@ -378,10 +424,26 @@ codex_wait_for_memory() {
         codex_stop_psi_stream
       fi
     fi
-    if ! codex_memory_guard_reason; then
+    if codex_memory_guard_reason; then
+      codex_lmkd_clear_windows=0
+    elif [[ "$codex_lmkd_reclaim_active" == true ]]; then
+      if [[ "$codex_psi_available" == true ]] && ((${#codex_some_deltas[@]} < 5)); then
+        codex_lmkd_clear_windows=0
+      else
+        ((codex_lmkd_clear_windows += 1))
+      fi
+      if ((codex_lmkd_clear_windows >= 5)); then
+        codex_lmkd_reclaim_active=false
+        codex_lmkd_clear_windows=0
+        codex_log_guard_event lmkd-clear \
+          'Android LMKD reclaim quiet for five clear memory checks; allowing Rust compile to resume'
+        return 0
+      fi
+      codex_guard_reason="recent LMKD reclaim of ${codex_lmkd_reclaim_process:-another app}; waiting for five clear memory checks"
+    else
       return 0
     fi
-    codex_guard_mark_paused "$codex_guard_reason"
+    codex_guard_mark_paused "$codex_guard_reason" waiting
     codex_log_guard_event waiting \
       "waiting for Android memory pressure to ease before (re)starting Rust compile: $codex_guard_reason"
     codex_report_guard_transitions
@@ -405,6 +467,7 @@ while true; do
   codex_compiler_suspended=false
   codex_guard_compiler_state=running
   codex_resume_clear_windows=0
+  codex_compiler_waited=false
   while kill -0 "$codex_compiler_pid" 2>/dev/null; do
     codex_read_memory || {
       echo 'Android Rust memory guard lost access to /proc/meminfo; stopping the compiler' >&2
@@ -422,23 +485,42 @@ while true; do
         codex_stop_psi_stream
       fi
     fi
-    if codex_memory_guard_reason; then
+    if [[ "$codex_lmkd_reclaim_active" == true ]]; then
+      codex_guard_reason="LMKD reclaimed ${codex_lmkd_reclaim_process:-another app}"
+    fi
+    if [[ "$codex_lmkd_reclaim_active" == true ]] || codex_memory_guard_reason; then
+      if [[ "$codex_lmkd_reclaim_active" == true ]]; then
+        codex_resume_clear_windows=0
+      fi
       if [[ "$codex_guard_reason" == memory\ PSI\ some\ stall* ]]; then
         codex_resume_clear_windows=0
         if [[ "$codex_compiler_suspended" == false ]]; then
           codex_compiler_suspended_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
-          codex_guard_mark_paused "$codex_guard_reason"
+          codex_guard_mark_paused "$codex_guard_reason" suspended
           kill -STOP -- "-$codex_compiler_pid" 2>/dev/null || true
           codex_compiler_suspended=true
         fi
       else
         codex_log_guard_event stopping \
           "stopping Rust compile before Android low-memory kill: $codex_guard_reason; waiting to retry"
-        codex_guard_mark_paused "$codex_guard_reason"
-        codex_compiler_suspended=false
+        if [[ "$codex_compiler_suspended" == true ]]; then
+          codex_guard_mark_running
+        fi
         codex_stop_compiler
-        wait "$codex_compiler_pid" 2>/dev/null || true
+        codex_guard_mark_paused "$codex_guard_reason" stopped
+        codex_compiler_status=0
+        wait "$codex_compiler_pid" 2>/dev/null || codex_compiler_status=$?
+        codex_compiler_waited=true
         codex_compiler_pid=""
+        if ((codex_compiler_status == 0)); then
+          # The compiler can finish between the last liveness check and the
+          # pressure response. Preserve its completed output and count the
+          # stage as running instead of classifying it as discarded.
+          codex_compiler_suspended=false
+          codex_guard_mark_running
+          codex_report_guard_transitions
+          break
+        fi
         # A killed rustc may have emitted only part of Cargo's JSON artifact
         # stream. Discard that attempt so a retry cannot report duplicate or
         # incomplete artifacts to Cargo's dependency queue.
@@ -457,7 +539,6 @@ while true; do
       if [[ "$codex_psi_available" == false ]] || ((codex_resume_clear_windows >= codex_psi_resume_clear_windows_required)); then
         codex_guard_mark_running
         kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
-        codex_compiler_suspended=false
         codex_resume_clear_windows=0
       fi
     fi
@@ -473,7 +554,9 @@ while true; do
   fi
   codex_stop_psi_stream
   codex_compiler_status=0
-  wait "$codex_compiler_pid" || codex_compiler_status=$?
+  if [[ "$codex_compiler_waited" != true ]]; then
+    wait "$codex_compiler_pid" || codex_compiler_status=$?
+  fi
   codex_compiler_pid=""
   cat "$codex_compiler_stdout"
   cat "$codex_compiler_stderr" >&2
