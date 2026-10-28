@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rust compiler accounting. Cumulative useful-running, lost, and suspended
+# Rust compiler accounting. Cumulative kept, lost, and suspended
 # are mutually exclusive, never-decreasing compiler-process durations.
 # Active attempts remain "in progress" until successfully finished or lost.
 # With concurrent rustc processes, totals are process-seconds, not wall-time.
@@ -52,12 +52,12 @@ codex_timing_emit() {
   codex_timing_format "$2" paused_duration
   codex_timing_format "$3" lost_duration
   codex_timing_format "$4" pending_duration
-  printf 'Rust time: running %s; suspended %s; lost %s; in progress (this rustc) %s\n' \
+  printf 'Rust time: kept %s; suspended %s; lost %s; in progress (this rustc) %s\n' \
     "${running_duration}" "${paused_duration}" "${lost_duration}" "${pending_duration}" >&2
 }
 
 # Events account all time up to the boundary, then switch mode. Successful
-# output credits pending work to running, discarded output credits it to lost.
+# output credits pending work to kept, discarded output credits it to lost.
 # Suspended time accrues independently of the compiler attempt's outcome.
 codex_timing_event() {
   local event="${1:-tick}" report="${2:-false}"
