@@ -88,6 +88,7 @@ def run(args):
     refills = 0
     releases = 0
     last_release = 0.0
+    last_pressure_release = 0.0
 
     def on_release(_signum, _frame):
         nonlocal pending_release
@@ -131,13 +132,16 @@ def run(args):
             now = time.monotonic()
             if pending_release:
                 pending_release = False
-                # PSI rising: return more memory before the compiler is stopped.
-                count = min(len(chunks), max(1, (args.pressure_release_mb + args.chunk_mb - 1) // args.chunk_mb))
-                for _ in range(count):
-                    chunks.pop().close()
-                releases += count
-                last_release = now
-                atomic_status(status, chunks, chunk)
+                # Multiple rustc wrappers can signal simultaneously. Throttle
+                # release to one batch per second across the entire build.
+                if now - last_pressure_release >= 1.0:
+                    count = min(len(chunks), max(1, (args.pressure_release_mb + args.chunk_mb - 1) // args.chunk_mb))
+                    for _ in range(count):
+                        chunks.pop().close()
+                    releases += count
+                    last_pressure_release = now
+                    last_release = now
+                    atomic_status(status, chunks, chunk)
             else:
                 action = chunk_action(available, target, len(chunks), max_chunks,
                                       floor, chunk, hysteresis,
