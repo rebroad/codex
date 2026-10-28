@@ -5,14 +5,14 @@
 # With concurrent rustc processes, totals are process-seconds, not wall-time.
 
 codex_timing_now() {
-  local uptime_value secs fraction
-  read -r uptime_value _ </proc/uptime
-  secs="${uptime_value%%.*}"
-  fraction="${uptime_value#*.}"
-  [[ "${fraction}" != "${uptime_value}" ]] || fraction="0"
+  # Bash's built-in EPOCHREALTIME works in Termux without /proc/uptime or a
+  # Python subprocess. Clamp backward wall-clock adjustments to zero elapsed.
+  local now="${EPOCHREALTIME}" seconds fraction
+  seconds="${now%%.*}"
+  fraction="${now#*.}"
   fraction="${fraction}000000"
   fraction="${fraction:0:6}"
-  CODEX_TIMING_NOW_US=$((10#${secs} * 1000000 + 10#${fraction}))
+  CODEX_TIMING_NOW_US=$((10#${seconds} * 1000000 + 10#${fraction}))
 }
 
 codex_timing_init() {
