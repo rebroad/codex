@@ -492,6 +492,9 @@ codex_abort_compiler() {
     codex_timing_lost
     codex_compiler_pid=""
   fi
+  # Also commit any outstanding time spent waiting for memory, when an
+  # interrupted wrapper has no active compiler.
+  codex_report_timing_counters
   codex_stop_psi_stream
   codex_cleanup_compiler_output
   exit "$code"
