@@ -63,10 +63,14 @@ class BallastTest(unittest.TestCase):
                 self.assertEqual(telemetry.read_text(), "16 16 0 0\n")
                 proc.send_signal(signal.SIGUSR1)
                 for _ in range(150):
-                    if status.exists() and int(status.read_text()) < 16:
+                    # The two files are individually atomic, but not updated
+                    # as a transaction. Wait for the complete new snapshot.
+                    if (status.exists() and telemetry.exists()
+                            and status.read_text() == "8\n"
+                            and telemetry.read_text() == "8 16 8 0\n"):
                         break
                     time.sleep(0.02)
-                self.assertEqual(int(status.read_text()), 8)
+                self.assertEqual(status.read_text(), "8\n")
                 self.assertEqual(telemetry.read_text(), "8 16 8 0\n")
                 proc.send_signal(signal.SIGUSR1)
                 time.sleep(0.1)
