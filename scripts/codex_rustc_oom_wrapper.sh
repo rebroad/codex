@@ -214,15 +214,31 @@ if [[ "$codex_psi_notice_probe" == true ]]; then
   exit 10
 fi
 
+# The ballast is shared across concurrent rustc wrappers. Its controller
+# throttles signals so a burst of concurrent pressure reports cannot release
+# many batches at once. This is advisory; the existing guard never waits for it.
+codex_ballast_request_relief() {
+  local ballast_pid="${CODEX_ANDROID_RUSTC_BALLAST_PID:-}"
+  local ballast_status="${CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE:-}"
+  local held_mb=0
+  [[ "${ballast_pid}" =~ ^[0-9]+$ && -r "${ballast_status}" ]] || return 0
+  read -r held_mb <"${ballast_status}" || return 0
+  if codex_uint "${held_mb}" && ((held_mb > 0)); then
+    kill -USR1 "${ballast_pid}" 2>/dev/null || true
+  fi
+}
+
 codex_memory_guard_reason() {
   if ((codex_mem_available_kb * 100 <= codex_mem_total_kb * codex_memavailable_critical_percent)); then
     codex_guard_reason="MemAvailable ${codex_mem_available_kb}kB <= ${codex_memavailable_critical_percent}% critical RAM floor"
+    codex_ballast_request_relief
     return 0
   fi
   if ((codex_swap_total_kb > 0 \
     && (codex_mem_available_kb + codex_swap_free_kb) * 100 \
       <= codex_swap_total_kb * codex_swap_headroom_percent)); then
     codex_guard_reason="combined RAM and swap headroom $((codex_mem_available_kb + codex_swap_free_kb))kB <= ${codex_swap_headroom_percent}% of configured swap"
+    codex_ballast_request_relief
     return 0
   fi
   if [[ "${1:-}" == memory-only ]]; then
@@ -259,6 +275,12 @@ codex_memory_guard_reason() {
       # Five 250ms samples cover 1.25s; normalize their sum to a per-second rate.
       codex_recent_some_us_per_second=$((codex_recent_some_us * 4 / 5))
       codex_recent_full_us_per_second=$((codex_recent_full_us * 4 / 5))
+      # Relieve pressure before reaching the existing suspend/stop threshold.
+      # A release cannot guarantee lower PSI; keep all guard limits unchanged.
+      if ((codex_recent_some_us_per_second >= codex_psi_some_guard_ms * 500 \
+        || codex_recent_full_us_per_second >= codex_psi_full_guard_ms * 500)); then
+        codex_ballast_request_relief
+      fi
       if ((codex_recent_full_us_per_second >= codex_psi_full_guard_ms * 1000)); then
         codex_guard_reason="memory PSI full stall ${codex_recent_full_us_per_second}us per second >= ${codex_psi_full_guard_ms}ms"
         return 0
@@ -489,6 +511,7 @@ while true; do
     fi
     if [[ "$codex_lmkd_reclaim_active" == true ]]; then
       codex_guard_reason="LMKD reclaimed ${codex_lmkd_reclaim_process:-another app}"
+      codex_ballast_request_relief
     fi
     if [[ "$codex_lmkd_reclaim_active" == true ]] || codex_memory_guard_reason; then
       if [[ "$codex_lmkd_reclaim_active" == true ]]; then
