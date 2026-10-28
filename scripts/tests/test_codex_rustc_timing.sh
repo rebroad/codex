@@ -7,6 +7,12 @@ trap 'rm -rf -- "$temp"' EXIT
 export TMPDIR="$temp" CODEX_ANDROID_RUSTC_TIMING_DIR="$temp"
 source "${test_dir}/../codex_rustc_timing.sh"
 
+# The wrapper supplies this hook. Ballast must be printed with timing, not
+# independently on every controller allocation/release tick.
+codex_report_ballast_telemetry() {
+  printf '🧠 Ballast: 96/256 MiB held | released 160 MiB | refilled 0 MiB\n' >&2
+}
+
 clock=1000000
 codex_timing_now() { CODEX_TIMING_NOW_US="$clock"; }
 
@@ -49,6 +55,10 @@ clock=46000000
 report="$(codex_report_timing_counters 2>&1)"
 [[ "$report" == *"Rust time: kept 00:00:14; suspended 00:00:13; lost 00:00:14"* ]] || {
   echo "unexpected timing report: $report" >&2
+  exit 1
+}
+[[ "$report" == *"🧠 Ballast: 96/256 MiB held"* ]] || {
+  echo "ballast must accompany timing report: $report" >&2
   exit 1
 }
 assert_ledger 14000000 13000000 14000000
