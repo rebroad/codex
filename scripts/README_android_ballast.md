@@ -65,3 +65,35 @@ Test the controller:
 ```sh
 python3 -m unittest discover -s scripts/tests -p 'test_codex_android_ballast.py' -v
 ```
+
+
+## Rust OOM-wrapper timing
+
+The memory guard reports cumulative, **mutually exclusive** compiler-process
+durations:
+
+```text
+Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this rustc) 00:01:32
+```
+
+- **Kept:** active time in completed rustc invocations whose output is retained.
+- **Suspended:** time spent with rustc stopped or waiting for memory pressure.
+- **Lost:** active time in invocations whose output is discarded after a failed
+  or killed attempt.
+- **In progress (this rustc):** active time in the current compiler attempt.
+  It is not added to kept or lost until that attempt succeeds or is discarded.
+
+Kept, suspended and lost never decrease. Timing is shared through a locked
+ledger keyed to the build process, rather than each rustc reading an outdated
+snapshot. With parallel compiler invocations, the totals are summed
+**compiler-process seconds** and may exceed the build's wall-clock elapsed time.
+The in-progress field is local to the reporting rustc, not a build-wide total.
+All values refer to time, not CPU instruction counts. The split is based on
+whether the wrapper keeps an invocation's output; it cannot measure partially
+reusable intermediate work within a terminated rustc process.
+
+Run the deterministic timing tests on a Linux/Termux shell with Bash and flock:
+
+```sh
+bash scripts/tests/test_codex_rustc_timing.sh
+```
