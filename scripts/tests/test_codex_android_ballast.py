@@ -168,8 +168,10 @@ class BallastTest(unittest.TestCase):
                                encoding="ascii")
                 time.sleep(1.6)
                 proc.send_signal(signal.SIGUSR1)
-                time.sleep(0.1)
-                self.assertEqual(int(status.read_text()), 8)
+                time.sleep(0.15)
+                # The second release is intentionally more than one second
+                # later and is therefore allowed to empty the reserve.
+                self.assertEqual(int(status.read_text()), 0)
             finally:
                 proc.terminate()
                 proc.communicate(timeout=5)
