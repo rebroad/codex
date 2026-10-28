@@ -35,9 +35,9 @@ codex_timing_init() {
   codex_timing_local_running_us=0
   codex_timing_local_suspended_us=0
   codex_timing_local_lost_us=0
-  codex_timing_last_periodic_us=0
   codex_timing_now
   codex_timing_previous_us="${CODEX_TIMING_NOW_US}"
+  codex_timing_last_periodic_us="${CODEX_TIMING_NOW_US}"
 }
 
 codex_timing_format() {
