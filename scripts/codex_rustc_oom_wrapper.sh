@@ -416,6 +416,11 @@ codex_guard_mark_running() {
   codex_timing_resume
   codex_guard_compile_state=running
   codex_guard_pause_mode=running
+  # Re-arm the PSI suspension path after each successful resume. Otherwise
+  # the next pressure spike sees a stale 'true' and never sends SIGSTOP.
+  codex_compiler_suspended=false
+  codex_compiler_suspended_at=""
+  codex_compiler_suspended_at_epoch_us=""
   echo "▶️ Rust resumed at $(date '+%Y-%m-%dT%H:%M:%S%z') (paused $duration)" >&2
 }
 
