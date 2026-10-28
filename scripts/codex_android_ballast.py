@@ -66,17 +66,29 @@ def touch_chunk(size):
     return block
 
 
-def atomic_status(path, chunks, chunk_size):
-    if path is None:
-        return
+def atomic_status(path, chunks, chunk_size, telemetry_path=None, max_mb=0,
+                  released_chunks=0, refilled_chunks=0):
+    # Keep the single-number status file for existing rustc wrappers. Write
+    # separate, atomically replaced telemetry for richer build output.
+    held_mb = len(chunks) * chunk_size // MIB
     staging = path.with_name(path.name + f".{os.getpid()}.tmp")
-    staging.write_text(str(len(chunks) * chunk_size // MIB) + "\n", encoding="ascii")
+    staging.write_text(str(held_mb) + "\n", encoding="ascii")
     os.replace(staging, path)
+    if telemetry_path is not None:
+        telemetry_staging = telemetry_path.with_name(
+            telemetry_path.name + f".{os.getpid()}.tmp")
+        telemetry_staging.write_text(
+            f"{held_mb} {max_mb} "
+            f"{released_chunks * chunk_size // MIB} "
+            f"{refilled_chunks * chunk_size // MIB}\n",
+            encoding="ascii")
+        os.replace(telemetry_staging, telemetry_path)
 
 
 def run(args):
     ready = Path(args.ready_file)
     status = Path(args.status_file)
+    telemetry = Path(args.telemetry_file) if args.telemetry_file else None
     chunk = args.chunk_mb * MIB
     max_chunks = args.max_mb // args.chunk_mb
     if max_chunks == 0:
@@ -89,6 +101,10 @@ def run(args):
     releases = 0
     last_release = 0.0
     last_pressure_release = 0.0
+
+    def publish_status():
+        atomic_status(status, chunks, chunk, telemetry, args.max_mb,
+                      releases, refills)
 
     def on_release(_signum, _frame):
         nonlocal pending_release
@@ -122,7 +138,7 @@ def run(args):
             chunks.append(touch_chunk(chunk))
             time.sleep(args.ramp_ms / 1000)
         _, target = read_memory()
-        atomic_status(status, chunks, chunk)
+        publish_status()
         ready.write_text(str(len(chunks) * args.chunk_mb) + "\n", encoding="ascii")
         print(f"Android RAM ballast: reserved {len(chunks) * args.chunk_mb} MB "
               f"(maximum {args.max_mb} MB, minimum available {floor // MIB} MB)",
@@ -141,7 +157,7 @@ def run(args):
                     releases += count
                     last_pressure_release = now
                     last_release = now
-                    atomic_status(status, chunks, chunk)
+                    publish_status()
             else:
                 action = chunk_action(available, target, len(chunks), max_chunks,
                                       floor, chunk, hysteresis,
@@ -151,19 +167,21 @@ def run(args):
                         chunks.pop().close()
                     releases += -action
                     last_release = now
-                    atomic_status(status, chunks, chunk)
+                    publish_status()
                 elif action > 0:
                     # Check the safety floor immediately before touching pages.
                     _, available = read_memory()
                     if available > floor + 128 * MIB + chunk:
                         chunks.append(touch_chunk(chunk))
                         refills += 1
-                        atomic_status(status, chunks, chunk)
+                        publish_status()
             time.sleep(args.interval_ms / 1000)
     finally:
         try:
             ready.unlink(missing_ok=True)
             status.unlink(missing_ok=True)
+            if telemetry is not None:
+                telemetry.unlink(missing_ok=True)
         except OSError:
             pass
         for block in chunks:
@@ -177,6 +195,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ready-file", required=True)
     parser.add_argument("--status-file", required=True)
+    parser.add_argument("--telemetry-file", help="atomic held/max/released/refilled MiB snapshot")
     parser.add_argument("--max-mb", type=positive_int, default=256)
     parser.add_argument("--chunk-mb", type=positive_int, default=8)
     parser.add_argument("--ramp-ms", type=positive_int, default=250)
