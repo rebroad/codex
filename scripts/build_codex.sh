@@ -270,8 +270,11 @@ start_android_ballast() {
   local attempt held_mb
   [[ "${max_mb}" =~ ^[0-9]+$ ]] || die "CODEX_ANDROID_RUSTC_BALLAST_MB must be a non-negative integer"
   ((max_mb > 0)) || return 1
-  mkdir -p -- "${temp_root}"
-  ANDROID_BALLAST_DIR="$(mktemp -d "${temp_root%/}/codex-android-ballast.XXXXXX")"
+  if ! mkdir -p -- "${temp_root}" \
+    || ! ANDROID_BALLAST_DIR="$(mktemp -d "${temp_root%/}/codex-android-ballast.XXXXXX")"; then
+    echo "Unable to create Android RAM ballast runtime directory; continuing without ballast." >&2
+    return 1
+  fi
   python3 -u "${SOURCE_REPO}/scripts/codex_android_ballast.py" \
     --max-mb "${max_mb}" \
     --chunk-mb "${CODEX_ANDROID_RUSTC_BALLAST_CHUNK_MB:-8}" \
