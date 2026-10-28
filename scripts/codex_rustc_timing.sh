@@ -16,18 +16,14 @@ codex_timing_now() {
 }
 
 codex_timing_init() {
-  local owner_pid="${PPID}" owner_start
-  if [[ "${CODEX_BUILD_PID:-}" =~ ^[0-9]+$ && -r "/proc/${CODEX_BUILD_PID}/stat" ]]; then
-    owner_pid="${CODEX_BUILD_PID}"
-  fi
-  owner_start="$(sed 's/^.*) //' "/proc/${owner_pid}/stat" 2>/dev/null | awk '{print $20}')"
+  # The build script supplies one unique directory to ALL rustc wrappers.
+  # Android restricts /proc/<pid>/stat, so never require it to share counters.
   codex_timing_file=""
-  if [[ "${owner_start}" =~ ^[0-9]+$ ]] && command -v flock >/dev/null 2>&1; then
-    local state_dir="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
-    mkdir -p "${state_dir}"
-    codex_timing_file="${state_dir}/codex-rustc-time-v3-${owner_pid}-${owner_start}"
+  if [[ -n "${CODEX_ANDROID_RUSTC_TIMING_DIR:-}" && -d "${CODEX_ANDROID_RUSTC_TIMING_DIR}" ]] \
+    && command -v flock >/dev/null 2>&1; then
+    codex_timing_file="${CODEX_ANDROID_RUSTC_TIMING_DIR}/totals"
   else
-    echo "warning: Rust timing shared ledger unavailable; reporting this rustc only" >&2
+    echo "warning: shared Rust time ledger unavailable (missing timing directory or flock)" >&2
   fi
   codex_timing_mode=idle
   codex_timing_attempt_us=0
@@ -37,9 +33,7 @@ codex_timing_init() {
   codex_timing_local_lost_us=0
   codex_timing_now
   codex_timing_previous_us="${CODEX_TIMING_NOW_US}"
-  codex_timing_last_periodic_us="${CODEX_TIMING_NOW_US}"
 }
-
 codex_timing_format() {
   local seconds=$(( $1 / 1000000 ))
   printf -v "$2" '%02d:%02d:%02d' \
@@ -86,11 +80,13 @@ codex_timing_event() {
     success)
       running_delta="${codex_timing_attempt_us}"
       codex_timing_attempt_us=0
-      codex_timing_mode=idle ;;
+      codex_timing_mode="${codex_guard_compile_state:-running}"
+      [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
     lost)
       lost_delta="${codex_timing_attempt_us}"
       codex_timing_attempt_us=0
-      codex_timing_mode=idle ;;
+      codex_timing_mode="${codex_guard_compile_state:-running}"
+      [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
     tick) ;;
     *) echo "invalid Rust timing event: ${event}" >&2; return 2 ;;
   esac
@@ -144,10 +140,3 @@ codex_timing_success() { codex_timing_event success; }
 codex_timing_lost() { codex_timing_event lost; }
 codex_report_timing_counters() { codex_timing_event tick true; }
 
-codex_timing_periodic_report() {
-  codex_timing_now
-  if ((CODEX_TIMING_NOW_US - codex_timing_last_periodic_us >= 30000000)); then
-    codex_timing_last_periodic_us="${CODEX_TIMING_NOW_US}"
-    codex_report_timing_counters
-  fi
-}
