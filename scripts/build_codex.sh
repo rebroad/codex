@@ -1120,7 +1120,9 @@ PY
     rm -f "${stderr_log}"
     # Always print the final shared ledger before deleting the stage runtime,
     # including short stages whose progress snapshots were throttled.
-    local kept_us=0 suspended_us=0 lost_us
+    # A fully cached Cargo stage may launch no rustc wrappers, and therefore
+    # create no timing ledger. Keep all values initialized with set -u.
+    local kept_us=0 suspended_us=0 lost_us=0
     if [[ -r "${ANDROID_RUST_TIMING_DIR}/totals" ]] \
       && read -r kept_us suspended_us lost_us <"${ANDROID_RUST_TIMING_DIR}/totals" \
       && [[ "${kept_us}" =~ ^[0-9]+$ && "${suspended_us}" =~ ^[0-9]+$ \
@@ -1130,6 +1132,12 @@ PY
         "${stage}" "$((k / 3600))" "$(((k / 60) % 60))" "$((k % 60))" \
         "$((p / 3600))" "$(((p / 60) % 60))" "$((p % 60))" \
         "$((l / 3600))" "$(((l / 60) % 60))" "$((l % 60))" >&2
+    else
+      # An absent or malformed ledger must not leave an unset/invalid value
+      # in the ballast build-result file.
+      kept_us=0
+      suspended_us=0
+      lost_us=0
     fi
     if [[ -n "${ANDROID_BALLAST_DIR}" && -d "${ANDROID_BALLAST_DIR}" ]]; then
       printf '%s %s\n' "${status}" "${lost_us}" >"${ANDROID_BALLAST_DIR}/build-result"
