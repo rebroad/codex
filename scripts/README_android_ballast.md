@@ -6,7 +6,8 @@ The existing Android rustc wrapper still owns PSI, RAM/swap thresholds, suspend,
 
 - A single controller is started by `scripts/build_codex.sh` for each guarded Cargo stage, before Cargo runs. Multiple rustc instances share it.
 - It slowly preallocates and touches up to 256 MiB in 8 MiB chunks (250 ms apart). It respects a memory floor of max(12% of RAM, 256 MiB), plus 128 MiB of startup cushion.
-- The post-ramp `MemAvailable` becomes the target. When available memory falls it releases chunks; when it rises it refills cautiously, with hysteresis and a 15-second release cooldown.
+- The post-ramp `MemAvailable` becomes the initial target. Automatic release follows falling available RAM; after a pressure lull, the controller may **lower an obsolete target** and cautiously replenish its reserve, instead of remaining at 0 MiB indefinitely.
+- Recovery refill waits at least 15 seconds after a release **and** 30 seconds after a pressure signal with recent low PSI (below 10 ms/s some and 2 ms/s full). It requires 512 MiB of additional RAM cushion above the configured floor. If recent ADB PSI is unavailable, it instead waits 60 seconds and requires 1024 MiB of extra cushion. Refill is limited to one 8 MiB chunk per second by default.
 - The rustc wrapper sends `SIGUSR1` at half the normal averaged PSI threshold or when a critical memory/LMKD condition is observed. Signal-triggered releases are limited to 64 MiB at most once per second across all wrappers.
 - The controller releases its allocations when Cargo finishes; failed initialization or zero safe headroom falls back to the existing guard.
 
@@ -42,6 +43,45 @@ The controller keeps the original numeric `status` file for existing
 wrapper behavior and updates a separate atomic `telemetry` snapshot
 containing `held max released refilled` in MiB. Both files disappear
 when the controller exits.
+
+## Persistent diagnostics and next-build learning
+
+Auto-tuning is **enabled by default** when
+`CODEX_ANDROID_RUSTC_BALLAST_MB` has not been explicitly set. The controller
+also writes
+`build/codex-android-ballast-last-session.json` every **30 seconds**
+and once at normal shutdown, whether the Cargo stage succeeds or fails.
+This checkpoint may survive a later abrupt LMKD kill. The file is overwritten
+by the next Cargo stage, while completed stages are retained (last ten) in
+`build/codex-android-ballast-autotune.json`.
+
+The detailed JSON records:
+
+- **Zero-reserve time:** total seconds, share of elapsed stage time, count and
+  longest interval with no pages held.
+- **Release outcomes:** pressure-signal versus MemAvailable-target releases;
+  available RAM and ADB PSI *before* and approximately 2 seconds *after*
+  release, when both fresh observations exist. Missing/invalid PSI is recorded
+  as missing rather than 0; only paired observations contribute to before/after
+  averages. This is observational, **not** proof that the release caused a PSI
+  change. The last 40 release examples are retained alongside counts.
+- **Refill opportunities:** once-per-second samples of RAM available while the
+  reserve was below capacity, including samples blocked by the original
+  target, cooldown, recent pressure, high PSI, or insufficient RAM headroom.
+  Available RAM minima, maxima and averages are retained.
+
+The next-build **size** tuner remains deliberately conservative: it does not
+increase allocation after discarded compiler work, because increasing a
+reserve cannot create more physical memory. The **within-build** refill
+recovery works independently of that size decision. This means even builds
+that experience OOM retries contribute useful diagnostics, without teaching
+the size tuner to chase repeated crashes.
+
+The controller reads PSI snapshots from the existing Rust guard's ADB stream,
+using a shared atomic file. It does **not** require direct access to Android's
+restricted `/proc/pressure/memory`. The controller never prints a line for
+every chunk release or refill; the normal ballast and Rust timing reports stay
+at approximately one per minute.
 
 ## Settings
 
@@ -94,8 +134,9 @@ reserve when that stage finished successfully **without discarded rustc work**:
   failures worse.
 
 This is a cautious heuristic, not a learned predictor of peak Rust memory or
-a guarantee against Android LMKD. The JSON file retains up to ten recent stage
-observations to make decisions inspectable.
+a guarantee against Android LMKD. The history file retains up to ten stage
+observations including empty-reserve time, refill-blocking reasons, and paired
+pressure samples to support improving the policy based on actual results.
 
 To disable learning while retaining the default size:
 
