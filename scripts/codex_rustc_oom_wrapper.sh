@@ -484,9 +484,21 @@ codex_cleanup_compiler_output() {
   codex_compiler_stdout=""
   codex_compiler_stderr=""
 }
-trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; codex_cleanup_compiler_output; exit 130' INT
-trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; codex_cleanup_compiler_output; exit 143' TERM
-trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; codex_cleanup_compiler_output; exit 129' HUP
+codex_abort_compiler() {
+  local code="$1"
+  if [[ -n "$codex_compiler_pid" ]]; then
+    codex_stop_compiler
+    wait "$codex_compiler_pid" 2>/dev/null || true
+    codex_timing_lost
+    codex_compiler_pid=""
+  fi
+  codex_stop_psi_stream
+  codex_cleanup_compiler_output
+  exit "$code"
+}
+trap 'codex_abort_compiler 130' INT
+trap 'codex_abort_compiler 143' TERM
+trap 'codex_abort_compiler 129' HUP
 
 codex_wait_for_memory() {
   while true; do
@@ -559,7 +571,9 @@ while true; do
       codex_stop_psi_stream
       wait "$codex_compiler_pid" 2>/dev/null || true
       codex_timing_lost
+      codex_compiler_pid=""
       codex_report_timing_counters
+      codex_cleanup_compiler_output
       exit 1
     }
     if [[ "$codex_psi_available" == true ]]; then
