@@ -25,6 +25,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::PoisonError;
 use std::sync::Weak;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
@@ -108,6 +109,36 @@ impl AgentTreeShutdownState {
 pub(crate) struct AgentTreeMembership {
     state: Arc<AgentTreeShutdownState>,
     _member: TaskTrackerToken,
+    _admission_lease: Arc<AgentTreeAdmissionLease>,
+}
+
+#[derive(Default)]
+struct AgentTreeAdmission {
+    state: Mutex<AgentTreeAdmissionState>,
+    changed: Notify,
+}
+
+#[derive(Default)]
+struct AgentTreeAdmissionState {
+    sealed: bool,
+    active: usize,
+}
+
+struct AgentTreeAdmissionLease {
+    admission: Arc<AgentTreeAdmission>,
+}
+
+impl Drop for AgentTreeAdmissionLease {
+    fn drop(&mut self) {
+        let mut state = self
+            .admission
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.active = state.active.saturating_sub(1);
+        drop(state);
+        self.admission.changed.notify_waiters();
+    }
 }
 
 impl AgentTreeMembership {
@@ -202,6 +233,7 @@ pub(crate) struct LocalAgentRuntime {
     /// Shared by every session in this tree, including private delegates.
     pub(crate) shutdown: CancellationToken,
     shutdown_state: Arc<AgentTreeShutdownState>,
+    handoff_admission: Arc<AgentTreeAdmission>,
 }
 
 impl LocalAgentRuntime {
@@ -218,6 +250,7 @@ impl LocalAgentRuntime {
             mailboxes: Arc::default(),
             shutdown: CancellationToken::new(),
             shutdown_state: Arc::default(),
+            handoff_admission: Arc::default(),
             agent_execution_limiter: Arc::default(),
             rollout_budget: Arc::default(),
             root_service_tier: Arc::new(ArcSwapOption::from(None)),
@@ -273,25 +306,75 @@ impl AgentControlInit {
 
 impl LocalAgentRuntime {
     pub(crate) fn admit_start(&self) -> CodexResult<AgentTreeMembership> {
-        if self.shutdown_state.members.is_closed() {
+        let mut admission = self
+            .handoff_admission
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if admission.sealed || self.shutdown_state.members.is_closed() {
             return Err(
                 CodexErr::InvalidRequest("agent runtime is shutting down".to_owned())
                     .with_agent_context(AgentErrorContext::RuntimeShutdown),
             );
         }
+        admission.active = admission.active.saturating_add(1);
         let membership = AgentTreeMembership {
             state: Arc::clone(&self.shutdown_state),
             _member: self.shutdown_state.members.token(),
+            _admission_lease: Arc::new(AgentTreeAdmissionLease {
+                admission: Arc::clone(&self.handoff_admission),
+            }),
         };
         // Closing a TaskTracker does not reject new tokens. Recheck so a start racing with
         // shutdown is either admitted before the fence or rejected after it.
         if self.shutdown_state.members.is_closed() {
+            admission.active = admission.active.saturating_sub(1);
+            drop(admission);
+            self.handoff_admission.changed.notify_waiters();
             return Err(
                 CodexErr::InvalidRequest("agent runtime is shutting down".to_owned())
                     .with_agent_context(AgentErrorContext::RuntimeShutdown),
             );
         }
+        drop(admission);
         Ok(membership)
+    }
+
+    pub(crate) async fn seal_for_handoff(&self) -> bool {
+        {
+            let mut state = self
+                .handoff_admission
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if state.sealed || self.shutdown_state.members.is_closed() {
+                return false;
+            }
+            state.sealed = true;
+        }
+        loop {
+            let changed = self.handoff_admission.changed.notified();
+            if self
+                .handoff_admission
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .active
+                == 0
+            {
+                return true;
+            }
+            changed.await;
+        }
+    }
+
+    pub(crate) fn reopen_after_handoff_failure(&self) {
+        let mut state = self
+            .handoff_admission
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.sealed = false;
     }
 
     pub(crate) fn request_shutdown(&self) -> Arc<AgentTreeShutdownState> {

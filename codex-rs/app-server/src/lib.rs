@@ -299,40 +299,17 @@ impl ShutdownState {
                 false
             }
         };
-        if graceful_restart && (running_turn_count > 0 || active_admissions > 0) {
+        turn_admission.begin_drain();
+        self.draining = true;
+        if graceful_restart {
             info!(
-                "received graceful restart request; waiting for idle before draining (connections={}, runningAssistantTurns={}, admittedRequests={})",
+                "received graceful restart request; closed work admission and waiting for active work to stop (connections={}, runningAssistantTurns={}, admittedRequests={})",
                 connection_count, running_turn_count, active_admissions,
             );
         } else {
-            turn_admission.begin_drain();
-            self.draining = true;
             info!(
-                "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new client turns rejected)",
+                "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new work rejected)",
                 connection_count, running_turn_count,
-            );
-        }
-    }
-
-    fn begin_drain_if_idle(
-        &mut self,
-        running_turn_count: usize,
-        active_admissions: usize,
-        connection_count: usize,
-        turn_admission: &turn_admission::TurnAdmission,
-    ) {
-        if self.requested
-            && !self.draining
-            && !self.forced
-            && running_turn_count == 0
-            && active_admissions == 0
-        {
-            turn_admission.begin_drain();
-            self.draining = true;
-            self.last_logged_running_turn_count = None;
-            info!(
-                "graceful restart reached idle; entering drain (connections={}, new client turns rejected)",
-                connection_count,
             );
         }
     }
@@ -342,15 +319,26 @@ impl ShutdownState {
         running_turn_count: usize,
         active_admissions: usize,
         connection_count: usize,
+        handoff_finished: bool,
+        managed_daemon: bool,
     ) -> ShutdownAction {
         if !self.requested {
             return ShutdownAction::Noop;
         }
 
-        if self.forced || (self.draining && running_turn_count == 0 && active_admissions == 0) {
+        let work_finished = if managed_daemon {
+            handoff_finished && active_admissions == 0
+        } else {
+            running_turn_count == 0 && active_admissions == 0
+        };
+        if self.forced || (self.draining && work_finished) {
             if self.forced {
                 info!(
                     "received second shutdown signal; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
+                );
+            } else if managed_daemon {
+                info!(
+                    "shutdown signal restart: active-turn handoff is durable; stopping acceptor and disconnecting {connection_count} connection(s)"
                 );
             } else {
                 info!(
@@ -1215,6 +1203,7 @@ pub async fn run_main_with_transport_options(
                 PluginStartupTasks::Start
             )
             .then_some(plugin_startup_config),
+            managed_daemon,
         });
         processor.remote_control_processor.daemon_settings_file = daemon_settings_file;
         let processor = Arc::new(processor);
@@ -1246,18 +1235,9 @@ pub async fn run_main_with_transport_options(
             };
             let mut listen_for_threads = true;
             // Keep force signals and daemon control events responsive while saving.
-            let mut snapshot = Box::pin(async {
-                let processor = Arc::clone(&processor);
-                let recovery_file = recovery_file.clone();
-                // Run independently: snapshot locks can require the event loop to make progress.
-                let task = tokio::spawn(async move {
-                    let saved = processor.daemon_recovery_snapshot().await;
-                    if let Err(err) = daemon_thread_recovery::snapshot(recovery_file, saved).await {
-                        warn!("failed to save threads during daemon shutdown: {err}");
-                    }
-                });
-                let _ = tokio_util::task::AbortOnDropHandle::new(task).await;
-            });
+            let mut snapshot: Option<
+                std::pin::Pin<Box<dyn std::future::Future<Output = IoResult<()>> + Send>>,
+            > = None;
             let mut snapshot_finished = !managed_daemon;
             let mut clients_disconnected = false;
             let mut shutdown_state = ShutdownState::default();
@@ -1267,12 +1247,6 @@ pub async fn run_main_with_transport_options(
                 // releasing its permit, and shutdown must observe that new turn.
                 let mut active_admissions = *active_admissions_rx.borrow_and_update();
                 let mut running_turn_count = *running_turn_count_rx.borrow_and_update();
-                shutdown_state.begin_drain_if_idle(
-                    running_turn_count,
-                    active_admissions,
-                    connections.len(),
-                    &processor.turn_admission,
-                );
                 // An admission can race with the zero-count observation above. The
                 // admission lock makes closing atomic; refresh counts after closing
                 // so shutdown still waits for work admitted just before the drain.
@@ -1280,8 +1254,26 @@ pub async fn run_main_with_transport_options(
                     active_admissions = *active_admissions_rx.borrow_and_update();
                     running_turn_count = *running_turn_count_rx.borrow_and_update();
                 }
+                if managed_daemon
+                    && shutdown_state.draining()
+                    && active_admissions == 0
+                    && !snapshot_finished
+                    && snapshot.is_none()
+                {
+                    let processor = Arc::clone(&processor);
+                    let recovery_file = recovery_file.clone();
+                    snapshot = Some(Box::pin(async move {
+                        processor.daemon_handoff(recovery_file).await
+                    }));
+                }
                 let ready_to_exit = matches!(
-                    shutdown_state.update(running_turn_count, active_admissions, connections.len()),
+                    shutdown_state.update(
+                        running_turn_count,
+                        active_admissions,
+                        connections.len(),
+                        snapshot_finished,
+                        managed_daemon,
+                    ),
                     ShutdownAction::Finish
                 );
                 if ready_to_exit {
@@ -1307,8 +1299,19 @@ pub async fn run_main_with_transport_options(
                 }
 
                 tokio::select! {
-                    _ = &mut snapshot, if shutdown_state.draining() && active_admissions == 0 && !snapshot_finished => {
-                        snapshot_finished = true;
+                    snapshot_result = async {
+                        snapshot.as_mut().expect("snapshot future is initialized").as_mut().await
+                    }, if snapshot.is_some() => {
+                        snapshot = None;
+                        match snapshot_result {
+                            Ok(()) => snapshot_finished = true,
+                            Err(err) => {
+                                warn!("active turn handoff failed; keeping the current server alive: {err}");
+                                processor.turn_admission.reopen();
+                                shutdown_state = ShutdownState::default();
+                                snapshot_finished = false;
+                            }
+                        }
                     }
                     shutdown_signal_result = &mut shutdown_signal_future, if graceful_signal_restart_enabled && !shutdown_state.forced() => {
                         shutdown_signal_future.set(shutdown_signal());
@@ -1838,7 +1841,13 @@ mod tests {
             &admission,
         );
         assert!(matches!(
-            shutdown.update(running_turn_count, *active.borrow(), connection_count),
+            shutdown.update(
+                running_turn_count,
+                *active.borrow(),
+                connection_count,
+                true,
+                true
+            ),
             ShutdownAction::Noop
         ));
         shutdown.on_signal(
@@ -1850,7 +1859,13 @@ mod tests {
         );
         assert!(shutdown.forced());
         assert!(matches!(
-            shutdown.update(running_turn_count, *active.borrow(), connection_count),
+            shutdown.update(
+                running_turn_count,
+                *active.borrow(),
+                connection_count,
+                true,
+                true
+            ),
             ShutdownAction::Finish
         ));
         drop(in_flight);
@@ -1858,7 +1873,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn graceful_restart_waits_for_idle_before_rejecting_new_turns() {
+    fn graceful_restart_closes_admission_immediately_and_waits_for_active_work() {
         let admission = TurnAdmission::default();
         let active = admission.subscribe_active();
         let in_flight = admission.admit().expect("initial request admitted");
@@ -1872,29 +1887,17 @@ mod tests {
             *active.borrow(),
             &admission,
         );
-        assert!(!shutdown.draining());
-        let accepted_while_waiting = admission
-            .admit()
-            .expect("new turns remain accepted while waiting for idle");
-        assert!(matches!(
-            shutdown.update(1, *active.borrow(), connection_count),
-            ShutdownAction::Noop
-        ));
-
-        drop(accepted_while_waiting);
-        drop(in_flight);
-        assert_eq!(*active.borrow(), 0);
-        shutdown.begin_drain_if_idle(
-            /*running_turn_count*/ 0,
-            *active.borrow(),
-            connection_count,
-            &admission,
-        );
-
         assert!(shutdown.draining());
         assert!(admission.admit().is_err());
         assert!(matches!(
-            shutdown.update(0, *active.borrow(), connection_count),
+            shutdown.update(1, *active.borrow(), connection_count, false, true),
+            ShutdownAction::Noop
+        ));
+
+        drop(in_flight);
+        assert_eq!(*active.borrow(), 0);
+        assert!(matches!(
+            shutdown.update(1, *active.borrow(), connection_count, true, true),
             ShutdownAction::Finish
         ));
     }

@@ -1,8 +1,12 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::ApprovalReviewContributor;
 use crate::ConfigContributor;
 use crate::ContextContributor;
+use crate::CoreWorkAdmission;
+use crate::CoreWorkKind;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
 use crate::ModelRequestContributor;
@@ -28,6 +32,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
             registry: ExtensionRegistry {
                 event_sink: Arc::new(NoopExtensionEventSink),
                 turn_start_admission: None,
+                core_work_admission: None,
                 thread_lifecycle_contributors: Vec::new(),
                 turn_lifecycle_contributors: Vec::new(),
                 config_contributors: Vec::new(),
@@ -67,6 +72,11 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Installs the host gate for turn-input submissions that start a new turn.
     pub fn turn_start_admission(&mut self, admission: Arc<dyn TurnStartAdmission>) {
         self.registry.turn_start_admission = Some(admission);
+    }
+
+    /// Installs the host gate for individual model requests and command starts.
+    pub fn core_work_admission(&mut self, admission: Arc<dyn CoreWorkAdmission>) {
+        self.registry.core_work_admission = Some(admission);
     }
 
     /// Registers one approval-review contributor.
@@ -154,6 +164,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
 pub struct ExtensionRegistry<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
     turn_start_admission: Option<Arc<dyn TurnStartAdmission>>,
+    core_work_admission: Option<Arc<dyn CoreWorkAdmission>>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
@@ -176,6 +187,7 @@ impl<C: Sync> ExtensionRegistry<C> {
             registry: Self {
                 event_sink: self.event_sink.clone(),
                 turn_start_admission: self.turn_start_admission.clone(),
+                core_work_admission: self.core_work_admission.clone(),
                 thread_lifecycle_contributors: self.thread_lifecycle_contributors.clone(),
                 turn_lifecycle_contributors: self.turn_lifecycle_contributors.clone(),
                 config_contributors: self.config_contributors.clone(),
@@ -199,6 +211,17 @@ impl<C: Sync> ExtensionRegistry<C> {
         match &self.turn_start_admission {
             Some(admission) => admission.admit_turn_start(),
             None => Some(Box::new(())),
+        }
+    }
+
+    /// Acquires a host permit before starting one model request or command process.
+    pub fn acquire_core_work(
+        &self,
+        kind: CoreWorkKind,
+    ) -> Pin<Box<dyn Future<Output = Option<Box<dyn Send>>> + Send + '_>> {
+        match &self.core_work_admission {
+            Some(admission) => admission.acquire_work_start(kind),
+            None => Box::pin(async { Some(Box::new(()) as Box<dyn Send>) }),
         }
     }
 

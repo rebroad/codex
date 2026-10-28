@@ -961,6 +961,44 @@ impl ExecServerClient {
         .await
     }
 
+    /// Reattaches a process owned by the resumed exec-server session and replays retained events.
+    pub(crate) async fn reattach_process(
+        &self,
+        process_id: &ProcessId,
+        after_seq: u64,
+    ) -> Result<Session, ExecServerError> {
+        let state = Arc::new(SessionState::new(/*recoverable*/ true));
+        self.inner.insert_session(process_id, Arc::clone(&state))?;
+
+        let response = match self
+            .read(ReadParams {
+                process_id: process_id.clone(),
+                after_seq: Some(after_seq),
+                max_bytes: None,
+                wait_ms: None,
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                self.inner.remove_session_if(process_id, &state);
+                return Err(error);
+            }
+        };
+        if let Some(failure) = response.failure.as_ref() {
+            self.inner.remove_session_if(process_id, &state);
+            return Err(ExecServerError::Protocol(failure.clone()));
+        }
+        state.restore_from_read_response(response, after_seq, &self.inner, process_id)?;
+
+        Ok(Session {
+            client: self.clone(),
+            process_id: process_id.clone(),
+            sandbox_type: None,
+            state,
+        })
+    }
+
     pub async fn fs_read_file(
         &self,
         params: FsReadFileParams,
@@ -1526,6 +1564,74 @@ impl SessionState {
         Ok(self.publish_ready(&mut ordered_events))
     }
 
+    fn restore_from_read_response(
+        self: &Arc<Self>,
+        response: ReadResponse,
+        after_seq: u64,
+        inner: &Inner,
+        process_id: &ProcessId,
+    ) -> Result<(), ExecServerError> {
+        let exit_seq = response.exited.then(|| {
+            response
+                .next_seq
+                .saturating_sub(if response.closed { 2 } else { 1 })
+        });
+        let closed_seq = response.closed.then(|| response.next_seq.saturating_sub(1));
+        let retained_floor = response
+            .chunks
+            .first()
+            .map(|chunk| chunk.seq.saturating_sub(1));
+        let replay_floor = after_seq.max(retained_floor.unwrap_or_else(|| {
+            if response.exited {
+                response
+                    .next_seq
+                    .saturating_sub(if response.closed { 3 } else { 2 })
+            } else {
+                after_seq
+            }
+        }));
+        {
+            let mut ordered_events = self
+                .ordered_events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ordered_events.last_published_seq = ordered_events.last_published_seq.max(replay_floor);
+            let last_published_seq = ordered_events.last_published_seq;
+            ordered_events
+                .pending
+                .retain(|seq, _| *seq > last_published_seq);
+            ordered_events.pending_bytes = ordered_events
+                .pending
+                .values()
+                .map(pending_process_event_bytes)
+                .sum();
+            ordered_events.exit_published |= exit_seq.is_some_and(|seq| seq <= last_published_seq);
+            ordered_events.closed_published |=
+                closed_seq.is_some_and(|seq| seq <= last_published_seq);
+            self.publish_ready(&mut ordered_events);
+        }
+
+        for chunk in response.chunks {
+            publish_reattached_event(inner, process_id, self, ExecProcessEvent::Output(chunk))?;
+        }
+        if let (Some(seq), Some(exit_code)) = (exit_seq, response.exit_code) {
+            publish_reattached_event(
+                inner,
+                process_id,
+                self,
+                ExecProcessEvent::Exited {
+                    seq,
+                    exit_code,
+                    sandbox_denied: Some(response.sandbox_denied),
+                },
+            )?;
+        }
+        if let Some(seq) = closed_seq {
+            publish_reattached_event(inner, process_id, self, ExecProcessEvent::Closed { seq })?;
+        }
+        Ok(())
+    }
+
     fn publish_ready(&self, ordered_events: &mut OrderedSessionEvents) -> bool {
         let mut published_closed = false;
         loop {
@@ -1597,6 +1703,29 @@ impl SessionState {
     }
 }
 
+fn publish_reattached_event(
+    inner: &Inner,
+    process_id: &ProcessId,
+    session: &Arc<SessionState>,
+    event: ExecProcessEvent,
+) -> Result<(), ExecServerError> {
+    let seq = event.seq().unwrap_or_default();
+    let result = session.publish_ordered_event(event);
+    if result.is_ok() {
+        session.note_change(seq);
+    }
+    match result {
+        Ok(complete) => {
+            finish_process_event(inner, process_id, session, Ok(complete));
+            Ok(())
+        }
+        Err(message) => {
+            finish_process_event(inner, process_id, session, Err(message.clone()));
+            Err(ExecServerError::Protocol(message))
+        }
+    }
+}
+
 impl OrderedSessionEvents {
     fn insert_pending(&mut self, event: ExecProcessEvent) -> Result<(), String> {
         let Some(seq) = event.seq() else {
@@ -1660,6 +1789,10 @@ fn finish_process_event(
 }
 
 impl Session {
+    pub(crate) fn session_id(&self) -> Option<String> {
+        self.client.session_id()
+    }
+
     pub(crate) fn process_id(&self) -> &ProcessId {
         &self.process_id
     }
@@ -2032,6 +2165,129 @@ mod tests {
     use crate::protocol::WriteParams;
     use crate::protocol::WriteResponse;
     use crate::protocol::WriteStatus;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replacement_client_reattaches_to_running_process() -> anyhow::Result<()> {
+        use crate::ExecServerRuntimeOptions;
+        use crate::protocol::ExecParams;
+        use crate::server::ConnectionProcessor;
+        use crate::server::RequestDispatchMode;
+        use crate::telemetry::ConnectionTransport;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let websocket_url = format!("ws://{}", listener.local_addr()?);
+        let processor = ConnectionProcessor::new_with_telemetry(
+            ExecServerRuntimeOptions::new(
+                std::env::current_exe()?,
+                /*codex_linux_sandbox_exe*/ None,
+            )?,
+            crate::ExecServerTelemetry::default(),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            RequestDispatchMode::Inline,
+        );
+        let server_processor = processor.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((stream, peer)) = listener.accept().await {
+                let processor = server_processor.clone();
+                tokio::spawn(async move {
+                    if let Ok(websocket) = accept_async(stream).await {
+                        processor
+                            .run_connection(
+                                JsonRpcConnection::from_websocket(
+                                    websocket,
+                                    format!("reattach-test-{peer}"),
+                                ),
+                                ConnectionTransport::WebSocket,
+                            )
+                            .await;
+                    }
+                });
+            }
+        });
+
+        let http_client_factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
+        let first_client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
+            websocket_url: websocket_url.clone(),
+            client_name: "reattach-test-first".to_string(),
+            connect_timeout: Duration::from_secs(2),
+            initialize_timeout: Duration::from_secs(2),
+            resume_session_id: None,
+            http_client_factory: http_client_factory.clone(),
+        })
+        .await?;
+        let process_id = ProcessId::from("reattach-running-process");
+        let mut env = HashMap::new();
+        env.insert(
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        );
+        let first_session = first_client
+            .start_process(
+                ExecParams {
+                    metadata: Default::default(),
+                    process_id: process_id.clone(),
+                    argv: vec![
+                        "/bin/sh".to_string(),
+                        "-c".to_string(),
+                        "sleep 1; printf reattached".to_string(),
+                    ],
+                    cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
+                    shell_snapshot: None,
+                    env_policy: None,
+                    env,
+                    tty: false,
+                    pipe_stdin: false,
+                    arg0: None,
+                    sandbox: None,
+                    enforce_managed_network: false,
+                    managed_network: None,
+                    network_proxy: None,
+                },
+                /*network_policy_decider*/ None,
+            )
+            .await?;
+        let session_id = first_session
+            .session_id()
+            .expect("initialize should return a session id");
+        drop(first_session);
+        drop(first_client);
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let replacement_client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
+            websocket_url,
+            client_name: "reattach-test-replacement".to_string(),
+            connect_timeout: Duration::from_secs(2),
+            initialize_timeout: Duration::from_secs(2),
+            resume_session_id: Some(session_id.clone()),
+            http_client_factory,
+        })
+        .await?;
+        assert_eq!(
+            replacement_client.session_id().as_deref(),
+            Some(session_id.as_str())
+        );
+        let reattached = replacement_client.reattach_process(&process_id, 0).await?;
+        let response = timeout(
+            Duration::from_secs(5),
+            reattached.read(Some(0), None, Some(4_000)),
+        )
+        .await??;
+        assert_eq!(
+            response
+                .chunks
+                .iter()
+                .flat_map(|chunk| chunk.chunk.0.iter().copied())
+                .collect::<Vec<_>>(),
+            b"reattached"
+        );
+
+        reattached.terminate().await?;
+        processor.shutdown().await;
+        server.abort();
+        let _ = server.await;
+        Ok(())
+    }
 
     async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
     where

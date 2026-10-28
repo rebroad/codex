@@ -1,3 +1,11 @@
+#[cfg(unix)]
+mod executor;
+#[cfg(unix)]
+pub(crate) use executor::ExecutorSupervisor;
+#[cfg(unix)]
+pub(crate) use executor::exec_server_url_env;
+#[cfg(unix)]
+pub(crate) use executor::session_id_file_env;
 mod pid;
 mod stderr_log;
 #[cfg(windows)]
@@ -24,6 +32,7 @@ pub(crate) struct BackendPaths {
     pub(crate) update_pid_file: PathBuf,
     pub(crate) remote_control_enabled: bool,
     pub(crate) feature_overrides: BTreeMap<String, bool>,
+    pub(crate) executor_state_file: PathBuf,
 }
 
 pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
@@ -33,6 +42,10 @@ pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
         paths.remote_control_enabled,
     );
     backend.feature_overrides = paths.feature_overrides;
+    #[cfg(unix)]
+    {
+        backend.executor_state_file = Some(paths.executor_state_file);
+    }
     backend
 }
 

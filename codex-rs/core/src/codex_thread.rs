@@ -1,6 +1,7 @@
 use crate::WithTurnExtensionData;
 use crate::agent::AgentStatus;
 use crate::agent::api::AgentControl;
+use crate::agent::control::LocalAgentRuntime;
 use crate::config::ConstraintResult;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
@@ -55,14 +56,18 @@ use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::turn_input::PendingTurnInteraction;
 use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_protocol::turn_input::SteerSubmission;
 use codex_protocol::turn_input::SuspendTurnOutcome;
+use codex_protocol::turn_input::SuspendedQueuedInput;
+use codex_protocol::turn_input::SuspendedThreadTurn;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
 use codex_protocol::turn_input::TurnStartOptions;
+use codex_protocol::turn_input::TurnTreeSuspendOutcome;
 use codex_thread_store::PersistContext;
 use codex_thread_store::StoredThread;
 use codex_thread_store::StoredThreadHistory;
@@ -217,6 +222,98 @@ pub struct CodexThread {
     rollout_path: Option<PathBuf>,
     out_of_band_elicitations: Mutex<OutOfBandElicitations>,
     _diagnostics_guard: GaugeGuard,
+}
+
+/// A prepared agent-tree handoff. Admission stays sealed until commit or explicit rollback.
+pub struct TurnTreeHandoff {
+    runtime: LocalAgentRuntime,
+    threads: Vec<Arc<CodexThread>>,
+    checkpoints: Vec<SuspendedThreadTurn>,
+    finalized: bool,
+}
+
+impl TurnTreeHandoff {
+    /// Complete checkpoint data to persist before stopping any thread in the tree.
+    pub fn checkpoints(&self) -> &[SuspendedThreadTurn] {
+        &self.checkpoints
+    }
+
+    /// Stop active turns after the host has persisted `checkpoints`.
+    pub async fn commit(&mut self) -> CodexResult<TurnTreeSuspendOutcome> {
+        if !self
+            .checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.thread_id == self.threads[0].session.thread_id)
+        {
+            self.runtime.reopen_after_handoff_failure();
+            self.finalized = true;
+            return Ok(TurnTreeSuspendOutcome::NotActive);
+        }
+        let mut suspended_thread_ids = Vec::new();
+        for thread in self.threads.iter().rev() {
+            let Some(checkpoint) = self
+                .checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.thread_id == thread.session.thread_id)
+            else {
+                continue;
+            };
+            match thread.suspend_turn_for_tree_handoff().await {
+                Ok(SuspendTurnOutcome::Suspended { turn_id }) if turn_id == checkpoint.turn_id => {
+                    suspended_thread_ids.push(thread.session.thread_id);
+                }
+                Ok(SuspendTurnOutcome::NotActive) => {}
+                Ok(SuspendTurnOutcome::UnsupportedTask) => {
+                    self.finalized = true;
+                    return Ok(TurnTreeSuspendOutcome::PartialCommit {
+                        threads: self.checkpoints.clone(),
+                        suspended_thread_ids,
+                        failed_thread_id: thread.session.thread_id,
+                        error: "turn changed to an unsupported task during handoff".to_string(),
+                    });
+                }
+                Ok(SuspendTurnOutcome::HasLiveDescendants) => {
+                    unreachable!("tree handoff suspension bypasses the live-descendant check")
+                }
+                Ok(SuspendTurnOutcome::Suspended { turn_id }) => {
+                    self.finalized = true;
+                    return Ok(TurnTreeSuspendOutcome::PartialCommit {
+                        threads: self.checkpoints.clone(),
+                        suspended_thread_ids,
+                        failed_thread_id: thread.session.thread_id,
+                        error: format!("turn changed during handoff: {}", turn_id),
+                    });
+                }
+                Err(error) => {
+                    self.finalized = true;
+                    return Ok(TurnTreeSuspendOutcome::PartialCommit {
+                        threads: self.checkpoints.clone(),
+                        suspended_thread_ids,
+                        failed_thread_id: thread.session.thread_id,
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+        self.finalized = true;
+        Ok(TurnTreeSuspendOutcome::Suspended {
+            threads: self.checkpoints.clone(),
+        })
+    }
+
+    /// Reopen admission after the host has restored any threads committed before a failure.
+    pub fn reopen_after_rollback(mut self) {
+        self.runtime.reopen_after_handoff_failure();
+        self.finalized = true;
+    }
+}
+
+impl Drop for TurnTreeHandoff {
+    fn drop(&mut self) {
+        if !self.finalized {
+            self.runtime.reopen_after_handoff_failure();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -475,6 +572,27 @@ impl CodexThread {
         &self,
         request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
     ) -> CodexResult<StartIfIdleSubmission> {
+        self.recover_turn_if_idle_with_pending_input(request, Vec::new())
+            .await
+    }
+
+    /// Recovers an interrupted turn and restores accepted input before its first resumed request.
+    pub async fn recover_turn_if_idle_with_pending_input(
+        &self,
+        request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
+        pending_input: Vec<SuspendedQueuedInput>,
+    ) -> CodexResult<StartIfIdleSubmission> {
+        self.recover_turn_if_idle_with_handoff(request, pending_input, Vec::new())
+            .await
+    }
+
+    /// Recovers an interrupted turn and restores accepted inputs and host interactions.
+    pub async fn recover_turn_if_idle_with_handoff(
+        &self,
+        request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
+        pending_input: Vec<SuspendedQueuedInput>,
+        pending_interactions: Vec<PendingTurnInteraction>,
+    ) -> CodexResult<StartIfIdleSubmission> {
         self.ensure_execution_capacity_for_turn_start(self.session.services.agent_control.as_ref())
             .await?;
         let WithTurnExtensionData {
@@ -499,6 +617,8 @@ impl CodexThread {
                 trace,
                 turn_id,
                 turn_extension_init,
+                pending_input,
+                pending_interactions,
             )
             .await?
         {
@@ -530,10 +650,138 @@ impl CodexThread {
     /// Callers must not transfer ownership until suspension succeeds, which
     /// requires stopping execution, flushing history, and closing its writer.
     pub async fn suspend_turn_and_shutdown(&self) -> CodexResult<SuspendTurnOutcome> {
+        self.suspend_turn_and_shutdown_inner(/*tree_handoff*/ false)
+            .await
+    }
+
+    /// Seals new agent-tree work and checkpoints active regular turns in the loaded subtree.
+    /// The returned report contains safe-boundary recovery data, not serialized task stacks.
+    pub async fn suspend_turn_tree_and_shutdown(
+        self: &Arc<Self>,
+    ) -> CodexResult<TurnTreeSuspendOutcome> {
+        let mut handoff = self.prepare_turn_tree_handoff().await?;
+        handoff.commit().await
+    }
+
+    /// Seal tree admission and capture durable recovery state without stopping any thread.
+    pub async fn prepare_turn_tree_handoff(self: &Arc<Self>) -> CodexResult<TurnTreeHandoff> {
         if self.session_source.is_non_root_agent() {
             return Err(CodexErr::UnsupportedOperation(
-                "turn suspension requires the owning root thread".to_string(),
+                "turn-tree suspension requires the owning root thread".to_string(),
             ));
+        }
+        let runtime = self.session.services.local_agent_runtime.clone();
+        if !runtime.seal_for_handoff().await {
+            return Err(CodexErr::InvalidRequest(
+                "agent tree is already sealed or shutting down".to_string(),
+            ));
+        }
+        let result = self.prepare_loaded_tree_after_seal(runtime.clone()).await;
+        if result.is_err() {
+            runtime.reopen_after_handoff_failure();
+        }
+        result
+    }
+
+    async fn prepare_loaded_tree_after_seal(
+        self: &Arc<Self>,
+        runtime: LocalAgentRuntime,
+    ) -> CodexResult<TurnTreeHandoff> {
+        let manager = runtime.upgrade()?;
+        let thread_ids = runtime
+            .list_live_agent_subtree_thread_ids(self.session.thread_id)
+            .await?;
+        let mut threads = Vec::with_capacity(thread_ids.len());
+        for thread_id in thread_ids {
+            let thread = manager.get_thread(thread_id).await?;
+            threads.push(thread);
+        }
+
+        // Snapshot and flush the complete tree before stopping any member, so a persistence
+        // failure during preparation leaves every current turn runnable.
+        let mut checkpoints = Vec::new();
+        for thread in &threads {
+            match thread.turn_handoff_checkpoint().await? {
+                Some(checkpoint) => checkpoints.push(checkpoint),
+                None => {}
+            }
+            thread.flush_rollout().await.map_err(|error| {
+                CodexErr::Fatal(format!(
+                    "flush before turn-tree suspension failed for {}: {error}",
+                    thread.session.thread_id
+                ))
+            })?;
+        }
+        if !checkpoints.is_empty()
+            && !checkpoints
+                .iter()
+                .any(|checkpoint| checkpoint.thread_id == self.session.thread_id)
+        {
+            return Err(CodexErr::UnsupportedOperation(
+                "cannot hand off active subagent turns without an active root turn".to_string(),
+            ));
+        }
+        Ok(TurnTreeHandoff {
+            runtime,
+            threads,
+            checkpoints,
+            finalized: false,
+        })
+    }
+
+    async fn turn_handoff_checkpoint(&self) -> CodexResult<Option<SuspendedThreadTurn>> {
+        let active = self.session.active_turn.lock().await;
+        let Some(active_turn) = active.as_ref() else {
+            return Ok(None);
+        };
+        let Some(task) = active_turn.task.as_ref() else {
+            return Ok(None);
+        };
+        if task.kind != crate::state::TaskKind::Regular {
+            return Err(CodexErr::UnsupportedOperation(
+                "turn-tree handoff only supports regular turns".to_string(),
+            ));
+        }
+        let turn_id = task.turn_context.sub_id.clone();
+        let pending_interactions = active_turn.turn_state.lock().await.pending_interactions();
+        drop(active);
+        let pending_input = self
+            .session
+            .input_queue
+            .snapshot_pending_for_handoff(&self.session.active_turn)
+            .await?;
+        let executor_processes = self
+            .session
+            .services
+            .unified_exec_manager
+            .snapshot_handoff_processes()
+            .await
+            .map_err(CodexErr::UnsupportedOperation)?;
+        Ok(Some(SuspendedThreadTurn {
+            thread_id: self.session.thread_id,
+            parent_thread_id: self.session_source.parent_thread_id(),
+            turn_id,
+            pending_input,
+            pending_interactions,
+            executor_processes,
+        }))
+    }
+
+    pub(crate) async fn suspend_turn_for_tree_handoff(&self) -> CodexResult<SuspendTurnOutcome> {
+        self.suspend_turn_and_shutdown_inner(/*tree_handoff*/ true)
+            .await
+    }
+
+    async fn suspend_turn_and_shutdown_inner(
+        &self,
+        tree_handoff: bool,
+    ) -> CodexResult<SuspendTurnOutcome> {
+        if self.session_source.is_non_root_agent() {
+            if !tree_handoff {
+                return Err(CodexErr::UnsupportedOperation(
+                    "turn suspension requires the owning root thread".to_string(),
+                ));
+            }
         }
 
         // The session owns accepted suspension, so dropping this caller cannot interrupt
@@ -543,7 +791,10 @@ impl CodexThread {
             .tx_sub
             .send(Submission {
                 id: new_submission_id(),
-                op: Op::SuspendTurnAndShutdown { reply },
+                op: Op::SuspendTurnAndShutdown {
+                    tree_handoff,
+                    reply,
+                },
                 turn_extension_init: None,
                 trace: current_span_w3c_trace_context(),
                 parent_turn_id: None,
@@ -788,6 +1039,26 @@ impl CodexThread {
 
     pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
         self.session.list_background_terminals().await
+    }
+
+    /// Reattaches executor processes saved when this thread was suspended for daemon handoff.
+    pub async fn reattach_suspended_executor_processes(
+        &self,
+        processes: &[codex_protocol::turn_input::SuspendedExecutorProcess],
+    ) -> Result<(), String> {
+        self.session
+            .services
+            .unified_exec_manager
+            .reattach_suspended_processes(
+                processes,
+                &self
+                    .session
+                    .services
+                    .turn_environments
+                    .environment_manager(),
+                &self.session,
+            )
+            .await
     }
 
     pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {

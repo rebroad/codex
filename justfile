@@ -13,6 +13,7 @@ build_repo_override := env_var_or_default("CODEX_BUILD_REPO", "")
 build_repo := if build_repo_override != "" { build_repo_override } else { shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " --resolve-build-repo " + quote(justfile_directory())) }
 export PYTHONPYCACHEPREFIX := build_repo / "build" / "python-cache"
 build_repo_is_inside_source := if build_repo == "" { "true" } else { shell(python + " " + quote(justfile_directory() / "scripts/resolve_source_repo.py") + " --is-build-repo-inside-source " + quote(source_repo) + " " + quote(build_repo)) }
+# A sibling build path that symlinks directly to source intentionally builds in source.
 build_tree := build_repo / "codex-rs"
 cargo_source_directory := source_repo / "codex-rs"
 cargo_working_directory := if build_repo_is_inside_source == "true" { error("Cargo operations are disabled in the source tree; CODEX_BUILD_REPO must name a separate external build tree") } else if path_exists(build_tree / "Cargo.toml") == "true" { build_tree } else { error("Cargo operations are disabled in the source tree; set CODEX_BUILD_REPO to an external .build/.make tree") }

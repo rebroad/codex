@@ -21,7 +21,7 @@ fi
 source_repo_real="$(cd -- "${source_repo}" && pwd -P)"
 build_repo_real="$(cd -- "${build_repo}" && pwd -P)"
 if [[ "${source_repo_real}" == "${build_repo_real}" && -L "${build_repo}" ]]; then
-  echo "Using source checkout as the build tree via symlink: ${build_repo}" >&2
+  echo "Using source checkout as the build tree via symlink: ${build_repo}; no sync needed" >&2
   exit 0
 fi
 case "${build_repo_real}/" in

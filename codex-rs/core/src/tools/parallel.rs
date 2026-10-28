@@ -107,6 +107,7 @@ impl ToolCallRuntime {
                     result.into_response()
                 }
                 Err(FunctionCallError::Fatal(message)) => return Err(CodexErr::Fatal(message)),
+                Err(FunctionCallError::Suspended) => return Err(CodexErr::TurnSuspended),
                 Err(other) => {
                     ResponseItemEnvelope::new(Self::failure_response(error_call, other).into())
                 }
@@ -241,7 +242,10 @@ impl ToolCallRuntime {
                 // Record readiness here, before either caller encodes or collects the result.
                 // A fatal error still propagates to the caller instead of producing a tool
                 // result; unlike a normal tool failure, it has no readiness event.
-                if !matches!(&result, Err(FunctionCallError::Fatal(_))) {
+                if !matches!(
+                    &result,
+                    Err(FunctionCallError::Fatal(_) | FunctionCallError::Suspended)
+                ) {
                     call_trace::result_ready(
                         thread_id,
                         &turn.sub_id,

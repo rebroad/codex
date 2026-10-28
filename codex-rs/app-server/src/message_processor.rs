@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -80,6 +81,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ThreadStoreConfig;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::CoreWorkAdmission;
 use codex_extension_api::TurnStartAdmission;
 use codex_feedback::CodexFeedback;
 use codex_goal_extension::GoalService;
@@ -268,6 +270,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     /// `None` skips startup tasks; otherwise preserve the initial config-loading path.
     pub(crate) plugin_startup_tasks: Option<PluginStartupConfig>,
+    pub(crate) managed_daemon: bool,
 }
 
 impl MessageProcessor {
@@ -294,6 +297,7 @@ impl MessageProcessor {
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
+            managed_daemon,
         } = args;
         // Startup credential reads must not open a browser before initialize selects the policy.
         let gateway_login_control =
@@ -325,6 +329,7 @@ impl MessageProcessor {
         let goal_service = Arc::new(GoalService::new());
         let turn_admission = TurnAdmission::default();
         let turn_start_admission: Arc<dyn TurnStartAdmission> = Arc::new(turn_admission.clone());
+        let core_work_admission: Arc<dyn CoreWorkAdmission> = Arc::new(turn_admission.clone());
         let extension_event_sink =
             app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone());
         let mut queue_service = None;
@@ -356,6 +361,7 @@ impl MessageProcessor {
                     http_client_factory: config.http_client_factory(),
                     queue_service: queue_service.clone(),
                     turn_start_admission: Some(Arc::clone(&turn_start_admission)),
+                    core_work_admission: managed_daemon.then(|| Arc::clone(&core_work_admission)),
                 }),
                 Arc::new(CodexHomeUserInstructionsProvider::new(
                     config.codex_home.clone(),
@@ -770,24 +776,48 @@ impl MessageProcessor {
         self.thread_processor.thread_created_receiver()
     }
 
-    pub(crate) async fn daemon_recovery_snapshot(
-        &self,
-    ) -> codex_app_server_transport::daemon_recovery::RecoverySnapshot {
-        self.thread_processor.daemon_recovery_snapshot().await
+    pub(crate) async fn daemon_handoff(&self, recovery_file: PathBuf) -> std::io::Result<()> {
+        self.thread_processor.daemon_handoff(recovery_file).await
     }
 
     pub(crate) async fn restore_daemon_threads(
         &self,
-        mut snapshot: codex_app_server_transport::daemon_recovery::RecoverySnapshot,
+        snapshot: codex_app_server_transport::daemon_recovery::RecoverySnapshot,
     ) {
-        for thread_id in snapshot.loaded {
+        let mut remaining = snapshot.loaded.clone();
+        let mut ordered = Vec::with_capacity(remaining.len());
+        while !remaining.is_empty() {
+            let next = remaining
+                .iter()
+                .find(|thread_id| {
+                    snapshot
+                        .interrupted
+                        .get(*thread_id)
+                        .and_then(|saved| saved.suspended.as_ref())
+                        .and_then(|suspended| suspended.parent_thread_id)
+                        .is_none_or(|parent| !remaining.contains(&parent.to_string()))
+                })
+                .cloned()
+                .or_else(|| remaining.iter().next().cloned());
+            let Some(thread_id) = next else {
+                break;
+            };
+            remaining.remove(&thread_id);
+            ordered.push(thread_id);
+        }
+
+        // Load the full tree before starting any recovered turn. Otherwise a root
+        // can resume and spawn work while its previously loaded descendants are
+        // still absent from the replacement runtime.
+        let mut restored = HashSet::new();
+        for thread_id in &ordered {
             let Ok(_permit) = self.turn_admission.admit() else {
                 break;
             };
             if let Err(err) = self
                 .thread_processor
                 .thread_resume(
-                    ThreadResumeTarget::DaemonRecovery(snapshot.interrupted.remove(&thread_id)),
+                    ThreadResumeTarget::DaemonRecovery,
                     codex_app_server_protocol::ThreadResumeParams {
                         thread_id: thread_id.clone(),
                         exclude_turns: true,
@@ -800,7 +830,21 @@ impl MessageProcessor {
                 .await
             {
                 tracing::warn!(code = err.code, "failed to restore saved daemon thread");
+            } else {
+                restored.insert(thread_id.clone());
             }
+        }
+
+        for thread_id in ordered {
+            if !restored.contains(&thread_id) {
+                continue;
+            }
+            let Some(saved) = snapshot.interrupted.get(&thread_id) else {
+                continue;
+            };
+            self.thread_processor
+                .continue_daemon_turn(&thread_id, saved.clone())
+                .await;
         }
     }
 
@@ -916,6 +960,12 @@ impl MessageProcessor {
         connection_id: ConnectionId,
         response: JSONRPCResponse,
     ) {
+        // Treat an accepted interaction reply as admitted work. Replies arriving
+        // after drain are left unresolved so the replacement can reissue them
+        // when the recovered tool reaches its wait site.
+        let Ok(_permit) = self.turn_admission.admit() else {
+            return;
+        };
         let JSONRPCResponse { id, result, .. } = response;
         self.outgoing
             .notify_client_response(connection_id, id, result)
@@ -924,6 +974,9 @@ impl MessageProcessor {
 
     /// Handle an error object received from the peer.
     pub(crate) async fn process_error(&self, connection_id: ConnectionId, err: JSONRPCError) {
+        let Ok(_permit) = self.turn_admission.admit() else {
+            return;
+        };
         self.outgoing
             .notify_client_error(connection_id, err.id, err.error)
             .await;
@@ -995,7 +1048,7 @@ impl MessageProcessor {
             &codex_request,
         );
 
-        let (turn_admission, recheck_turn_admission) = match &codex_request {
+        let (work_admission, recheck_work_admission) = match &codex_request {
             ClientRequest::ThreadStart { .. }
             | ClientRequest::ThreadFork { .. }
             | ClientRequest::ThreadResume { .. }
@@ -1004,6 +1057,16 @@ impl MessageProcessor {
             | ClientRequest::TurnSettingsUpdate { .. }
             | ClientRequest::ThreadDelete { .. }
             | ClientRequest::ThreadArchive { .. } => (Some(self.turn_admission.admit()?), false),
+            ClientRequest::McpResourceRead { .. }
+            | ClientRequest::McpServerEventStreamStart { .. }
+            | ClientRequest::McpServerOauthLogin { .. }
+            | ClientRequest::McpServerRefresh { .. }
+            | ClientRequest::McpServerToolCall { .. }
+            | ClientRequest::OneOffCommandExec { .. }
+            | ClientRequest::ProcessSpawn { .. }
+            | ClientRequest::WindowsSandboxSetupStart { .. } => {
+                (Some(self.turn_admission.admit()?), true)
+            }
             ClientRequest::TurnStart { .. }
             | ClientRequest::TurnSteer { .. }
             | ClientRequest::ReviewStart { .. }
@@ -1033,13 +1096,19 @@ impl MessageProcessor {
         let request = QueuedInitializedRequest::new(
             rpc_gate,
             async move {
-                let _turn_admission = turn_admission;
-                // Runtime changes already admitted before drain finish normally. Turn work
-                // still waiting in serialization must observe the newly closed gate.
-                if recheck_turn_admission && let Err(error) = processor.turn_admission.admit() {
-                    processor.outgoing.send_error(error_request_id, error).await;
-                    return;
-                }
+                let _work_admission = work_admission;
+                // Work still waiting in serialization must observe the newly closed gate.
+                let _recheck_work_admission = if recheck_work_admission {
+                    match processor.turn_admission.admit() {
+                        Ok(permit) => Some(permit),
+                        Err(error) => {
+                            processor.outgoing.send_error(error_request_id, error).await;
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
                 let processor_for_request = Arc::clone(&processor);
                 let originator = AuthStorageOriginator::from_client_name(
                     session.app_server_client_name().unwrap_or("none"),

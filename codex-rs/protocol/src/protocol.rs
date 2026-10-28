@@ -714,12 +714,15 @@ pub enum Op {
     RecoverTurn {
         thread_settings: ThreadSettingsOverrides,
         start_options: TurnStartOptions,
+        pending_input: Vec<crate::turn_input::SuspendedQueuedInput>,
+        pending_interactions: Vec<crate::turn_input::PendingTurnInteraction>,
         reply: oneshot::Sender<CodexResult<TurnInputSubmission>>,
     },
 
     /// Stop the active root turn without recording a terminal turn event.
     #[debug("SuspendTurnAndShutdown")]
     SuspendTurnAndShutdown {
+        tree_handoff: bool,
         reply: oneshot::Sender<CodexResult<SuspendTurnOutcome>>,
     },
 
