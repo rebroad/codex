@@ -349,7 +349,7 @@ def run(args):
         still_pending = []
         for start, event_epoch_us, before, event in pending_after_release:
             if (now - start >= 2.0 and before and psi is not None
-                    and psi[0] >= event_epoch_us + 500_000):
+                    and psi[0] >= event_epoch_us + 1_500_000):
                 event["psi_some_after_ms_s"] = round(psi[1] / 1000, 2)
                 event["psi_full_after_ms_s"] = round(psi[2] / 1000, 2)
                 event["available_after_mb"] = available // MIB
