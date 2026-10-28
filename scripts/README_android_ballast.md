@@ -162,6 +162,42 @@ wrapper path and hash, and eventually a tuning decision when the Cargo stage
 finishes. The tuned value only affects **future stages**, never the reserve
 of an already-running stage.
 
+## Rust memory-pressure protection
+
+PSI measures **stall time**, not how much RAM or swap remains. The earlier
+policy terminated a Rust compilation whenever system-wide memory PSI `full`
+exceeded 60 ms/s, even if available RAM was plentiful. That could repeatedly
+discard minutes of progress without preventing an Android LMKD kill.
+
+The guard now distinguishes **reversible pressure** from **hard memory danger**:
+
+- PSI `some` >= 35 ms/s and PSI `full` >= 60 ms/s both trigger a **reversible
+  SIGSTOP** when outside the recovery-grace window. Neither PSI value on its
+  own is a reason to terminate the compiler.
+- The compiler can resume when PSI subsides, as before. Even if PSI stays
+  high, a PSI-only pause lasts **at most 5 seconds** by default and is then
+  resumed, with **30 seconds** of PSI-only suspension grace so Rust can make
+  forward progress. A compiler waiting to start is likewise admitted after
+  a five-second PSI-only wait.
+- Critically low `MemAvailable`, insufficient combined RAM/swap headroom,
+  and a genuine Android LMKD reclaim event **still allow immediate stop and
+  retry**. Those overrides remain effective during PSI grace.
+- The ballast still gets requests to release reserved memory before the
+  ordinary PSI thresholds, independently of these compiler actions.
+
+The two backoff periods are configurable with
+`CODEX_ANDROID_RUSTC_PSI_MAX_PAUSE_SECONDS=5` and
+`CODEX_ANDROID_RUSTC_PSI_RESUME_GRACE_SECONDS=30`. Tuning them does **not**
+alter the hard memory headroom thresholds. This favors retaining already
+completed compiler work under reclaim stalls but cannot prevent Android
+itself from killing a process under real memory exhaustion.
+
+Run the pause-policy regression test:
+
+```sh
+bash scripts/tests/test_codex_rustc_suspend_state.sh
+```
+
 ## Rust OOM-wrapper timing
 
 The memory guard reports cumulative, **mutually exclusive** compiler-process
