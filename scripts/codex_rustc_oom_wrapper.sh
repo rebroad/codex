@@ -45,13 +45,13 @@ codex_uint() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
 
-codex_swap_guard_percent="${CODEX_ANDROID_RUSTC_SWAP_FREE_GUARD_PERCENT:-50}"
-codex_memavailable_guard_percent="${CODEX_ANDROID_RUSTC_MEMAVAILABLE_GUARD_PERCENT:-20}"
+codex_swap_headroom_percent="${CODEX_ANDROID_RUSTC_SWAP_HEADROOM_PERCENT:-50}"
+codex_memavailable_critical_percent="${CODEX_ANDROID_RUSTC_MEMAVAILABLE_CRITICAL_PERCENT:-5}"
 codex_psi_some_guard_ms="${CODEX_ANDROID_RUSTC_PSI_SOME_GUARD_MS:-35}"
 codex_psi_full_guard_ms="${CODEX_ANDROID_RUSTC_PSI_FULL_GUARD_MS:-60}"
 for codex_threshold in \
-  "$codex_swap_guard_percent" \
-  "$codex_memavailable_guard_percent" \
+  "$codex_swap_headroom_percent" \
+  "$codex_memavailable_critical_percent" \
   "$codex_psi_some_guard_ms" \
   "$codex_psi_full_guard_ms"; do
   if ! codex_uint "$codex_threshold"; then
@@ -215,12 +215,14 @@ if [[ "$codex_psi_notice_probe" == true ]]; then
 fi
 
 codex_memory_guard_reason() {
-  if ((codex_mem_available_kb * 100 <= codex_mem_total_kb * codex_memavailable_guard_percent)); then
-    codex_guard_reason="MemAvailable ${codex_mem_available_kb}kB <= ${codex_memavailable_guard_percent}% of RAM"
+  if ((codex_mem_available_kb * 100 <= codex_mem_total_kb * codex_memavailable_critical_percent)); then
+    codex_guard_reason="MemAvailable ${codex_mem_available_kb}kB <= ${codex_memavailable_critical_percent}% critical RAM floor"
     return 0
   fi
-  if ((codex_swap_total_kb > 0 && codex_swap_free_kb * 100 <= codex_swap_total_kb * codex_swap_guard_percent)); then
-    codex_guard_reason="free swap ${codex_swap_free_kb}kB <= ${codex_swap_guard_percent}% of total swap"
+  if ((codex_swap_total_kb > 0 \
+    && (codex_mem_available_kb + codex_swap_free_kb) * 100 \
+      <= codex_swap_total_kb * codex_swap_headroom_percent)); then
+    codex_guard_reason="combined RAM and swap headroom $((codex_mem_available_kb + codex_swap_free_kb))kB <= ${codex_swap_headroom_percent}% of configured swap"
     return 0
   fi
   if [[ "${1:-}" == memory-only ]]; then
@@ -272,6 +274,45 @@ codex_memory_guard_reason() {
 
 codex_compiler_pid=""
 codex_compiler_suspended_at=""
+codex_compiler_suspended_at_epoch_us=""
+codex_compiler_ended_epoch_us=""
+# Running, suspended, and lost are disjoint build-wide time buckets. Successful
+# rustc stages add to running, pressure pauses add to suspended, and only
+# discarded compiler attempts add to lost.
+codex_compiler_started_epoch_us=""
+codex_compiler_suspended_total_us=0
+codex_guard_total_suspended_us=0
+codex_guard_total_running_us=0
+codex_guard_total_lost_us=0
+codex_timing_parent_start="$(sed 's/^.*) //' "/proc/$PPID/stat" 2>/dev/null | awk '{print $20}')"
+codex_timing_state_dir="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
+codex_timing_state_file=""
+codex_timing_state_lock_fd=""
+if [[ "$codex_timing_parent_start" =~ ^[0-9]+$ ]] && command -v flock >/dev/null 2>&1; then
+  codex_timing_state_file="${codex_timing_state_dir}/codex-rustc-time-${PPID}-${codex_timing_parent_start}"
+  mkdir -p "$codex_timing_state_dir"
+  exec {codex_timing_state_lock_fd}>"${codex_timing_state_file}.lock"
+  flock -x "$codex_timing_state_lock_fd"
+  if [[ -r "$codex_timing_state_file" ]]; then
+    if ! read -r codex_guard_total_running_us codex_guard_total_suspended_us codex_guard_total_lost_us \
+      <"$codex_timing_state_file" \
+      || ! codex_uint "$codex_guard_total_running_us" \
+      || ! codex_uint "$codex_guard_total_suspended_us" \
+      || ! codex_uint "$codex_guard_total_lost_us"; then
+      codex_guard_total_running_us=0
+      codex_guard_total_suspended_us=0
+      codex_guard_total_lost_us=0
+    fi
+  fi
+  flock -u "$codex_timing_state_lock_fd"
+  exec {codex_timing_state_lock_fd}>&-
+fi
+codex_timing_prior_running_us="$codex_guard_total_running_us"
+codex_timing_prior_suspended_us="$codex_guard_total_suspended_us"
+codex_timing_prior_lost_us="$codex_guard_total_lost_us"
+codex_guard_total_running_us=0
+codex_guard_total_suspended_us=0
+codex_guard_total_lost_us=0
 codex_compiler_stdout=""
 codex_compiler_stderr=""
 codex_guard_report_window_started_us="${EPOCHREALTIME/./}"
@@ -286,6 +327,7 @@ codex_guard_pending_last_pause_duration=""
 codex_guard_pending_last_pause_started_at=""
 codex_guard_compiler_state=running
 codex_guard_compile_state=running
+codex_guard_pause_mode=running
 codex_guard_pause_started_at=""
 codex_guard_pause_started_epoch_us=""
 codex_resume_clear_windows=0
@@ -300,8 +342,12 @@ codex_log_guard_event() {
 }
 
 codex_guard_mark_paused() {
-  local reason="$1"
-  [[ "$codex_guard_compile_state" == paused ]] && return 0
+  local reason="$1" mode="${2:-waiting}"
+  if [[ "$codex_guard_compile_state" == paused ]]; then
+    codex_guard_pause_mode="$mode"
+    codex_guard_compiler_state="$mode"
+    return 0
+  fi
   codex_guard_compile_state=paused
   codex_guard_pause_started_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
   codex_guard_pause_started_epoch_us="${EPOCHREALTIME/./}"
@@ -310,7 +356,8 @@ codex_guard_mark_paused() {
   [[ -n "$codex_guard_pending_first_at" ]] || codex_guard_pending_first_at="$codex_guard_pause_started_at"
   codex_guard_pending_last_at="$codex_guard_pause_started_at"
   codex_guard_pending_last_reason="$reason"
-  codex_guard_compiler_state=paused
+  codex_guard_pause_mode="$mode"
+  codex_guard_compiler_state="$mode"
 }
 
 codex_guard_mark_running() {
@@ -324,12 +371,83 @@ codex_guard_mark_running() {
   ((codex_guard_pending_transition_count += 1))
   ((codex_guard_pending_resume_count += 1))
   ((codex_guard_pending_completed_pause_us += pause_duration_us))
+  codex_guard_total_suspended_us=$((codex_guard_total_suspended_us + pause_duration_us))
   [[ -n "$codex_guard_pending_first_at" ]] || codex_guard_pending_first_at="$resumed_at"
   codex_guard_pending_last_at="$resumed_at"
   codex_guard_pending_last_pause_duration="$pause_duration"
   codex_guard_pending_last_pause_started_at="$codex_guard_pause_started_at"
   codex_guard_compile_state=running
   codex_guard_compiler_state=running
+  codex_guard_pause_mode=running
+}
+
+codex_account_compiler_resume() {
+  [[ "$codex_compiler_suspended" == true ]] || return 0
+  local resumed_at_epoch_us
+  resumed_at_epoch_us="${EPOCHREALTIME/./}"
+  codex_compiler_suspended_total_us=$((
+    codex_compiler_suspended_total_us + resumed_at_epoch_us - codex_compiler_suspended_at_epoch_us
+  ))
+  codex_compiler_suspended=false
+  codex_compiler_suspended_at_epoch_us=""
+}
+
+codex_current_running_us() {
+  local now_epoch_us elapsed_us suspended_us
+  if [[ -z "$codex_compiler_started_epoch_us" ]]; then
+    codex_current_running_us=0
+    return
+  fi
+  now_epoch_us="${codex_compiler_ended_epoch_us:-${EPOCHREALTIME/./}}"
+  elapsed_us=$((now_epoch_us - codex_compiler_started_epoch_us))
+  suspended_us="$codex_compiler_suspended_total_us"
+  if [[ "$codex_compiler_suspended" == true ]]; then
+    ((suspended_us += now_epoch_us - codex_compiler_suspended_at_epoch_us))
+  fi
+  codex_current_running_us=$((elapsed_us > suspended_us ? elapsed_us - suspended_us : 0))
+}
+
+codex_format_duration() {
+  local total_seconds=$(( $1 / 1000000 ))
+  printf -v "$2" '%02d:%02d:%02d' \
+    "$((total_seconds / 3600))" "$(((total_seconds / 60) % 60))" "$((total_seconds % 60))"
+}
+
+codex_report_timing_counters() {
+  local now_epoch_us suspended_us running_us running_duration suspended_duration lost_duration
+  now_epoch_us="${EPOCHREALTIME/./}"
+  suspended_us=$((codex_timing_prior_suspended_us + codex_guard_total_suspended_us))
+  if [[ "$codex_guard_compile_state" == paused ]]; then
+    ((suspended_us += now_epoch_us - codex_guard_pause_started_epoch_us))
+  fi
+  codex_current_running_us
+  running_us=$((codex_timing_prior_running_us + codex_guard_total_running_us + codex_current_running_us))
+  codex_format_duration "$running_us" running_duration
+  codex_format_duration "$suspended_us" suspended_duration
+  codex_format_duration "$((codex_timing_prior_lost_us + codex_guard_total_lost_us))" lost_duration
+  echo "Rust time: running $running_duration; suspended $suspended_duration; lost $lost_duration" >&2
+}
+
+codex_commit_timing_counters() {
+  [[ -n "$codex_timing_state_file" ]] || return 0
+  exec {codex_timing_state_lock_fd}>"${codex_timing_state_file}.lock"
+  flock -x "$codex_timing_state_lock_fd"
+  local prior_running=0 prior_suspended=0 prior_lost=0
+  if [[ -r "$codex_timing_state_file" ]]; then
+    if ! read -r prior_running prior_suspended prior_lost <"$codex_timing_state_file" \
+      || ! codex_uint "$prior_running" || ! codex_uint "$prior_suspended" || ! codex_uint "$prior_lost"; then
+      prior_running=0
+      prior_suspended=0
+      prior_lost=0
+    fi
+  fi
+  printf '%s %s %s\n' \
+    "$((prior_running + codex_guard_total_running_us))" \
+    "$((prior_suspended + codex_guard_total_suspended_us))" \
+    "$((prior_lost + codex_guard_total_lost_us))" >"${codex_timing_state_file}.tmp.$$"
+  mv -f "${codex_timing_state_file}.tmp.$$" "$codex_timing_state_file"
+  flock -u "$codex_timing_state_lock_fd"
+  exec {codex_timing_state_lock_fd}>&-
 }
 
 codex_report_guard_transitions() {
@@ -342,7 +460,19 @@ codex_report_guard_transitions() {
       codex_pause_duration_us=$((codex_now_epoch_us - codex_guard_pause_started_epoch_us))
       printf -v codex_pause_duration '%d.%06ds' \
         "$((codex_pause_duration_us / 1000000))" "$((codex_pause_duration_us % 1000000))"
-      echo "⏸ Rust paused at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current pause $codex_pause_duration)" >&2
+      case "$codex_guard_pause_mode" in
+        suspended)
+          echo "⏸ Rust suspended at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current pause $codex_pause_duration)" >&2
+          ;;
+        stopped)
+          echo "⏹ Rust attempt stopped at $codex_guard_pending_last_at: $codex_guard_pending_last_reason; retrying (current wait $codex_pause_duration)" >&2
+          ;;
+        waiting)
+          echo "⏸ Rust waiting at $codex_guard_pending_last_at: $codex_guard_pending_last_reason (current wait $codex_pause_duration)" >&2
+          ;;
+        running)
+          ;;
+      esac
     else
       echo "▶️ Rust running at $codex_guard_pending_last_at (last pause $codex_guard_pending_last_pause_duration; began $codex_guard_pending_last_pause_started_at)" >&2
     fi
@@ -358,6 +488,9 @@ codex_report_guard_transitions() {
       "$((codex_guard_pending_completed_pause_us % 1000000))"
     echo "🔄 Rust state changed ${codex_guard_pending_transition_count} times (${codex_guard_pending_suspend_count} pauses, ${codex_guard_pending_resume_count} resumes; completed pauses totaled $codex_pause_duration); now $codex_guard_compiler_state${codex_current_pause_duration:+ for $codex_current_pause_duration} ($codex_guard_pending_first_at–$codex_guard_pending_last_at)" >&2
   fi
+  if ((codex_guard_pending_transition_count > 0)); then
+    codex_report_timing_counters
+  fi
   codex_guard_report_window_started_us="$codex_now_epoch_us"
   codex_guard_pending_transition_count=0
   codex_guard_pending_suspend_count=0
@@ -372,6 +505,7 @@ codex_report_guard_transitions() {
 
 codex_stop_compiler() {
   [[ -n "$codex_compiler_pid" ]] || return 0
+  codex_account_compiler_resume
   kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
   kill -TERM -- "-$codex_compiler_pid" 2>/dev/null || true
   for codex_wait_attempt in {1..8}; do
@@ -379,6 +513,7 @@ codex_stop_compiler() {
     sleep 0.25
   done
   kill -KILL -- "-$codex_compiler_pid" 2>/dev/null || true
+  codex_compiler_ended_epoch_us="${EPOCHREALTIME/./}"
 }
 codex_cleanup_compiler_output() {
   [[ -z "$codex_compiler_stdout" ]] || rm -f "$codex_compiler_stdout"
@@ -424,7 +559,7 @@ codex_wait_for_memory() {
     else
       return 0
     fi
-    codex_guard_mark_paused "$codex_guard_reason"
+    codex_guard_mark_paused "$codex_guard_reason" waiting
     codex_log_guard_event waiting \
       "waiting for Android memory pressure to ease before (re)starting Rust compile: $codex_guard_reason"
     codex_report_guard_transitions
@@ -444,10 +579,14 @@ while true; do
   /system/bin/setsid "${codex_compiler_command[@]}" \
     >"$codex_compiler_stdout" 2>"$codex_compiler_stderr" &
   codex_compiler_pid=$!
+  codex_compiler_started_epoch_us="${EPOCHREALTIME/./}"
+  codex_compiler_ended_epoch_us=""
+  codex_compiler_suspended_total_us=0
   codex_restart_compiler=false
   codex_compiler_suspended=false
   codex_guard_compiler_state=running
   codex_resume_clear_windows=0
+  codex_compiler_waited=false
   while kill -0 "$codex_compiler_pid" 2>/dev/null; do
     codex_read_memory || {
       echo 'Android Rust memory guard lost access to /proc/meminfo; stopping the compiler' >&2
@@ -476,18 +615,40 @@ while true; do
         codex_resume_clear_windows=0
         if [[ "$codex_compiler_suspended" == false ]]; then
           codex_compiler_suspended_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
-          codex_guard_mark_paused "$codex_guard_reason"
+          codex_compiler_suspended_at_epoch_us="${EPOCHREALTIME/./}"
+          codex_guard_mark_paused "$codex_guard_reason" suspended
           kill -STOP -- "-$codex_compiler_pid" 2>/dev/null || true
           codex_compiler_suspended=true
         fi
       else
         codex_log_guard_event stopping \
           "stopping Rust compile before Android low-memory kill: $codex_guard_reason; waiting to retry"
-        codex_guard_mark_paused "$codex_guard_reason"
-        codex_compiler_suspended=false
+        if [[ "$codex_compiler_suspended" == true ]]; then
+          codex_account_compiler_resume
+          codex_guard_mark_running
+        fi
         codex_stop_compiler
-        wait "$codex_compiler_pid" 2>/dev/null || true
+        codex_guard_mark_paused "$codex_guard_reason" stopped
+        codex_compiler_status=0
+        wait "$codex_compiler_pid" 2>/dev/null || codex_compiler_status=$?
+        codex_compiler_waited=true
         codex_compiler_pid=""
+        codex_current_running_us
+        if ((codex_compiler_status == 0)); then
+          # The compiler can finish between the last liveness check and the
+          # pressure response. Preserve its completed output and count the
+          # stage as running instead of classifying it as discarded.
+          codex_guard_total_running_us=$((codex_guard_total_running_us + codex_current_running_us))
+          codex_compiler_started_epoch_us=""
+          codex_compiler_suspended=false
+          codex_compiler_suspended_at_epoch_us=""
+          codex_guard_mark_running
+          codex_report_guard_transitions
+          break
+        fi
+        codex_guard_total_lost_us=$((codex_guard_total_lost_us + codex_current_running_us))
+        codex_compiler_started_epoch_us=""
+        codex_report_timing_counters
         # A killed rustc may have emitted only part of Cargo's JSON artifact
         # stream. Discard that attempt so a retry cannot report duplicate or
         # incomplete artifacts to Cargo's dependency queue.
@@ -504,9 +665,9 @@ while true; do
         codex_resume_clear_windows=0
       fi
       if [[ "$codex_psi_available" == false ]] || ((codex_resume_clear_windows >= codex_psi_resume_clear_windows_required)); then
+        codex_account_compiler_resume
         codex_guard_mark_running
         kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
-        codex_compiler_suspended=false
         codex_resume_clear_windows=0
       fi
     fi
@@ -522,8 +683,19 @@ while true; do
   fi
   codex_stop_psi_stream
   codex_compiler_status=0
-  wait "$codex_compiler_pid" || codex_compiler_status=$?
+  if [[ "$codex_compiler_waited" != true ]]; then
+    wait "$codex_compiler_pid" || codex_compiler_status=$?
+    codex_current_running_us
+    codex_guard_total_running_us=$((codex_guard_total_running_us + codex_current_running_us))
+  fi
   codex_compiler_pid=""
+  codex_compiler_started_epoch_us=""
+  codex_compiler_suspended=false
+  codex_compiler_suspended_at_epoch_us=""
+  codex_commit_timing_counters
+  if ((codex_guard_total_suspended_us > 0 || codex_guard_total_lost_us > 0)); then
+    codex_report_timing_counters
+  fi
   cat "$codex_compiler_stdout"
   cat "$codex_compiler_stderr" >&2
   codex_cleanup_compiler_output
