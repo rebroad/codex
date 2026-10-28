@@ -329,6 +329,15 @@ codex_memory_guard_reason() {
 
 codex_compiler_pid=""
 codex_compiler_suspended_at=""
+codex_compiler_suspended_at_epoch_us=""
+codex_compiler_ended_epoch_us=""
+codex_compiler_started_epoch_us=""
+codex_compiler_suspended_total_us=0
+# Accounting is shared across rustc wrappers and never retroactively changes
+# an already reported counter. An attempt is only credited to Kept or Lost
+# when we know whether its output was retained.
+source "${BASH_SOURCE[0]%/*}/codex_rustc_timing.sh"
+codex_timing_init
 codex_compiler_stdout=""
 codex_compiler_stderr=""
 codex_guard_report_window_started_us="${EPOCHREALTIME/./}"
@@ -364,6 +373,7 @@ codex_guard_mark_paused() {
     codex_guard_compiler_state="$mode"
     return 0
   fi
+  codex_timing_pause
   codex_guard_compile_state=paused
   codex_guard_pause_started_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
   codex_guard_pause_started_epoch_us="${EPOCHREALTIME/./}"
@@ -391,9 +401,21 @@ codex_guard_mark_running() {
   codex_guard_pending_last_at="$resumed_at"
   codex_guard_pending_last_pause_duration="$pause_duration"
   codex_guard_pending_last_pause_started_at="$codex_guard_pause_started_at"
+  codex_timing_resume
   codex_guard_compile_state=running
   codex_guard_compiler_state=running
   codex_guard_pause_mode=running
+}
+
+codex_account_compiler_resume() {
+  [[ "$codex_compiler_suspended" == true ]] || return 0
+  local resumed_at_epoch_us
+  resumed_at_epoch_us="${EPOCHREALTIME/./}"
+  codex_compiler_suspended_total_us=$((
+    codex_compiler_suspended_total_us + resumed_at_epoch_us - codex_compiler_suspended_at_epoch_us
+  ))
+  codex_compiler_suspended=false
+  codex_compiler_suspended_at_epoch_us=""
 }
 
 codex_report_guard_transitions() {
@@ -521,6 +543,10 @@ while true; do
   /system/bin/setsid "${codex_compiler_command[@]}" \
     >"$codex_compiler_stdout" 2>"$codex_compiler_stderr" &
   codex_compiler_pid=$!
+  codex_timing_launch
+  codex_compiler_started_epoch_us="${EPOCHREALTIME/./}"
+  codex_compiler_ended_epoch_us=""
+  codex_compiler_suspended_total_us=0
   codex_restart_compiler=false
   codex_compiler_suspended=false
   codex_guard_compiler_state=running
@@ -532,6 +558,8 @@ while true; do
       codex_stop_compiler
       codex_stop_psi_stream
       wait "$codex_compiler_pid" 2>/dev/null || true
+      codex_timing_lost
+      codex_report_timing_counters
       exit 1
     }
     if [[ "$codex_psi_available" == true ]]; then
@@ -571,12 +599,22 @@ while true; do
         codex_compiler_status=0
         wait "$codex_compiler_pid" 2>/dev/null || codex_compiler_status=$?
         codex_compiler_waited=true
+        # The compiler may have finished just before we sent TERM. Classify
+        # only after wait reveals whether Cargo can retain its output.
+        if ((codex_compiler_status == 0)); then
+          codex_timing_success
+        else
+          codex_timing_lost
+        fi
         codex_compiler_pid=""
+        codex_compiler_started_epoch_us=""
+        codex_report_timing_counters
         if ((codex_compiler_status == 0)); then
           # The compiler can finish between the last liveness check and the
           # pressure response. Preserve its completed output and count the
           # stage as running instead of classifying it as discarded.
           codex_compiler_suspended=false
+          codex_compiler_suspended_at_epoch_us=""
           codex_guard_mark_running
           codex_report_guard_transitions
           break
@@ -603,6 +641,7 @@ while true; do
       fi
     fi
     codex_report_guard_transitions
+    codex_timing_periodic_report
     sleep 0.25
   done
   while ((codex_guard_pending_transition_count > 0)); do
@@ -616,8 +655,17 @@ while true; do
   codex_compiler_status=0
   if [[ "$codex_compiler_waited" != true ]]; then
     wait "$codex_compiler_pid" || codex_compiler_status=$?
+    if ((codex_compiler_status == 0)); then
+      codex_timing_success
+    else
+      codex_timing_lost
+    fi
   fi
   codex_compiler_pid=""
+  codex_compiler_started_epoch_us=""
+  codex_compiler_suspended=false
+  codex_compiler_suspended_at_epoch_us=""
+  codex_report_timing_counters
   cat "$codex_compiler_stdout"
   cat "$codex_compiler_stderr" >&2
   codex_cleanup_compiler_output
