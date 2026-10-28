@@ -14,15 +14,21 @@ The existing Android rustc wrapper still owns PSI, RAM/swap thresholds, suspend,
 
 ## Live build telemetry
 
-While the Android memory guard is active, `build_codex.sh` prints one
-consolidated ballast status line about every 15 seconds, even when Cargo
-runs multiple rustc processes:
+While the Android memory guard is active, `build_codex.sh` prints
+a ballast snapshot together with a **Kept / Suspended / Lost** Rust timing
+report. The build-wide output filter limits both to **at most one update
+per minute**, even when Cargo runs multiple rustc processes. Pause/resume
+events themselves are emitted once at each state transition, not periodically.
+The controller can continue adjusting memory every 250 ms without flooding
+the terminal:
 
 ```text
+Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this rustc) 00:01:32
 [22:20:15] 🧠 Ballast: 96/256 MiB held | released 160 MiB | refilled 0 MiB | MemAvailable 824 MiB | PSI some 36.4 ms/s, full 0.0 ms/s
 ```
 
-These are illustrative numbers. **Held** is the current resident
+These are illustrative numbers. Output is written to stderr, which the build script
+captures alongside stdout in its build log. **Held** is the current resident
 allocation *requested* by ballast (Android may swap/compress those pages),
 and **released** / **refilled** are cumulative MiB unmapped / allocated
 within the current Cargo stage. They can exceed the configured maximum
