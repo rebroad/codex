@@ -451,7 +451,8 @@ codex_guard_mark_running() {
   codex_compiler_suspended=false
   codex_compiler_suspended_at=""
   codex_compiler_suspended_at_epoch_us=""
-  echo "▶️ Rust resumed at $(date '+%Y-%m-%dT%H:%M:%S%z') (paused $duration)" >&2
+  echo "▶️ Rust resumed at $(date '+%Y-%m-%dT%H:%M:%S%z') (paused $duration${codex_guard_resume_note:+; $codex_guard_resume_note})" >&2
+  codex_guard_resume_note=""
 }
 
 codex_stop_compiler() {
@@ -605,6 +606,7 @@ while true; do
         if [[ "$codex_compiler_suspended" == true ]]; then
           if codex_psi_pause_limit_reached "$codex_now_epoch_us"; then
             kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
+            codex_guard_resume_note="PSI-only backoff limit; ${codex_psi_resume_grace_seconds}s progress grace"
             codex_guard_mark_running
           fi
         elif ((codex_now_epoch_us >= codex_psi_resume_grace_until_epoch_us)); then
