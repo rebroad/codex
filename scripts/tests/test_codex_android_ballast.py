@@ -98,6 +98,20 @@ class BallastTest(unittest.TestCase):
             record_tuning(history, outcome, stats, 384)
             self.assertEqual(read_tuning(history, 256, 384, 4096), 288)
 
+    def test_autotune_does_not_grow_long_empty_reserve(self):
+        with tempfile.TemporaryDirectory() as d:
+            history = Path(d, "history.json")
+            result = Path(d, "result")
+            result.write_text("0 0\n", encoding="ascii")
+            stats = dict(system_ram_mb=4096, max_mb=256,
+                         initial_mb=256, lowest_mb=0,
+                         pressure_signals=5, released_mb=256, refilled_mb=0,
+                         elapsed_s=400, zero_held_seconds=350)
+            record_tuning(history, result, stats, 384)
+            saved = json.loads(history.read_text(encoding="utf-8"))
+            self.assertEqual(saved["recommended_mb"], 256)
+            self.assertIn("long empty reserve", saved["observations"][-1]["decision"])
+
     def test_atomic_telemetry_snapshot(self):
         with tempfile.TemporaryDirectory() as d:
             status = Path(d, "status")
@@ -159,6 +173,8 @@ class BallastTest(unittest.TestCase):
             self.assertIn("zero_held_seconds", saved)
             self.assertIn("release_observations", saved)
             self.assertIn("refill_opportunity_samples", saved)
+            self.assertIn("refill_blocked_available_mb_avg", saved)
+            self.assertIn("empty_with_safe_headroom_samples", saved)
 
 
 if __name__ == "__main__":
