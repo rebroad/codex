@@ -492,6 +492,7 @@ trap 'codex_abort_compiler 143' TERM
 trap 'codex_abort_compiler 129' HUP
 
 codex_wait_for_memory() {
+  local psi_wait_started_epoch_us=0 now_epoch_us
   while true; do
     codex_read_memory || {
       echo 'Android Rust memory guard cannot read required /proc/meminfo fields' >&2
@@ -508,6 +509,20 @@ codex_wait_for_memory() {
     fi
     if codex_memory_guard_reason; then
       codex_lmkd_clear_windows=0
+      if [[ "$codex_lmkd_reclaim_active" != true ]] && codex_guard_is_psi_only; then
+        now_epoch_us="${EPOCHREALTIME/./}"
+        if ((psi_wait_started_epoch_us == 0)); then
+          psi_wait_started_epoch_us="$now_epoch_us"
+        fi
+        # PSI stalls alone must not block a rustc from ever starting. The
+        # check above already ruled out critical RAM/swap headroom.
+        if ((now_epoch_us - psi_wait_started_epoch_us >=
+              codex_psi_max_pause_seconds * 1000000)); then
+          return 0
+        fi
+      else
+        psi_wait_started_epoch_us=0
+      fi
     elif [[ "$codex_lmkd_reclaim_active" == true ]]; then
       if [[ "$codex_psi_available" == true ]] && ((${#codex_some_deltas[@]} < 5)); then
         codex_lmkd_clear_windows=0
@@ -581,11 +596,20 @@ while true; do
       if [[ "$codex_lmkd_reclaim_active" == true ]]; then
         codex_resume_clear_windows=0
       fi
-      if [[ "$codex_guard_reason" == memory\ PSI\ some\ stall* ]]; then
+      if [[ "$codex_lmkd_reclaim_active" != true ]] && codex_guard_is_psi_only; then
+        # Both PSI some and full indicate stalls; neither alone warrants
+        # discarding rustc's work. Pause reversibly, but ensure a suspended
+        # compiler gets another chance to make progress after 5 seconds.
         codex_resume_clear_windows=0
-        if [[ "$codex_compiler_suspended" == false ]]; then
+        codex_now_epoch_us="${EPOCHREALTIME/./}"
+        if [[ "$codex_compiler_suspended" == true ]]; then
+          if codex_psi_pause_limit_reached "$codex_now_epoch_us"; then
+            kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
+            codex_guard_mark_running
+          fi
+        elif ((codex_now_epoch_us >= codex_psi_resume_grace_until_epoch_us)); then
           codex_compiler_suspended_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
-          codex_compiler_suspended_at_epoch_us="${EPOCHREALTIME/./}"
+          codex_compiler_suspended_at_epoch_us="$codex_now_epoch_us"
           codex_guard_mark_paused "$codex_guard_reason" suspended
           kill -STOP -- "-$codex_compiler_pid" 2>/dev/null || true
           codex_compiler_suspended=true
