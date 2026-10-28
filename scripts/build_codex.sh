@@ -288,6 +288,7 @@ start_android_ballast() {
       --autotune-cap-mb "${CODEX_ANDROID_RUSTC_BALLAST_AUTOTUNE_CAP_MB:-384}"
     )
   fi
+  mkdir -p -- "${BUILD_REPO}/build"
   python3 -u "${SOURCE_REPO}/scripts/codex_android_ballast.py" \
     --max-mb "${max_mb}" \
     --chunk-mb "${CODEX_ANDROID_RUSTC_BALLAST_CHUNK_MB:-8}" \
@@ -297,6 +298,7 @@ start_android_ballast() {
     --status-file "${ANDROID_BALLAST_DIR}/status" \
     --telemetry-file "${ANDROID_BALLAST_DIR}/telemetry" \
     --psi-status-file "${ANDROID_BALLAST_DIR}/psi-sample" \
+    --session-stats-file "${BUILD_REPO}/build/codex-android-ballast-last-session.json" \
     "${tune_args[@]}" 9>&- &
   ANDROID_BALLAST_PID=$!
   for ((attempt = 0; attempt < 160; attempt++)); do
