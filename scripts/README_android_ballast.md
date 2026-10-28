@@ -58,7 +58,7 @@ Baseline comparison:
 CODEX_ANDROID_RUSTC_BALLAST_MB=0 ./scripts/build_codex.sh
 ```
 
-Keep Cargo jobs, device conditions, and profile similar. Compare elapsed time, cumulative running/paused duration, compiler restarts, and Android kills. Fewer pauses alone do not prove an improvement.
+Keep Cargo jobs, device conditions, and profile similar. Compare elapsed time, cumulative kept/suspended/lost duration, compiler restarts, and Android kills. Fewer pauses alone do not prove an improvement.
 
 Test the controller:
 
@@ -66,6 +66,49 @@ Test the controller:
 python3 -m unittest discover -s scripts/tests -p 'test_codex_android_ballast.py' -v
 ```
 
+
+## Conservative next-build auto-tuning
+
+On Termux, automatic ballast sizing is enabled when
+`CODEX_ANDROID_RUSTC_BALLAST_MB` is **unset**. It starts at 256 MiB and
+stores a history in `build/codex-android-ballast-autotune.json`.
+The next Cargo stage (including the next build invocation) reads the learned
+recommendation. The controller still observes the RAM floor and can allocate
+less than the requested maximum when headroom is unavailable.
+
+After a Cargo stage lasting at least 90 seconds, the tuner only changes the
+reserve when that stage finished successfully **without discarded rustc work**:
+
+- Raise by **32 MiB** (at most **384 MiB** by default) only if the reserve
+  was depleted and at least two early pressure-release signals were observed.
+- Lower by **32 MiB** (never below **128 MiB**) only if at most 25% of the
+  reserve was needed and no pressure-release signals occurred.
+- Otherwise hold the size constant. In particular, **LMKD/PSI retries do not
+  cause automatic increases**, since a larger ballast could make such
+  failures worse.
+
+This is a cautious heuristic, not a learned predictor of peak Rust memory or
+a guarantee against Android LMKD. The JSON file retains up to ten recent stage
+observations to make decisions inspectable.
+
+To disable learning while retaining the default size:
+
+```sh
+CODEX_ANDROID_RUSTC_BALLAST_AUTOTUNE=0 ./scripts/build_codex.sh
+```
+
+To select an exact manual size (which also disables learning for that run):
+
+```sh
+CODEX_ANDROID_RUSTC_BALLAST_MB=256 ./scripts/build_codex.sh
+```
+
+The maximum automatic reserve can be changed separately with
+`CODEX_ANDROID_RUSTC_BALLAST_AUTOTUNE_CAP_MB=384`. A new build prints
+whether ballast is enabled, its actual startup allocation and maximum, the
+wrapper path and hash, and eventually a tuning decision when the Cargo stage
+finishes. The tuned value only affects **future stages**, never the reserve
+of an already-running stage.
 
 ## Rust OOM-wrapper timing
 
