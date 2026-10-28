@@ -228,6 +228,39 @@ codex_ballast_request_relief() {
   fi
 }
 
+# This file belongs to the build-wide controller. Every compiler shares the
+# same counters; the build's awk output deduplicates concurrent status reports.
+codex_ballast_last_telemetry_us=0
+codex_report_ballast_telemetry() {
+  local telemetry_file="${CODEX_ANDROID_RUSTC_BALLAST_TELEMETRY_FILE:-}"
+  local now_us held_mb max_mb released_mb refilled_mb psi_some psi_full
+  [[ -n "${telemetry_file}" && -r "${telemetry_file}" ]] || return 0
+  now_us="${EPOCHREALTIME/./}"
+  if ((codex_ballast_last_telemetry_us > 0 \
+    && now_us - codex_ballast_last_telemetry_us < 15000000)); then
+    return 0
+  fi
+  if ! read -r held_mb max_mb released_mb refilled_mb <"${telemetry_file}"; then
+    return 0
+  fi
+  codex_uint "${held_mb}" && codex_uint "${max_mb}" \
+    && codex_uint "${released_mb}" && codex_uint "${refilled_mb}" || return 0
+  psi_some=n/a
+  psi_full=n/a
+  if [[ "${codex_psi_available}" == true ]] && (("${#codex_some_deltas[@]}" >= 5)); then
+    printf -v psi_some '%d.%01d ms/s' \
+      "$((codex_recent_some_us_per_second / 1000))" \
+      "$(((codex_recent_some_us_per_second % 1000) / 100))"
+    printf -v psi_full '%d.%01d ms/s' \
+      "$((codex_recent_full_us_per_second / 1000))" \
+      "$(((codex_recent_full_us_per_second % 1000) / 100))"
+  fi
+  printf '🧠 Ballast: %s/%s MiB held | released %s MiB | refilled %s MiB | MemAvailable %s MiB | PSI some %s, full %s\n' \
+    "${held_mb}" "${max_mb}" "${released_mb}" "${refilled_mb}" \
+    "$((codex_mem_available_kb / 1024))" "${psi_some}" "${psi_full}" >&2
+  codex_ballast_last_telemetry_us="${now_us}"
+}
+
 codex_memory_guard_reason() {
   if ((codex_mem_available_kb * 100 <= codex_mem_total_kb * codex_memavailable_critical_percent)); then
     codex_guard_reason="MemAvailable ${codex_mem_available_kb}kB <= ${codex_memavailable_critical_percent}% critical RAM floor"
@@ -448,6 +481,7 @@ codex_wait_for_memory() {
         codex_stop_psi_stream
       fi
     fi
+    codex_report_ballast_telemetry
     if codex_memory_guard_reason; then
       codex_lmkd_clear_windows=0
     elif [[ "$codex_lmkd_reclaim_active" == true ]]; then
@@ -509,6 +543,7 @@ while true; do
         codex_stop_psi_stream
       fi
     fi
+    codex_report_ballast_telemetry
     if [[ "$codex_lmkd_reclaim_active" == true ]]; then
       codex_guard_reason="LMKD reclaimed ${codex_lmkd_reclaim_process:-another app}"
       codex_ballast_request_relief
