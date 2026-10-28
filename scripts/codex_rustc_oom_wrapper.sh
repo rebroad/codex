@@ -545,6 +545,7 @@ codex_wait_for_memory() {
 
 while true; do
   if ! codex_wait_for_memory; then
+    codex_report_timing_counters
     codex_stop_psi_stream
     exit 1
   fi
@@ -605,11 +606,12 @@ while true; do
       else
         codex_log_guard_event stopping \
           "stopping Rust compile before Android low-memory kill: $codex_guard_reason; waiting to retry"
-        if [[ "$codex_compiler_suspended" == true ]]; then
-          codex_guard_mark_running
-        fi
-        codex_stop_compiler
+        # Transition straight to stopped, not briefly through running.
+        # Once pressure forces termination, time spent delivering signals
+        # and waiting for a retry is suspended, not useful or lost work.
         codex_guard_mark_paused "$codex_guard_reason" stopped
+        codex_stop_compiler
+        codex_stop_compiler
         codex_compiler_status=0
         wait "$codex_compiler_pid" 2>/dev/null || codex_compiler_status=$?
         codex_compiler_waited=true
