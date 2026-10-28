@@ -1102,6 +1102,12 @@ PY
             if (last_ballast && now - last_ballast < 60) next
             last_ballast = now
             printf "[%s] %s\n", strftime("%H:%M:%S"), $0
+          } else if (index($0, "Rust time: kept ") == 1) {
+            # Frequent short rustc invocations should not flood the log.
+            now = systime()
+            if (last_timing && now - last_timing < 60) next
+            last_timing = now
+            print
           } else {
             print
           }
@@ -1113,6 +1119,19 @@ PY
       status=$?
     fi
     rm -f "${stderr_log}"
+    # Always print the final shared ledger before deleting the stage runtime,
+    # including short stages whose progress snapshots were throttled.
+    local kept_us=0 suspended_us=0 lost_us
+    if [[ -r "${ANDROID_RUST_TIMING_DIR}/totals" ]] \
+      && read -r kept_us suspended_us lost_us <"${ANDROID_RUST_TIMING_DIR}/totals" \
+      && [[ "${kept_us}" =~ ^[0-9]+$ && "${suspended_us}" =~ ^[0-9]+$ \
+         && "${lost_us}" =~ ^[0-9]+$ ]]; then
+      local k=$((kept_us / 1000000)) p=$((suspended_us / 1000000)) l=$((lost_us / 1000000))
+      printf '⏱ Rust totals (%s): kept %02d:%02d:%02d; suspended %02d:%02d:%02d; lost %02d:%02d:%02d\n' \
+        "${stage}" "$((k / 3600))" "$(((k / 60) % 60))" "$((k % 60))" \
+        "$((p / 3600))" "$(((p / 60) % 60))" "$((p % 60))" \
+        "$((l / 3600))" "$(((l / 60) % 60))" "$((l % 60))" >&2
+    fi
     stop_android_ballast
     if [[ -n "${ANDROID_RUST_TIMING_DIR}" ]]; then
       rm -rf -- "${ANDROID_RUST_TIMING_DIR}"
@@ -1722,6 +1741,9 @@ run_preflight() {
     cd "${SOURCE_REPO}"
     bash -n \
       scripts/build_codex.sh \
+      scripts/codex_rustc_oom_wrapper.sh \
+      scripts/codex_rustc_timing.sh \
+      scripts/tests/test_codex_rustc_timing.sh \
       scripts/build_armv7.sh \
       scripts/resolve_rusty_v8_artifacts.sh \
       scripts/package_npm.sh \
