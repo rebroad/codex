@@ -9,7 +9,9 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from codex_android_ballast import MIB, atomic_status, chunk_action
+from codex_android_ballast import (
+    MIB, atomic_status, chunk_action, read_tuning, record_tuning, tune_next_mb,
+)
 
 
 class BallastTest(unittest.TestCase):
@@ -28,6 +30,34 @@ class BallastTest(unittest.TestCase):
 
     def test_no_refill_at_capacity(self):
         self.assertEqual(chunk_action(480*MIB, 440*MIB, 32, 32, 100*MIB, 8*MIB, 16*MIB, True), 0)
+
+    def test_autotune_step_with_clean_build(self):
+        self.assertEqual(tune_next_mb(256, 256, 0, 3, 180, True, 0, 384)[0], 288)
+        self.assertEqual(tune_next_mb(256, 256, 240, 0, 180, True, 0, 384)[0], 224)
+        self.assertEqual(tune_next_mb(384, 384, 0, 3, 180, True, 0, 384)[0], 384)
+
+    def test_autotune_does_not_chase_oom_restarts(self):
+        self.assertEqual(tune_next_mb(256, 256, 0, 10, 180, True, 1000000, 384)[0], 256)
+        self.assertEqual(tune_next_mb(256, 256, 0, 10, 180, False, 0, 384)[0], 256)
+        self.assertEqual(tune_next_mb(256, 256, 0, 10, 30, True, 0, 384)[0], 256)
+        self.assertEqual(tune_next_mb(256, 64, 0, 0, 180, True, 0, 384)[0], 256)
+
+    def test_autotune_history_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            history = Path(d, "history.json")
+            outcome = Path(d, "outcome")
+            outcome.write_text("0 0\n")
+            stats = dict(system_ram_mb=4096, max_mb=256, initial_mb=256,
+                         lowest_mb=0, pressure_signals=3, released_mb=256,
+                         refilled_mb=0, elapsed_s=180)
+            record_tuning(history, outcome, stats, 384)
+            self.assertEqual(read_tuning(history, 256, 384, 4096), 288)
+            self.assertEqual(read_tuning(history, 256, 384, 8192), 256)
+            outcome.write_text("0 90000000\n")
+            stats["max_mb"] = 288
+            stats["initial_mb"] = 288
+            record_tuning(history, outcome, stats, 384)
+            self.assertEqual(read_tuning(history, 256, 384, 4096), 288)
 
     def test_atomic_telemetry_snapshot(self):
         with tempfile.TemporaryDirectory() as d:
