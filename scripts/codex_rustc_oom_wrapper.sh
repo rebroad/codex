@@ -118,6 +118,11 @@ codex_start_psi_stream() {
     fi
     ADB_SERVER_SOCKET="$codex_adb_server_socket" \
       exec "$codex_adb_bin" -s "$codex_adb_serial" exec-out sh -c '
+      since="$(date +%s.%3N)"
+      logcat -T "$since" -v epoch -s lmkd:I |
+        while IFS= read -r line; do
+          printf "L %s\n" "$line"
+        done &
       while :; do
         some=0
         full=0
@@ -133,7 +138,7 @@ codex_start_psi_stream() {
             esac
           done
         done </proc/pressure/memory
-        printf "%s %s\n" "$some" "$full"
+        printf "P %s %s\n" "$some" "$full"
         sleep 0.25
       done
     ' 2>/dev/null
@@ -154,15 +159,37 @@ codex_stop_psi_stream() {
   fi
 }
 
+codex_lmkd_reclaim_active=false
+codex_lmkd_reclaim_process=""
+codex_lmkd_clear_windows=0
 codex_start_psi_stream || true
 
 codex_read_psi() {
+  local codex_record_kind codex_record_value codex_record_rest codex_lmkd_line
   codex_psi_some_total_us=0
   codex_psi_full_total_us=0
   [[ -n "$codex_psi_stream_fd" ]] || return 1
-  IFS=' ' read -r -t 1 codex_psi_some_total_us codex_psi_full_total_us \
-    <&"$codex_psi_stream_fd" || return 1
-  codex_uint "$codex_psi_some_total_us" && codex_uint "$codex_psi_full_total_us"
+  while IFS=' ' read -r -t 1 codex_record_kind codex_record_value codex_record_rest \
+    <&"$codex_psi_stream_fd"; do
+    case "$codex_record_kind" in
+      P)
+        codex_psi_some_total_us="$codex_record_value"
+        codex_psi_full_total_us="$codex_record_rest"
+        codex_uint "$codex_psi_some_total_us" && codex_uint "$codex_psi_full_total_us"
+        return
+        ;;
+      L)
+        codex_lmkd_line="$codex_record_value $codex_record_rest"
+        if [[ "$codex_lmkd_line" == *"Reclaim '"* ]]; then
+          codex_lmkd_reclaim_process=${codex_lmkd_line#*Reclaim \'}
+          codex_lmkd_reclaim_process=${codex_lmkd_reclaim_process%%\'*}
+          codex_lmkd_reclaim_active=true
+          codex_lmkd_clear_windows=0
+        fi
+        ;;
+    esac
+  done
+  return 1
 }
 
 if ! codex_read_memory; then
@@ -378,7 +405,23 @@ codex_wait_for_memory() {
         codex_stop_psi_stream
       fi
     fi
-    if ! codex_memory_guard_reason; then
+    if codex_memory_guard_reason; then
+      codex_lmkd_clear_windows=0
+    elif [[ "$codex_lmkd_reclaim_active" == true ]]; then
+      if [[ "$codex_psi_available" == true ]] && ((${#codex_some_deltas[@]} < 5)); then
+        codex_lmkd_clear_windows=0
+      else
+        ((codex_lmkd_clear_windows += 1))
+      fi
+      if ((codex_lmkd_clear_windows >= 5)); then
+        codex_lmkd_reclaim_active=false
+        codex_lmkd_clear_windows=0
+        codex_log_guard_event lmkd-clear \
+          'Android LMKD reclaim quiet for five clear memory checks; allowing Rust compile to resume'
+        return 0
+      fi
+      codex_guard_reason="recent LMKD reclaim of ${codex_lmkd_reclaim_process:-another app}; waiting for five clear memory checks"
+    else
       return 0
     fi
     codex_guard_mark_paused "$codex_guard_reason"
@@ -422,7 +465,13 @@ while true; do
         codex_stop_psi_stream
       fi
     fi
-    if codex_memory_guard_reason; then
+    if [[ "$codex_lmkd_reclaim_active" == true ]]; then
+      codex_guard_reason="LMKD reclaimed ${codex_lmkd_reclaim_process:-another app}"
+    fi
+    if [[ "$codex_lmkd_reclaim_active" == true ]] || codex_memory_guard_reason; then
+      if [[ "$codex_lmkd_reclaim_active" == true ]]; then
+        codex_resume_clear_windows=0
+      fi
       if [[ "$codex_guard_reason" == memory\ PSI\ some\ stall* ]]; then
         codex_resume_clear_windows=0
         if [[ "$codex_compiler_suspended" == false ]]; then
