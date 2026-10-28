@@ -49,6 +49,11 @@ codex_timing_emit() {
   codex_timing_format "$4" pending_duration
   printf 'Rust time: kept %s; suspended %s; lost %s; in progress (this rustc) %s\n' \
     "${running_duration}" "${paused_duration}" "${lost_duration}" "${pending_duration}" >&2
+  # Ballast shares the timer report cadence instead of producing independent
+  # status messages every time it allocates or releases pages.
+  if declare -F codex_report_ballast_telemetry >/dev/null 2>&1; then
+    codex_report_ballast_telemetry
+  fi
 }
 
 # Events account all time up to the boundary, then switch mode. Successful
