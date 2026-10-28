@@ -4,7 +4,7 @@ set -euo pipefail
 test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 temp="$(mktemp -d)"
 trap 'rm -rf -- "$temp"' EXIT
-export TMPDIR="$temp" CODEX_BUILD_PID="$$"
+export TMPDIR="$temp" CODEX_ANDROID_RUSTC_TIMING_DIR="$temp"
 source "${test_dir}/../codex_rustc_timing.sh"
 
 clock=1000000
