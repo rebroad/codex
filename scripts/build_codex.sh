@@ -69,6 +69,8 @@ RESTART_APP_SERVER="false"
 PROFILE_OPTION_SET="false"
 SOURCE_LOCK_BACKUP=""
 ANDROID_PSI_NOTICE_DIR=""
+ANDROID_BALLAST_PID=""
+ANDROID_BALLAST_DIR=""
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -249,7 +251,56 @@ release_cargo_target_lock() {
   exec 9>&-
   unset CODEX_CARGO_HELD_TARGET_LOCK_FILE CODEX_CARGO_HELD_TARGET_LOCK_PID
 }
+# One ballast per Cargo stage (not one per concurrently running rustc).
+# The controller is disposable; the OOM wrapper remains the final safety guard.
+stop_android_ballast() {
+  if [[ -n "${ANDROID_BALLAST_PID}" ]]; then
+    kill -TERM "${ANDROID_BALLAST_PID}" 2>/dev/null || true
+    wait "${ANDROID_BALLAST_PID}" 2>/dev/null || true
+    ANDROID_BALLAST_PID=""
+  fi
+  if [[ -n "${ANDROID_BALLAST_DIR}" ]]; then
+    rm -rf -- "${ANDROID_BALLAST_DIR}"
+    ANDROID_BALLAST_DIR=""
+  fi
+}
+start_android_ballast() {
+  local max_mb="${CODEX_ANDROID_RUSTC_BALLAST_MB:-256}"
+  local temp_root="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
+  local attempt held_mb
+  [[ "${max_mb}" =~ ^[0-9]+$ ]] || die "CODEX_ANDROID_RUSTC_BALLAST_MB must be a non-negative integer"
+  ((max_mb > 0)) || return 1
+  mkdir -p -- "${temp_root}"
+  ANDROID_BALLAST_DIR="$(mktemp -d "${temp_root%/}/codex-android-ballast.XXXXXX")"
+  python3 -u "${SOURCE_REPO}/scripts/codex_android_ballast.py" \
+    --max-mb "${max_mb}" \
+    --chunk-mb "${CODEX_ANDROID_RUSTC_BALLAST_CHUNK_MB:-8}" \
+    --ramp-ms "${CODEX_ANDROID_RUSTC_BALLAST_RAMP_MS:-250}" \
+    --floor-percent "${CODEX_ANDROID_RUSTC_BALLAST_FLOOR_PERCENT:-12}" \
+    --ready-file "${ANDROID_BALLAST_DIR}/ready" \
+    --status-file "${ANDROID_BALLAST_DIR}/status" 9>&- &
+  ANDROID_BALLAST_PID=$!
+  for ((attempt = 0; attempt < 160; attempt++)); do
+    [[ -f "${ANDROID_BALLAST_DIR}/ready" ]] && break
+    kill -0 "${ANDROID_BALLAST_PID}" 2>/dev/null || break
+    sleep 0.25
+  done
+  if [[ ! -f "${ANDROID_BALLAST_DIR}/ready" ]]; then
+    echo "Android RAM ballast did not initialize; continuing with the existing memory guard." >&2
+    stop_android_ballast
+    return 1
+  fi
+  held_mb=0
+  read -r held_mb <"${ANDROID_BALLAST_DIR}/status" || true
+  if [[ ! "${held_mb}" =~ ^[0-9]+$ ]] || ((held_mb == 0)); then
+    echo "Android RAM ballast has no safe headroom; continuing without it." >&2
+    stop_android_ballast
+    return 1
+  fi
+  return 0
+}
 cleanup_build_process() {
+  stop_android_ballast
   release_cargo_target_lock
   codex_sccache_server_stop
   if [[ -n "${ANDROID_PSI_NOTICE_DIR}" ]]; then
@@ -1004,9 +1055,16 @@ PY
       return $?
     fi
 
+    local -a ballast_env_args=()
+    if start_android_ballast; then
+      ballast_env_args=(
+        CODEX_ANDROID_RUSTC_BALLAST_PID="${ANDROID_BALLAST_PID}"
+        CODEX_ANDROID_RUSTC_BALLAST_STATUS_FILE="${ANDROID_BALLAST_DIR}/status"
+      )
+    fi
     local temp_root="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
     stderr_log="$(mktemp "${temp_root}/codex-cargo-stderr.XXXXXX")"
-    if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${cmd[@]}") 2>&1 \
+    if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${ballast_env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
       | awk '
         function flush_guard_transitions() {
@@ -1172,6 +1230,7 @@ PY
       status=$?
     fi
     rm -f "${stderr_log}"
+    stop_android_ballast
     return "${status}"
   }
   echo "Building ${profile} ${target_mode} in ${target_dir} (target artifacts retained)..." >&2
