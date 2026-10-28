@@ -61,6 +61,31 @@ for codex_threshold in \
 done
 codex_psi_some_resume_guard_us_per_second=$((codex_psi_some_guard_ms * 750))
 codex_psi_resume_clear_windows_required=3
+# PSI describes memory stalls, not necessarily imminent OOM. A rustc that
+# stays suspended cannot make progress, so soft-pressure pauses are bounded.
+# Hard RAM/swap exhaustion and actual LMKD reclaim still stop the compiler.
+codex_psi_max_pause_seconds="${CODEX_ANDROID_RUSTC_PSI_MAX_PAUSE_SECONDS:-5}"
+codex_psi_resume_grace_seconds="${CODEX_ANDROID_RUSTC_PSI_RESUME_GRACE_SECONDS:-30}"
+for codex_threshold in "$codex_psi_max_pause_seconds" "$codex_psi_resume_grace_seconds"; do
+  codex_uint "$codex_threshold" && ((codex_threshold > 0)) || {
+    echo "invalid positive Rust PSI pause/grace duration: $codex_threshold" >&2
+    exit 2
+  }
+done
+codex_psi_resume_grace_until_epoch_us=0
+
+# Keep the pause/kill distinction explicit: neither some nor full PSI alone
+# is evidence that discarding an expensive rustc attempt will help.
+codex_guard_is_psi_only() {
+  [[ "${codex_guard_reason:-}" == memory\ PSI\ some\ stall* \
+      || "${codex_guard_reason:-}" == memory\ PSI\ full\ stall* ]]
+}
+codex_psi_pause_limit_reached() {
+  local now_us="$1" paused_us="${codex_compiler_suspended_at_epoch_us:-}"
+  [[ "$paused_us" =~ ^[0-9]+$ ]] || return 1
+  ((now_us - paused_us >= codex_psi_max_pause_seconds * 1000000))
+}
+
 
 codex_read_memory() {
   codex_mem_total_kb=0
@@ -331,6 +356,8 @@ codex_memory_guard_reason() {
         || codex_recent_full_us_per_second >= codex_psi_full_guard_ms * 500)); then
         codex_ballast_request_relief
       fi
+      # High full PSI gets a reversible, bounded pause just like some PSI.
+      # Do not confuse an observed stall with proof of insufficient headroom.
       if ((codex_recent_full_us_per_second >= codex_psi_full_guard_ms * 1000)); then
         codex_guard_reason="memory PSI full stall ${codex_recent_full_us_per_second}us per second >= ${codex_psi_full_guard_ms}ms"
         return 0
@@ -416,7 +443,16 @@ codex_guard_mark_running() {
   codex_timing_resume
   codex_guard_compile_state=running
   codex_guard_pause_mode=running
-  echo "▶️ Rust resumed at $(date '+%Y-%m-%dT%H:%M:%S%z') (paused $duration)" >&2
+  # Allow a window of forward progress after PSI-only pauses, while always
+  # letting actual RAM/swap/LMKD emergencies terminate a compiler.
+  codex_psi_resume_grace_until_epoch_us=$((now + ${codex_psi_resume_grace_seconds:-30} * 1000000))
+  # Re-arm the PSI suspension path after each successful resume. Otherwise
+  # the next pressure spike sees a stale 'true' and never sends SIGSTOP.
+  codex_compiler_suspended=false
+  codex_compiler_suspended_at=""
+  codex_compiler_suspended_at_epoch_us=""
+  echo "▶️ Rust resumed at $(date '+%Y-%m-%dT%H:%M:%S%z') (paused $duration${codex_guard_resume_note:+; $codex_guard_resume_note})" >&2
+  codex_guard_resume_note=""
 }
 
 codex_stop_compiler() {
@@ -457,6 +493,7 @@ trap 'codex_abort_compiler 143' TERM
 trap 'codex_abort_compiler 129' HUP
 
 codex_wait_for_memory() {
+  local psi_wait_started_epoch_us=0 now_epoch_us
   while true; do
     codex_read_memory || {
       echo 'Android Rust memory guard cannot read required /proc/meminfo fields' >&2
@@ -473,6 +510,20 @@ codex_wait_for_memory() {
     fi
     if codex_memory_guard_reason; then
       codex_lmkd_clear_windows=0
+      if [[ "$codex_lmkd_reclaim_active" != true ]] && codex_guard_is_psi_only; then
+        now_epoch_us="${EPOCHREALTIME/./}"
+        if ((psi_wait_started_epoch_us == 0)); then
+          psi_wait_started_epoch_us="$now_epoch_us"
+        fi
+        # PSI stalls alone must not block a rustc from ever starting. The
+        # check above already ruled out critical RAM/swap headroom.
+        if ((now_epoch_us - psi_wait_started_epoch_us >=
+              codex_psi_max_pause_seconds * 1000000)); then
+          return 0
+        fi
+      else
+        psi_wait_started_epoch_us=0
+      fi
     elif [[ "$codex_lmkd_reclaim_active" == true ]]; then
       if [[ "$codex_psi_available" == true ]] && ((${#codex_some_deltas[@]} < 5)); then
         codex_lmkd_clear_windows=0
@@ -546,11 +597,21 @@ while true; do
       if [[ "$codex_lmkd_reclaim_active" == true ]]; then
         codex_resume_clear_windows=0
       fi
-      if [[ "$codex_guard_reason" == memory\ PSI\ some\ stall* ]]; then
+      if [[ "$codex_lmkd_reclaim_active" != true ]] && codex_guard_is_psi_only; then
+        # Both PSI some and full indicate stalls; neither alone warrants
+        # discarding rustc's work. Pause reversibly, but ensure a suspended
+        # compiler gets another chance to make progress after 5 seconds.
         codex_resume_clear_windows=0
-        if [[ "$codex_compiler_suspended" == false ]]; then
+        codex_now_epoch_us="${EPOCHREALTIME/./}"
+        if [[ "$codex_compiler_suspended" == true ]]; then
+          if codex_psi_pause_limit_reached "$codex_now_epoch_us"; then
+            kill -CONT -- "-$codex_compiler_pid" 2>/dev/null || true
+            codex_guard_resume_note="PSI-only backoff limit; ${codex_psi_resume_grace_seconds}s progress grace"
+            codex_guard_mark_running
+          fi
+        elif ((codex_now_epoch_us >= codex_psi_resume_grace_until_epoch_us)); then
           codex_compiler_suspended_at="$(date '+%Y-%m-%dT%H:%M:%S%z')"
-          codex_compiler_suspended_at_epoch_us="${EPOCHREALTIME/./}"
+          codex_compiler_suspended_at_epoch_us="$codex_now_epoch_us"
           codex_guard_mark_paused "$codex_guard_reason" suspended
           kill -STOP -- "-$codex_compiler_pid" 2>/dev/null || true
           codex_compiler_suspended=true
