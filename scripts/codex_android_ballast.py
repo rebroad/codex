@@ -7,6 +7,8 @@ other processes grow. It never replaces the Rust PSI/LMKD guard.
 """
 
 import argparse
+import fcntl
+import json
 import mmap
 import os
 from pathlib import Path
@@ -15,6 +17,86 @@ import sys
 import time
 
 MIB = 1024 * 1024
+TUNE_STEP_MB = 32
+TUNE_MIN_MB = 128
+
+
+def tune_next_mb(current_mb, initial_mb, lowest_mb, pressure_signals,
+                 elapsed_s, cargo_success, lost_us, cap_mb):
+    """Conservative one-step adaptation; never increase after discarded work.
+
+    The ballast cannot produce RAM. An exhausted ballast and severe PSI may
+    indicate sustained pressure, so failed/restarted builds must not teach
+    the tuner to allocate even more.
+    """
+    current_mb = max(TUNE_MIN_MB, min(current_mb, cap_mb))
+    if not cargo_success or lost_us > 0 or elapsed_s < 90:
+        return current_mb, "unchanged (insufficient clean evidence)"
+    if initial_mb < current_mb - TUNE_STEP_MB:
+        return current_mb, "unchanged (RAM floor limited preallocation)"
+    used_mb = max(0, initial_mb - lowest_mb)
+    if pressure_signals >= 2 and lowest_mb <= TUNE_STEP_MB and current_mb < cap_mb:
+        return min(cap_mb, current_mb + TUNE_STEP_MB), "increased (clean build exhausted reserve)"
+    if pressure_signals == 0 and used_mb <= current_mb // 4 and current_mb > TUNE_MIN_MB:
+        return max(TUNE_MIN_MB, current_mb - TUNE_STEP_MB), "decreased (reserve mostly unused)"
+    return current_mb, "unchanged (reserve matched observed demand)"
+
+
+def read_tuning(path, base_mb, cap_mb, system_ram_mb):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        selected = payload.get("recommended_mb")
+        observed_ram = payload.get("system_ram_mb")
+        if (isinstance(selected, int) and not isinstance(selected, bool)
+                and isinstance(observed_ram, int)
+                and abs(observed_ram - system_ram_mb) <= system_ram_mb // 10):
+            return max(TUNE_MIN_MB, min(selected, cap_mb))
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return base_mb
+
+
+def record_tuning(path, result_file, stats, cap_mb):
+    if path is None or result_file is None or not result_file.exists():
+        return
+    try:
+        cargo_status, lost_us = map(int, result_file.read_text(encoding="ascii").split())
+        if cargo_status < 0 or lost_us < 0:
+            return
+    except (OSError, ValueError):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Separate, persistent lock handles accidental overlapping Cargo stages.
+    with open(str(path) + ".lock", "a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        previous = {}
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(previous, dict):
+                previous = {}
+        except (OSError, ValueError):
+            pass
+        proposed, reason = tune_next_mb(
+            stats["max_mb"], stats["initial_mb"], stats["lowest_mb"],
+            stats["pressure_signals"], stats["elapsed_s"],
+            cargo_status == 0, lost_us, cap_mb)
+        # Avoid promoting stale device-specific observations.
+        if previous.get("system_ram_mb") != stats["system_ram_mb"]:
+            previous = {}
+        observations = previous.get("observations", [])
+        if not isinstance(observations, list):
+            observations = []
+        observations = (observations + [dict(stats, cargo_status=cargo_status,
+                                               lost_us=lost_us, decision=reason)])[-10:]
+        result = dict(version=1, system_ram_mb=stats["system_ram_mb"],
+                      recommended_mb=proposed, observations=observations)
+        temp = path.with_name(path.name + f".{os.getpid()}.tmp")
+        temp.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        os.replace(temp, path)
+        print(f"Android RAM ballast tuning: next reserve {proposed} MiB "
+              f"({reason}; {stats['initial_mb']} MiB allocated initially, "
+              f"{stats['initial_mb']-stats['lowest_mb']} MiB peak released)",
+              file=sys.stderr, flush=True)
 
 
 def positive_int(value):
@@ -89,6 +171,12 @@ def run(args):
     ready = Path(args.ready_file)
     status = Path(args.status_file)
     telemetry = Path(args.telemetry_file) if args.telemetry_file else None
+    history = Path(args.history_file) if args.history_file else None
+    result_file = Path(args.build_result_file) if args.build_result_file else None
+    system_ram, _ = read_memory()
+    if history is not None:
+        args.max_mb = read_tuning(history, args.max_mb, args.autotune_cap_mb,
+                                  system_ram // MIB)
     chunk = args.chunk_mb * MIB
     max_chunks = args.max_mb // args.chunk_mb
     if max_chunks == 0:
@@ -101,6 +189,10 @@ def run(args):
     releases = 0
     last_release = 0.0
     last_pressure_release = 0.0
+    pressure_signals = 0
+    initial_mb = 0
+    lowest_mb = 0
+    controller_start = time.monotonic()
 
     def publish_status():
         atomic_status(status, chunks, chunk, telemetry, args.max_mb,
@@ -138,6 +230,8 @@ def run(args):
             chunks.append(touch_chunk(chunk))
             time.sleep(args.ramp_ms / 1000)
         _, target = read_memory()
+        initial_mb = len(chunks) * args.chunk_mb
+        lowest_mb = initial_mb
         publish_status()
         ready.write_text(str(len(chunks) * args.chunk_mb) + "\n", encoding="ascii")
         print(f"Android RAM ballast: reserved {len(chunks) * args.chunk_mb} MB "
@@ -148,6 +242,7 @@ def run(args):
             now = time.monotonic()
             if pending_release:
                 pending_release = False
+                pressure_signals += 1
                 # Multiple rustc wrappers can signal simultaneously. Throttle
                 # release to one batch per second across the entire build.
                 if now - last_pressure_release >= 1.0:
@@ -158,6 +253,7 @@ def run(args):
                     last_pressure_release = now
                     last_release = now
                     publish_status()
+                    lowest_mb = min(lowest_mb, len(chunks) * args.chunk_mb)
             else:
                 action = chunk_action(available, target, len(chunks), max_chunks,
                                       floor, chunk, hysteresis,
@@ -168,6 +264,7 @@ def run(args):
                     releases += -action
                     last_release = now
                     publish_status()
+                    lowest_mb = min(lowest_mb, len(chunks) * args.chunk_mb)
                 elif action > 0:
                     # Check the safety floor immediately before touching pages.
                     _, available = read_memory()
@@ -189,6 +286,17 @@ def run(args):
         print(f"Android RAM ballast: released on exit; "
               f"{releases * args.chunk_mb} MB dynamically released, "
               f"{refills * args.chunk_mb} MB refilled", file=sys.stderr, flush=True)
+        try:
+            record_tuning(history, result_file, dict(
+                system_ram_mb=system_ram // MIB, max_mb=args.max_mb,
+                initial_mb=initial_mb, lowest_mb=lowest_mb,
+                pressure_signals=pressure_signals,
+                released_mb=releases * args.chunk_mb,
+                refilled_mb=refills * args.chunk_mb,
+                elapsed_s=int(time.monotonic() - controller_start)),
+                args.autotune_cap_mb)
+        except (OSError, ValueError) as exc:
+            print(f"Android RAM ballast tuning unavailable: {exc}", file=sys.stderr)
 
 
 def main():
@@ -196,6 +304,9 @@ def main():
     parser.add_argument("--ready-file", required=True)
     parser.add_argument("--status-file", required=True)
     parser.add_argument("--telemetry-file", help="atomic held/max/released/refilled MiB snapshot")
+    parser.add_argument("--history-file", help="persistent next-build autotuning history")
+    parser.add_argument("--build-result-file", help="status and lost microseconds recorded after Cargo exits")
+    parser.add_argument("--autotune-cap-mb", type=positive_int, default=384)
     parser.add_argument("--max-mb", type=positive_int, default=256)
     parser.add_argument("--chunk-mb", type=positive_int, default=8)
     parser.add_argument("--ramp-ms", type=positive_int, default=250)
