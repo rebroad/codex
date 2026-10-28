@@ -487,6 +487,7 @@ codex_cleanup_compiler_output() {
 codex_abort_compiler() {
   local code="$1"
   if [[ -n "$codex_compiler_pid" ]]; then
+    codex_timing_pause
     codex_stop_compiler
     wait "$codex_compiler_pid" 2>/dev/null || true
     codex_timing_lost
@@ -571,6 +572,7 @@ while true; do
   while kill -0 "$codex_compiler_pid" 2>/dev/null; do
     codex_read_memory || {
       echo 'Android Rust memory guard lost access to /proc/meminfo; stopping the compiler' >&2
+      codex_timing_pause
       codex_stop_compiler
       codex_stop_psi_stream
       wait "$codex_compiler_pid" 2>/dev/null || true
