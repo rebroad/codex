@@ -269,6 +269,11 @@ def run(args):
     refill_opportunity_available_mb_sum = 0
     refill_opportunity_min_available_mb = None
     refill_opportunity_max_available_mb = None
+    blocked_refill_samples = 0
+    blocked_refill_available_mb_sum = 0
+    blocked_refill_available_mb_min = None
+    blocked_refill_available_mb_max = None
+    empty_with_safe_headroom_samples = 0
     refill_blocked_by_target_samples = 0
     refill_blocked_by_quiet_samples = 0
     refill_blocked_by_psi_samples = 0
@@ -380,6 +385,13 @@ def run(args):
                 if refill_opportunity_samples else None),
             "refill_opportunity_available_mb_min": refill_opportunity_min_available_mb,
             "refill_opportunity_available_mb_max": refill_opportunity_max_available_mb,
+            "refill_blocked_samples": blocked_refill_samples,
+            "refill_blocked_available_mb_avg": (
+                round(blocked_refill_available_mb_sum / blocked_refill_samples)
+                if blocked_refill_samples else None),
+            "refill_blocked_available_mb_min": blocked_refill_available_mb_min,
+            "refill_blocked_available_mb_max": blocked_refill_available_mb_max,
+            "empty_with_safe_headroom_samples": empty_with_safe_headroom_samples,
             "refill_blocked_by_original_target_samples": refill_blocked_by_target_samples,
             "refill_blocked_by_quiet_samples": refill_blocked_by_quiet_samples,
             "refill_blocked_by_psi_samples": refill_blocked_by_psi_samples,
@@ -489,8 +501,23 @@ def run(args):
                             refill_opportunity_max_available_mb = (
                                 mb if refill_opportunity_max_available_mb is None
                                 else max(mb, refill_opportunity_max_available_mb))
-                            if available <= target + hysteresis + chunk:
+                            target_blocks = available <= target + hysteresis + chunk
+                            if target_blocks:
                                 refill_blocked_by_target_samples += 1
+                            if not safe or target_blocks:
+                                # Actual RAM observed when a refill could have
+                                # fitted but the old target or pressure policy
+                                # prevented it. Keep units and sample counts.
+                                blocked_refill_samples += 1
+                                blocked_refill_available_mb_sum += mb
+                                blocked_refill_available_mb_min = (
+                                    mb if blocked_refill_available_mb_min is None
+                                    else min(mb, blocked_refill_available_mb_min))
+                                blocked_refill_available_mb_max = (
+                                    mb if blocked_refill_available_mb_max is None
+                                    else max(mb, blocked_refill_available_mb_max))
+                            if not chunks:
+                                empty_with_safe_headroom_samples += 1
                             if gate == "quiet":
                                 refill_blocked_by_quiet_samples += 1
                             elif gate == "psi":
