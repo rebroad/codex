@@ -241,6 +241,7 @@ impl LazyRemoteExecServerClient {
         client.attach_environment_connection_state(environment_connection_state_tx.clone());
         Self {
             transport_params: None,
+            session_id_file: None,
             http_client_factory,
             recovery_policy: super::RecoveryPolicy::Wait,
             startup: std::sync::Arc::new(super::ConnectionAttempt {

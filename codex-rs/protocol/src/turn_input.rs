@@ -16,6 +16,10 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use ts_rs::TS;
 
+#[cfg(test)]
+#[path = "turn_input_tests.rs"]
+mod tests;
+
 /// Result of stopping an unfinished root turn so another worker can recover it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SuspendTurnOutcome {
@@ -26,6 +30,74 @@ pub enum SuspendTurnOutcome {
     /// A currently loaded descendant would remain running after root handoff.
     HasLiveDescendants,
     UnsupportedTask,
+}
+
+/// Result of checkpointing a root thread and its live subagent tree for process handoff.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TurnTreeSuspendOutcome {
+    Suspended {
+        threads: Vec<SuspendedThreadTurn>,
+    },
+    NotActive,
+    UnsupportedTask,
+    AdmissionFailed,
+    PartialCommit {
+        threads: Vec<SuspendedThreadTurn>,
+        suspended_thread_ids: Vec<crate::ThreadId>,
+        failed_thread_id: crate::ThreadId,
+        error: String,
+    },
+}
+
+/// Durable state the host must retain for one thread in a suspended turn tree.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SuspendedThreadTurn {
+    pub thread_id: crate::ThreadId,
+    pub parent_thread_id: Option<crate::ThreadId>,
+    pub turn_id: String,
+    /// Input accepted by Core but not yet consumed into rollout history.
+    pub pending_input: Vec<SuspendedQueuedInput>,
+    /// Requests whose one-shot response senders belong to the old process.
+    /// Hosts persist the payload and reissue/rebind the request after recovery.
+    pub pending_interactions: Vec<PendingTurnInteraction>,
+    /// Remote executor processes that can be reattached by the replacement worker.
+    pub executor_processes: Vec<SuspendedExecutorProcess>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuspendedExecutorProcess {
+    pub unified_process_id: i32,
+    pub call_id: String,
+    pub environment_id: String,
+    pub exec_server_process_id: String,
+    pub exec_server_session_id: String,
+    pub after_seq: u64,
+    pub command: String,
+    pub cwd: String,
+    pub tty: bool,
+}
+
+/// One accepted input item and the options retained with it when queued as mailbox work.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SuspendedQueuedInput {
+    /// Opaque serialized Core input, kept open for future queue variants.
+    pub input: Value,
+    pub start_options: Option<TurnStartOptions>,
+}
+
+/// A pending host interaction, including the original request event to reissue after recovery.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingTurnInteraction {
+    pub correlation_id: String,
+    pub event: crate::protocol::EventMsg,
+    /// Event fields skipped by serde but needed to restore the original interaction context.
+    pub model_context: Option<SuspendedInteractionModelContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuspendedInteractionModelContext {
+    pub model_slug: String,
+    pub reasoning_effort: Option<String>,
 }
 
 /// Input consumed by a regular turn.
@@ -200,7 +272,7 @@ pub enum CyberAccessProgram {
 /// `final_output_json_schema` is a compatibility requirement: Core only
 /// accepts the steer if the active turn already uses the same schema. For
 /// child input, Core also compares root lineage to detect ambiguity.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TurnStartOptions {
     /// Source classification for this request. Recorded on new turns and captured
     /// as input provenance when steering, without changing the active turn's trigger.

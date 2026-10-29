@@ -146,7 +146,7 @@ async fn exec_command_with_tty(
             hook_command: cmd.to_string(),
             tty,
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            permissions: TerminalPermissions::for_launch(
+            permissions: Some(TerminalPermissions::for_launch(
                 turn.initial_environments
                     .primary()
                     .expect("turn environment"),
@@ -155,7 +155,7 @@ async fn exec_command_with_tty(
                 SandboxPermissions::UseDefault,
                 /*additional_permissions*/ None,
                 /*internal_permissions*/ None,
-            ),
+            )),
             network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
@@ -614,7 +614,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             hook_command: "sleep 60".to_string(),
             tty: true,
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            permissions: TerminalPermissions::for_launch(
+            permissions: Some(TerminalPermissions::for_launch(
                 turn.initial_environments
                     .primary()
                     .expect("turn environment"),
@@ -623,7 +623,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
                 SandboxPermissions::UseDefault,
                 /*additional_permissions*/ None,
                 /*internal_permissions*/ None,
-            ),
+            )),
             network_approval: None,
             session: Arc::downgrade(&session),
             last_used: Instant::now(),
@@ -700,7 +700,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             hook_command: "sleep 60".to_string(),
             tty: true,
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            permissions: TerminalPermissions::for_launch(
+            permissions: Some(TerminalPermissions::for_launch(
                 turn.initial_environments
                     .primary()
                     .expect("turn environment"),
@@ -709,7 +709,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
                 SandboxPermissions::UseDefault,
                 /*additional_permissions*/ None,
                 /*internal_permissions*/ None,
-            ),
+            )),
             network_approval: None,
             session: Arc::downgrade(&session),
             last_used,
@@ -875,7 +875,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
     let original = {
         let mut store = manager.process_store.lock().await;
         let entry = store.processes.get_mut(&process_id).unwrap();
-        entry.permissions = TerminalPermissions::for_launch(
+        entry.permissions = Some(TerminalPermissions::for_launch(
             turn.initial_environments
                 .primary()
                 .expect("turn environment"),
@@ -884,7 +884,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
             SandboxPermissions::RequireEscalated,
             /*additional_permissions*/ None,
             /*internal_permissions*/ None,
-        );
+        ));
         entry.environment_id = "unselected-executor".to_string();
         entry.cwd = cwd.clone();
         Arc::clone(&entry.process)

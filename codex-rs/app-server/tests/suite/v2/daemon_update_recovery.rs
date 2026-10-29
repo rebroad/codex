@@ -6,10 +6,13 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 use app_test_support::create_final_assistant_message_sse_response;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_transport::daemon_recovery;
 use codex_app_server_transport::daemon_recovery_file_path;
 use codex_uds::UnixStream;
@@ -19,7 +22,10 @@ use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Command as StdCommand;
 use std::process::Stdio;
@@ -101,7 +107,6 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
     )
     .await?;
     request_shutdown(&server, &socket_path).await?;
-    assert_still_running(&mut server, "active turn must finish first").await;
     release_response.send(()).expect("response is waiting");
     wait_success(&mut server).await?;
     assert_eq!(
@@ -119,11 +124,13 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
     let requests = mock.requests().await;
     let recovered: serde_json::Value = serde_json::from_slice(&requests[1])?;
     assert_eq!(recovered["model"], "gpt-5.2");
-    assert!(recovered["input"]
-        .as_array()
-        .context("recovered conversation")?
-        .iter()
-        .any(|item| item["role"] == "assistant" && item["content"].to_string().contains("Done")));
+    assert!(
+        recovered["input"]
+            .as_array()
+            .context("recovered conversation")?
+            .iter()
+            .any(|item| item["role"] == "user" && item["content"].to_string().contains("Hello"))
+    );
     assert!(
         recovered["tools"].to_string().contains("lookup_ticket"),
         "{recovered}"
@@ -363,13 +370,13 @@ async fn managed_shutdown_preserves_admitted_resume() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn managed_force_shutdown_exits_with_blocked_rollout_writer() -> Result<()> {
+async fn managed_handoff_checkpoints_active_parent_and_child_turns() -> Result<()> {
     use core_test_support::responses;
 
     let home = TempDir::new()?;
     let (release_spawn, spawn_gate) = oneshot::channel();
-    let (_release_parent, parent_gate) = oneshot::channel();
-    let (_release_child, child_gate) = oneshot::channel();
+    let (release_parent, parent_gate) = oneshot::channel();
+    let (release_child, child_gate) = oneshot::channel();
     let (mock, _completions) = start_streaming_sse_server(vec![
         vec![StreamingSseChunk {
             gate: Some(spawn_gate),
@@ -386,6 +393,8 @@ async fn managed_force_shutdown_exits_with_blocked_rollout_writer() -> Result<()
         }],
         vec![stream_chunk(Some(parent_gate), "Done")?],
         vec![stream_chunk(Some(child_gate), "Done")?],
+        vec![stream_chunk(None, "Parent resumed")?],
+        vec![stream_chunk(None, "Child resumed")?],
     ])
     .await;
     create_config_toml(home.path(), mock.uri(), "never")?;
@@ -396,47 +405,515 @@ async fn managed_force_shutdown_exits_with_blocked_rollout_writer() -> Result<()
         format!("{config}\n[features.multi_agent_v2]\nenabled = true\n"),
     )?;
     let socket_path = home.path().join("control/server.sock");
-    let mut server = spawn_server(home.path(), &socket_path)?;
+    let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
+    let _executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
+    let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
     let mut client = connect_default_daemon_client(&socket_path).await?;
-    let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
-    let parent = start_thread(&mut client, /*id*/ 3, json!({})).await?;
-    start_turn(&mut client, /*id*/ 4, &parent.thread.id).await?;
+    let parent = start_thread(&mut client, /*id*/ 2, json!({})).await?;
+    start_turn(&mut client, /*id*/ 3, &parent.thread.id).await?;
     wait_for_requests(&mock, /*count*/ 1).await?;
-    let rollout = thread
-        .thread
-        .path
-        .context("persistent thread rollout path")?;
-    assert!(!rollout.exists(), "idle rollout should still be deferred");
-    let compressed = rollout.with_extension("jsonl.zst");
-    std::fs::create_dir_all(compressed.parent().context("rollout directory")?)?;
-    assert!(
-        StdCommand::new("mkfifo")
-            .arg(&compressed)
-            .status()?
-            .success()
-    );
-
+    // Establish the descendant before draining so both active turns belong to
+    // the tree checkpoint captured by this replacement.
+    release_spawn.send(()).expect("parent is waiting to spawn");
+    wait_for_requests(&mock, /*count*/ 3).await?;
     request_shutdown(&server, &socket_path).await?;
-    // Opening the write end succeeds only once the real rollout writer opens
-    // the compressed input. Keep it empty and open to block that writer's read.
-    let _blocked_input = timeout(Duration::from_secs(10), async {
+    wait_success(&mut server).await?;
+    release_parent
+        .send(())
+        .expect("old parent response is gated");
+    release_child.send(()).expect("old child response is gated");
+    let recovery_file = daemon_recovery_file_path(home.path());
+    let snapshot = daemon_recovery::read_snapshot(&recovery_file)?;
+    let active_turns: Vec<_> = snapshot.interrupted.values().collect();
+    assert_eq!(active_turns.len(), 2);
+    assert!(active_turns.iter().all(|turn| turn.suspended.is_some()));
+    assert!(active_turns.iter().any(|turn| {
+        turn.suspended
+            .as_ref()
+            .is_some_and(|thread| thread.parent_thread_id.is_some())
+    }));
+
+    let mut successor = spawn_server(home.path(), &socket_path)?;
+    timeout(
+        Duration::from_secs(30),
+        mock.wait_for_request_count(/*count*/ 5),
+    )
+    .await
+    .context("successor did not resume both active tree turns")?;
+    assert_eq!(mock.requests().await.len(), 5);
+    request_shutdown(&successor, &socket_path).await?;
+    wait_success(&mut successor).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_handoff_reissues_pending_user_interaction_after_replacement() -> Result<()> {
+    use core_test_support::responses;
+
+    let home = TempDir::new()?;
+    let input_args = serde_json::to_string(&json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes",
+                "description": "Continue the current plan."
+            }, {
+                "label": "No",
+                "description": "Stop and revisit the plan."
+            }]
+        }]
+    }))?;
+    let ask_for_input = responses::sse(vec![
+        responses::ev_response_created("handoff-input-response"),
+        responses::ev_function_call("handoff-input", "request_user_input", &input_args),
+        responses::ev_completed("handoff-input-response"),
+    ]);
+    let repeat_ask_for_input = responses::sse(vec![
+        responses::ev_response_created("handoff-input-recovered-response"),
+        responses::ev_function_call("handoff-input", "request_user_input", &input_args),
+        responses::ev_completed("handoff-input-recovered-response"),
+    ]);
+    let finish_turn = responses::sse(vec![
+        responses::ev_response_created("handoff-input-finished-response"),
+        responses::ev_assistant_message("handoff-input-finished-message", "Completed"),
+        responses::ev_completed("handoff-input-finished-response"),
+    ]);
+    let (mock, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: ask_for_input,
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: repeat_ask_for_input,
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: finish_turn,
+        }],
+    ])
+    .await;
+    create_config_toml(home.path(), mock.uri(), "on-request")?;
+    let socket_path = home.path().join("control/server.sock");
+    let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
+    let _executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
+    let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
+    let mut client = connect_daemon_client(
+        &socket_path,
+        InitializeCapabilities {
+            experimental_api: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
+    request(
+        &mut client,
+        /*id*/ 3,
+        "turn/start",
+        json!({
+            "threadId":thread.thread.id,
+            "input":[{"type":"text","text":"Plan the next step"}],
+            "collaborationMode":{"mode":"plan","settings":{"model":"mock-model","reasoning_effort":null,"developer_instructions":null}}
+        }),
+    )
+    .await?;
+    wait_for_requests(&mock, /*count*/ 1)
+        .await
+        .context("initial user-input request did not reach the mock server")?;
+
+    let original_request = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
-            if let Ok(sender) = tokio::net::unix::pipe::OpenOptions::new().open_sender(&compressed)
-            {
-                return sender;
+            let frame = client.next().await.context("old client socket closed")??;
+            let Message::Text(text) = frame else {
+                continue;
+            };
+            let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
+                continue;
+            };
+            if request.method == "item/tool/requestUserInput" {
+                return Ok::<_, anyhow::Error>(request);
             }
-            sleep(Duration::from_millis(25)).await;
         }
     })
     .await
-    .context("rollout writer did not open the blocked input")?;
-    // The running parent can create a child after admissions drain. Its listener
-    // needs the unload lock held by the blocked snapshot.
-    release_spawn.send(()).expect("parent is waiting to spawn");
-    wait_for_requests(&mock, /*count*/ 3).await?;
-    assert_still_running(&mut server, "graceful shutdown must wait for the writer").await;
+    .context("initial user-input interaction was not issued")??;
+    let original_params = original_request
+        .params
+        .as_ref()
+        .context("initial user-input request params")?;
+    assert_eq!(original_params["threadId"], thread.thread.id);
+    assert_eq!(original_params["itemId"], "handoff-input");
+
     request_shutdown(&server, &socket_path).await?;
-    wait_success(&mut server).await?;
+    wait_success(&mut server)
+        .await
+        .context("pre-replacement server did not exit after saving the checkpoint")?;
+    let recovery_file = daemon_recovery_file_path(home.path());
+    let snapshot = daemon_recovery::read_snapshot(&recovery_file)?;
+    let suspended = snapshot
+        .interrupted
+        .get(&thread.thread.id)
+        .and_then(|turn| turn.suspended.as_ref())
+        .context("active turn checkpoint was not saved")?;
+    assert_eq!(suspended.pending_interactions.len(), 1);
+    assert_eq!(
+        suspended.pending_interactions[0].correlation_id,
+        "user_input:".to_string() + &suspended.turn_id
+    );
+
+    let mut successor = spawn_server(home.path(), &socket_path)?;
+    let mut replacement_client = connect_daemon_client(
+        &socket_path,
+        InitializeCapabilities {
+            experimental_api: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+    replacement_client
+        .send(Message::Text(
+            json!({
+                "id": 2,
+                "method": "thread/resume",
+                "params": {"threadId":thread.thread.id,"excludeTurns":true}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await?;
+    let mut resume_response_received = false;
+    let mut recovered_request = None;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let frame = replacement_client
+                .next()
+                .await
+                .context("replacement client socket closed")??;
+            let Message::Text(text) = frame else {
+                continue;
+            };
+            match serde_json::from_str::<JSONRPCMessage>(&text)? {
+                JSONRPCMessage::Response(response) if response.id == RequestId::Integer(2) => {
+                    assert_eq!(response.result["thread"]["id"], thread.thread.id);
+                    resume_response_received = true;
+                }
+                JSONRPCMessage::Error(error) if error.id == RequestId::Integer(2) => {
+                    anyhow::bail!("thread/resume failed: {}", error.error.message);
+                }
+                JSONRPCMessage::Request(request)
+                    if request.method == "item/tool/requestUserInput" =>
+                {
+                    recovered_request = Some(request);
+                }
+                _ => {}
+            }
+            if resume_response_received && recovered_request.is_some() {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+    })
+    .await
+    .context("replacement did not resume the thread and reissue its pending interaction")??;
+    let recovered_request = recovered_request.context("missing reissued user-input request")?;
+    let recovered_params = recovered_request
+        .params
+        .as_ref()
+        .context("reissued user-input request params")?;
+    assert_eq!(recovered_params["threadId"], thread.thread.id);
+    assert_eq!(recovered_params["turnId"], suspended.turn_id);
+    assert_eq!(recovered_params["itemId"], "handoff-input");
+
+    replacement_client
+        .send(Message::Text(
+            json!({
+                "id":recovered_request.id,
+                "result":{"answers":{"confirm_path":{"answers":["yes"]}}}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await?;
+    wait_for_requests(&mock, /*count*/ 3)
+        .await
+        .context("recovered user-input answer did not trigger the next model request")?;
+    let requests = mock.requests().await;
+    let resumed: serde_json::Value = serde_json::from_slice(&requests[2])?;
+    assert!(
+        resumed["input"].to_string().contains("yes"),
+        "resumed request did not include the accepted answer: {resumed}"
+    );
+
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let frame = replacement_client
+                .next()
+                .await
+                .context("replacement client closed before turn completion")??;
+            let Message::Text(text) = frame else {
+                continue;
+            };
+            if let JSONRPCMessage::Notification(notification) = serde_json::from_str(&text)?
+                && notification.method == "turn/completed"
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+    })
+    .await
+    .context("recovered turn did not complete")??;
+
+    request_shutdown(&successor, &socket_path).await?;
+    wait_success(&mut successor)
+        .await
+        .context("replacement server did not exit after turn completion")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_handoff_reattaches_a_running_local_command() -> Result<()> {
+    use core_test_support::responses;
+
+    let home = TempDir::new()?;
+    let command =
+        "printf 'handoff-pid=%s\\n' \"$$\"; sleep 20; printf 'handoff-pid=%s done\\n' \"$$\"";
+    let first_response = responses::sse(vec![
+        responses::ev_response_created("handoff-command-response"),
+        responses::ev_exec_command_call_with_args(
+            "handoff-command",
+            &json!({
+                "cmd": command,
+                "shell": "/bin/sh",
+                "login": false,
+                "yield_time_ms": 1_000,
+            }),
+        ),
+        responses::ev_completed("handoff-command-response"),
+    ]);
+    let (release_old_response, old_response_gate) = oneshot::channel();
+    let old_response = responses::sse(vec![
+        responses::ev_response_created("handoff-old-server-response"),
+        responses::ev_assistant_message("handoff-old-server-message", "Old server"),
+        responses::ev_completed("handoff-old-server-response"),
+    ]);
+    let (mock, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: first_response,
+        }],
+        vec![StreamingSseChunk {
+            gate: Some(old_response_gate),
+            body: old_response,
+        }],
+    ])
+    .await;
+    create_config_toml(home.path(), mock.uri(), "on-request")?;
+    let socket_path = home.path().join("control/server.sock");
+    let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
+    let executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
+    let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
+    let mut client = connect_daemon_client(
+        &socket_path,
+        InitializeCapabilities {
+            experimental_api: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
+    client
+        .send(Message::Text(
+            json!({
+                "id": 3,
+                "method": "turn/start",
+                "params": {
+                    "threadId": &thread.thread.id,
+                    "input": [{"type": "text", "text": "Hello"}]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await?;
+    wait_for_requests(&mock, /*count*/ 1)
+        .await
+        .context("initial model request did not arrive")?;
+    let turn_start = timeout(Duration::from_secs(30), async {
+        let mut turn_id = None;
+        let mut requests = None;
+        loop {
+            tokio::select! {
+                _ = mock.wait_for_request_count(2), if requests.is_none() => {
+                    requests = Some(mock.requests().await);
+                }
+                message = client.next() => {
+                    let message = message.context("daemon websocket closed")??;
+                    let Message::Text(text) = message else {
+                        continue;
+                    };
+                    match serde_json::from_str::<JSONRPCMessage>(&text)? {
+                        JSONRPCMessage::Response(response) if response.id == RequestId::Integer(3) => {
+                            let response: TurnStartResponse = serde_json::from_value(response.result)?;
+                            turn_id = Some(response.turn.id);
+                        }
+                        JSONRPCMessage::Notification(notification)
+                            if notification.method == "turn/completed" =>
+                        {
+                            anyhow::bail!("turn completed before command started: {notification:?}");
+                        }
+                        JSONRPCMessage::Request(request)
+                            if request.method == "item/commandExecution/requestApproval" =>
+                        {
+                            let result = serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                                decision: CommandExecutionApprovalDecision::Accept,
+                            })?;
+                            client
+                                .send(Message::Text(
+                                    json!({"id": request.id, "result": result})
+                                        .to_string()
+                                        .into(),
+                                ))
+                                .await?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if let (Some(turn_id), Some(requests)) = (turn_id.as_ref(), requests.as_ref()) {
+                let request: serde_json::Value =
+                    serde_json::from_slice(&requests[1]).context("running request")?;
+                return Ok::<_, anyhow::Error>((turn_id.clone(), request));
+            }
+        }
+    })
+    .await;
+    let (turn_id, running_request) =
+        turn_start.context("timed out waiting for the running command request")??;
+
+    let accepted_steer = request(
+        &mut client,
+        /*id*/ 4,
+        "turn/steer",
+        json!({
+            "threadId": thread.thread.id,
+            "expectedTurnId": turn_id,
+            "clientUserMessageId": "handoff-queued-input",
+            "input": [{"type": "text", "text": "Keep the final answer concise"}]
+        }),
+    )
+    .await?;
+    assert_eq!(accepted_steer["turnId"], turn_id);
+
+    let running_output = running_request["input"]
+        .as_array()
+        .context("running command request input")?
+        .iter()
+        .find(|item| item["type"] == "function_call_output" && item["call_id"] == "handoff-command")
+        .context("running command output was not sent to the model")?;
+    let running_output_text = running_output["output"].as_str().unwrap_or_default();
+    let process_session_id = running_output_text
+        .split_once("Process running with session ID ")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .context("command output did not expose its running session ID")?
+        .parse::<u32>()?;
+    request_shutdown(&server, &socket_path).await?;
+    wait_success(&mut server)
+        .await
+        .context("pre-replacement app server did not finish draining")?;
+    let recovery_file = daemon_recovery_file_path(home.path());
+    let snapshot = daemon_recovery::read_snapshot(&recovery_file)?;
+    let suspended = snapshot
+        .interrupted
+        .get(&thread.thread.id)
+        .and_then(|turn| turn.suspended.as_ref())
+        .context("active turn did not save its executor process checkpoint")?;
+    assert_eq!(suspended.executor_processes.len(), 1);
+    assert_eq!(
+        suspended.executor_processes[0].unified_process_id,
+        process_session_id as i32
+    );
+    let _ = release_old_response.send(());
+    let poll_response = responses::sse(vec![
+        responses::ev_response_created("handoff-process-poll-response"),
+        responses::ev_function_call(
+            "handoff-command-poll",
+            "write_stdin",
+            &json!({"session_id": process_session_id, "yield_time_ms": 30_000}).to_string(),
+        ),
+        responses::ev_completed("handoff-process-poll-response"),
+    ]);
+    let poll_completion = mock
+        .queue_response(vec![StreamingSseChunk {
+            gate: None,
+            body: poll_response,
+        }])
+        .await;
+    let final_response = responses::sse(vec![
+        responses::ev_response_created("handoff-command-recovered-response"),
+        responses::ev_assistant_message("handoff-command-recovered-message", "Command completed"),
+        responses::ev_completed("handoff-command-recovered-response"),
+    ]);
+    let final_completion = mock
+        .queue_response(vec![StreamingSseChunk {
+            gate: None,
+            body: final_response,
+        }])
+        .await;
+
+    let mut successor = spawn_server(home.path(), &socket_path)?;
+    wait_for_requests(&mock, /*count*/ 3)
+        .await
+        .context("successor did not resume the active turn")?;
+    let requests = mock.requests().await;
+    let recovered: serde_json::Value = serde_json::from_slice(&requests[2])?;
+    assert!(
+        recovered["input"]
+            .to_string()
+            .contains("Keep the final answer concise"),
+        "recovered request omitted the accepted steer"
+    );
+
+    timeout(Duration::from_secs(30), mock.wait_for_request_count(4))
+        .await
+        .context("successor did not resume the recovered process")?;
+    let requests = mock.requests().await;
+    let completion_request: serde_json::Value = serde_json::from_slice(&requests[3])?;
+    let command_output = completion_request["input"]
+        .as_array()
+        .context("completed command request input")?
+        .iter()
+        .find(|item| {
+            item["type"] == "function_call_output" && item["call_id"] == "handoff-command-poll"
+        })
+        .context("recovered write_stdin output")?;
+    assert!(
+        command_output["output"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("handoff-pid="),
+        "recovered command output did not contain the process marker: {command_output}"
+    );
+    assert!(
+        command_output["output"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("done"),
+        "recovered command output did not contain its final marker: {command_output}"
+    );
+    request_shutdown(&successor, &socket_path).await?;
+    wait_success(&mut successor).await?;
+    poll_completion
+        .await
+        .context("write_stdin response did not finish")?;
+    final_completion
+        .await
+        .context("final response did not finish")?;
+    mock.shutdown().await;
+    drop(executor_cleanup);
     Ok(())
 }
 
@@ -569,27 +1046,36 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
     })
     .await?;
     let interrupted = !matches!(outcome, "completed" | "canceled" | "compacting");
-    let expected = if interrupted {
-        [(
-            id.clone(),
-            daemon_recovery::InterruptedTurn {
-                turn_id: turn["turn"]["id"].as_str().context("turn ID")?.to_string(),
-                output_schema: Some(schema.clone()),
-                service_tier: Some("default".into()),
-                cyber_access_program: None,
-                local_environment,
-            },
-        )]
-        .into()
-    } else {
-        Default::default()
-    };
+    let suspended = interrupted.then(|| codex_protocol::turn_input::SuspendedThreadTurn {
+        thread_id: codex_protocol::ThreadId::from_string(&id).expect("thread ID"),
+        parent_thread_id: None,
+        turn_id: turn["turn"]["id"].as_str().expect("turn ID").to_string(),
+        pending_input: Vec::new(),
+        pending_interactions: Vec::new(),
+        executor_processes: Vec::new(),
+    });
+    let expected: std::collections::BTreeMap<String, daemon_recovery::InterruptedTurn> =
+        if interrupted {
+            [(
+                id.clone(),
+                daemon_recovery::InterruptedTurn {
+                    turn_id: turn["turn"]["id"].as_str().context("turn ID")?.to_string(),
+                    output_schema: Some(schema.clone()),
+                    service_tier: Some("default".into()),
+                    cyber_access_program: None,
+                    local_environment,
+                    suspended: suspended.clone(),
+                },
+            )]
+            .into()
+        } else {
+            Default::default()
+        };
+    let snapshot = daemon_recovery::read_snapshot(&path)?;
+    assert_eq!(snapshot.loaded, [id.clone()].into());
     assert_eq!(
-        daemon_recovery::read_snapshot(&path)?,
-        daemon_recovery::RecoverySnapshot {
-            loaded: [id.clone()].into(),
-            interrupted: expected,
-        }
+        serde_json::to_value(snapshot.interrupted)?,
+        serde_json::to_value(expected)?
     );
     // Existing binaries can still read the candidate array and ignore the metadata entry.
     let legacy: std::collections::BTreeSet<String> =
@@ -703,7 +1189,7 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
         .filter(|turn| turn["id"] != "older-turn")
         .map(|turn| turn["status"].clone())
         .collect();
-    assert_eq!(statuses, vec![json!("interrupted"), json!("inProgress")]);
+    assert_eq!(statuses, vec![json!("inProgress")]);
     release_compaction
         .send(())
         .expect("continuation is waiting");
@@ -720,7 +1206,7 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
             if let Some(continued) = turns.last()
                 && continued["status"] == "completed"
             {
-                assert_ne!(continued["id"], turn["turn"]["id"]);
+                assert_eq!(continued["id"], turn["turn"]["id"]);
                 assert!(
                     continued["items"]
                         .as_array()
@@ -741,7 +1227,7 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
     assert_eq!(body["text"]["format"]["schema"], schema);
     let input = body["input"].to_string();
     assert!(
-        input.contains("Do the work") && input.contains("Continue the unfinished work"),
+        input.contains("Do the work") && !input.contains("Continue the unfinished work"),
         "{input}"
     );
     let collaboration = input
@@ -776,15 +1262,17 @@ async fn start_turn(
     websocket: &mut WebSocketStream<UnixStream>,
     id: i64,
     thread_id: impl serde::Serialize,
-) -> Result<()> {
-    request(
-        websocket,
-        id,
-        "turn/start",
-        json!({"threadId":thread_id,"input":[{"type":"text","text":"Hello"}]}),
-    )
-    .await?;
-    Ok(())
+) -> Result<String> {
+    let response: TurnStartResponse = serde_json::from_value(
+        request(
+            websocket,
+            id,
+            "turn/start",
+            json!({"threadId":thread_id,"input":[{"type":"text","text":"Hello"}]}),
+        )
+        .await?,
+    )?;
+    Ok(response.turn.id)
 }
 
 async fn start_thread(
@@ -809,11 +1297,83 @@ pub(super) async fn connect_daemon_client(
 }
 
 pub(super) fn spawn_server(home: &Path, socket_path: &Path) -> Result<Child> {
+    spawn_server_inner(home, socket_path, None, None)
+}
+
+#[cfg(unix)]
+struct ManagedExecutorCleanup {
+    state_file: PathBuf,
+    executable: PathBuf,
+}
+
+#[cfg(unix)]
+impl ManagedExecutorCleanup {
+    fn new(home: &Path, executable: &Path) -> Result<Self> {
+        Ok(Self {
+            state_file: home.join("app-server-daemon").join("local-executor.json"),
+            executable: std::fs::canonicalize(executable)?,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ManagedExecutorCleanup {
+    fn drop(&mut self) {
+        let Ok(state) = std::fs::read(&self.state_file) else {
+            return;
+        };
+        let Ok(state) = serde_json::from_slice::<serde_json::Value>(&state) else {
+            return;
+        };
+        let Some(pid) = state["pid"]
+            .as_u64()
+            .and_then(|pid| i32::try_from(pid).ok())
+        else {
+            return;
+        };
+        let Ok(executable) = std::fs::read_link(format!("/proc/{pid}/exe")) else {
+            return;
+        };
+        if executable != self.executable {
+            return;
+        }
+        // The executor is intentionally detached from the app server; tests
+        // must explicitly stop the fixture so it cannot leak into later runs.
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn spawn_server_with_executor(
+    home: &Path,
+    socket_path: &Path,
+    executor_binary: &Path,
+) -> Result<Child> {
+    let sandbox_binary = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")?;
+    spawn_server_inner(
+        home,
+        socket_path,
+        Some(executor_binary),
+        Some(sandbox_binary.as_path()),
+    )
+}
+
+fn spawn_server_inner(
+    home: &Path,
+    socket_path: &Path,
+    executor_binary: Option<&Path>,
+    sandbox_binary: Option<&Path>,
+) -> Result<Child> {
     let binary = codex_utils_cargo_bin::cargo_bin("codex-app-server")?;
-    Ok(Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(["--listen", &format!("unix://{}", socket_path.display())])
         .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
         .env("CODEX_HOME", home)
+        .env_remove("CODEX_EXEC_SERVER_URL")
+        .env_remove("CODEX_EXEC_SERVER_SESSION_ID_FILE")
         // Match TestAppServer's isolation from the host's managed configuration.
         .env(
             "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
@@ -824,10 +1384,23 @@ pub(super) fn spawn_server(home: &Path, socket_path: &Path) -> Result<Child> {
         .env(
             codex_app_server_transport::DAEMON_SHUTDOWN_SOCKET_ENV,
             socket_path,
-        )
+        );
+    if let Some(executor_binary) = executor_binary {
+        command.env("CODEX_MANAGED_EXECUTOR_EXECUTABLE", executor_binary);
+    }
+    if let Some(sandbox_binary) = sandbox_binary {
+        command.env("CODEX_TEST_LINUX_SANDBOX_EXE", sandbox_binary);
+    }
+    Ok(command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(
+            if std::env::var_os("CODEX_APP_SERVER_TEST_STDERR").is_some() {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            },
+        )
         .kill_on_drop(true)
         .spawn()?)
 }

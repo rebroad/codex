@@ -22,6 +22,7 @@ const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
     telemetry: ExecServerTelemetry,
+    detached_session_ttl: Option<Duration>,
 }
 
 struct SessionEntry {
@@ -36,7 +37,7 @@ enum AttachmentState {
     },
     Detached {
         connection_id: ConnectionId,
-        expires_at: tokio::time::Instant,
+        expires_at: Option<tokio::time::Instant>,
     },
 }
 
@@ -61,6 +62,15 @@ impl SessionRegistry {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
             telemetry,
+            detached_session_ttl: if std::env::var_os(
+                crate::CODEX_EXEC_SERVER_PRESERVE_SESSIONS_ENV_VAR,
+            )
+            .is_some_and(|value| value == "1")
+            {
+                None
+            } else {
+                Some(DETACHED_SESSION_TTL)
+            },
         })
     }
 
@@ -158,6 +168,7 @@ impl Default for SessionRegistry {
         Self {
             sessions: Mutex::new(HashMap::new()),
             telemetry: ExecServerTelemetry::default(),
+            detached_session_ttl: Some(DETACHED_SESSION_TTL),
         }
     }
 }
@@ -179,7 +190,7 @@ impl SessionEntry {
         *attachment = AttachmentState::Attached { connection_id };
     }
 
-    fn detach(&self, connection_id: ConnectionId) -> bool {
+    fn detach(&self, connection_id: ConnectionId, ttl: Option<Duration>) -> bool {
         let mut attachment = self
             .attachment
             .lock()
@@ -192,7 +203,7 @@ impl SessionEntry {
         self.process.set_notification_sender(/*notifications*/ None);
         *attachment = AttachmentState::Detached {
             connection_id,
-            expires_at: tokio::time::Instant::now() + DETACHED_SESSION_TTL,
+            expires_at: ttl.map(|ttl| tokio::time::Instant::now() + ttl),
         };
         true
     }
@@ -216,7 +227,7 @@ impl SessionEntry {
     fn is_expired(&self, now: tokio::time::Instant) -> bool {
         matches!(*self.attachment
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Detached { expires_at, .. } if now >= expires_at)
+            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Detached { expires_at: Some(expires_at), .. } if now >= expires_at)
     }
 
     fn is_detached_connection_expired(
@@ -228,7 +239,7 @@ impl SessionEntry {
             .attachment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        matches!(*attachment, AttachmentState::Detached { connection_id: detached, expires_at } if detached == connection_id && now >= expires_at)
+        matches!(*attachment, AttachmentState::Detached { connection_id: detached, expires_at: Some(expires_at) } if detached == connection_id && now >= expires_at)
     }
 }
 
@@ -250,10 +261,16 @@ impl SessionHandle {
     }
 
     pub(crate) async fn detach(&self) {
-        if !self.entry.detach(self.connection_id) {
+        if !self
+            .entry
+            .detach(self.connection_id, self.registry.detached_session_ttl)
+        {
             return;
         }
 
+        if self.registry.detached_session_ttl.is_none() {
+            return;
+        }
         let registry = Arc::clone(&self.registry);
         let session_id = self.entry.session_id.clone();
         let connection_id = self.connection_id;

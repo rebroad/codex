@@ -251,7 +251,12 @@ impl LazyRemoteExecServerClient {
             let result = tokio::select! {
                 biased;
                 _ = attempt.cancelled.cancelled() => return Err(Arc::new(ExecServerError::Disconnected("connection attempt was superseded".to_string()))),
-                result = ExecServerClient::connect_for_transport(transport.clone(), self.http_client_factory.clone(), &mut observation.started) => result,
+                result = ExecServerClient::connect_for_transport(
+                    transport.clone(),
+                    self.http_client_factory.clone(),
+                    self.session_id_file.clone(),
+                    &mut observation.started,
+                ) => result,
             };
             let client = result.map_err(|error| {
                 observation.outcome = ConnectionAttemptOutcome::Failure;
