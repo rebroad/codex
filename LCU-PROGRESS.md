@@ -6,6 +6,40 @@ completion percentages.
 
 ## Completed work
 
+- Fixed built-in Computer Use routing on 2026-10-29. Added a `[mcp_servers.cua_repl]`
+  config entry that duplicates the working `linux_cua` launcher and session
+  environment, while retaining the bundled plugin's browser provider settings.
+  The override enables both `browser,computer` surfaces and trusts both the
+  browser desktop service and Sky. After `codex app-server reload`, the
+  built-in `mcp__cua_repl__js` tool reset successfully; `cua.getState()` returned
+  106 apps and two browser tabs, and `cua.listWindows()` returned 29 windows.
+  This is a host config integration: the bundled plugin cache remains
+  browser-only, and no user-wide `AGENTS.md` guidance is needed.
+- Resolved a native-surface routing failure on 2026-10-29. The generic
+  `mcp__cua_repl` integration exposed browser tabs only in that session; the
+  separately configured `mcp__linux_cua` service was the native Linux path but
+  lacked `DISPLAY` and `XAUTHORITY` in its MCP environment. Added the verified
+  active X11 values (`:0` and `/home/rebroad/.Xauthority`) to the
+  `linux_cua` server configuration and reloaded app-server. A fresh
+  `mcp__linux_cua` runtime now discovers 106 desktop apps and 10 windows.
+  Native Linux tasks must use `mcp__linux_cua`; the generic CUA server remains
+  browser-only.
+- The configured startup banner supplies `cua.listWindows` from the Linux
+  computer backend when the installed CUA package omits that optional wrapper.
+  The MCP server is discoverable in the session's tool inventory as
+  `mcp__linux_cua__js`. It is separate from the browser-only
+  `mcp__cua_repl`, so the latter cannot be transparently redirected to it.
+- Regression test with a fresh agent on 2026-10-29: invoking the built-in
+  Computer Use skill initialized the bundled browser-only runtime, returned
+  Chrome tabs, and had no native `listWindows`; its summarized tool inventory
+  separately showed three Linux CUA MCP functions. An explicit config-level
+  `cua_repl` alias exposed the expected tool name but its process could not
+  connect to X11 (`Connection refused`), so that alias was removed. The
+  separately configured `linux_cua` MCP still initializes on the host and
+  reports 106 apps and 29 windows. A later config alias copied from the working
+  Linux CUA server was verified through the built-in `cua_repl` name as recorded
+  above; the earlier failed alias's exact cause was not established.
+
 - Confirmed that the installed `@oai/sky` package includes a Linux backend and
   binary for app discovery, launching, windows, screenshots, mouse, keyboard,
   X11, and accessibility.
@@ -82,7 +116,9 @@ completion percentages.
 
 - The installed ChatGPT Desktop production runtime still materializes the
   bundled plugin as browser-only because its Linux `computerUse` feature gate is
-  disabled. Its development-only feature override is not a production fix.
+  disabled. The host's Codex config override enables both surfaces for the
+  running app-server, but does not change Desktop's plugin packaging or make
+  this setup portable to other Linux installations.
 - The generated cache under `~/.codex/plugins/cache` is not an implementation
   target and was not modified.
 - The Codex repository has no Electron Desktop source. The backend path is
