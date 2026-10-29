@@ -225,13 +225,22 @@ Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this r
 - **In progress (this rustc):** active time in the current compiler attempt.
   It is not added to kept or lost until that attempt succeeds or is discarded.
 
-Kept, suspended and lost never decrease. Timing is shared through a locked
-ledger keyed to the build process, rather than each rustc reading an outdated
-snapshot. The guarded `RUSTC_WRAPPER` is scoped to the managed Cargo stage
-together with `CODEX_ANDROID_RUSTC_TIMING_DIR`, not exported to unrelated
-preparatory Cargo commands; the stage validates both variables and `flock`
-before starting compilation. This avoids isolated local counters caused by
-an orphaned wrapper environment. With parallel compiler invocations, the totals are summed
+**Kept, Suspended, and Lost are project-wide cumulative totals.** Every
+Rust OOM wrapper updates a persistent, `flock`-protected ledger at
+`build/codex-rust-timing-global/totals` relative to the source checkout,
+including compiler invocations from auxiliary Cargo processes without
+`CODEX_ANDROID_RUSTC_TIMING_DIR`. Counts persist across builds and do not
+restart when another crate or Cargo process starts. Set
+`CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR` to override the directory when needed.
+
+Managed Cargo builds also write a **separate temporary stage ledger** via
+`CODEX_ANDROID_RUSTC_TIMING_DIR`. This preserves per-stage accounting for
+ballast autotuning and final `⏱ Rust totals` while the on-screen `Rust time:`
+reports use the project-wide running totals. Each ledger is protected by its
+own lock. If the global ledger cannot be used, a warning is printed and the
+wrapper falls back to stage-specific or local counters.
+
+With parallel compiler invocations, the totals are summed
 **compiler-process seconds** and may exceed the build's wall-clock elapsed time.
 The in-progress field is local to the reporting rustc, not a build-wide total.
 All values refer to time, not CPU instruction counts. The split is based on
