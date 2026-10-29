@@ -1785,6 +1785,7 @@ run_preflight() {
       scripts/codex_rustc_oom_wrapper.sh \
       scripts/codex_rustc_timing.sh \
       scripts/tests/test_codex_rustc_timing.sh \
+      scripts/tests/test_codex_rustc_timing_scope.sh \
       scripts/tests/test_codex_rustc_suspend_state.sh \
       scripts/tests/test_codex_rustc_lmkd_advisory.sh \
       scripts/build_armv7.sh \
@@ -1800,6 +1801,7 @@ run_preflight() {
     # Catch stale suspension-state regressions before a long Cargo build.
     bash scripts/tests/test_codex_rustc_suspend_state.sh >/dev/null
     bash scripts/tests/test_codex_rustc_lmkd_advisory.sh >/dev/null
+    bash scripts/tests/test_codex_rustc_timing_scope.sh >/dev/null
   )
   require_cmd cargo
   if command -v rustup >/dev/null 2>&1; then
