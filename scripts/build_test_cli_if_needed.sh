@@ -7,6 +7,8 @@ set -euo pipefail
 selected_packages=()
 build_all_packages=false
 package_spec=""
+requested_args=("$@")
+build_linux_sandbox=false
 while (($#)); do
   case "$1" in
     --workspace|--all)
@@ -52,9 +54,25 @@ else
   done
 fi
 
-if [[ "$build_cli" == false ]]; then
-  echo "Skipping Codex CLI refresh; selected packages do not spawn the CLI."
-  exit 0
+if [[ "$build_all_packages" == false && ${#selected_packages[@]} -eq 1 \
+  && "${selected_packages[0]}" == codex-app-server ]]; then
+  for requested_arg in "${requested_args[@]}"; do
+    if [[ "$requested_arg" == managed_handoff_reattaches_a_running_local_command ]]; then
+      # This test launches app-server and exec-server fixtures, not the Codex
+      # CLI. It needs the sandbox binary to execute the test command.
+      build_cli=false
+      build_linux_sandbox=true
+      break
+    fi
+  done
 fi
 
-cargo build --locked -p codex-cli --bin codex
+if [[ "$build_cli" == true ]]; then
+  cargo build --locked -p codex-cli --bin codex
+else
+  echo "Skipping Codex CLI refresh; selected tests do not spawn the CLI."
+fi
+
+if [[ "$build_linux_sandbox" == true ]]; then
+  cargo build --locked -p codex-linux-sandbox --bin codex-linux-sandbox
+fi

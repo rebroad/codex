@@ -6,6 +6,7 @@ mod state;
 mod tool_policy;
 mod turn_admission;
 mod user_instructions;
+mod work_admission;
 
 pub use session_isolation::IsolatedSessionExtensions;
 pub use session_isolation::SessionIsolation;
@@ -111,6 +112,8 @@ pub use user_instructions::LoadInstructionsFuture;
 pub use user_instructions::LoadedUserInstructions;
 pub use user_instructions::ThreadInstructionsProvider;
 pub use user_instructions::UserInstructionsProvider;
+pub use work_admission::CoreWorkAdmission;
+pub use work_admission::CoreWorkKind;
 
 pub use contributors::ToolDispatchInput;
 

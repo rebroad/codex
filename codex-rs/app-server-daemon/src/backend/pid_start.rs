@@ -9,6 +9,12 @@ use super::PidCommandKind;
 use super::PidFileState;
 use super::PidRecord;
 use super::read_process_start_time;
+#[cfg(unix)]
+use crate::backend::ExecutorSupervisor;
+#[cfg(unix)]
+use crate::backend::exec_server_url_env;
+#[cfg(unix)]
+use crate::backend::session_id_file_env;
 use crate::managed_install::executable_identity;
 use anyhow::Context;
 use anyhow::Result;
@@ -148,6 +154,19 @@ impl PidBackend {
         }
         if let Some((key, value)) = self.command_env() {
             command.env(key, value);
+        }
+        #[cfg(unix)]
+        if matches!(self.command_kind, super::PidCommandKind::AppServer { .. })
+            && let Some(state_file) = &self.executor_state_file
+        {
+            command.env_remove(exec_server_url_env());
+            if let Some(url) = ExecutorSupervisor::endpoint_from_state(state_file).await {
+                command.env(exec_server_url_env(), url);
+            }
+            command.env(
+                session_id_file_env(),
+                state_file.with_file_name("exec-server-session-id"),
+            );
         }
 
         crate::background_command::set_working_directory(

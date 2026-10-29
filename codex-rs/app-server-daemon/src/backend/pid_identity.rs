@@ -10,7 +10,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged, rename_all_fields = "camelCase")]
-pub(super) enum ProcessIdentity {
+pub(crate) enum ProcessIdentity {
     Linux {
         boot_id: String,
         start_ticks: u64,
@@ -30,7 +30,7 @@ pub(super) enum ProcessIdentity {
 
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 impl ProcessIdentity {
-    pub(super) async fn matches_process(&self, pid: u32) -> Result<(bool, bool)> {
+    pub(crate) async fn matches_process(&self, pid: u32) -> Result<(bool, bool)> {
         // A different boot proves staleness even when the reused PID is inaccessible.
         if let Self::Linux { boot_id, .. } | Self::MacOsUnique { boot_id, .. } = self
             && *boot_id != read_boot_id().await?
@@ -100,7 +100,7 @@ impl super::PidBackend {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) async fn read_process_details(pid: u32) -> Result<(bool, ProcessIdentity)> {
+pub(crate) async fn read_process_details(pid: u32) -> Result<(bool, ProcessIdentity)> {
     let boot_id = read_boot_id().await?;
     let unique_id = read_unique_id(pid)?;
     let pid = libc::pid_t::try_from(pid).context("daemon pid is out of range")?;
@@ -195,7 +195,7 @@ async fn read_boot_id() -> Result<String> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub(super) async fn read_process_details(pid: u32) -> Result<(bool, ProcessIdentity)> {
+pub(crate) async fn read_process_details(pid: u32) -> Result<(bool, ProcessIdentity)> {
     let stat = tokio::fs::read(format!("/proc/{pid}/stat"))
         .await
         .with_context(|| format!("failed to read process stat for pid-managed process {pid}"))?;

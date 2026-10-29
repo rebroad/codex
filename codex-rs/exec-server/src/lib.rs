@@ -48,6 +48,7 @@ mod sandbox_selection;
 mod sandboxed_file_open;
 mod sandboxed_file_system;
 mod server;
+mod session_id_store;
 #[cfg(unix)]
 mod shell_snapshot;
 #[cfg(unix)]
@@ -115,6 +116,8 @@ pub use environment::CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
+/// Keep disconnected sessions available for a replacement app-server process.
+pub const CODEX_EXEC_SERVER_PRESERVE_SESSIONS_ENV_VAR: &str = "CODEX_EXEC_SERVER_PRESERVE_SESSIONS";
 pub use environment::ConnectionAttemptOutcome;
 pub use environment::Environment;
 pub use environment::EnvironmentConnectionState;

@@ -9,14 +9,14 @@ use codex_utils_path::write_atomically;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct RecoverySnapshot {
     #[serde(skip)]
     pub loaded: BTreeSet<String>,
     pub interrupted: BTreeMap<String, InterruptedTurn>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InterruptedTurn {
     pub turn_id: String,
     pub output_schema: Option<serde_json::Value>,
@@ -25,6 +25,9 @@ pub struct InterruptedTurn {
     /// Only local execution with thread-owned configuration can continue automatically.
     /// Older snapshots without this identity are reloaded without continuation.
     pub local_environment: Option<codex_app_server_protocol::ThreadEnvironment>,
+    /// Core state captured at the suspension boundary, including queued input and interactions.
+    #[serde(default)]
+    pub suspended: Option<codex_protocol::turn_input::SuspendedThreadTurn>,
 }
 
 // Old servers accept the array and skip this non-thread entry during best-effort

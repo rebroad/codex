@@ -126,6 +126,7 @@ impl SequenceNoiseConnectProvider {
             codex_http_client::HttpClientFactory::new(
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
+            None,
             /*started*/ &mut None,
         )
         .await

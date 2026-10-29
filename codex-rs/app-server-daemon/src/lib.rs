@@ -695,6 +695,8 @@ impl Daemon {
             backend
                 .stop_with_grace(settings.shutdown_grace_seconds)
                 .await?;
+            #[cfg(unix)]
+            self.stop_managed_executor().await?;
             return Ok(self
                 .output(
                     LifecycleStatus::Stopped,
@@ -710,6 +712,9 @@ impl Daemon {
                 "app server is running but is not managed by codex app-server daemon"
             ));
         }
+
+        #[cfg(unix)]
+        self.stop_managed_executor().await?;
 
         Ok(self
             .output(
@@ -986,6 +991,8 @@ impl Daemon {
         settings: &DaemonSettings,
         managed_codex_bin: &Path,
     ) -> Result<Option<u32>> {
+        #[cfg(unix)]
+        self.ensure_managed_executor(managed_codex_bin).await?;
         let backend =
             backend::pid_backend(self.backend_paths_with_bin(settings, managed_codex_bin));
         backend.start().await
@@ -1086,7 +1093,29 @@ impl Daemon {
             update_pid_file: self.update_pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,
             feature_overrides: settings.feature_overrides.clone(),
+            executor_state_file: self.pid_file.with_file_name("exec-server.json"),
         }
+    }
+
+    #[cfg(unix)]
+    async fn ensure_managed_executor(&self, codex_bin: &Path) -> Result<()> {
+        backend::ExecutorSupervisor::new(
+            codex_bin.to_path_buf(),
+            self.pid_file.with_file_name("exec-server.json"),
+        )
+        .ensure_running()
+        .await
+        .map(|_| ())
+    }
+
+    #[cfg(unix)]
+    async fn stop_managed_executor(&self) -> Result<()> {
+        backend::ExecutorSupervisor::new(
+            self.backend_codex_bin().to_path_buf(),
+            self.pid_file.with_file_name("exec-server.json"),
+        )
+        .stop()
+        .await
     }
 
     async fn load_settings(&self) -> Result<DaemonSettings> {

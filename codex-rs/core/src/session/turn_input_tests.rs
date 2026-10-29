@@ -277,6 +277,8 @@ async fn recovery_rejects_active_turn_without_injecting_or_applying_settings() {
         },
         TurnStartOptions::default(),
         "recovered-turn".to_string(),
+        Vec::new(),
+        Vec::new(),
     )
     .await
     .expect("recovery should return a typed rejection");

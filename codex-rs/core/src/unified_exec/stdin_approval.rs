@@ -202,6 +202,11 @@ impl ProcessEntry {
         {
             return Ok(None);
         }
+        let Some(permissions) = self.permissions.as_ref() else {
+            return Err(approval_error(
+                "stdin is closed for this restored process; start a new interactive terminal",
+            ));
+        };
         let environment = context
             .step_context
             .environments
@@ -212,7 +217,6 @@ impl ProcessEntry {
                     "cannot access the terminal's original environment; select it before retrying",
                 )
             })?;
-        let permissions = &self.permissions;
         let current = TerminalPolicy::capture(
             environment,
             &context.step_context.turn,
