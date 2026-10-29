@@ -68,6 +68,70 @@ codex_timing_format() {
   printf -v "$2" '%s' "$duration"
 }
 
+# The wrapper receives Rustc's actual argv (compiler path followed by flags).
+# Cargo's "Compiling ..." lines can interleave across multiple compiler
+# processes; keep this immutable label and each attempt PID on transitions.
+codex_timing_identify_compiler() {
+  codex_timing_crate=unknown
+  codex_timing_source=""
+  local arg
+  while (($#)); do
+    arg="$1"
+    case "$arg" in
+      --crate-name)
+        shift
+        codex_timing_crate="${1:-unknown}"
+        ;;
+      --crate-name=*)
+        codex_timing_crate="${arg#--crate-name=}"
+        ;;
+      *.rs)
+        if [[ -z "$codex_timing_source" && "$arg" != -* ]]; then
+          codex_timing_source="$arg"
+        fi
+        ;;
+    esac
+    shift
+  done
+  # Rust test targets often have generic names like "all"; the input path
+  # disambiguates these in otherwise identical-looking timing updates.
+  case "$codex_timing_crate" in
+    all|lib|main|unknown)
+      if [[ -n "$codex_timing_source" ]]; then
+        codex_timing_source="${codex_timing_source#*/codex-rs/}"
+      fi
+      ;;
+    *) codex_timing_source="" ;;
+  esac
+}
+
+codex_timing_emit_transition() {
+  local kind="$1" micros="$2" duration context
+  [[ "$kind" == kept || "$kind" == lost ]] || return 0
+  # The aggregate is updated first. Each unthrottled transition then explains
+  # exactly which compiler attempt changed Kept or Lost.
+  codex_timing_format "$micros" duration
+  if ((micros > 0 && micros < 1000000)); then
+    duration="<1s"
+  fi
+  context="crate=${codex_timing_crate:-unknown} pid=${codex_compiler_pid:-unknown}"
+  if [[ -n "${codex_timing_source:-}" ]]; then
+    context+=" src=$codex_timing_source"
+  fi
+  case "$kind" in
+    kept) printf '%s ✓ kept+%s %s\n' "$(date '+%H:%M:%S')" "$duration" "$context" >&2 ;;
+    lost) printf '%s ✗ lost+%s %s\n' "$(date '+%H:%M:%S')" "$duration" "$context" >&2 ;;
+  esac
+}
+
+codex_timing_emit_start() {
+  local context="crate=${codex_timing_crate:-unknown} pid=${codex_compiler_pid:-unknown}"
+  if [[ -n "${codex_timing_source:-}" ]]; then
+    context+=" src=$codex_timing_source"
+  fi
+  printf '%s ▶ start %s\n' "$(date '+%H:%M:%S')" "$context" >&2
+}
+
 codex_timing_emit() {
   local running_duration paused_duration lost_duration pending_duration
   codex_timing_format "$1" running_duration
@@ -91,6 +155,7 @@ codex_timing_event() {
   local event="${1:-tick}" report="${2:-false}"
   local now_us elapsed_us=0 running_delta=0 lost_delta=0 suspended_delta
   local running=0 suspended=0 lost=0 lock_fd ledger_file
+  local transition_kind="" transition_us=0
   local report_running=0 report_suspended=0 report_lost=0
   local -a ledgers=()
   codex_timing_now
@@ -115,11 +180,15 @@ codex_timing_event() {
       fi ;;
     success)
       running_delta="${codex_timing_attempt_us}"
+      transition_kind=kept
+      transition_us="$running_delta"
       codex_timing_attempt_us=0
       codex_timing_mode="${codex_guard_compile_state:-running}"
       [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
     lost)
       lost_delta="${codex_timing_attempt_us}"
+      transition_kind=lost
+      transition_us="$lost_delta"
       codex_timing_attempt_us=0
       codex_timing_mode="${codex_guard_compile_state:-running}"
       [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
@@ -132,6 +201,7 @@ codex_timing_event() {
     codex_timing_local_running_us=$((codex_timing_local_running_us + running_delta))
     codex_timing_local_suspended_us=$((codex_timing_local_suspended_us + suspended_delta))
     codex_timing_local_lost_us=$((codex_timing_local_lost_us + lost_delta))
+    codex_timing_emit_transition "$transition_kind" "$transition_us"
     if [[ "${report}" == true ]]; then
       codex_timing_emit "${codex_timing_local_running_us}" \
         "${codex_timing_local_suspended_us}" "${codex_timing_local_lost_us}" \
@@ -179,6 +249,7 @@ codex_timing_event() {
     flock -u "${lock_fd}"
     exec {lock_fd}>&-
   done
+  codex_timing_emit_transition "$transition_kind" "$transition_us"
   if [[ "$report" == true ]]; then
     codex_timing_emit "$report_running" "$report_suspended" "$report_lost" \
       "${codex_timing_attempt_us}"
