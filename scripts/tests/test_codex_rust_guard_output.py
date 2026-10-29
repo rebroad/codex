@@ -140,6 +140,25 @@ class GuardOutputTest(unittest.TestCase):
         self.assertTrue(lines[0].startswith("14:16:30 kept="))
         self.assertTrue(lines[1].startswith("14:17:30 kept="))
 
+    def test_compiler_transitions_are_never_hidden_by_timing_throttle(self):
+        self.f.process_line("15:37:03 kept=24m slept=0s lost=0s this=2m")
+        self.clock.t += .3
+        self.f.process_line("15:37:25 ✓ kept+2m22s crate=codex_app_server pid=31337")
+        self.f.process_line("15:37:25 kept=26m22s slept=0s lost=0s this=0s")
+        self.f.process_line("15:37:25 ▶ start crate=core_test_support pid=31339")
+        self.clock.t += .2
+        self.f.process_line("15:37:41 ✓ kept+16s crate=core_test_support pid=31339")
+        self.f.process_line("15:37:41 kept=26m38s slept=0s lost=0s this=0s")
+        self.f.process_line("15:37:41 ▶ start crate=all pid=31340 src=app-server/tests/all.rs")
+        lines = self.buffer.getvalue().splitlines()
+        self.assertEqual(len(lines), 5)
+        self.assertIn("kept+2m22s crate=codex_app_server pid=31337", lines[1])
+        self.assertIn("start crate=core_test_support pid=31339", lines[2])
+        self.assertIn("kept+16s crate=core_test_support pid=31339", lines[3])
+        self.assertIn("src=app-server/tests/all.rs", lines[4])
+        # There is still only one periodic aggregate snapshot in this minute.
+        self.assertEqual(sum(" kept=" in line for line in lines), 1)
+
     def test_multiline_status_has_global_throttle(self):
         self.f.process_line("⏹ Rust attempt stopped: full PSI; waiting to retry")
         for _ in range(12):
