@@ -184,13 +184,13 @@ codex_stop_psi_stream() {
   fi
 }
 
-codex_lmkd_reclaim_active=false
-codex_lmkd_reclaim_process=""
-codex_lmkd_clear_windows=0
+# Other applications reclaimed by Android's LMKD are advisory information:
+# they do not prove that this rustc needs to be killed or stopped.
 codex_start_psi_stream || true
 
 codex_read_psi() {
   local codex_record_kind codex_record_value codex_record_rest codex_lmkd_line
+  local codex_lmkd_reclaim_process
   codex_psi_some_total_us=0
   codex_psi_full_total_us=0
   [[ -n "$codex_psi_stream_fd" ]] || return 1
@@ -208,8 +208,18 @@ codex_read_psi() {
         if [[ "$codex_lmkd_line" == *"Reclaim '"* ]]; then
           codex_lmkd_reclaim_process=${codex_lmkd_line#*Reclaim \'}
           codex_lmkd_reclaim_process=${codex_lmkd_reclaim_process%%\'*}
-          codex_lmkd_reclaim_active=true
-          codex_lmkd_clear_windows=0
+          # Send diagnostics to stderr inside the rustc wrapper so Cargo's
+          # compiler stdout stays protocol-clean. The build-wide log filter
+          # forwards these notices to the build's actual stdout.
+          if [[ "$codex_lmkd_reclaim_process" =~ ^[[:alnum:]_.:-]+$ ]]; then
+            printf 'ℹ️ Android LMKD reclaimed %s; advisory only (rustc preserved)\n' \
+              "$codex_lmkd_reclaim_process" >&2
+            # A reclaim event still warrants releasing disposable ballast,
+            # but never proactively discarding this compiler's progress.
+            if declare -F codex_ballast_request_relief >/dev/null 2>&1; then
+              codex_ballast_request_relief
+            fi
+          fi
         fi
         ;;
     esac
@@ -509,14 +519,13 @@ codex_wait_for_memory() {
       fi
     fi
     if codex_memory_guard_reason; then
-      codex_lmkd_clear_windows=0
-      if [[ "$codex_lmkd_reclaim_active" != true ]] && codex_guard_is_psi_only; then
+      if codex_guard_is_psi_only; then
         now_epoch_us="${EPOCHREALTIME/./}"
         if ((psi_wait_started_epoch_us == 0)); then
           psi_wait_started_epoch_us="$now_epoch_us"
         fi
-        # PSI stalls alone must not block a rustc from ever starting. The
-        # check above already ruled out critical RAM/swap headroom.
+        # PSI stalls alone must not block rustc from ever starting. Critical
+        # RAM/swap checks are still enforced on every iteration.
         if ((now_epoch_us - psi_wait_started_epoch_us >=
               codex_psi_max_pause_seconds * 1000000)); then
           return 0
@@ -524,20 +533,6 @@ codex_wait_for_memory() {
       else
         psi_wait_started_epoch_us=0
       fi
-    elif [[ "$codex_lmkd_reclaim_active" == true ]]; then
-      if [[ "$codex_psi_available" == true ]] && ((${#codex_some_deltas[@]} < 5)); then
-        codex_lmkd_clear_windows=0
-      else
-        ((codex_lmkd_clear_windows += 1))
-      fi
-      if ((codex_lmkd_clear_windows >= 5)); then
-        codex_lmkd_reclaim_active=false
-        codex_lmkd_clear_windows=0
-        codex_log_guard_event lmkd-clear \
-          'Android LMKD reclaim quiet for five clear memory checks; allowing Rust compile to resume'
-        return 0
-      fi
-      codex_guard_reason="recent LMKD reclaim of ${codex_lmkd_reclaim_process:-another app}; waiting for five clear memory checks"
     else
       return 0
     fi
@@ -589,15 +584,8 @@ while true; do
         codex_stop_psi_stream
       fi
     fi
-    if [[ "$codex_lmkd_reclaim_active" == true ]]; then
-      codex_guard_reason="LMKD reclaimed ${codex_lmkd_reclaim_process:-another app}"
-      codex_ballast_request_relief
-    fi
-    if [[ "$codex_lmkd_reclaim_active" == true ]] || codex_memory_guard_reason; then
-      if [[ "$codex_lmkd_reclaim_active" == true ]]; then
-        codex_resume_clear_windows=0
-      fi
-      if [[ "$codex_lmkd_reclaim_active" != true ]] && codex_guard_is_psi_only; then
+    if codex_memory_guard_reason; then
+      if codex_guard_is_psi_only; then
         # Both PSI some and full indicate stalls; neither alone warrants
         # discarding rustc's work. Pause reversibly, but ensure a suspended
         # compiler gets another chance to make progress after 5 seconds.
