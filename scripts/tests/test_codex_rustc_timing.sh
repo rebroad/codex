@@ -109,6 +109,15 @@ codex_timing_format 232000000 time_3m52s
 codex_timing_format 0 time_zero
 [[ "$time_zero" == '0s' ]]
 
+# The periodic snapshot identifies the current compilation unit without a PID,
+# and an idle snapshot names the file whose completion last changed Kept.
+codex_compiler_pid=303
+active_report="$(codex_timing_emit 14000000 13000000 14000000 2000000 2>&1)"
+[[ "$active_report" == *'this=2s crate=codex_app_server file=app-server/src/lib.rs'* ]]
+codex_compiler_pid=""
+idle_report="$(codex_timing_emit 14000000 13000000 14000000 0 2>&1)"
+[[ "$idle_report" == *'this=0s last=codex_app_server file=app-server/src/lib.rs'* ]]
+
 # Reports do not mutate past classifications or decrease counters.
 clock=46000000
 report="$(codex_report_timing_counters 2>&1)"
