@@ -59,22 +59,37 @@ assert_ledger() {
 }
 
 codex_timing_init
+# Extract crate identity from real Cargo/rustc flags, not interleaved Cargo
+# "Compiling" messages. Generic test crate names get their input path.
+codex_timing_identify_compiler /usr/bin/rustc --crate-name=all --test app-server/tests/all.rs
+[[ "$codex_timing_crate" == all ]]
+[[ "$codex_timing_source" == 'app-server/tests/all.rs' ]]
+codex_compiler_pid=515
+codex_timing_emit_start 2>"$temp/started"
+grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2} ▶ start crate=all pid=515 src=app-server/tests/all.rs$' "$temp/started"
+codex_timing_identify_compiler /usr/bin/rustc --crate-name codex_core core/src/lib.rs
+[[ "$codex_timing_crate" == codex_core ]]
+[[ -z "$codex_timing_source" ]]
+
 # First attempt: 10s active + 4s paused + 4s active, then discarded.
 codex_compiler_pid=101
 clock=2000000; codex_timing_launch
 clock=12000000; codex_timing_pause
 clock=16000000; codex_timing_resume
-clock=20000000; codex_timing_lost
+clock=20000000; codex_timing_lost 2>"$temp/lost-transition"
 codex_compiler_pid=""
+grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2} ✗ lost\+14s crate=codex_core pid=101$' "$temp/lost-transition"
 assert_ledger 0 4000000 14000000
 
 # Second attempt: 10s active + 3s paused + 4s active, then retained.
 codex_compiler_pid=102
+codex_timing_identify_compiler /usr/bin/rustc --crate-name codex_app_server app-server/src/lib.rs
 clock=21000000; codex_timing_launch
 clock=31000000; codex_timing_pause
 clock=34000000; codex_timing_resume
-clock=38000000; codex_timing_success
+clock=38000000; codex_timing_success 2>"$temp/kept-transition"
 codex_compiler_pid=""
+grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2} ✓ kept\+14s crate=codex_app_server pid=102$' "$temp/kept-transition"
 assert_ledger 14000000 7000000 14000000
 
 # Waiting for memory is suspended, not useful or lost.
