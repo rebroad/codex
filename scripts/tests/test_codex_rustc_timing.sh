@@ -140,6 +140,21 @@ assert_ledger 29000000 13000000 14000000
 read -r stage_kept stage_suspended stage_lost <"$temp/totals"
 [[ "$stage_kept" == 19000000 && "$stage_suspended" == 13000000 && "$stage_lost" == 14000000 ]]
 
+# A fresh managed Cargo stage has a new stage ledger, but the visible
+# project-wide Kept count still starts from all previously completed work.
+mkdir -p "$temp/second-stage"
+(
+  export CODEX_ANDROID_RUSTC_TIMING_DIR="$temp/second-stage"
+  clock=90000000; codex_timing_init
+  [[ "$codex_timing_stage_file" == "$temp/second-stage/totals" ]]
+  codex_compiler_pid=106
+  clock=91000000; codex_timing_launch
+  clock=93000000; codex_timing_success
+)
+assert_ledger 31000000 13000000 14000000
+read -r fresh_kept fresh_suspended fresh_lost <"$temp/second-stage/totals"
+[[ "$fresh_kept" == 2000000 && "$fresh_suspended" == 0 && "$fresh_lost" == 0 ]]
+
 # If a running attempt is suspended then killed, only active time is lost.
 clock=60000000; codex_timing_init
 codex_compiler_pid=104
@@ -147,7 +162,7 @@ clock=61000000; codex_timing_launch
 clock=67000000; codex_timing_pause
 clock=71000000; codex_timing_lost
 codex_compiler_pid=""
-assert_ledger 29000000 17000000 20000000
+assert_ledger 31000000 17000000 20000000
 read -r stage_kept stage_suspended stage_lost <"$temp/totals"
 [[ "$stage_kept" == 19000000 && "$stage_suspended" == 17000000 && "$stage_lost" == 20000000 ]]
 
