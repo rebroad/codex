@@ -58,6 +58,16 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(len(self.buffer.getvalue().splitlines()), 2)
         self.assertIn("▶️ Rust resumed", self.buffer.getvalue().splitlines()[1])
 
+    def test_guard_events_use_time_first_and_hide_successful_finishes(self):
+        self.f.process_line(
+            "⏸ Rust suspended at 2026-10-28T23:30:01+0100: PSI")
+        self.f.process_line(
+            "23:30:02 ✓ finished crate=ctor "
+            "file=ctor-0.6.3/src/lib.rs")
+        lines = self.buffer.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "23:30:01 ⏸ Rust suspended: PSI")
+
     def test_other_build_output_passes_through_immediately(self):
         self.f.process_line("⏹ Rust attempt stopped: PSI; waiting to retry")
         self.clock.t += .01
