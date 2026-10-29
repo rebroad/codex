@@ -111,17 +111,13 @@ codex_timing_compiler_context() {
 }
 
 codex_timing_emit_transition() {
-  local description
-  # Suppress Rustc version/probe invocations: they have no actual source
-  # entry file or crate identity and add no useful compilation context.
+  # Successful compilation is already identified by its ▶ compiling line.
+  # Only report discarded work, which is an actionable exception.
+  [[ "$1" == lost ]] || return 0
+  # Suppress rustc version/probe invocations with no useful source identity.
   [[ "${codex_timing_crate:-unknown}" != unknown || -n "${codex_timing_source:-}" ]] || return 0
-  case "$1" in
-    kept) description="✓ finished" ;;
-    lost) description="✗ discarded" ;;
-    *) return 0 ;;
-  esac
   codex_timing_compiler_context
-  printf '%s %s %s\n' "$(date '+%H:%M:%S')" "$description" "$codex_timing_context" >&2
+  printf '%s ✗ discarded %s\n' "$(date '+%H:%M:%S')" "$codex_timing_context" >&2
 }
 
 codex_timing_emit_start() {
@@ -137,14 +133,11 @@ codex_timing_emit() {
   codex_timing_format "$3" lost_duration
   codex_timing_format "$4" pending_duration
   local context=""
-  if [[ -n "${codex_timing_crate:-}" ]]; then
+  # The start event already identifies completed crates. Repeating their file
+  # path on idle snapshots adds noise; show source only for active work.
+  if [[ -n "${codex_compiler_pid:-}" && -n "${codex_timing_crate:-}" ]]; then
     codex_timing_compiler_context
-    if [[ -n "${codex_compiler_pid:-}" ]]; then
-      context=" $codex_timing_context"
-    else
-      context=" last=${codex_timing_crate:-unknown}"
-      [[ -z "${codex_timing_source:-}" ]] || context+=" file=$codex_timing_source"
-    fi
+    context=" $codex_timing_context"
   fi
   printf '%s kept=%s slept=%s lost=%s this=%s%s\n' \
     "$(date '+%H:%M:%S')" \
