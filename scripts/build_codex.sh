@@ -1769,6 +1769,8 @@ run_preflight() {
       scripts/build_codex.sh \
       scripts/codex_rustc_oom_wrapper.sh \
       scripts/codex_rustc_timing.sh \
+      scripts/codex_rust_guard_env.sh \
+      scripts/codex_cargo_env.sh \
       scripts/tests/test_codex_rustc_timing.sh \
       scripts/tests/test_codex_rustc_timing_scope.sh \
       scripts/tests/test_codex_rustc_suspend_state.sh \
