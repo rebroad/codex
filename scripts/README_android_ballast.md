@@ -29,7 +29,7 @@ with a count of coalesced updates. Cargo compiler diagnostics are not
 throttled:
 
 ```text
-Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this rustc) 00:01:32
+14:16:30 kept=8m14s slept=1m16s lost=10m42s this=1m32s
 [22:20:15] 🧠 Ballast: 96/256 MiB held | released 160 MiB | refilled 0 MiB | MemAvailable 824 MiB | PSI some 36.4 ms/s, full 0.0 ms/s
 ```
 
@@ -215,7 +215,7 @@ The memory guard reports cumulative, **mutually exclusive** compiler-process
 durations:
 
 ```text
-Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this rustc) 00:01:32
+14:16:30 kept=8m14s slept=1m16s lost=10m42s this=1m32s
 ```
 
 - **Kept:** active time in completed rustc invocations whose output is retained.
@@ -225,28 +225,28 @@ Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this r
 - **In progress (this rustc):** active time in the current compiler attempt.
   It is not added to kept or lost until that attempt succeeds or is discarded.
 
-**Kept, Suspended, and Lost are project-wide cumulative totals.** Every
-Rust OOM wrapper updates a persistent, `flock`-protected ledger at
-`build/codex-rust-timing-global/totals` relative to the source checkout,
-including compiler invocations from auxiliary Cargo processes without
-`CODEX_ANDROID_RUSTC_TIMING_DIR`. Counts persist across builds and do not
-restart when another crate or Cargo process starts. Set
-`CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR` to override the directory when needed.
+**Kept, slept, and lost reset to zero at the start of each top-level
+`just test` or `build_codex.sh` invocation.** All compiler wrappers
+belonging to that command update the same `flock`-protected run ledger.
+The shared setup in `scripts/codex_cargo_env.sh` /
+`scripts/codex_rust_guard_env.sh` creates a unique directory under
+`build/codex-rust-timing-runs/run.XXXXXX` for each top-level command.
+Separate concurrently running commands get separate ledgers rather than
+overwriting each other's counters. Further Cargo stages within the same
+top-level command keep the existing totals; the timer does not reset when
+another crate or worker starts. `CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR`
+is exported to all compiler subprocesses.
 
-The Rust guard is configured **once** through
-`scripts/codex_cargo_env.sh` and `scripts/codex_rust_guard_env.sh`, used by
-both `just test` (and other `just` Cargo recipes) and `build_codex.sh`.
-The shared helper verifies `flock`, the compiler wrapper, and the durable
-global timing directory before running Cargo. There is no separate timing
-setup for `just test`; its wrapper updates the same project-wide ledger
-as a managed build. No edits to the `justfile` are required.
+The timestamp is local `HH:MM:SS`. Fields use compact duration units:
+`h`, `m`, `s` (zero is `0s`). `slept` is time suspended or
+waiting for memory; `this` is the still-uncommitted active time for
+the reporting compiler process.
 
 Managed Cargo builds also write a **separate temporary stage ledger** via
-`CODEX_ANDROID_RUSTC_TIMING_DIR`. This preserves per-stage accounting for
-ballast autotuning and final `⏱ Rust totals` while the on-screen `Rust time:`
-reports use the project-wide running totals. Each ledger is protected by its
-own lock. If the global ledger cannot be used, a warning is printed and the
-wrapper falls back to stage-specific or local counters.
+`CODEX_ANDROID_RUSTC_TIMING_DIR`. That ledger supplies per-stage ballast
+autotuning and the final `⏱ Rust totals` line. Each ledger is protected
+by its own lock. If the run ledger cannot be used, a warning is printed and
+the wrapper falls back to stage-specific or local counters.
 
 With parallel compiler invocations, the totals are summed
 **compiler-process seconds** and may exceed the build's wall-clock elapsed time.
