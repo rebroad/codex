@@ -31,7 +31,7 @@ export CODEX_ANDROID_RUSTC_MEMORY_GUARD=1 RUSTC_WRAPPER="$temp/rustc-wrapper"
 codex_rust_guard_setup "$temp/source"
 global="${CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR}"
 [[ "$global" == "$temp/source/build/codex-rust-timing-runs/run."* ]]
-[[ "${CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER:-}" == "$" ]]
+[[ "${CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER:-}" == "$$" ]]
 [[ -d "$global" && -w "$global" ]]
 [[ "$(env | grep '^CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR=')" == "CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR=$global" ]]
 [[ "$(env | grep '^RUSTC_WRAPPER=')" == "RUSTC_WRAPPER=$temp/rustc-wrapper" ]]
