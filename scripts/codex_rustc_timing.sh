@@ -211,8 +211,10 @@ codex_timing_event() {
     fi
     return 0
   fi
+  # A fast cached/probe invocation can complete in under one microsecond.
+  # Still show its source-file transition even if all rounded deltas are zero.
   if ((running_delta == 0 && lost_delta == 0 && suspended_delta == 0)) \
-    && [[ "${report}" != true ]]; then
+    && [[ "${report}" != true && -z "$transition_kind" ]]; then
     return 0
   fi
   ledgers=("$codex_timing_file")
