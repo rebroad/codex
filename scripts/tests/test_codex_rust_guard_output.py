@@ -140,36 +140,32 @@ class GuardOutputTest(unittest.TestCase):
         self.assertTrue(lines[0].startswith("14:16:30 kept="))
         self.assertTrue(lines[1].startswith("14:17:30 kept="))
 
-    def test_compiler_transitions_are_never_hidden_by_timing_throttle(self):
+    def test_compiler_start_and_discard_bypass_timing_throttle(self):
         self.f.process_line(
             "15:37:03 kept=24m slept=0s lost=0s this=2m "
             "crate=codex_app_server file=app-server/src/lib.rs")
         self.clock.t += .3
-        self.f.process_line(
-            "15:37:25 ✓ finished crate=codex_app_server file=app-server/src/lib.rs")
-        self.f.process_line(
-            "15:37:25 kept=26m22s slept=0s lost=0s this=0s "
-            "last=codex_app_server file=app-server/src/lib.rs")
+        # No routine finish notification: completion changes the aggregate.
+        self.f.process_line("15:37:25 kept=26m22s slept=0s lost=0s this=0s")
         self.f.process_line(
             "15:37:25 ▶ compiling crate=core_test_support "
             "file=core/tests/common/lib.rs")
         self.clock.t += .2
         self.f.process_line(
-            "15:37:41 ✓ finished crate=core_test_support "
+            "15:37:41 ✗ discarded crate=core_test_support "
             "file=core/tests/common/lib.rs")
-        self.f.process_line("15:37:41 kept=26m38s slept=0s lost=0s this=0s")
+        self.f.process_line("15:37:41 kept=26m22s slept=0s lost=3s this=0s")
         self.f.process_line(
             "15:37:41 ▶ compiling crate=all file=app-server/tests/all.rs")
         lines = self.buffer.getvalue().splitlines()
-        self.assertEqual(len(lines), 5)
+        self.assertEqual(len(lines), 4)
         self.assertIn("this=2m crate=codex_app_server file=app-server/src/lib.rs",
                       lines[0])
-        self.assertIn("✓ finished crate=codex_app_server file=app-server/src/lib.rs",
-                      lines[1])
-        self.assertIn("▶ compiling crate=core_test_support", lines[2])
-        self.assertIn("file=core/tests/common/lib.rs", lines[3])
-        self.assertIn("file=app-server/tests/all.rs", lines[4])
-        self.assertFalse(any(" pid=" in line or "kept+" in line for line in lines))
+        self.assertIn("▶ compiling crate=core_test_support", lines[1])
+        self.assertIn("✗ discarded crate=core_test_support", lines[2])
+        self.assertIn("▶ compiling crate=all file=app-server/tests/all.rs", lines[3])
+        self.assertFalse(any(" pid=" in line or "✓ finished" in line
+                             for line in lines))
         # Only one periodic aggregate snapshot in this minute.
         self.assertEqual(sum(" kept=" in line for line in lines), 1)
 
