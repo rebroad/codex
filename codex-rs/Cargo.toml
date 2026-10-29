@@ -608,9 +608,9 @@ ignored = [
 ]
 
 [profile.dev]
-# The test profile inherits dev. Keep source locations in ordinary builds;
-# use CARGO_PROFILE_DEV_DEBUG=full (or CARGO_PROFILE_TEST_DEBUG=full) for locals.
-debug = "line-tables-only"
+# The test profile inherits dev. Keep full symbols in development and test
+# executables so source-level debuggers can inspect locals.
+debug = "full"
 
 [profile.dev-small]
 inherits = "dev"
