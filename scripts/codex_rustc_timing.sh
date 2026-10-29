@@ -106,21 +106,21 @@ codex_timing_identify_compiler() {
 }
 
 codex_timing_emit_transition() {
-  local kind="$1" micros="$2" duration context
+  local kind="$1" micros="$2" human_duration context
   [[ "$kind" == kept || "$kind" == lost ]] || return 0
   # The aggregate is updated first. Each unthrottled transition then explains
   # exactly which compiler attempt changed Kept or Lost.
-  codex_timing_format "$micros" duration
+  codex_timing_format "$micros" human_duration
   if ((micros > 0 && micros < 1000000)); then
-    duration="<1s"
+    human_duration="<1s"
   fi
   context="crate=${codex_timing_crate:-unknown} pid=${codex_compiler_pid:-unknown}"
   if [[ -n "${codex_timing_source:-}" ]]; then
     context+=" src=$codex_timing_source"
   fi
   case "$kind" in
-    kept) printf '%s ✓ kept+%s %s\n' "$(date '+%H:%M:%S')" "$duration" "$context" >&2 ;;
-    lost) printf '%s ✗ lost+%s %s\n' "$(date '+%H:%M:%S')" "$duration" "$context" >&2 ;;
+    kept) printf '%s ✓ kept+%s %s\n' "$(date '+%H:%M:%S')" "$human_duration" "$context" >&2 ;;
+    lost) printf '%s ✗ lost+%s %s\n' "$(date '+%H:%M:%S')" "$human_duration" "$context" >&2 ;;
   esac
 }
 
