@@ -233,6 +233,14 @@ including compiler invocations from auxiliary Cargo processes without
 restart when another crate or Cargo process starts. Set
 `CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR` to override the directory when needed.
 
+The Rust guard is configured **once** through
+`scripts/codex_cargo_env.sh` and `scripts/codex_rust_guard_env.sh`, used by
+both `just test` (and other `just` Cargo recipes) and `build_codex.sh`.
+The shared helper verifies `flock`, the compiler wrapper, and the durable
+global timing directory before running Cargo. There is no separate timing
+setup for `just test`; its wrapper updates the same project-wide ledger
+as a managed build. No edits to the `justfile` are required.
+
 Managed Cargo builds also write a **separate temporary stage ledger** via
 `CODEX_ANDROID_RUSTC_TIMING_DIR`. This preserves per-stage accounting for
 ballast autotuning and final `⏱ Rust totals` while the on-screen `Rust time:`

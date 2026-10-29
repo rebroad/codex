@@ -656,3 +656,10 @@ elif [[ "${TARGET}" == "${HOST_TARGET}" && "${TARGET}" == *-linux-* ]]; then
 elif [[ "${DENY_WARNINGS_VALUE}" == 1 ]]; then
   printf 'export RUSTFLAGS=\"${RUSTFLAGS:-} -D warnings\"\n'
 fi
+ 
+# Both just test and build_codex.sh evaluate this same Cargo setup output.
+# Configure the same guarded wrapper and durable timer for both entrypoints.
+if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
+  printf 'source %q && codex_rust_guard_setup %q\n' \
+    "${SOURCE_REPO}/scripts/codex_rust_guard_env.sh" "${SOURCE_REPO_REAL}"
+fi
