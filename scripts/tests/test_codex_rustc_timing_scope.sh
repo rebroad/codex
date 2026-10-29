@@ -30,10 +30,28 @@ export CODEX_ANDROID_RUSTC_MEMORY_GUARD=1 RUSTC_WRAPPER="$temp/rustc-wrapper"
 
 codex_rust_guard_setup "$temp/source"
 global="${CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR}"
-[[ "$global" == "$temp/source/build/codex-rust-timing-global" ]]
+[[ "$global" == "$temp/source/build/codex-rust-timing-runs/run."* ]]
+[[ "${CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER:-}" == "$" ]]
 [[ -d "$global" && -w "$global" ]]
 [[ "$(env | grep '^CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR=')" == "CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR=$global" ]]
 [[ "$(env | grep '^RUSTC_WRAPPER=')" == "RUSTC_WRAPPER=$temp/rustc-wrapper" ]]
+
+# Another setup call in this same top-level shell must preserve all progress.
+printf '5000000 0 0\n' >"$global/totals"
+codex_rust_guard_setup "$temp/source"
+[[ "$CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR" == "$global" ]]
+[[ "$(cat "$global/totals")" == '5000000 0 0' ]]
+
+# A NEW top-level Bash command inherits the old environment but must start
+# from zero in a DIFFERENT directory. Do not truncate the old run's ledger:
+# it may still have live compiler processes updating it.
+next_run="$(bash -c '
+  source "$1"
+  codex_rust_guard_setup "$2"
+  printf "%s" "$CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR"
+' bash "$scripts_dir/codex_rust_guard_env.sh" "$temp/source")"
+[[ "$next_run" != "$global" && -d "$next_run" && ! -e "$next_run/totals" ]]
+[[ "$(cat "$global/totals")" == '5000000 0 0' ]]
 
 # just test: no temporary stage, but wrapper and global ledger are present.
 (
