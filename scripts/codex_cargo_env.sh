@@ -121,9 +121,9 @@ ensure_build_lockfile
 
 RUSTC_BIN="${RUSTC:-rustc}"
 HOST_TARGET="$(${RUSTC_BIN} -vV | sed -n 's/^host: //p')"
-# Keep the native Android dev profile consistent for builds and tests. These
-# settings reduce debug artifact size and link-time memory pressure on Termux;
-# centralizing them also lets `build_codex.sh` reuse artifacts from `just test`.
+# Keep the native Android dev profile consistent for builds and tests. One
+# codegen unit reduces link-time memory pressure; retain full debug info so
+# test and development executables remain inspectable with a debugger.
 if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
   export CODEX_RUSTC_OOM_SCORE_ADJ=800
   export CODEX_ANDROID_RUSTC_MEMORY_GUARD=1
@@ -135,7 +135,7 @@ if [[ "${HOST_TARGET}" == aarch64-linux-android ]]; then
   # Combine RAM and swap headroom so low free RAM alone does not repeatedly
   # discard large Rust compiles. Keep a small RAM floor for non-swappable pressure.
   export CODEX_ANDROID_RUSTC_MEMAVAILABLE_CRITICAL_PERCENT="${CODEX_ANDROID_RUSTC_MEMAVAILABLE_CRITICAL_PERCENT:-5}"
-  export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
+  export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-full}"
   export CARGO_PROFILE_DEV_CODEGEN_UNITS="${CARGO_PROFILE_DEV_CODEGEN_UNITS:-1}"
   if [[ -z "${TMPDIR:-}" ]]; then
     export TMPDIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
