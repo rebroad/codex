@@ -7,6 +7,32 @@ trap 'rm -rf -- "$temp"' EXIT
 export TMPDIR="$temp" CODEX_ANDROID_RUSTC_TIMING_DIR="$temp"
 source "${test_dir}/../codex_rustc_timing.sh"
 
+# Ensure missing ledger diagnostics distinguish a missing build-stage
+# environment from an absent directory or a missing flock in the child PATH.
+(
+  unset CODEX_ANDROID_RUSTC_TIMING_DIR
+  output="$(codex_timing_init 2>&1)"
+  [[ "$output" == *'CODEX_ANDROID_RUSTC_TIMING_DIR is unset'* ]]
+  [[ -z "$codex_timing_file" ]]
+)
+(
+  export CODEX_ANDROID_RUSTC_TIMING_DIR="$temp/does-not-exist"
+  output="$(codex_timing_init 2>&1)"
+  [[ "$output" == *'timing directory does not exist:'* ]]
+  [[ -z "$codex_timing_file" ]]
+)
+(
+  export PATH="/a-nonexistent-path"
+  output="$(codex_timing_init 2>&1)"
+  [[ "$output" == *'flock not found in compiler PATH:'* ]]
+  [[ -z "$codex_timing_file" ]]
+)
+(
+  output="$(codex_timing_init 2>&1)"
+  [[ -z "$output" ]]
+  [[ "$codex_timing_file" == "$temp/totals" ]]
+)
+
 # The wrapper supplies this hook. Ballast must be printed with timing, not
 # independently on every controller allocation/release tick.
 codex_report_ballast_telemetry() {
