@@ -653,7 +653,7 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
                 hook_command: format!("command-{process_id}"),
                 tty: false,
                 environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-                permissions: super::super::TerminalPermissions::for_launch(
+                permissions: Some(super::super::TerminalPermissions::for_launch(
                     turn.initial_environments
                         .primary()
                         .expect("turn environment"),
@@ -662,7 +662,7 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
                     crate::sandboxing::SandboxPermissions::UseDefault,
                     /*additional_permissions*/ None,
                     /*internal_permissions*/ None,
-                ),
+                )),
                 network_approval: None,
                 session: std::sync::Weak::new(),
                 last_used: if is_exited {

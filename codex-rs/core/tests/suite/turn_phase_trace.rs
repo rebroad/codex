@@ -220,6 +220,7 @@ async fn steer_joins_existing_turn_without_extending_sampling(
                         turn_id: call.turn_id.clone(),
                         thread_settings: Default::default(),
                         trace: codex_otel::span_w3c_trace_context(&recovery),
+                        final_output_json_schema: None,
                         cyber_access_program: None,
                     })
                     .await?,

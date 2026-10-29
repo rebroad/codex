@@ -21,16 +21,31 @@ use crate::protocol::WriteResponse;
 #[derive(Clone)]
 pub(crate) struct RemoteProcess {
     client: LazyRemoteExecServerClient,
+    executor_url: Option<String>,
 }
 
 struct RemoteExecProcess {
     session: Session,
+    executor_url: Option<String>,
 }
 
 impl RemoteProcess {
     pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
         trace!("remote process new");
-        Self { client }
+        Self {
+            client,
+            executor_url: None,
+        }
+    }
+
+    pub(crate) fn new_with_executor_url(
+        client: LazyRemoteExecServerClient,
+        executor_url: String,
+    ) -> Self {
+        Self {
+            client,
+            executor_url: Some(executor_url),
+        }
     }
 
     async fn start(
@@ -43,7 +58,10 @@ impl RemoteProcess {
         let sandbox_type = sandbox_type_from_protocol(session.sandbox_type());
 
         Ok(StartedExecProcess {
-            process: Arc::new(RemoteExecProcess { session }),
+            process: Arc::new(RemoteExecProcess {
+                session,
+                executor_url: self.executor_url.clone(),
+            }),
             sandbox_type,
         })
     }
@@ -54,6 +72,25 @@ impl ExecBackend for RemoteProcess {
         Box::pin(RemoteProcess::start(
             self, params, /*network_policy_decider*/ None,
         ))
+    }
+
+    fn reattach_process(
+        &self,
+        process_id: crate::ProcessId,
+        after_seq: u64,
+    ) -> ExecBackendFuture<'_> {
+        Box::pin(async move {
+            let client = self.client.get().await?;
+            let session = client.reattach_process(&process_id, after_seq).await?;
+            Ok(StartedExecProcess {
+                process: Arc::new(RemoteExecProcess {
+                    session,
+                    executor_url: self.executor_url.clone(),
+                }),
+                // The protocol's read response does not carry sandbox metadata.
+                sandbox_type: None,
+            })
+        })
     }
 
     fn start_with_network_policy_decider(
@@ -94,6 +131,14 @@ impl RemoteExecProcess {
 impl ExecProcess for RemoteExecProcess {
     fn process_id(&self) -> &crate::ProcessId {
         self.session.process_id()
+    }
+
+    fn session_id(&self) -> Option<String> {
+        self.session.session_id()
+    }
+
+    fn executor_url(&self) -> Option<String> {
+        self.executor_url.clone()
     }
 
     fn subscribe_wake(&self) -> watch::Receiver<u64> {

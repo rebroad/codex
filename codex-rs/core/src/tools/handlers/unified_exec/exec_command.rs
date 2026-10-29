@@ -456,6 +456,7 @@ impl ExecCommandHandler {
                     hook_command: Some(hook_command),
                 }))
             }
+            Err(UnifiedExecError::TurnSuspended) => Err(FunctionCallError::Suspended),
             Err(err) => {
                 let message = format!("exec_command failed: {err:?}");
                 Err(FunctionCallError::RespondToModel(truncate_middle_chars(

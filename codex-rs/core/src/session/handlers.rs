@@ -288,6 +288,14 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 }
 
 pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    shutdown_session_runtime_inner(sess, /*detach_executor_processes*/ false).await;
+}
+
+pub(super) async fn shutdown_session_runtime_for_handoff(sess: &Arc<Session>) {
+    shutdown_session_runtime_inner(sess, /*detach_executor_processes*/ true).await;
+}
+
+async fn shutdown_session_runtime_inner(sess: &Arc<Session>, detach_executor_processes: bool) {
     let startup_prewarm = {
         let mut state = sess.state.lock().await;
         // Stop admission and take the current warmup together so resume cannot replace it.
@@ -308,10 +316,17 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.hooks().shutdown().await;
     sess.async_hook_results.close();
     while sess.async_hook_results.try_recv().is_ok() {}
-    sess.services
-        .unified_exec_manager
-        .terminate_all_processes()
-        .await;
+    if detach_executor_processes {
+        sess.services
+            .unified_exec_manager
+            .detach_all_processes_for_handoff()
+            .await;
+    } else {
+        sess.services
+            .unified_exec_manager
+            .terminate_all_processes()
+            .await;
+    }
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         sess.services.local_agent_runtime.record_shutdown_failure(
             AgentTreeShutdownFailure::operation_failed(
@@ -574,6 +589,8 @@ pub(super) async fn submission_loop(
                 Op::RecoverTurn {
                     thread_settings,
                     start_options,
+                    pending_input,
+                    pending_interactions,
                     reply,
                 } => {
                     let result = turn_input::handle_recovery(
@@ -584,15 +601,23 @@ pub(super) async fn submission_loop(
                         },
                         start_options,
                         sub.id.clone(),
+                        pending_input,
+                        pending_interactions,
                     )
                     .await;
                     let _ = reply.send(result);
                     false
                 }
-                Op::SuspendTurnAndShutdown { reply } => {
-                    let result =
-                        super::turn_suspension::suspend_turn_and_shutdown(&sess, sub.id.clone())
-                            .await;
+                Op::SuspendTurnAndShutdown {
+                    tree_handoff,
+                    reply,
+                } => {
+                    let result = super::turn_suspension::suspend_turn_and_shutdown(
+                        &sess,
+                        sub.id.clone(),
+                        tree_handoff,
+                    )
+                    .await;
                     // Exit only after history is durable and its writer has closed; an error
                     // must leave responsibility for the thread with the current worker.
                     let should_exit = matches!(

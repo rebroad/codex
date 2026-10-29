@@ -73,6 +73,7 @@ use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
+use codex_extension_api::CoreWorkKind;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
@@ -2673,6 +2674,13 @@ async fn try_run_sampling_request(
     let effort = sess
         .reasoning_effort_for_request(&step_context.settings, super::RequestEffortUsage::Sampling)
         .await;
+    let _work_permit = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => return Err(CodexErr::TurnAborted),
+        permit = sess.services.extensions.acquire_core_work(CoreWorkKind::ModelRequest) => {
+            permit.ok_or(CodexErr::TurnSuspended)?
+        }
+    };
     let mut stream = client_session
         .stream(
             prompt,
@@ -2687,6 +2695,10 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
+    // Admission covers creating the backend request. A streamed response may
+    // take arbitrarily long; handoff cancels it after a durable checkpoint and
+    // the replacement retries from the saved turn history.
+    drop(_work_permit);
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);
     }

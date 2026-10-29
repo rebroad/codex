@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::process::ExitStatus;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -137,6 +138,10 @@ impl ExecServerHarness {
         &self.websocket_url
     }
 
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     pub(crate) async fn disconnect_websocket(&mut self) -> anyhow::Result<()> {
         self.websocket.close(None).await?;
         Ok(())
@@ -228,6 +233,20 @@ impl ExecServerHarness {
             .await
             .map_err(|_| anyhow!("timed out waiting for exec-server shutdown"))??;
         Ok(())
+    }
+
+    pub(crate) async fn wait_for_exit(&mut self) -> anyhow::Result<ExitStatus> {
+        self.wait_for_exit_with_timeout(CONNECT_TIMEOUT).await
+    }
+
+    pub(crate) async fn wait_for_exit_with_timeout(
+        &mut self,
+        wait_timeout: Duration,
+    ) -> anyhow::Result<ExitStatus> {
+        timeout(wait_timeout, self.child.wait())
+            .await
+            .map_err(|_| anyhow!("timed out waiting for exec-server shutdown"))?
+            .map_err(Into::into)
     }
 
     async fn send_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {

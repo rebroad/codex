@@ -173,6 +173,7 @@ fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> 
         }))?,
     )?;
     let mut previous_pid = None;
+    let mut previous_executor_pid = None;
     // Start from a stopped daemon, change running settings, and restart again
     // with omitted flags. Every explicit restart replaces the process.
     for (args, discovery) in [
@@ -206,6 +207,12 @@ fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> 
         let pid = output["pid"].as_u64().context("restarted daemon PID")?;
         assert_ne!(Some(pid), previous_pid);
         previous_pid = Some(pid);
+        let executor_pid = daemon.pid("exec-server.json")?;
+        assert_ne!(Some(executor_pid), previous_executor_pid);
+        if let Some(previous_executor_pid) = previous_executor_pid {
+            wait_for_exit(previous_executor_pid)?;
+        }
+        previous_executor_pid = Some(executor_pid);
         let settings: Value = serde_json::from_slice(&std::fs::read(&settings_path)?)?;
         assert_eq!(
             settings["featureOverrides"],
@@ -238,6 +245,8 @@ fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> 
     assert_eq!(std::fs::read(&settings_path)?, saved_settings);
     assert_eq!(Some(u64::from(daemon.pid("app-server.pid")?)), previous_pid);
     assert_eq!(daemon.lifecycle("version")?["status"], "running");
+    daemon.lifecycle("stop")?;
+    wait_for_exit(previous_executor_pid.context("current exec-server PID")?)?;
     Ok(())
 }
 

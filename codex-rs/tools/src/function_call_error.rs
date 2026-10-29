@@ -9,6 +9,9 @@ pub enum FunctionCallError {
     RespondToModel(String),
     #[error("Fatal error: {0}")]
     Fatal(String),
+    /// The host is draining; stop the turn without recording a tool result.
+    #[error("turn suspended for handoff")]
+    Suspended,
 }
 
 impl FunctionCallError {
@@ -20,7 +23,7 @@ impl FunctionCallError {
             {
                 Some("parse_arguments")
             }
-            Self::RespondToModel(_) | Self::Fatal(_) => None,
+            Self::RespondToModel(_) | Self::Fatal(_) | Self::Suspended => None,
         }
     }
 }

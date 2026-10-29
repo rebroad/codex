@@ -1138,6 +1138,8 @@ impl SessionIo {
         trace: Option<W3cTraceContext>,
         turn_id: String,
         turn_extension_init: Option<ExtensionDataInit>,
+        pending_input: Vec<codex_protocol::turn_input::SuspendedQueuedInput>,
+        pending_interactions: Vec<codex_protocol::turn_input::PendingTurnInteraction>,
     ) -> CodexResult<TurnInputSubmission> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.submit_with_id(Submission {
@@ -1145,6 +1147,8 @@ impl SessionIo {
             op: Op::RecoverTurn {
                 thread_settings,
                 start_options,
+                pending_input,
+                pending_interactions,
                 reply: reply_tx,
             },
             trace,
@@ -3078,6 +3082,13 @@ impl Session {
             available_decisions: Some(available_decisions),
             parsed_cmd,
         });
+        if let Some(at) = self.active_turn.lock().await.as_mut() {
+            at.turn_state.lock().await.record_pending_interaction(
+                "approval",
+                &effective_approval_id,
+                event.clone(),
+            );
+        }
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
@@ -3113,13 +3124,20 @@ impl Session {
         }
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-            call_id,
+            call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
             started_at_ms: now_unix_timestamp_ms(),
             changes,
             reason,
             grant_root,
         });
+        if let Some(at) = self.active_turn.lock().await.as_mut() {
+            at.turn_state.lock().await.record_pending_interaction(
+                "approval",
+                &call_id,
+                event.clone(),
+            );
+        }
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
@@ -3291,6 +3309,13 @@ impl Session {
             permissions: requested_permissions,
             cwd: Some(cwd.clone().into()),
         });
+        if let Some(at) = self.active_turn.lock().await.as_mut() {
+            at.turn_state.lock().await.record_pending_interaction(
+                "permissions",
+                &call_id,
+                event.clone(),
+            );
+        }
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
             biased;
@@ -3341,6 +3366,13 @@ impl Session {
             is_blocking: args.is_blocking,
             auto_resolution_ms: args.auto_resolution_ms,
         });
+        if let Some(at) = self.active_turn.lock().await.as_mut() {
+            at.turn_state.lock().await.record_pending_interaction(
+                "user_input",
+                &event_id,
+                event.clone(),
+            );
+        }
         turn_context
             .turn_metadata_state
             .mark_user_input_requested_during_turn();

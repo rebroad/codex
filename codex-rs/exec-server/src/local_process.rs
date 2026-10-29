@@ -250,6 +250,10 @@ impl LocalProcess {
         }
     }
 
+    pub(crate) async fn has_processes(&self) -> bool {
+        !self.inner.processes.lock().await.is_empty()
+    }
+
     pub(crate) fn set_notification_sender(&self, notifications: Option<RpcNotificationSender>) {
         let requests = notifications
             .as_ref()
@@ -2031,7 +2035,13 @@ mod tests {
         let backend = LocalProcess::default();
         let mut process = spawn_test_process(&backend, "proc-closed-eviction").await;
         let process_id = process.process_id.clone();
+        assert!(backend.has_processes().await);
 
+        process
+            .stdout_tx
+            .send(b"handoff output\n".to_vec())
+            .await
+            .expect("send captured stdout");
         process.exit(/*exit_code*/ 0);
         drop(process.stdout_tx);
         drop(process.stderr_tx);
@@ -2043,6 +2053,11 @@ mod tests {
         .await
         .expect("process should close");
         assert!(closed_response.closed);
+        assert!(backend.has_processes().await);
+        assert_eq!(
+            closed_response.chunks[0].chunk.as_ref(),
+            b"handoff output\n"
+        );
 
         timeout(Duration::from_secs(1), async {
             loop {
@@ -2057,6 +2072,7 @@ mod tests {
         })
         .await
         .expect("closed process should be evicted");
+        assert!(!backend.has_processes().await);
         backend.shutdown().await;
     }
 

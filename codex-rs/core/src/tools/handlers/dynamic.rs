@@ -10,6 +10,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolExposure;
 use codex_async_utils::OrCancelExt;
+use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -17,6 +18,7 @@ use codex_protocol::items::DynamicToolCallItem;
 use codex_protocol::items::DynamicToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::protocol::EventMsg;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -216,6 +218,21 @@ async fn request_dynamic_tool(
     }
 
     let started_at = Instant::now();
+    let started_at_ms = crate::turn_timing::now_unix_timestamp_ms();
+    if let Some(at) = session.active_turn.lock().await.as_mut() {
+        at.turn_state.lock().await.record_pending_interaction(
+            "dynamic_tool",
+            &call_id,
+            EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+                call_id: call_id.clone(),
+                turn_id: turn_context.sub_id.clone(),
+                started_at_ms,
+                namespace: namespace.clone(),
+                tool: tool.clone(),
+                arguments: arguments.clone(),
+            }),
+        );
+    }
     session
         .emit_turn_item_started(
             turn_context,

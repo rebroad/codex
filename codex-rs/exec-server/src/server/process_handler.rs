@@ -36,6 +36,10 @@ impl ProcessHandler {
         self.process.shutdown().await;
     }
 
+    pub(crate) async fn has_processes(&self) -> bool {
+        self.process.has_processes().await
+    }
+
     pub(crate) fn set_notification_sender(&self, notifications: Option<RpcNotificationSender>) {
         self.process.set_notification_sender(notifications);
     }

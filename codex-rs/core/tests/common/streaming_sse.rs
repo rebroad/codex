@@ -20,6 +20,7 @@ pub struct StreamingSseChunk {
 /// Minimal streaming SSE server for tests that need gated per-chunk delivery.
 pub struct StreamingSseServer {
     uri: String,
+    state: Arc<TokioMutex<StreamingSseState>>,
     requests: Arc<TokioMutex<Vec<Vec<u8>>>>,
     request_notify: Arc<Notify>,
     shutdown: oneshot::Sender<()>,
@@ -42,6 +43,15 @@ impl StreamingSseServer {
             }
             self.request_notify.notified().await;
         }
+    }
+
+    /// Queues a response after setup when its contents depend on an earlier request.
+    pub async fn queue_response(&self, chunks: Vec<StreamingSseChunk>) -> oneshot::Receiver<i64> {
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let mut state = self.state.lock().await;
+        state.responses.push_back(chunks);
+        state.completions.push_back(completion_tx);
+        completion_rx
     }
 
     pub async fn shutdown(self) {
@@ -78,6 +88,7 @@ pub async fn start_streaming_sse_server(
         responses: VecDeque::from(responses),
         completions: VecDeque::from(completion_senders),
     }));
+    let state_for_task = Arc::clone(&state);
     let requests = Arc::new(TokioMutex::new(Vec::new()));
     let request_notify = Arc::new(Notify::new());
     let requests_for_task = Arc::clone(&requests);
@@ -90,7 +101,7 @@ pub async fn start_streaming_sse_server(
                 _ = &mut shutdown_rx => break,
                 accept_res = listener.accept() => {
                     let (mut stream, _) = accept_res.expect("accept streaming SSE connection");
-                    let state = Arc::clone(&state);
+                    let state = Arc::clone(&state_for_task);
                     let requests = Arc::clone(&requests_for_task);
                     let request_notify = Arc::clone(&request_notify_for_task);
                     tokio::spawn(async move {
@@ -170,6 +181,7 @@ pub async fn start_streaming_sse_server(
     (
         StreamingSseServer {
             uri,
+            state,
             requests,
             request_notify,
             shutdown: shutdown_tx,

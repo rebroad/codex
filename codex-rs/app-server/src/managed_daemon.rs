@@ -1,5 +1,8 @@
 //! Unix process setup specific to a managed app-server daemon.
 
+mod local_executor;
+pub(crate) use local_executor::ensure as ensure_local_executor;
+
 use std::io;
 
 const NOFILE_LIMIT: libc::rlim_t = 4096;

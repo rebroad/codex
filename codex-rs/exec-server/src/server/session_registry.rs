@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+use tokio::sync::RwLockReadGuard;
 use uuid::Uuid;
 
 use crate::ExecServerRuntimeOptions;
@@ -22,6 +26,9 @@ const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
     telemetry: ExecServerTelemetry,
+    detached_session_ttl: Option<Duration>,
+    retiring: AtomicBool,
+    process_start_gate: RwLock<()>,
 }
 
 struct SessionEntry {
@@ -36,7 +43,7 @@ enum AttachmentState {
     },
     Detached {
         connection_id: ConnectionId,
-        expires_at: tokio::time::Instant,
+        expires_at: Option<tokio::time::Instant>,
     },
 }
 
@@ -61,6 +68,17 @@ impl SessionRegistry {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
             telemetry,
+            detached_session_ttl: if std::env::var_os(
+                crate::CODEX_EXEC_SERVER_PRESERVE_SESSIONS_ENV_VAR,
+            )
+            .is_some_and(|value| value == "1")
+            {
+                None
+            } else {
+                Some(DETACHED_SESSION_TTL)
+            },
+            retiring: AtomicBool::new(false),
+            process_start_gate: RwLock::new(()),
         })
     }
 
@@ -133,6 +151,40 @@ impl SessionRegistry {
         }
     }
 
+    pub(crate) async fn process_start_guard(
+        &self,
+    ) -> Result<RwLockReadGuard<'_, ()>, JSONRPCErrorError> {
+        let guard = self.process_start_gate.read().await;
+        if self.retiring.load(Ordering::Acquire) {
+            return Err(invalid_request(
+                "exec-server is retiring and cannot start new processes".to_string(),
+            ));
+        }
+        Ok(guard)
+    }
+
+    pub(crate) async fn retire_when_idle(&self) {
+        {
+            let _gate = self.process_start_gate.write().await;
+            self.retiring.store(true, Ordering::Release);
+        }
+
+        loop {
+            let sessions: Vec<_> = self.sessions.lock().await.values().cloned().collect();
+            let mut has_processes = false;
+            for session in sessions {
+                if session.process.has_processes().await {
+                    has_processes = true;
+                    break;
+                }
+            }
+            if !has_processes {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     async fn expire_if_detached(&self, session_id: String, connection_id: ConnectionId) {
         tokio::time::sleep(DETACHED_SESSION_TTL).await;
 
@@ -158,6 +210,9 @@ impl Default for SessionRegistry {
         Self {
             sessions: Mutex::new(HashMap::new()),
             telemetry: ExecServerTelemetry::default(),
+            detached_session_ttl: Some(DETACHED_SESSION_TTL),
+            retiring: AtomicBool::new(false),
+            process_start_gate: RwLock::new(()),
         }
     }
 }
@@ -179,7 +234,7 @@ impl SessionEntry {
         *attachment = AttachmentState::Attached { connection_id };
     }
 
-    fn detach(&self, connection_id: ConnectionId) -> bool {
+    fn detach(&self, connection_id: ConnectionId, ttl: Option<Duration>) -> bool {
         let mut attachment = self
             .attachment
             .lock()
@@ -192,7 +247,7 @@ impl SessionEntry {
         self.process.set_notification_sender(/*notifications*/ None);
         *attachment = AttachmentState::Detached {
             connection_id,
-            expires_at: tokio::time::Instant::now() + DETACHED_SESSION_TTL,
+            expires_at: ttl.map(|ttl| tokio::time::Instant::now() + ttl),
         };
         true
     }
@@ -216,7 +271,7 @@ impl SessionEntry {
     fn is_expired(&self, now: tokio::time::Instant) -> bool {
         matches!(*self.attachment
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Detached { expires_at, .. } if now >= expires_at)
+            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Detached { expires_at: Some(expires_at), .. } if now >= expires_at)
     }
 
     fn is_detached_connection_expired(
@@ -228,7 +283,7 @@ impl SessionEntry {
             .attachment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        matches!(*attachment, AttachmentState::Detached { connection_id: detached, expires_at } if detached == connection_id && now >= expires_at)
+        matches!(*attachment, AttachmentState::Detached { connection_id: detached, expires_at: Some(expires_at) } if detached == connection_id && now >= expires_at)
     }
 }
 
@@ -250,10 +305,16 @@ impl SessionHandle {
     }
 
     pub(crate) async fn detach(&self) {
-        if !self.entry.detach(self.connection_id) {
+        if !self
+            .entry
+            .detach(self.connection_id, self.registry.detached_session_ttl)
+        {
             return;
         }
 
+        if self.registry.detached_session_ttl.is_none() {
+            return;
+        }
         let registry = Arc::clone(&self.registry);
         let session_id = self.entry.session_id.clone();
         let connection_id = self.connection_id;

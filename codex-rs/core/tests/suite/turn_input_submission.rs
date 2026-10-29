@@ -636,6 +636,7 @@ async fn recover_turn_if_idle_preserves_id_and_resumes_plan_mode() {
                 ..Default::default()
             },
             trace: None,
+            final_output_json_schema: None,
             cyber_access_program: None,
         })
         .await
@@ -893,6 +894,7 @@ async fn recovery_preserves_durable_turn_attribution(
                         ..Default::default()
                     },
                     trace: None,
+                    final_output_json_schema: None,
                     cyber_access_program: None,
                 })
                 .await?,
