@@ -5,35 +5,38 @@ test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 temp="$(mktemp -d)"
 trap 'rm -rf -- "$temp"' EXIT
 export TMPDIR="$temp" CODEX_ANDROID_RUSTC_TIMING_DIR="$temp"
+export CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR="$temp/global"
 source "${test_dir}/../codex_rustc_timing.sh"
 
-# Ensure missing ledger diagnostics distinguish a missing build-stage
-# environment from an absent directory or a missing flock in the child PATH.
+# Missing stage environment no longer causes isolated per-rustc counters:
+# all wrappers join the project-wide ledger, regardless of Cargo process.
 (
   unset CODEX_ANDROID_RUSTC_TIMING_DIR
   codex_timing_init 2>"$temp/diag"
-  IFS= read -r output <"$temp/diag"
-  [[ "$output" == *'CODEX_ANDROID_RUSTC_TIMING_DIR is unset'* ]]
-  [[ -z "$codex_timing_file" ]]
+  [[ ! -s "$temp/diag" ]]
+  [[ "$codex_timing_file" == "$temp/global/totals" ]]
+  [[ -z "$codex_timing_stage_file" ]]
 )
 (
   export CODEX_ANDROID_RUSTC_TIMING_DIR="$temp/does-not-exist"
   codex_timing_init 2>"$temp/diag"
   IFS= read -r output <"$temp/diag"
-  [[ "$output" == *'timing directory does not exist:'* ]]
-  [[ -z "$codex_timing_file" ]]
+  [[ "$output" == *'stage Rust timing directory missing'* ]]
+  [[ "$codex_timing_file" == "$temp/global/totals" ]]
+  [[ -z "$codex_timing_stage_file" ]]
 )
 (
   export PATH="/a-nonexistent-path"
   codex_timing_init 2>"$temp/diag"
   IFS= read -r output <"$temp/diag"
-  [[ "$output" == *'flock not found in compiler PATH:'* ]]
+  [[ "$output" == *'flock not in compiler PATH:'* ]]
   [[ -z "$codex_timing_file" ]]
 )
 (
   codex_timing_init 2>"$temp/diag"
   [[ ! -s "$temp/diag" ]]
-  [[ "$codex_timing_file" == "$temp/totals" ]]
+  [[ "$codex_timing_file" == "$temp/global/totals" ]]
+  [[ "$codex_timing_stage_file" == "$temp/totals" ]]
 )
 
 # The wrapper supplies this hook. Ballast must be printed with timing, not
@@ -101,6 +104,23 @@ assert_ledger 14000000 13000000 14000000
 )
 assert_ledger 19000000 13000000 14000000
 
+# An independent Cargo invocation (no managed timing directory) must keep
+# adding to the exact same displayed aggregate, not restart from zero.
+(
+  unset CODEX_ANDROID_RUSTC_TIMING_DIR
+  clock=57000000; codex_timing_init
+  [[ "$codex_timing_file" == "$temp/global/totals" ]]
+  [[ -z "$codex_timing_stage_file" ]]
+  codex_compiler_pid=105
+  clock=58000000; codex_timing_launch
+  clock=60000000; codex_timing_success
+  report="$(codex_report_timing_counters 2>&1)"
+  [[ "$report" == *"Rust time: kept 00:00:21; suspended 00:00:13; lost 00:00:14"* ]]
+)
+assert_ledger 21000000 13000000 14000000
+read -r stage_kept stage_suspended stage_lost <"$temp/totals"
+[[ "$stage_kept" == 19000000 && "$stage_suspended" == 13000000 && "$stage_lost" == 14000000 ]]
+
 # If a running attempt is suspended then killed, only active time is lost.
 clock=60000000; codex_timing_init
 codex_compiler_pid=104
@@ -108,6 +128,8 @@ clock=61000000; codex_timing_launch
 clock=67000000; codex_timing_pause
 clock=71000000; codex_timing_lost
 codex_compiler_pid=""
-assert_ledger 19000000 17000000 20000000
+assert_ledger 21000000 17000000 20000000
+read -r stage_kept stage_suspended stage_lost <"$temp/totals"
+[[ "$stage_kept" == 19000000 && "$stage_suspended" == 17000000 && "$stage_lost" == 20000000 ]]
 
-echo 'rustc timing: disjoint kept/suspended/lost counters and shared ledger OK'
+echo 'rustc timing: project-wide monotonic totals, isolated stage deltas, and disjoint counters OK'
