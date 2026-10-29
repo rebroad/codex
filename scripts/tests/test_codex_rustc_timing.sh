@@ -11,25 +11,28 @@ source "${test_dir}/../codex_rustc_timing.sh"
 # environment from an absent directory or a missing flock in the child PATH.
 (
   unset CODEX_ANDROID_RUSTC_TIMING_DIR
-  output="$(codex_timing_init 2>&1)"
+  codex_timing_init 2>"$temp/diag"
+  IFS= read -r output <"$temp/diag"
   [[ "$output" == *'CODEX_ANDROID_RUSTC_TIMING_DIR is unset'* ]]
   [[ -z "$codex_timing_file" ]]
 )
 (
   export CODEX_ANDROID_RUSTC_TIMING_DIR="$temp/does-not-exist"
-  output="$(codex_timing_init 2>&1)"
+  codex_timing_init 2>"$temp/diag"
+  IFS= read -r output <"$temp/diag"
   [[ "$output" == *'timing directory does not exist:'* ]]
   [[ -z "$codex_timing_file" ]]
 )
 (
   export PATH="/a-nonexistent-path"
-  output="$(codex_timing_init 2>&1)"
+  codex_timing_init 2>"$temp/diag"
+  IFS= read -r output <"$temp/diag"
   [[ "$output" == *'flock not found in compiler PATH:'* ]]
   [[ -z "$codex_timing_file" ]]
 )
 (
-  output="$(codex_timing_init 2>&1)"
-  [[ -z "$output" ]]
+  codex_timing_init 2>"$temp/diag"
+  [[ ! -s "$temp/diag" ]]
   [[ "$codex_timing_file" == "$temp/totals" ]]
 )
 
