@@ -128,6 +128,7 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(text.count("Rust time: kept"), 2)
         self.assertEqual(text.count("🧠 Ballast:"), 2)
         self.assertNotIn("0/256 MiB held", text)
+        self.assertRegex(text.splitlines()[1], r"^\d{2}:\d{2}:\d{2} 🧠 Ballast:")
 
     def test_multiline_status_has_global_throttle(self):
         self.f.process_line("⏹ Rust attempt stopped: full PSI; waiting to retry")
