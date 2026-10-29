@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# cargo_build() returns the binary path on stdout and callers capture it in
+# command substitutions. Keep an independent handle to the entrypoint's
+# original stdout for informational LMKD notices: never mix them into the
+# binary path or rustc's output protocol.
+exec {CODEX_BUILD_ADVISORY_STDOUT_FD}>&1
+
 # Keep the logical path here: the designated build sibling may itself be a
 # symlink into a separate build filesystem, and source discovery depends on
 # its logical .build/.make name.
@@ -1112,7 +1118,7 @@ PY
     stderr_log="$(mktemp "${temp_root%/}/codex-cargo-stderr.XXXXXX")"
     if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${ballast_env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
-      | python3 -u "${SOURCE_REPO}/scripts/codex_rust_guard_output.py"; then
+      | python3 -u "${SOURCE_REPO}/scripts/codex_rust_guard_output.py" >&${CODEX_BUILD_ADVISORY_STDOUT_FD}; then
       status=0
     else
       status=$?
