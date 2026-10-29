@@ -1801,6 +1801,8 @@ run_preflight() {
     # Catch stale suspension-state regressions before a long Cargo build.
     bash scripts/tests/test_codex_rustc_suspend_state.sh >/dev/null
     bash scripts/tests/test_codex_rustc_lmkd_advisory.sh >/dev/null
+    # Reject broken cross-wrapper cumulative accounting before compilation.
+    bash scripts/tests/test_codex_rustc_timing.sh >/dev/null
     bash scripts/tests/test_codex_rustc_timing_scope.sh >/dev/null
   )
   require_cmd cargo
