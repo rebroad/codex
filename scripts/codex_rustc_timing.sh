@@ -68,9 +68,9 @@ codex_timing_format() {
   printf -v "$2" '%s' "$duration"
 }
 
-# The wrapper receives Rustc's actual argv (compiler path followed by flags).
-# Cargo's "Compiling ..." lines can interleave across multiple compiler
-# processes; keep this immutable label and each attempt PID on transitions.
+# Rustc's --crate-name and .rs input identify the compilation unit. Rustc
+# does not expose which internal module it is processing at a given moment.
+# Never guess a source module from Cargo's interleaved "Compiling" messages.
 codex_timing_identify_compiler() {
   codex_timing_crate=unknown
   codex_timing_source=""
@@ -79,8 +79,10 @@ codex_timing_identify_compiler() {
     arg="$1"
     case "$arg" in
       --crate-name)
-        shift
-        codex_timing_crate="${1:-unknown}"
+        if (($# > 1)); then
+          codex_timing_crate="$2"
+          shift
+        fi
         ;;
       --crate-name=*)
         codex_timing_crate="${arg#--crate-name=}"
@@ -93,43 +95,35 @@ codex_timing_identify_compiler() {
     esac
     shift
   done
-  # Rust test targets often have generic names like "all"; the input path
-  # disambiguates these in otherwise identical-looking timing updates.
-  case "$codex_timing_crate" in
-    all|lib|main|unknown)
-      if [[ -n "$codex_timing_source" ]]; then
-        codex_timing_source="${codex_timing_source#*/codex-rs/}"
-      fi
-      ;;
-    *) codex_timing_source="" ;;
+  # Display checkout-relative paths when rustc supplies absolute paths.
+  # Keep even ordinary lib.rs paths: knowing core/src/lib.rs is more useful
+  # than just "core" when Cargo starts interleaving dependency compilations.
+  case "$codex_timing_source" in
+    */codex-rs/*) codex_timing_source="${codex_timing_source#*/codex-rs/}" ;;
   esac
+}
+
+codex_timing_compiler_context() {
+  codex_timing_context="crate=${codex_timing_crate:-unknown}"
+  if [[ -n "${codex_timing_source:-}" ]]; then
+    codex_timing_context+=" file=$codex_timing_source"
+  fi
 }
 
 codex_timing_emit_transition() {
-  local kind="$1" micros="$2" human_duration context
-  [[ "$kind" == kept || "$kind" == lost ]] || return 0
-  # The aggregate is updated first. Each unthrottled transition then explains
-  # exactly which compiler attempt changed Kept or Lost.
-  codex_timing_format "$micros" human_duration
-  if ((micros > 0 && micros < 1000000)); then
-    human_duration="<1s"
-  fi
-  context="crate=${codex_timing_crate:-unknown} pid=${codex_compiler_pid:-unknown}"
-  if [[ -n "${codex_timing_source:-}" ]]; then
-    context+=" src=$codex_timing_source"
-  fi
-  case "$kind" in
-    kept) printf '%s ✓ kept+%s %s\n' "$(date '+%H:%M:%S')" "$human_duration" "$context" >&2 ;;
-    lost) printf '%s ✗ lost+%s %s\n' "$(date '+%H:%M:%S')" "$human_duration" "$context" >&2 ;;
+  local description
+  case "$1" in
+    kept) description="✓ finished" ;;
+    lost) description="✗ discarded" ;;
+    *) return 0 ;;
   esac
+  codex_timing_compiler_context
+  printf '%s %s %s\n' "$(date '+%H:%M:%S')" "$description" "$codex_timing_context" >&2
 }
 
 codex_timing_emit_start() {
-  local context="crate=${codex_timing_crate:-unknown} pid=${codex_compiler_pid:-unknown}"
-  if [[ -n "${codex_timing_source:-}" ]]; then
-    context+=" src=$codex_timing_source"
-  fi
-  printf '%s ▶ start %s\n' "$(date '+%H:%M:%S')" "$context" >&2
+  codex_timing_compiler_context
+  printf '%s ▶ compiling %s\n' "$(date '+%H:%M:%S')" "$codex_timing_context" >&2
 }
 
 codex_timing_emit() {
@@ -138,9 +132,19 @@ codex_timing_emit() {
   codex_timing_format "$2" paused_duration
   codex_timing_format "$3" lost_duration
   codex_timing_format "$4" pending_duration
-  printf '%s kept=%s slept=%s lost=%s this=%s\n' \
+  local context=""
+  if [[ -n "${codex_timing_crate:-}" ]]; then
+    codex_timing_compiler_context
+    if [[ -n "${codex_compiler_pid:-}" ]]; then
+      context=" $codex_timing_context"
+    else
+      context=" last=${codex_timing_crate:-unknown}"
+      [[ -z "${codex_timing_source:-}" ]] || context+=" file=$codex_timing_source"
+    fi
+  fi
+  printf '%s kept=%s slept=%s lost=%s this=%s%s\n' \
     "$(date '+%H:%M:%S')" \
-    "$running_duration" "$paused_duration" "$lost_duration" "$pending_duration" >&2
+    "$running_duration" "$paused_duration" "$lost_duration" "$pending_duration" "$context" >&2
   # Ballast shares the timer report cadence instead of producing independent
   # status messages every time it allocates or releases pages.
   if declare -F codex_report_ballast_telemetry >/dev/null 2>&1; then
@@ -155,7 +159,7 @@ codex_timing_event() {
   local event="${1:-tick}" report="${2:-false}"
   local now_us elapsed_us=0 running_delta=0 lost_delta=0 suspended_delta
   local running=0 suspended=0 lost=0 lock_fd ledger_file
-  local transition_kind="" transition_us=0
+  local transition_kind=""
   local report_running=0 report_suspended=0 report_lost=0
   local -a ledgers=()
   codex_timing_now
@@ -181,14 +185,12 @@ codex_timing_event() {
     success)
       running_delta="${codex_timing_attempt_us}"
       transition_kind=kept
-      transition_us="$running_delta"
       codex_timing_attempt_us=0
       codex_timing_mode="${codex_guard_compile_state:-running}"
       [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
     lost)
       lost_delta="${codex_timing_attempt_us}"
       transition_kind=lost
-      transition_us="$lost_delta"
       codex_timing_attempt_us=0
       codex_timing_mode="${codex_guard_compile_state:-running}"
       [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
@@ -201,7 +203,7 @@ codex_timing_event() {
     codex_timing_local_running_us=$((codex_timing_local_running_us + running_delta))
     codex_timing_local_suspended_us=$((codex_timing_local_suspended_us + suspended_delta))
     codex_timing_local_lost_us=$((codex_timing_local_lost_us + lost_delta))
-    codex_timing_emit_transition "$transition_kind" "$transition_us"
+    codex_timing_emit_transition "$transition_kind"
     if [[ "${report}" == true ]]; then
       codex_timing_emit "${codex_timing_local_running_us}" \
         "${codex_timing_local_suspended_us}" "${codex_timing_local_lost_us}" \
@@ -249,7 +251,7 @@ codex_timing_event() {
     flock -u "${lock_fd}"
     exec {lock_fd}>&-
   done
-  codex_timing_emit_transition "$transition_kind" "$transition_us"
+  codex_timing_emit_transition "$transition_kind"
   if [[ "$report" == true ]]; then
     codex_timing_emit "$report_running" "$report_suspended" "$report_lost" \
       "${codex_timing_attempt_us}"
