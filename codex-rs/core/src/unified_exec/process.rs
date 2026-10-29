@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -110,6 +111,9 @@ pub(crate) struct UnifiedExecProcess {
     timed_out: AtomicBool,
     /// Explicit termination overrides retention of remote output after exit.
     pub(super) termination_requested: AtomicBool,
+    /// A detached remote executor process is retained by its executor session on drop.
+    preserve_remote_process_on_drop: AtomicBool,
+    last_exec_server_seq: Arc<AtomicU64>,
     // The shell may still need to replay this file after process startup returns.
     pub(crate) _shell_snapshot: Option<Arc<ShellSnapshotFile>>,
 }
@@ -155,6 +159,8 @@ impl UnifiedExecProcess {
             sandbox_type,
             timed_out: AtomicBool::new(false),
             termination_requested: AtomicBool::new(false),
+            preserve_remote_process_on_drop: AtomicBool::new(false),
+            last_exec_server_seq: Arc::new(AtomicU64::new(0)),
             _shell_snapshot: None,
         }
     }
@@ -252,6 +258,27 @@ impl UnifiedExecProcess {
             }
         }
         self.finish_termination();
+    }
+
+    pub(super) fn executor_handoff_ids(&self) -> Option<(String, String)> {
+        match &self.process_handle {
+            ProcessHandle::Local(_) => None,
+            ProcessHandle::ExecServer(process) => {
+                Some((process.process_id().to_string(), process.session_id()?))
+            }
+        }
+    }
+
+    pub(super) fn last_exec_server_seq(&self) -> u64 {
+        self.last_exec_server_seq.load(Ordering::Acquire)
+    }
+
+    pub(super) fn detach_for_handoff(&self) {
+        if matches!(&self.process_handle, ProcessHandle::ExecServer(_)) {
+            self.preserve_remote_process_on_drop
+                .store(true, Ordering::Release);
+            self.finish_termination();
+        }
     }
 
     pub(super) async fn terminate_confirmed(&self) -> Result<(), UnifiedExecError> {
@@ -427,11 +454,30 @@ impl UnifiedExecProcess {
         started: StartedExecProcess,
         output_drain_policy: OutputDrainPolicy,
     ) -> Result<Self, UnifiedExecError> {
+        Self::from_exec_server_started_with_cursor(started, output_drain_policy, 0).await
+    }
+
+    pub(super) async fn from_reattached_exec_server_started(
+        started: StartedExecProcess,
+        output_drain_policy: OutputDrainPolicy,
+        after_seq: u64,
+    ) -> Result<Self, UnifiedExecError> {
+        Self::from_exec_server_started_with_cursor(started, output_drain_policy, after_seq).await
+    }
+
+    async fn from_exec_server_started_with_cursor(
+        started: StartedExecProcess,
+        output_drain_policy: OutputDrainPolicy,
+        after_seq: u64,
+    ) -> Result<Self, UnifiedExecError> {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         // Older peers do not report this field. In that case, skip local
         // classification rather than attributing a violation to a guessed backend.
         let sandbox_type = started.sandbox_type;
         let mut managed = Self::new(process_handle, sandbox_type, output_drain_policy);
+        managed
+            .last_exec_server_seq
+            .store(after_seq, Ordering::Release);
         let output_handles = managed.output_handles().clone();
         managed.output_task = Some(Self::spawn_exec_server_output_task(
             started,
@@ -440,6 +486,7 @@ impl UnifiedExecProcess {
             managed.output_tx.clone(),
             managed.state_tx.clone(),
             managed.interaction_lock(),
+            Arc::clone(&managed.last_exec_server_seq),
         ));
 
         let mut state_rx = managed.state_rx.clone();
@@ -470,6 +517,7 @@ impl UnifiedExecProcess {
         output_tx: broadcast::Sender<Vec<u8>>,
         state_tx: watch::Sender<ProcessState>,
         interaction_lock: Arc<Mutex<()>>,
+        last_exec_server_seq: Arc<AtomicU64>,
     ) -> JoinHandle<()> {
         let OutputHandles {
             output_buffer,
@@ -497,7 +545,7 @@ impl UnifiedExecProcess {
             };
             tokio::pin!(drain);
             let mut final_drain = false;
-            let mut last_seq: u64 = 0;
+            let mut last_seq = last_exec_server_seq.load(Ordering::Acquire);
             loop {
                 let received = tokio::select! {
                     received = events.recv() => Some(received),
@@ -579,6 +627,7 @@ impl UnifiedExecProcess {
                         output_notify.notify_waiters();
                     }
                     last_seq = last_seq.max(next_seq.saturating_sub(1));
+                    last_exec_server_seq.store(last_seq, Ordering::Release);
                     if let Some(message) = failure {
                         let state = state_tx.borrow().clone();
                         let _ = state_tx.send_replace(state.failed(message));
@@ -623,6 +672,7 @@ impl UnifiedExecProcess {
                         drop(guard);
                         let _ = output_tx.send(bytes);
                         output_notify.notify_waiters();
+                        last_exec_server_seq.store(last_seq, Ordering::Release);
                     }
                     ExecProcessEvent::Exited {
                         seq,
@@ -636,6 +686,7 @@ impl UnifiedExecProcess {
                         let mut state = state_tx.borrow().clone();
                         state.sandbox_denied |= sandbox_denied.unwrap_or(false);
                         let _ = state_tx.send_replace(state.exited(Some(exit_code)));
+                        last_exec_server_seq.store(last_seq, Ordering::Release);
                         if output_drain_policy == OutputDrainPolicy::BoundedAfterExit {
                             cancellation_token.cancel();
                         }
@@ -644,8 +695,10 @@ impl UnifiedExecProcess {
                         if seq <= last_seq {
                             continue;
                         }
+                        last_seq = seq;
                         output_closed.store(true, Ordering::Release);
                         output_closed_notify.notify_waiters();
+                        last_exec_server_seq.store(last_seq, Ordering::Release);
                         cancellation_token.cancel();
                         break;
                     }
@@ -714,6 +767,10 @@ impl UnifiedExecProcess {
 
 impl Drop for UnifiedExecProcess {
     fn drop(&mut self) {
-        self.terminate();
+        if self.preserve_remote_process_on_drop.load(Ordering::Acquire) {
+            self.finish_termination();
+        } else {
+            self.terminate();
+        }
     }
 }

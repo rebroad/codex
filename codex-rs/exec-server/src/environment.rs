@@ -145,6 +145,42 @@ pub enum EnvironmentObservedStatus {
 }
 
 impl EnvironmentManager {
+    /// Routes local command execution through an external executor owned by the managed daemon.
+    ///
+    /// The local filesystem and HTTP capabilities remain in this process. The executor transport
+    /// is retained separately so a replacement app-server can reconnect to running processes.
+    pub fn use_managed_local_executor(
+        &mut self,
+        websocket_url: String,
+        session_id_file: std::path::PathBuf,
+    ) -> Result<(), ExecServerError> {
+        let Some(local_environment) = self.local_environment.as_ref() else {
+            return Ok(());
+        };
+        let local_runtime_paths =
+            local_environment
+                .local_runtime_paths
+                .clone()
+                .ok_or_else(|| {
+                    ExecServerError::Protocol(
+                        "managed local executor requires local runtime paths".to_string(),
+                    )
+                })?;
+        let environment = Arc::new(Environment::local_with_managed_executor(
+            websocket_url,
+            session_id_file,
+            local_runtime_paths,
+            self.http_client_factory.clone(),
+        ));
+        environment.start_connecting();
+        self.environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(LOCAL_ENVIRONMENT_ID.to_string(), Arc::clone(&environment));
+        self.local_environment = Some(environment);
+        Ok(())
+    }
+
     /// Builds a test-only manager without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
@@ -690,6 +726,7 @@ fn optional_environment_value(name: &str) -> Option<String> {
 #[derive(Clone)]
 pub struct Environment {
     skills: ScopedSkillsConfig,
+    remote_environment: bool,
     remote_client: Option<LazyRemoteExecServerClient>,
     ready_info: Arc<ArcSwapOption<EnvironmentReadyInfo>>,
     // No sender means an ordinary environment. A provisioned environment retains a sender whose
@@ -708,6 +745,7 @@ impl Environment {
     pub fn default_for_tests() -> Self {
         Self {
             remote_client: None,
+            remote_environment: false,
             skills: ScopedSkillsConfig::default(),
             ready_info: Arc::new(ArcSwapOption::empty()),
             provisioning_status_tx: None,
@@ -789,6 +827,7 @@ impl Environment {
     ) -> Self {
         Self {
             remote_client: None,
+            remote_environment: false,
             skills: ScopedSkillsConfig::default(),
             ready_info: Arc::new(ArcSwapOption::empty()),
             provisioning_status_tx: None,
@@ -796,6 +835,36 @@ impl Environment {
             exec_backend: Arc::new(LocalProcess::with_local_runtime_paths(
                 local_runtime_paths.clone(),
             )),
+            filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
+                local_runtime_paths.clone(),
+            )),
+            http_client: Arc::new(RouteAwareHttpClient::new(http_client_factory)),
+            local_runtime_paths: Some(local_runtime_paths),
+        }
+    }
+
+    fn local_with_managed_executor(
+        websocket_url: String,
+        session_id_file: std::path::PathBuf,
+        local_runtime_paths: ExecServerRuntimeOptions,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
+        let client = LazyRemoteExecServerClient::new_with_session_id_file(
+            ExecServerTransportParams::websocket_url(
+                websocket_url,
+                DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+            ),
+            http_client_factory.clone(),
+            Some(session_id_file),
+        );
+        Self {
+            remote_client: Some(client.clone()),
+            remote_environment: false,
+            skills: ScopedSkillsConfig::default(),
+            ready_info: Arc::new(ArcSwapOption::empty()),
+            provisioning_status_tx: None,
+            startup_task: Arc::new(Mutex::new(None)),
+            exec_backend: Arc::new(RemoteProcess::new(client)),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
             )),
@@ -825,6 +894,7 @@ impl Environment {
 
         Self {
             remote_client: Some(client.clone()),
+            remote_environment: true,
             skills,
             ready_info: Arc::new(ArcSwapOption::empty()),
             provisioning_status_tx: None,
@@ -842,6 +912,11 @@ impl Environment {
     }
 
     pub fn is_remote(&self) -> bool {
+        self.remote_environment
+    }
+
+    /// Returns whether command execution uses the exec-server protocol.
+    pub fn uses_exec_server(&self) -> bool {
         self.remote_client.is_some()
     }
 
@@ -1192,9 +1267,9 @@ impl Environment {
 
     /// Returns a filesystem view that fails instead of starting or waiting for a connection.
     pub fn get_filesystem_without_reconnect(&self) -> Arc<dyn ExecutorFileSystem> {
-        match &self.remote_client {
-            Some(client) => Arc::new(RemoteFileSystem::new(client.fail_fast())),
-            None => Arc::clone(&self.filesystem),
+        match (&self.remote_client, self.remote_environment) {
+            (Some(client), true) => Arc::new(RemoteFileSystem::new(client.fail_fast())),
+            _ => Arc::clone(&self.filesystem),
         }
     }
 }

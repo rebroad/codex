@@ -203,7 +203,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
     }
 
     fn uses_executor_managed_process_sandbox(&self, req: &UnifiedExecRequest) -> bool {
-        req.turn_environment.environment.is_remote() || req.shell_snapshot.is_some()
+        req.turn_environment.environment.uses_exec_server() || req.shell_snapshot.is_some()
     }
 
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b PathUri> {

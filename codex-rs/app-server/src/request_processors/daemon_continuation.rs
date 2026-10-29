@@ -1,8 +1,10 @@
-//! Attempts one new continuation turn immediately after daemon thread restoration.
-//! Completed or superseded work is discarded; recovery never waits for a later idle event.
+//! Recovers an interrupted turn after daemon thread restoration.
+//! Completed or superseded work is discarded; interaction requests wait for a
+//! subscriber so the resumed wait site can issue a fresh client request.
 //! Permissions and the saved local executor selection must match the resumed runtime.
 
 use super::ThreadRequestProcessor;
+use crate::thread_state::ThreadStateManager;
 use codex_app_server_protocol::ThreadEnvironment;
 use codex_app_server_transport::daemon_recovery::InterruptedTurn;
 use codex_core::TurnInput;
@@ -17,17 +19,25 @@ use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::turn_input::RecoverTurnRequest;
+use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_rollout::RolloutItem;
 
 impl ThreadRequestProcessor {
     pub(crate) async fn continue_daemon_turn(&self, thread_id: &str, saved: InterruptedTurn) {
         let Ok(thread_id) = ThreadId::from_string(thread_id) else {
+            tracing::debug!(
+                thread_id,
+                "skipping interrupted turn recovery with an invalid thread id"
+            );
             return;
         };
         let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+            tracing::debug!(%thread_id, "skipping interrupted turn recovery because the thread was not restored");
             return;
         };
         let Some(path) = thread.rollout_path() else {
+            tracing::debug!(%thread_id, "skipping interrupted turn recovery because the thread has no rollout");
             return;
         };
         let history = match codex_rollout::RolloutRecorder::load_rollout_items(&path).await {
@@ -43,21 +53,21 @@ impl ThreadRequestProcessor {
             .iter()
             .rposition(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))))
         else {
+            tracing::debug!(%thread_id, saved_turn_id = %saved.turn_id, "skipping interrupted turn recovery because history has no started turn");
             return;
         };
-        if !matches!(&history[start], RolloutItem::EventMsg(EventMsg::TurnStarted(event))
-            if event.turn_id == saved.turn_id)
-            || history[start..].iter().any(|item| match item {
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                    event.turn_id == saved.turn_id
-                }
-                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => event
-                    .turn_id
-                    .as_ref()
-                    .is_none_or(|turn_id| turn_id == &saved.turn_id),
-                _ => false,
-            })
-        {
+        let started_turn_matches = matches!(&history[start], RolloutItem::EventMsg(EventMsg::TurnStarted(event))
+            if event.turn_id == saved.turn_id);
+        let has_terminal_event = history[start..].iter().any(|item| match item {
+            RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => event.turn_id == saved.turn_id,
+            RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => event
+                .turn_id
+                .as_ref()
+                .is_none_or(|turn_id| turn_id == &saved.turn_id),
+            _ => false,
+        });
+        if !started_turn_matches || has_terminal_event {
+            tracing::debug!(%thread_id, saved_turn_id = %saved.turn_id, started_turn_matches, has_terminal_event, "skipping interrupted turn recovery because saved turn history is no longer active");
             return;
         }
         let previous_context = history.iter().rev().find_map(|item| match item {
@@ -69,20 +79,83 @@ impl ThreadRequestProcessor {
             _ => None,
         });
         let Some(previous_context) = previous_context else {
+            tracing::debug!(%thread_id, saved_turn_id = %saved.turn_id, "skipping interrupted turn recovery because its turn context is missing");
             return;
         };
         let config = thread.config_snapshot().await;
         let [environment] = config.environment_selections() else {
+            tracing::debug!(%thread_id, saved_turn_id = %saved.turn_id, "skipping interrupted turn recovery because the thread has an ambiguous environment");
             return;
         };
         if environment.environment_id != codex_exec_server::LOCAL_ENVIRONMENT_ID
             || environment.config != EnvironmentConfigState::FromThread
             || saved.local_environment.as_ref() != Some(&ThreadEnvironment::from(environment))
         {
+            tracing::debug!(%thread_id, saved_turn_id = %saved.turn_id, environment_id = %environment.environment_id, environment_config = ?environment.config, "skipping interrupted turn recovery because the saved local environment does not match");
             return;
         }
         // Recovery must not override a stricter saved or newly configured policy.
         if previous_context.permission_profile() != config.permission_profile {
+            tracing::debug!(%thread_id, saved_turn_id = %saved.turn_id, "skipping interrupted turn recovery because the permission profile changed");
+            return;
+        }
+        if let Some(suspended) = saved.suspended.as_ref() {
+            tracing::debug!(
+                %thread_id,
+                saved_turn_id = %saved.turn_id,
+                pending_interaction_count = suspended.pending_interactions.len(),
+                pending_input_count = suspended.pending_input.len(),
+                executor_process_count = suspended.executor_processes.len(),
+                "restoring suspended turn checkpoint"
+            );
+            if let Err(error) = thread
+                .reattach_suspended_executor_processes(&suspended.executor_processes)
+                .await
+            {
+                tracing::warn!(%thread_id, %error, "failed to reattach suspended executor processes");
+                return;
+            }
+            if !suspended.pending_interactions.is_empty() {
+                tracing::debug!(
+                    %thread_id,
+                    saved_turn_id = %saved.turn_id,
+                    pending_interaction_ids = ?suspended
+                        .pending_interactions
+                        .iter()
+                        .map(|interaction| &interaction.correlation_id)
+                        .collect::<Vec<_>>(),
+                    "waiting for a client before replaying suspended interactions"
+                );
+                wait_for_pending_interaction_client(&self.thread_state_manager, thread_id).await;
+            }
+            tracing::debug!(%thread_id, saved_turn_id = %saved.turn_id, "submitting suspended turn recovery");
+            let result = thread
+                .recover_turn_if_idle_with_handoff(
+                    RecoverTurnRequest {
+                        turn_id: saved.turn_id.clone(),
+                        thread_settings: Default::default(),
+                        trace: None,
+                        cyber_access_program: saved.cyber_access_program,
+                    },
+                    suspended.pending_input.clone(),
+                    suspended.pending_interactions.clone(),
+                )
+                .await;
+            match result {
+                Ok(StartIfIdleSubmission::Started { .. }) => {
+                    crate::extensions::send_thread_warning(
+                        &self.outgoing,
+                        &self.thread_state_manager,
+                        thread_id,
+                        "Resuming interrupted work".to_string(),
+                    )
+                    .await;
+                }
+                Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
+                    tracing::debug!(%thread_id, ?reason, "recovery continuation was not started");
+                }
+                Err(err) => tracing::warn!(%thread_id, %err, "recovery continuation failed"),
+            }
             return;
         }
         let continuation = ContextualUserFragment::into(InternalModelContextFragment::new(
@@ -135,3 +208,16 @@ impl ThreadRequestProcessor {
         }
     }
 }
+
+async fn wait_for_pending_interaction_client(
+    thread_state_manager: &ThreadStateManager,
+    thread_id: ThreadId,
+) {
+    thread_state_manager
+        .wait_for_thread_subscriber(thread_id)
+        .await;
+}
+
+#[cfg(test)]
+#[path = "daemon_continuation_tests.rs"]
+mod tests;

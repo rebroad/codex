@@ -199,6 +199,11 @@ impl ExecProcessEventReceiver {
 pub trait ExecProcess: Send + Sync {
     fn process_id(&self) -> &ProcessId;
 
+    /// Returns the reconnectable executor session containing this process, if available.
+    fn session_id(&self) -> Option<String> {
+        None
+    }
+
     fn subscribe_wake(&self) -> watch::Receiver<u64>;
 
     fn subscribe_events(&self) -> ExecProcessEventReceiver;
@@ -222,6 +227,16 @@ pub type ExecProcessFuture<'a, T> =
 
 pub trait ExecBackend: Send + Sync {
     fn start(&self, params: ExecParams) -> ExecBackendFuture<'_>;
+
+    /// Reattaches to a previously started process after the exec-server session resumes.
+    /// `after_seq` is the last process event already consumed by the caller.
+    fn reattach_process(&self, _process_id: ProcessId, _after_seq: u64) -> ExecBackendFuture<'_> {
+        Box::pin(async {
+            Err(ExecServerError::Protocol(
+                "exec backend does not support process reattachment".to_string(),
+            ))
+        })
+    }
 
     /// Captures a local shell snapshot without starting the requested command.
     /// Failures must remain retryable by real commands. Remote backends do not

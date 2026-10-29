@@ -75,6 +75,8 @@ use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::PluginMetricsSidecar;
 use codex_core_plugins::strip_output_env;
+use codex_exec_server::EnvironmentManager;
+use codex_extension_api::CoreWorkKind;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -85,6 +87,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
+use codex_protocol::turn_input::SuspendedExecutorProcess;
 use codex_sandboxing::SandboxCommand;
 use codex_shell_command::is_dangerous_command::DangerousCommandPlatform;
 use codex_tools::ToolName;
@@ -449,6 +452,129 @@ fn terminate_process_on_network_denial(
 }
 
 impl UnifiedExecProcessManager {
+    pub(crate) async fn reattach_suspended_processes(
+        &self,
+        suspended: &[SuspendedExecutorProcess],
+        environment_manager: &EnvironmentManager,
+        session: &Arc<crate::session::session::Session>,
+    ) -> Result<(), String> {
+        let mut restored = Vec::with_capacity(suspended.len());
+        for saved in suspended {
+            if saved.tty {
+                return Err(format!(
+                    "interactive terminal {} cannot be restored safely after handoff",
+                    saved.unified_process_id
+                ));
+            }
+            let environment = environment_manager
+                .get_environment(&saved.environment_id)
+                .ok_or_else(|| {
+                    format!(
+                        "executor environment {} for process {} is unavailable",
+                        saved.environment_id, saved.unified_process_id
+                    )
+                })?;
+            let started = environment
+                .get_exec_backend()
+                .reattach_process(saved.exec_server_process_id.clone().into(), saved.after_seq)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "failed to reattach executor process {}: {error}",
+                        saved.unified_process_id
+                    )
+                })?;
+            if started.process.session_id().as_deref()
+                != Some(saved.exec_server_session_id.as_str())
+            {
+                return Err(format!(
+                    "reattached process {} belongs to a different executor session",
+                    saved.unified_process_id
+                ));
+            }
+            let process = UnifiedExecProcess::from_reattached_exec_server_started(
+                started,
+                OutputDrainPolicy::WaitForOutputClosure,
+                saved.after_seq,
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to restore executor process {}: {error}",
+                    saved.unified_process_id
+                )
+            })?;
+            let cwd = PathUri::parse(&saved.cwd).map_err(|error| {
+                format!(
+                    "invalid restored working directory for process {}: {error}",
+                    saved.unified_process_id
+                )
+            })?;
+            let process = Arc::new(process);
+            restored.push((
+                saved,
+                ProcessEntry {
+                    process,
+                    plugin_metrics_sidecar: None,
+                    call_id: saved.call_id.clone(),
+                    process_id: saved.unified_process_id,
+                    cwd,
+                    initial_exec_command_active: Arc::new(AtomicBool::new(true)),
+                    hook_command: saved.command.clone(),
+                    tty: saved.tty,
+                    environment_id: saved.environment_id.clone(),
+                    permissions: None,
+                    network_approval: None,
+                    session: Arc::downgrade(session),
+                    last_used: Instant::now(),
+                },
+            ));
+        }
+
+        let mut store = self.process_store.lock().await;
+        for (saved, _) in &restored {
+            if store.processes.contains_key(&saved.unified_process_id) {
+                return Err(format!(
+                    "process {} is already present while restoring executor handoff",
+                    saved.unified_process_id
+                ));
+            }
+            if store.restored_call_ids.contains(&saved.call_id) {
+                return Err(format!(
+                    "tool call {} is already present while restoring executor handoff",
+                    saved.call_id
+                ));
+            }
+        }
+        for (saved, entry) in restored {
+            store.reserved_process_ids.insert(saved.unified_process_id);
+            store.restored_call_ids.insert(saved.call_id.clone());
+            store.processes.insert(saved.unified_process_id, entry);
+        }
+        Ok(())
+    }
+
+    async fn take_restored_process_for_call(
+        &self,
+        call_id: &str,
+    ) -> Option<(i32, Arc<UnifiedExecProcess>, Arc<AtomicBool>)> {
+        let mut store = self.process_store.lock().await;
+        if !store.restored_call_ids.contains(call_id) {
+            return None;
+        }
+        let entry = store
+            .processes
+            .values()
+            .find(|entry| entry.call_id == call_id)?;
+        let restored = (
+            entry.process_id,
+            Arc::clone(&entry.process),
+            Arc::clone(&entry.initial_exec_command_active),
+        );
+        store.restored_call_ids.remove(call_id);
+        Some(restored)
+    }
+
     pub(crate) async fn allocate_process_id(&self) -> i32 {
         loop {
             let mut store = self.process_store.lock().await;
@@ -479,11 +605,7 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn release_process_id(&self, process_id: i32) {
         let removed = {
             let mut store = self.process_store.lock().await;
-            let entry = store.processes.remove(&process_id);
-            if !should_use_deterministic_process_ids() {
-                store.reserved_process_ids.remove(&process_id);
-            }
-            entry
+            store.remove(process_id)
         };
         if let Some(entry) = removed {
             unregister_network_approval_for_entry(&entry).await;
@@ -523,28 +645,52 @@ impl UnifiedExecProcessManager {
 
     pub(super) async fn exec_command_inner(
         &self,
-        request: ExecCommandRequest,
+        mut request: ExecCommandRequest,
         context: &UnifiedExecContext,
         mut completion: Option<&mut Completion<'_>>,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let cwd = request.cwd.clone();
-        let process = self
-            .open_session_with_sandbox(&request, cwd.clone(), context)
-            .await;
-
-        let (attempt, mut deferred_network_approval) = match process {
-            Ok((attempt, deferred_network_approval)) => (attempt, deferred_network_approval),
-            Err(err) => {
-                self.release_process_id(request.process_id).await;
-                return Err(err);
-            }
-        };
-        let UnifiedExecAttempt {
+        let allocated_process_id = request.process_id;
+        let (
             process,
             metrics_sidecar,
             permissions,
-        } = attempt;
-        let process = Arc::new(process);
+            mut deferred_network_approval,
+            restored_process,
+            restored_initial_active,
+        ) = if let Some((restored_process_id, process, initial_active)) =
+            self.take_restored_process_for_call(&context.call_id).await
+        {
+            request.process_id = restored_process_id;
+            if allocated_process_id != restored_process_id {
+                self.release_process_id(allocated_process_id).await;
+            }
+            (process, None, None, None, true, Some(initial_active))
+        } else {
+            let result = self
+                .open_session_with_sandbox(&request, cwd.clone(), context)
+                .await;
+            let (attempt, deferred_network_approval) = match result {
+                Ok((attempt, deferred_network_approval)) => (attempt, deferred_network_approval),
+                Err(err) => {
+                    self.release_process_id(request.process_id).await;
+                    return Err(err);
+                }
+            };
+            let UnifiedExecAttempt {
+                process,
+                metrics_sidecar,
+                permissions,
+            } = attempt;
+            (
+                Arc::new(process),
+                metrics_sidecar,
+                Some(permissions),
+                deferred_network_approval,
+                false,
+                None,
+            )
+        };
         if let Some(completion) = completion.as_ref() {
             let _ = completion.process.set(Arc::clone(&process));
         }
@@ -611,11 +757,11 @@ impl UnifiedExecProcessManager {
                     .output_closed
                     .load(Ordering::Acquire));
         let mut initial_exec_command_guard = InitialExecCommandGuard {
-            active: None,
+            active: restored_initial_active,
             metrics_sidecar,
             collection_finished: process.output_handles().collection_finished.clone(),
         };
-        if process_stored {
+        if process_stored && !restored_process {
             let initial_exec_command_active = Arc::new(AtomicBool::new(true));
             initial_exec_command_guard.active = Some(Arc::clone(&initial_exec_command_active));
             self.store_process(
@@ -625,7 +771,7 @@ impl UnifiedExecProcessManager {
                 request.hook_command.clone(),
                 cwd.clone(),
                 request.turn_environment.selection.environment_id.clone(),
-                permissions,
+                permissions.expect("newly started processes have terminal permissions"),
                 plugin_attribution.clone(),
                 start,
                 request.process_id,
@@ -1250,7 +1396,7 @@ impl UnifiedExecProcessManager {
             hook_command,
             tty,
             environment_id,
-            permissions,
+            permissions: Some(permissions),
             network_approval,
             session: Arc::downgrade(&context.session),
             last_used: started_at,
@@ -1297,7 +1443,7 @@ impl UnifiedExecProcessManager {
         tty: bool,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let mut request = if environment.is_remote() || shell_snapshot.is_some() {
+        let mut request = if environment.uses_exec_server() || shell_snapshot.is_some() {
             attempt.env_for_exec_server(command, options).await
         } else {
             attempt
@@ -1315,6 +1461,15 @@ impl UnifiedExecProcessManager {
         request.exec_server_network_proxy = network_proxy_launch;
         request.exec_server_env_config = exec_server_env_config;
         request.exec_server_shell_snapshot = shell_snapshot;
+        let _work_permit = tokio::select! {
+            biased;
+            _ = tool_ctx.cancellation_token.cancelled() => {
+                return Err(ToolError::Codex(CodexErr::TurnAborted));
+            }
+            permit = tool_ctx.session.services.extensions.acquire_core_work(CoreWorkKind::CommandProcessStart) => {
+                permit.ok_or(ToolError::Codex(CodexErr::TurnSuspended))?
+            }
+        };
         self.open_session_with_prepared_exec_env(
             process_id,
             &request,
@@ -1347,7 +1502,7 @@ impl UnifiedExecProcessManager {
         tty: bool,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        if environment.is_remote() || request.exec_server_shell_snapshot.is_some() {
+        if environment.uses_exec_server() || request.exec_server_shell_snapshot.is_some() {
             let backend = environment.get_exec_backend();
             let params = exec_server_params_for_request(
                 process_id,
@@ -1562,6 +1717,7 @@ impl UnifiedExecProcessManager {
             .map(|result| (result.output, result.deferred_network_approval))
             .map_err(|err| match err {
                 ToolError::Codex(err) => match err.details() {
+                    CodexErrorDetails::TurnSuspended => UnifiedExecError::TurnSuspended,
                     CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
                         let output = output.as_ref().clone();
                         let message = if output.aggregated_output.text.is_empty() {
@@ -1817,6 +1973,71 @@ impl UnifiedExecProcessManager {
         lru.into_iter()
             .find(|(process_id, _, _)| !protected.contains(process_id))
             .map(|(process_id, _, _)| process_id)
+    }
+
+    pub(crate) async fn snapshot_handoff_processes(
+        &self,
+    ) -> Result<Vec<SuspendedExecutorProcess>, String> {
+        let processes = self.process_store.lock().await;
+        tracing::info!(
+            process_count = processes.processes.len(),
+            "capturing executor process handoff state"
+        );
+        let mut handoff = Vec::new();
+        for entry in processes.processes.values() {
+            let has_exited = entry.process.has_exited();
+            let has_handoff_ids = entry.process.executor_handoff_ids().is_some();
+            tracing::info!(
+                process_id = entry.process_id,
+                has_exited,
+                has_handoff_ids,
+                "examining executor process for handoff"
+            );
+            if has_exited {
+                continue;
+            }
+            if entry.tty {
+                return Err(format!(
+                    "interactive terminal {} cannot survive app-server handoff",
+                    entry.process_id
+                ));
+            }
+            let Some((exec_server_process_id, exec_server_session_id)) =
+                entry.process.executor_handoff_ids()
+            else {
+                return Err(format!(
+                    "active local process {} cannot survive app-server handoff",
+                    entry.process_id
+                ));
+            };
+            handoff.push(SuspendedExecutorProcess {
+                unified_process_id: entry.process_id,
+                call_id: entry.call_id.clone(),
+                environment_id: entry.environment_id.clone(),
+                exec_server_process_id,
+                exec_server_session_id,
+                after_seq: entry.process.last_exec_server_seq(),
+                command: entry.hook_command.clone(),
+                cwd: entry.cwd.to_string(),
+                tty: entry.tty,
+            });
+        }
+        handoff.sort_by_key(|process| process.unified_process_id);
+        Ok(handoff)
+    }
+
+    pub(crate) async fn detach_all_processes_for_handoff(&self) {
+        let entries: Vec<ProcessEntry> = {
+            let mut processes = self.process_store.lock().await;
+            processes
+                .processes
+                .drain()
+                .map(|(_, entry)| entry)
+                .collect()
+        };
+        for entry in entries {
+            entry.process.detach_for_handoff();
+        }
     }
 
     pub(crate) async fn terminate_all_processes(&self) {

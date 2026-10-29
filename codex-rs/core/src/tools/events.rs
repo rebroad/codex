@@ -395,6 +395,13 @@ impl ToolEmitter {
         out: Result<ExecToolCallOutput, ToolError>,
         applied_patch_delta: Option<&AppliedPatchDelta>,
     ) -> Result<String, FunctionCallError> {
+        if matches!(
+            &out,
+            Err(ToolError::Codex(err))
+                if matches!(err.details(), CodexErrorDetails::TurnSuspended)
+        ) {
+            return Err(FunctionCallError::Suspended);
+        }
         let (event, result) = match out {
             Ok(output) => {
                 let content = self.format_exec_output_for_model(&output, ctx);

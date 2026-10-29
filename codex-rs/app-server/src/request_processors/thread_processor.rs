@@ -474,7 +474,7 @@ pub(crate) struct ThreadRequestProcessor {
 /// Whether resume attaches a client or restores a cold runtime during daemon startup.
 pub(crate) enum ThreadResumeTarget {
     Client(ConnectionRequestId),
-    DaemonRecovery(Option<codex_app_server_transport::daemon_recovery::InterruptedTurn>),
+    DaemonRecovery,
 }
 
 /// Outcome of trying to satisfy a resume request from an already loaded thread.
@@ -3904,15 +3904,11 @@ impl ThreadRequestProcessor {
                 }
                 RunningThreadResumeResult::NotRunning(stored_thread) => stored_thread,
             },
-            ThreadResumeTarget::DaemonRecovery(saved) => {
+            ThreadResumeTarget::DaemonRecovery => {
                 let thread_id = ThreadId::from_string(&params.thread_id)
                     .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
                 // Recheck under the same permit as client resume, including after config loading.
                 if self.thread_manager.get_thread(thread_id).await.is_ok() {
-                    if let Some(saved) = saved {
-                        self.continue_daemon_turn(&params.thread_id, saved.clone())
-                            .await;
-                    }
                     return Ok(ControlFlow::Break(()));
                 }
                 None
@@ -3944,7 +3940,7 @@ impl ThreadRequestProcessor {
         let history_load_started_at = std::time::Instant::now();
         let progress_request = match target {
             ThreadResumeTarget::Client(request_id) => Some(request_id.clone()),
-            ThreadResumeTarget::DaemonRecovery(_) => None,
+            ThreadResumeTarget::DaemonRecovery => None,
         };
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
@@ -4028,10 +4024,26 @@ impl ThreadRequestProcessor {
             && let Some((source, _)) = thread_history.get_resumed_session_sources()
             && !can_accept_direct_input(thread_history.get_multi_agent_version(), &source)
         {
+            let child_thread_id = resumed_history.conversation_id;
+            if matches!(target, ThreadResumeTarget::DaemonRecovery) {
+                self.thread_manager
+                    .ensure_multi_agent_v2_child_loaded(child_thread_id)
+                    .await
+                    .map_err(|err| {
+                        tracing::warn!(
+                            thread_id = %child_thread_id,
+                            error = %err,
+                            "failed to restore a multi-agent v2 child through its parent"
+                        );
+                        invalid_request(format!(
+                            "cannot restore multi-agent v2 child {child_thread_id} through its parent: {err}"
+                        ))
+                    })?;
+                return Ok(ControlFlow::Break(()));
+            }
             let ThreadResumeTarget::Client(request_id) = target else {
                 return Ok(ControlFlow::Break(()));
             };
-            let child_thread_id = resumed_history.conversation_id;
             self.thread_manager
                 .ensure_multi_agent_v2_child_loaded(child_thread_id)
                 .await
@@ -4262,7 +4274,7 @@ impl ThreadRequestProcessor {
                     ThreadResumeTarget::Client(request_id) => {
                         self.request_trace_context(request_id).await
                     }
-                    ThreadResumeTarget::DaemonRecovery(_) => None,
+                    ThreadResumeTarget::DaemonRecovery => None,
                 },
                 client_mcp_extensions,
                 ..StartThreadOptions::new(config)
@@ -4284,10 +4296,6 @@ impl ThreadRequestProcessor {
                     codex_thread
                         .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
                         .await;
-                    if let ThreadResumeTarget::DaemonRecovery(Some(saved)) = target {
-                        self.continue_daemon_turn(&thread_id.to_string(), saved.clone())
-                            .await;
-                    }
                     let state = self.thread_state_manager.thread_state(thread_id).await;
                     self.ensure_listener_task_running(thread_id, Arc::clone(&codex_thread), state)
                         .await?;
