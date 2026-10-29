@@ -13,6 +13,7 @@ work.
 | Linux discovery, launch, window binding, accessibility, screenshot, and harmless input | 100% | None for the current X11 host |
 | Capability detection and clear display/session/compositor errors | 100% | Current backend reports display, X11, Wayland, accessibility, and MCP failures; unsupported Wayland remains explicit |
 | Browser Computer Use preservation | 100% | None observed |
+| Built-in Computer Use skill routing to native Linux CUA | 100% | None for the current host; `cua_repl` resolves to the configured Linux backend and exposes browser plus native computer surfaces |
 | On-demand use without affecting shell-first workflows | 100% | Shell-first policy documented and enforced by usage guidance |
 | Codex repository tests and repeatable validation | 100% | None for the current backend path |
 | Configurable backend selection: Sky or open X11-style implementation | 0% | Define the configuration contract, implement the alternate backend adapter, and preserve Sky as the default |
@@ -41,6 +42,16 @@ option for an open-source Linux implementation based on the methods used by
 The alternate implementation should borrow the repository's deterministic
 window targeting and screenshot-before/after verification methods without
 copying its shell driver into the Sky path.
+
+### Built-in Computer Use skill routing
+
+The backend MCP is available as `mcp__linux_cua__js`, but a fresh agent that
+invokes the built-in Computer Use skill initializes the separate bundled
+`cua_repl` server. That server is configured with the browser surface only, so
+the skill reports browser tabs and cannot call `listWindows`. Make the native
+Linux surface available through the skill's own runtime or add a supported
+host-side routing mechanism; do not depend on a user-wide `AGENTS.md` reminder
+or edit generated plugin caches as the implementation.
 
 - If integrated ChatGPT Desktop support is required, obtain the external
   Electron source/build owner and enable the Linux production `computerUse`
