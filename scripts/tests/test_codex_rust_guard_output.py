@@ -152,7 +152,7 @@ class GuardOutputTest(unittest.TestCase):
         result = subprocess.run(
             ["bash", "-c", script], capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "LMKD advisory\\n")
+        self.assertEqual(result.stdout, "LMKD advisory\n")
         self.assertIn("captured:/tmp/codex-bin", result.stderr)
         self.assertNotIn("advisory", result.stderr)
 
