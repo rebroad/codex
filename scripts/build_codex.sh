@@ -854,6 +854,18 @@ build_armv7_bwrap() {
   fi
 }
 
+# RUSTC_WRAPPER is exported by the shared Cargo environment helper.
+# Do not leak it into preparatory or nested Cargo invocations which have no
+# CODEX_ANDROID_RUSTC_TIMING_DIR. Supply it only to the managed Cargo stage
+# alongside the newly created shared ledger.
+codex_scope_managed_rustc_wrapper() {
+  CODEX_MANAGED_RUSTC_WRAPPER=""
+  if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD:-0}" == 1 ]]; then
+    CODEX_MANAGED_RUSTC_WRAPPER="${RUSTC_WRAPPER:?Android Rust guard requires RUSTC_WRAPPER}"
+    export -n RUSTC_WRAPPER
+  fi
+}
+
 cargo_build() {
   local mode="${1}" target_mode="${2}" profile="${3:-${CARGO_PROFILE}}" purpose="${CODEX_CARGO_PURPOSE:-build}" profile_args=() target triple target_dir psi_probe_status
   case "${profile}" in
@@ -875,6 +887,7 @@ cargo_build() {
     --purpose "${purpose}" \
     --emit)" || return $?
   eval "${cargo_env_output}" || return $?
+  codex_scope_managed_rustc_wrapper
   target_dir="${CARGO_TARGET_DIR}"
   if [[ "${CODEX_ANDROID_RUSTC_MEMORY_GUARD:-0}" == 1 ]]; then
     python3 - "${target_dir}" <<'PY'
@@ -975,6 +988,11 @@ PY
       OPENSSL_STATIC=1
     )
   fi
+  # Rustc guard and its ledger must be scoped together to this Cargo
+  # invocation; an outer RUSTC_WRAPPER export causes false local-timer
+  # warnings in auxiliary Cargo runs.
+  [[ -z "${CODEX_MANAGED_RUSTC_WRAPPER}" ]] \
+    || env_args+=(RUSTC_WRAPPER="${CODEX_MANAGED_RUSTC_WRAPPER}")
   env_args+=(
     CARGO_TARGET_DIR="${target_dir}"
     RUSTUP_DISABLE_SELF_UPDATE=1
@@ -1080,6 +1098,13 @@ PY
     # processes. Avoid /proc/<pid>/stat, which Android may not permit reading.
     ANDROID_RUST_TIMING_DIR="$(mktemp -d "${temp_root%/}/codex-rust-timing.XXXXXX")" || return 1
     ballast_env_args+=(CODEX_ANDROID_RUSTC_TIMING_DIR="${ANDROID_RUST_TIMING_DIR}")
+    # Catch broken stage environment propagation before starting a lengthy
+    # build, rather than silently falling back to per-wrapper timings.
+    if ! env "${env_args[@]}" "${ballast_env_args[@]}" \
+        bash -c '[[ -n "${RUSTC_WRAPPER:-}" && -d "${CODEX_ANDROID_RUSTC_TIMING_DIR:-}" ]] && command -v flock >/dev/null'; then
+      echo "Android Rust stage missing RUSTC_WRAPPER, shared timing directory, or flock" >&2
+      return 1
+    fi
     if start_android_ballast; then
       ballast_env_args+=(
         CODEX_ANDROID_RUSTC_BALLAST_PID="${ANDROID_BALLAST_PID}"
@@ -1746,6 +1771,7 @@ run_preflight() {
       scripts/codex_rustc_oom_wrapper.sh \
       scripts/codex_rustc_timing.sh \
       scripts/tests/test_codex_rustc_timing.sh \
+      scripts/tests/test_codex_rustc_timing_scope.sh \
       scripts/tests/test_codex_rustc_suspend_state.sh \
       scripts/tests/test_codex_rustc_lmkd_advisory.sh \
       scripts/build_armv7.sh \
@@ -1761,6 +1787,7 @@ run_preflight() {
     # Catch stale suspension-state regressions before a long Cargo build.
     bash scripts/tests/test_codex_rustc_suspend_state.sh >/dev/null
     bash scripts/tests/test_codex_rustc_lmkd_advisory.sh >/dev/null
+    bash scripts/tests/test_codex_rustc_timing_scope.sh >/dev/null
   )
   require_cmd cargo
   if command -v rustup >/dev/null 2>&1; then

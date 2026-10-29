@@ -227,7 +227,11 @@ Rust time: kept 00:08:14; suspended 00:01:16; lost 00:10:42; in progress (this r
 
 Kept, suspended and lost never decrease. Timing is shared through a locked
 ledger keyed to the build process, rather than each rustc reading an outdated
-snapshot. With parallel compiler invocations, the totals are summed
+snapshot. The guarded `RUSTC_WRAPPER` is scoped to the managed Cargo stage
+together with `CODEX_ANDROID_RUSTC_TIMING_DIR`, not exported to unrelated
+preparatory Cargo commands; the stage validates both variables and `flock`
+before starting compilation. This avoids isolated local counters caused by
+an orphaned wrapper environment. With parallel compiler invocations, the totals are summed
 **compiler-process seconds** and may exceed the build's wall-clock elapsed time.
 The in-progress field is local to the reporting rustc, not a build-wide total.
 All values refer to time, not CPU instruction counts. The split is based on
