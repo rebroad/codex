@@ -55,9 +55,17 @@ codex_timing_init() {
   codex_timing_last_periodic_us="${CODEX_TIMING_NOW_US}"
 }
 codex_timing_format() {
-  local seconds=$(( $1 / 1000000 ))
-  printf -v "$2" '%02d:%02d:%02d' \
-    "$((seconds / 3600))" "$(((seconds / 60) % 60))" "$((seconds % 60))"
+  local total_seconds=$(( $1 / 1000000 ))
+  local hours=$((total_seconds / 3600))
+  local minutes=$(((total_seconds / 60) % 60))
+  local seconds=$((total_seconds % 60))
+  local duration=""
+  ((hours == 0)) || duration+="${hours}h"
+  ((minutes == 0)) || duration+="${minutes}m"
+  if ((seconds > 0)) || [[ -z "$duration" ]]; then
+    duration+="${seconds}s"
+  fi
+  printf -v "$2" '%s' "$duration"
 }
 
 codex_timing_emit() {
@@ -66,8 +74,9 @@ codex_timing_emit() {
   codex_timing_format "$2" paused_duration
   codex_timing_format "$3" lost_duration
   codex_timing_format "$4" pending_duration
-  printf 'Rust time: kept %s; suspended %s; lost %s; in progress (this rustc) %s\n' \
-    "${running_duration}" "${paused_duration}" "${lost_duration}" "${pending_duration}" >&2
+  printf '%s kept=%s slept=%s lost=%s this=%s\n' \
+    "$(date '+%H:%M:%S')" \
+    "$running_duration" "$paused_duration" "$lost_duration" "$pending_duration" >&2
   # Ballast shares the timer report cadence instead of producing independent
   # status messages every time it allocates or releases pages.
   if declare -F codex_report_ballast_telemetry >/dev/null 2>&1; then
