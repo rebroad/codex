@@ -15,7 +15,10 @@ import sys
 import time
 
 
+LMKD_ADVISORY_PREFIX = "ℹ️ Android LMKD reclaimed "
+
 GUARD_PREFIXES = (
+    LMKD_ADVISORY_PREFIX,
     "stopping Rust compile before Android low-memory kill:",
     "waiting for Android memory pressure to ease",
     "⏹ Rust attempt stopped",
@@ -47,8 +50,9 @@ def timestamp():
 
 
 class CargoLogFilter:
-    def __init__(self, output=None, now=None, date_stamp=None):
+    def __init__(self, output=None, now=None, date_stamp=None, lmkd_output=None):
         self.output = output if output is not None else sys.stdout
+        self.lmkd_output = lmkd_output if lmkd_output is not None else self.output
         self.now = now if now is not None else time.monotonic
         self.date_stamp = date_stamp if date_stamp is not None else timestamp
         self.last_guard_at = None
@@ -60,8 +64,10 @@ class CargoLogFilter:
     def emit_guard(self, line, at, coalesced=0):
         suffix = (f" (coalesced {coalesced} rapid guard updates)"
                   if coalesced else "")
-        self.output.write(f"[{self.date_stamp()}] {line}{suffix}\n")
-        self.output.flush()
+        destination = (self.lmkd_output if line.startswith(LMKD_ADVISORY_PREFIX)
+                       else self.output)
+        destination.write(f"[{self.date_stamp()}] {line}{suffix}\n")
+        destination.flush()
         self.last_guard_at = at
 
     def flush_due(self, at=None):
@@ -84,7 +90,13 @@ class CargoLogFilter:
                 self.pending_guard = None
                 self.pending_count = 0
             else:
-                self.pending_guard = line
+                # Do not let rapid suspend/resume messages replace an LMKD
+                # notice that is still waiting for its one-second log slot.
+                # LMKD is diagnostic, so its destination is the build stdout.
+                if (line.startswith(LMKD_ADVISORY_PREFIX)
+                        or self.pending_guard is None
+                        or not self.pending_guard.startswith(LMKD_ADVISORY_PREFIX)):
+                    self.pending_guard = line
                 self.pending_count += 1
             return
 
@@ -114,7 +126,11 @@ class CargoLogFilter:
 
 
 def run():
-    output = CargoLogFilter()
+    # Cargo/rustc stdout is not touched: the build combines Cargo output
+    # into our stdin first. Only informational LMKD reclaims go to the
+    # build script's stdout; compiler logs and ordinary guard events remain
+    # on stderr as before.
+    output = CargoLogFilter(output=sys.stderr, lmkd_output=sys.stdout)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     pending_text = ""
     stdin_fd = sys.stdin.fileno()
