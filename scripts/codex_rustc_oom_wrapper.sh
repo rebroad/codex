@@ -212,7 +212,7 @@ codex_read_psi() {
           # compiler stdout stays protocol-clean. The build-wide log filter
           # forwards these notices to the build's actual stdout.
           if [[ "$codex_lmkd_reclaim_process" =~ ^[[:alnum:]_.:-]+$ ]]; then
-            printf 'ℹ️ Android LMKD reclaimed %s; advisory only (rustc preserved)\n' \
+            printf 'ℹ️ Android LMKD reclaimed %s; advisory only (no rustc stop from this event)\n' \
               "$codex_lmkd_reclaim_process" >&2
             # A reclaim event still warrants releasing disposable ballast,
             # but never proactively discarding this compiler's progress.
