@@ -121,6 +121,25 @@ assert_ledger 21000000 13000000 14000000
 read -r stage_kept stage_suspended stage_lost <"$temp/totals"
 [[ "$stage_kept" == 19000000 && "$stage_suspended" == 13000000 && "$stage_lost" == 14000000 ]]
 
+# Competing auxiliary rustc processes must serialize global increments.
+parallel_pids=()
+for worker in 1 2 3 4; do
+  (
+    unset CODEX_ANDROID_RUSTC_TIMING_DIR
+    clock=80000000; codex_timing_init
+    codex_compiler_pid="$worker"
+    clock=81000000; codex_timing_launch
+    clock=83000000; codex_timing_success
+  ) &
+  parallel_pids+=("$!")
+done
+for pid in "${parallel_pids[@]}"; do
+  wait "$pid"
+done
+assert_ledger 29000000 13000000 14000000
+read -r stage_kept stage_suspended stage_lost <"$temp/totals"
+[[ "$stage_kept" == 19000000 && "$stage_suspended" == 13000000 && "$stage_lost" == 14000000 ]]
+
 # If a running attempt is suspended then killed, only active time is lost.
 clock=60000000; codex_timing_init
 codex_compiler_pid=104
@@ -128,7 +147,7 @@ clock=61000000; codex_timing_launch
 clock=67000000; codex_timing_pause
 clock=71000000; codex_timing_lost
 codex_compiler_pid=""
-assert_ledger 21000000 17000000 20000000
+assert_ledger 29000000 17000000 20000000
 read -r stage_kept stage_suspended stage_lost <"$temp/totals"
 [[ "$stage_kept" == 19000000 && "$stage_suspended" == 17000000 && "$stage_lost" == 20000000 ]]
 
