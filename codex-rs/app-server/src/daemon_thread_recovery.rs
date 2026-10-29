@@ -17,34 +17,28 @@ pub(crate) async fn snapshot(
         .name("daemon-snapshot".into())
         .spawn(move || {
             let result = daemon_recovery::write_snapshot(&path, &saved);
-            if result.is_err()
-                && let Err(err) = std::fs::remove_file(&path)
-                && err.kind() != io::ErrorKind::NotFound
-            {
-                tracing::warn!("failed to clear stale daemon recovery file: {err}");
-            }
             let _ = result_tx.send(result);
         })?;
     result_rx.await.map_err(io::Error::other)?
 }
 
-/// Consume the handoff before serving requests, then restore runtimes in the background.
+/// Restore a handoff in the background and consume it only after all candidates load.
 pub(crate) async fn start_recovery(
     path: PathBuf,
     processor: std::sync::Arc<crate::message_processor::MessageProcessor>,
 ) -> io::Result<tokio::task::JoinHandle<()>> {
-    let candidates = tokio::task::spawn_blocking(move || {
-        let candidates = daemon_recovery::read_snapshot(&path);
-        // Even malformed or temporarily unreadable snapshots belong to this generation only.
-        match std::fs::remove_file(&path) {
-            Ok(()) => candidates,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => candidates,
-            Err(err) => Err(err),
-        }
+    let candidates = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || daemon_recovery::read_snapshot(&path)
     })
     .await
     .map_err(io::Error::other)??;
     Ok(tokio::spawn(async move {
         processor.restore_daemon_threads(candidates).await;
+        if let Err(err) = std::fs::remove_file(&path)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            tracing::warn!("failed to clear restored daemon recovery snapshot: {err}");
+        }
     }))
 }

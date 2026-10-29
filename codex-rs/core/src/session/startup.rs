@@ -58,6 +58,7 @@ impl SessionStartup {
 
     pub(crate) fn release_membership(&self) {
         if let Some(teardown) = self.lock_teardown().take() {
+            teardown.release_admission();
             teardown.complete();
         }
     }
@@ -101,6 +102,7 @@ impl SessionStartup {
             }
         }
         if let Some(teardown) = teardown {
+            teardown.release_admission();
             teardown.complete();
         }
     }

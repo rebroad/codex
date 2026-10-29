@@ -252,6 +252,8 @@ pub(super) async fn handle(
                 submission_id,
                 kind,
                 /*expected_previous_turn_id*/ None,
+                Vec::new(),
+                Vec::new(),
             )
             .await
         }
@@ -272,6 +274,8 @@ pub(super) async fn handle(
                 submission_id,
                 TurnStartKind::Recovery,
                 Some(expected_previous_turn_id),
+                Vec::new(),
+                Vec::new(),
             )
             .await
         }
@@ -300,6 +304,8 @@ pub(super) async fn handle_recovery(
     thread_settings: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
     start_options: TurnStartOptions,
     submission_id: String,
+    pending_input: Vec<codex_protocol::turn_input::SuspendedQueuedInput>,
+    pending_interactions: Vec<codex_protocol::turn_input::PendingTurnInteraction>,
 ) -> CodexResult<TurnInputSubmission> {
     let WithTurnExtensionData {
         request: thread_settings,
@@ -317,6 +323,8 @@ pub(super) async fn handle_recovery(
         submission_id,
         TurnStartKind::Recovery,
         /*expected_previous_turn_id*/ None,
+        pending_input,
+        pending_interactions,
     )
     .await;
     if let Ok(TurnInputSubmission::Started { turn_id, .. }) = &result {
@@ -464,6 +472,8 @@ async fn start_if_idle(
     submission_id: String,
     kind: TurnStartKind,
     expected_previous_turn_id: Option<String>,
+    pending_input: Vec<codex_protocol::turn_input::SuspendedQueuedInput>,
+    pending_interactions: Vec<codex_protocol::turn_input::PendingTurnInteraction>,
 ) -> CodexResult<TurnInputSubmission> {
     let WithTurnExtensionData {
         request,
@@ -477,6 +487,13 @@ async fn start_if_idle(
         responsesapi_client_metadata,
         ..
     } = request;
+    let (start, restored_pending_input) = if kind == TurnStartKind::Recovery {
+        let (start, restored) =
+            super::input_queue::InputQueue::decode_handoff_inputs(start, pending_input)?;
+        (start, Some(restored))
+    } else {
+        (start, None)
+    };
     let origin = UserInputOrigin::from_turn_trigger(start.turn_trigger.as_deref());
     if session.input_queue.has_trigger_turn_mailbox_items().await {
         return Ok(TurnInputSubmission::NotSubmitted {
@@ -529,6 +546,13 @@ async fn start_if_idle(
             });
         }
         let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
+        if kind == TurnStartKind::Recovery {
+            active_turn
+                .turn_state
+                .lock()
+                .await
+                .restore_pending_interactions(pending_interactions);
+        }
         Arc::clone(&active_turn.turn_state)
     };
 
@@ -582,6 +606,12 @@ async fn start_if_idle(
         .await;
 
     let mut task_input = merge_additional_context_input(session, additional_context).await;
+    if let Some(restored) = restored_pending_input {
+        session
+            .input_queue
+            .restore_handoff_inputs(turn_state.as_ref(), restored)
+            .await;
+    }
     let sender_messages = capture_sender_user_messages(session, &mut input).await;
     match kind {
         TurnStartKind::User => {

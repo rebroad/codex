@@ -56,6 +56,22 @@ impl ExecBackend for RemoteProcess {
         ))
     }
 
+    fn reattach_process(
+        &self,
+        process_id: crate::ProcessId,
+        after_seq: u64,
+    ) -> ExecBackendFuture<'_> {
+        Box::pin(async move {
+            let client = self.client.get().await?;
+            let session = client.reattach_process(&process_id, after_seq).await?;
+            Ok(StartedExecProcess {
+                process: Arc::new(RemoteExecProcess { session }),
+                // The protocol's read response does not carry sandbox metadata.
+                sandbox_type: None,
+            })
+        })
+    }
+
     fn start_with_network_policy_decider(
         &self,
         params: ExecParams,
@@ -94,6 +110,10 @@ impl RemoteExecProcess {
 impl ExecProcess for RemoteExecProcess {
     fn process_id(&self) -> &crate::ProcessId {
         self.session.process_id()
+    }
+
+    fn session_id(&self) -> Option<String> {
+        self.session.session_id()
     }
 
     fn subscribe_wake(&self) -> watch::Receiver<u64> {

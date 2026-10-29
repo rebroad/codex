@@ -331,6 +331,7 @@ impl ExecServerClient {
     pub(crate) async fn connect_for_transport(
         transport_params: ExecServerTransportParams,
         http_client_factory: HttpClientFactory,
+        managed_session_id_file: Option<std::path::PathBuf>,
         started: &mut Option<Instant>,
     ) -> Result<Self, ExecServerError> {
         let (transport_params, deferred_readiness) = match transport_params {
@@ -430,6 +431,7 @@ impl ExecServerClient {
                 http_client_factory,
             },
             http_headers,
+            managed_session_id_file,
         )
         .await
     }
@@ -531,21 +533,41 @@ impl ExecServerClient {
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
-        Self::connect_websocket_with_headers(args, HeaderMap::new()).await
+        Self::connect_websocket_with_headers(args, HeaderMap::new(), None).await
     }
 
     async fn connect_websocket_with_headers(
-        args: RemoteExecServerConnectArgs,
+        mut args: RemoteExecServerConnectArgs,
         http_headers: HeaderMap,
+        managed_session_id_file: Option<std::path::PathBuf>,
     ) -> Result<Self, ExecServerError> {
+        let session_id_file = managed_session_id_file
+            .or_else(|| crate::session_id_store::session_id_file_for_url(&args.websocket_url));
+        args.resume_session_id = crate::session_id_store::resume_session_id(
+            args.resume_session_id,
+            session_id_file.as_deref(),
+        )
+        .await
+        .map_err(|error| ExecServerError::Protocol(error.to_string()))?;
         let connection = Self::open_websocket_connection(&args, &http_headers).await?;
         let options = args.clone().into();
-        Self::connect_with_recovery(
+        let client = Self::connect_with_recovery(
             connection,
             options,
             Some(ExecServerReconnectStrategy::WebSocket { args, http_headers }),
         )
-        .await
+        .await?;
+        if let Some(path) = session_id_file {
+            let session_id = client.session_id().ok_or_else(|| {
+                ExecServerError::Protocol(
+                    "exec-server initialize completed without a session ID".to_string(),
+                )
+            })?;
+            crate::session_id_store::save(&path, &session_id)
+                .await
+                .map_err(|error| ExecServerError::Protocol(error.to_string()))?;
+        }
+        Ok(client)
     }
 
     pub(crate) async fn open_websocket_connection(

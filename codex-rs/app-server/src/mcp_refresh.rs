@@ -489,6 +489,7 @@ enabled = false
                     http_client_factory: good_config.http_client_factory(),
                     queue_service: None,
                     turn_start_admission: None,
+                    core_work_admission: None,
                 }),
                 Arc::new(CodexHomeUserInstructionsProvider::new(
                     good_config.codex_home.clone(),
