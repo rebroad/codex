@@ -16,21 +16,34 @@ codex_timing_now() {
 }
 
 codex_timing_init() {
-  # The build script supplies one unique directory to ALL rustc wrappers.
-  # Android restricts /proc/<pid>/stat, so never require it to share counters.
+  # Per-stage ledger: short-lived Cargo accounting, used by ballast autotune.
+  # Global ledger: durable across ALL wrappers, including ad-hoc Cargo commands
+  # with no CODEX_ANDROID_RUSTC_TIMING_DIR, so displayed totals never reset.
   codex_timing_file=""
-  local timing_dir="${CODEX_ANDROID_RUSTC_TIMING_DIR:-}"
-  if [[ -z "$timing_dir" ]]; then
-    echo 'warning: shared Rust time ledger unavailable: CODEX_ANDROID_RUSTC_TIMING_DIR is unset (compiler not in a managed Cargo timing stage)' >&2
-  elif [[ ! -d "$timing_dir" ]]; then
-    printf 'warning: shared Rust time ledger unavailable: timing directory does not exist: %s\n' "$timing_dir" >&2
-  elif ! command -v flock >/dev/null 2>&1; then
-    printf 'warning: shared Rust time ledger unavailable: flock not found in compiler PATH: %s\n' "${PATH:-}" >&2
-  elif [[ ! -w "$timing_dir" ]]; then
-    printf 'warning: shared Rust time ledger unavailable: timing directory not writable: %s\n' "$timing_dir" >&2
+  codex_timing_stage_file=""
+  local stage_dir="${CODEX_ANDROID_RUSTC_TIMING_DIR:-}"
+  local global_dir="${CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR:-${BASH_SOURCE[0]%/*}/../build/codex-rust-timing-global}"
+
+  if ! command -v flock >/dev/null 2>&1; then
+    printf 'warning: shared Rust time ledger unavailable: flock not in compiler PATH: %s\n' "${PATH:-}" >&2
   else
-    codex_timing_file="$timing_dir/totals"
+    if mkdir -p -- "$global_dir" 2>/dev/null && [[ -w "$global_dir" ]]; then
+      codex_timing_file="$global_dir/totals"
+    else
+      printf 'warning: project-wide Rust timing directory unavailable: %s\n' "$global_dir" >&2
+    fi
+    if [[ -n "$stage_dir" ]]; then
+      if [[ -d "$stage_dir" && -w "$stage_dir" ]]; then
+        codex_timing_stage_file="$stage_dir/totals"
+      else
+        printf 'warning: Cargo stage Rust timing directory missing or unwritable: %s\n' "$stage_dir" >&2
+      fi
+    fi
+    # Prefer the global aggregate for user-visible figures. If unavailable,
+    # the per-stage ledger is still useful for accounting and rate-limits.
+    [[ -n "$codex_timing_file" ]] || codex_timing_file="$codex_timing_stage_file"
   fi
+
   codex_timing_mode=idle
   codex_timing_attempt_us=0
   codex_timing_pending_suspended_us=0
@@ -68,7 +81,9 @@ codex_timing_emit() {
 codex_timing_event() {
   local event="${1:-tick}" report="${2:-false}"
   local now_us elapsed_us=0 running_delta=0 lost_delta=0 suspended_delta
-  local running=0 suspended=0 lost=0 lock_fd
+  local running=0 suspended=0 lost=0 lock_fd ledger_file
+  local report_running=0 report_suspended=0 report_lost=0
+  local -a ledgers=()
   codex_timing_now
   now_us="${CODEX_TIMING_NOW_US}"
   if ((now_us > codex_timing_previous_us)); then
@@ -119,30 +134,46 @@ codex_timing_event() {
     && [[ "${report}" != true ]]; then
     return 0
   fi
-  exec {lock_fd}>"${codex_timing_file}.lock"
-  flock -x "${lock_fd}"
-  if [[ -r "${codex_timing_file}" ]]; then
-    if ! read -r running suspended lost <"${codex_timing_file}" \
-      || ! [[ "${running}" =~ ^[0-9]+$ && "${suspended}" =~ ^[0-9]+$ && "${lost}" =~ ^[0-9]+$ ]]; then
-      echo "warning: Rust timing ledger invalid; restarting counters" >&2
-      running=0
-      suspended=0
-      lost=0
+  ledgers=("$codex_timing_file")
+  if [[ -n "$codex_timing_stage_file" \
+    && "$codex_timing_stage_file" != "$codex_timing_file" ]]; then
+    ledgers+=("$codex_timing_stage_file")
+  fi
+  for ledger_file in "${ledgers[@]}"; do
+    running=0
+    suspended=0
+    lost=0
+    exec {lock_fd}>"${ledger_file}.lock"
+    flock -x "${lock_fd}"
+    if [[ -r "$ledger_file" ]]; then
+      if ! read -r running suspended lost <"$ledger_file" \
+        || ! [[ "$running" =~ ^[0-9]+$ && "$suspended" =~ ^[0-9]+$ && "$lost" =~ ^[0-9]+$ ]]; then
+        echo "warning: Rust timing ledger invalid: $ledger_file; restarting its counters" >&2
+        running=0
+        suspended=0
+        lost=0
+      fi
     fi
+    running=$((running + running_delta))
+    suspended=$((suspended + suspended_delta))
+    lost=$((lost + lost_delta))
+    if ((running_delta > 0 || suspended_delta > 0 || lost_delta > 0)); then
+      printf '%s %s %s\n' "$running" "$suspended" "$lost" \
+        >"${ledger_file}.tmp.$$"
+      mv -f "${ledger_file}.tmp.$$" "$ledger_file"
+    fi
+    if [[ "$ledger_file" == "$codex_timing_file" ]]; then
+      report_running="$running"
+      report_suspended="$suspended"
+      report_lost="$lost"
+    fi
+    flock -u "${lock_fd}"
+    exec {lock_fd}>&-
+  done
+  if [[ "$report" == true ]]; then
+    codex_timing_emit "$report_running" "$report_suspended" "$report_lost" \
+      "${codex_timing_attempt_us}"
   fi
-  running=$((running + running_delta))
-  suspended=$((suspended + suspended_delta))
-  lost=$((lost + lost_delta))
-  if ((running_delta > 0 || suspended_delta > 0 || lost_delta > 0)); then
-    printf '%s %s %s\n' "${running}" "${suspended}" "${lost}" \
-      >"${codex_timing_file}.tmp.$$"
-    mv -f "${codex_timing_file}.tmp.$$" "${codex_timing_file}"
-  fi
-  if [[ "${report}" == true ]]; then
-    codex_timing_emit "${running}" "${suspended}" "${lost}" "${codex_timing_attempt_us}"
-  fi
-  flock -u "${lock_fd}"
-  exec {lock_fd}>&-
 }
 
 codex_timing_pause() { codex_timing_event pause; }
