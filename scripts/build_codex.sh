@@ -1112,7 +1112,7 @@ PY
     stderr_log="$(mktemp "${temp_root%/}/codex-cargo-stderr.XXXXXX")"
     if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${ballast_env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
-      | python3 -u "${SOURCE_REPO}/scripts/codex_rust_guard_output.py" >&2; then
+      | python3 -u "${SOURCE_REPO}/scripts/codex_rust_guard_output.py"; then
       status=0
     else
       status=$?
