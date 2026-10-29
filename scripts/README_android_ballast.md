@@ -240,7 +240,25 @@ is exported to all compiler subprocesses.
 The timestamp is local `HH:MM:SS`. Fields use compact duration units:
 `h`, `m`, `s` (zero is `0s`). `slept` is time suspended or
 waiting for memory; `this` is the still-uncommitted active time for
-the reporting compiler process.
+the reporting compiler process. The timer now also identifies its associated
+compilation unit:
+
+```text
+15:36:02 ▶️ compiling crate=codex_app_server file=app-server/src/lib.rs
+15:37:03 kept=24m slept=0s lost=0s this=2m crate=codex_app_server file=app-server/src/lib.rs
+15:37:25 kept=26m22s slept=0s lost=0s this=0s
+15:37:26 ▶️ compiling crate=core_test_support file=core/tests/common/lib.rs
+```
+
+The crate name and source entry file come directly from Rustc's arguments.
+`file=` is the entry point (`lib.rs`, `main.rs`, or a test source), not
+a live trace of internal modules. Rustc does not expose its current internal
+module reliably, so the wrapper does not speculate. A **▶ compiling**
+transition is emitted for each actual compiler attempt. Routine successful
+finishes are silent: the aggregate Kept timer accounts for them. Only
+discarded work gets a separate **✗ discarded** notice. These transitions
+bypass the once-per-minute aggregate throttle, keeping short compilations
+visible without repeating source filenames on idle timer snapshots.
 
 Managed Cargo builds also write a **separate temporary stage ledger** via
 `CODEX_ANDROID_RUSTC_TIMING_DIR`. That ledger supplies per-stage ballast

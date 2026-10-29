@@ -68,15 +68,80 @@ codex_timing_format() {
   printf -v "$2" '%s' "$duration"
 }
 
+# Rustc's --crate-name and .rs input identify the compilation unit. Rustc
+# does not expose which internal module it is processing at a given moment.
+# Never guess a source module from Cargo's interleaved "Compiling" messages.
+codex_timing_identify_compiler() {
+  codex_timing_crate=unknown
+  codex_timing_source=""
+  local arg
+  while (($#)); do
+    arg="$1"
+    case "$arg" in
+      --crate-name)
+        if (($# > 1)); then
+          codex_timing_crate="$2"
+          shift
+        fi
+        ;;
+      --crate-name=*)
+        codex_timing_crate="${arg#--crate-name=}"
+        ;;
+      *.rs)
+        if [[ -z "$codex_timing_source" && "$arg" != -* ]]; then
+          codex_timing_source="$arg"
+        fi
+        ;;
+    esac
+    shift
+  done
+  # Display checkout-relative paths when rustc supplies absolute paths.
+  # Keep even ordinary lib.rs paths: knowing core/src/lib.rs is more useful
+  # than just "core" when Cargo starts interleaving dependency compilations.
+  case "$codex_timing_source" in
+    */codex-rs/*) codex_timing_source="${codex_timing_source#*/codex-rs/}" ;;
+  esac
+}
+
+codex_timing_compiler_context() {
+  codex_timing_context="crate=${codex_timing_crate:-unknown}"
+  if [[ -n "${codex_timing_source:-}" ]]; then
+    codex_timing_context+=" file=$codex_timing_source"
+  fi
+}
+
+codex_timing_emit_transition() {
+  # Successful compilation is already identified by its ▶ compiling line.
+  # Only report discarded work, which is an actionable exception.
+  [[ "$1" == lost ]] || return 0
+  # Suppress rustc version/probe invocations with no useful source identity.
+  [[ "${codex_timing_crate:-unknown}" != unknown || -n "${codex_timing_source:-}" ]] || return 0
+  codex_timing_compiler_context
+  printf '%s ✗ discarded %s\n' "$(date '+%H:%M:%S')" "$codex_timing_context" >&2
+}
+
+codex_timing_emit_start() {
+  [[ "${codex_timing_crate:-unknown}" != unknown || -n "${codex_timing_source:-}" ]] || return 0
+  codex_timing_compiler_context
+  printf '%s ▶️ compiling %s\n' "$(date '+%H:%M:%S')" "$codex_timing_context" >&2
+}
+
 codex_timing_emit() {
   local running_duration paused_duration lost_duration pending_duration
   codex_timing_format "$1" running_duration
   codex_timing_format "$2" paused_duration
   codex_timing_format "$3" lost_duration
   codex_timing_format "$4" pending_duration
-  printf '%s kept=%s slept=%s lost=%s this=%s\n' \
+  local context=""
+  # The start event already identifies completed crates. Repeating their file
+  # path on idle snapshots adds noise; show source only for active work.
+  if [[ -n "${codex_compiler_pid:-}" && -n "${codex_timing_crate:-}" ]]; then
+    codex_timing_compiler_context
+    context=" $codex_timing_context"
+  fi
+  printf '%s kept=%s slept=%s lost=%s this=%s%s\n' \
     "$(date '+%H:%M:%S')" \
-    "$running_duration" "$paused_duration" "$lost_duration" "$pending_duration" >&2
+    "$running_duration" "$paused_duration" "$lost_duration" "$pending_duration" "$context" >&2
   # Ballast shares the timer report cadence instead of producing independent
   # status messages every time it allocates or releases pages.
   if declare -F codex_report_ballast_telemetry >/dev/null 2>&1; then
@@ -91,6 +156,7 @@ codex_timing_event() {
   local event="${1:-tick}" report="${2:-false}"
   local now_us elapsed_us=0 running_delta=0 lost_delta=0 suspended_delta
   local running=0 suspended=0 lost=0 lock_fd ledger_file
+  local transition_kind=""
   local report_running=0 report_suspended=0 report_lost=0
   local -a ledgers=()
   codex_timing_now
@@ -115,11 +181,13 @@ codex_timing_event() {
       fi ;;
     success)
       running_delta="${codex_timing_attempt_us}"
+      transition_kind=kept
       codex_timing_attempt_us=0
       codex_timing_mode="${codex_guard_compile_state:-running}"
       [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
     lost)
       lost_delta="${codex_timing_attempt_us}"
+      transition_kind=lost
       codex_timing_attempt_us=0
       codex_timing_mode="${codex_guard_compile_state:-running}"
       [[ "${codex_timing_mode}" == paused ]] || codex_timing_mode=idle ;;
@@ -132,6 +200,7 @@ codex_timing_event() {
     codex_timing_local_running_us=$((codex_timing_local_running_us + running_delta))
     codex_timing_local_suspended_us=$((codex_timing_local_suspended_us + suspended_delta))
     codex_timing_local_lost_us=$((codex_timing_local_lost_us + lost_delta))
+    codex_timing_emit_transition "$transition_kind"
     if [[ "${report}" == true ]]; then
       codex_timing_emit "${codex_timing_local_running_us}" \
         "${codex_timing_local_suspended_us}" "${codex_timing_local_lost_us}" \
@@ -139,8 +208,10 @@ codex_timing_event() {
     fi
     return 0
   fi
+  # A fast cached/probe invocation can complete in under one microsecond.
+  # Still show its source-file transition even if all rounded deltas are zero.
   if ((running_delta == 0 && lost_delta == 0 && suspended_delta == 0)) \
-    && [[ "${report}" != true ]]; then
+    && [[ "${report}" != true && -z "$transition_kind" ]]; then
     return 0
   fi
   ledgers=("$codex_timing_file")
@@ -179,6 +250,7 @@ codex_timing_event() {
     flock -u "${lock_fd}"
     exec {lock_fd}>&-
   done
+  codex_timing_emit_transition "$transition_kind"
   if [[ "$report" == true ]]; then
     codex_timing_emit "$report_running" "$report_suspended" "$report_lost" \
       "${codex_timing_attempt_us}"

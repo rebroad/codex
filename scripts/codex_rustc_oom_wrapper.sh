@@ -392,6 +392,9 @@ codex_compiler_suspended_total_us=0
 # when we know whether its output was retained.
 source "${BASH_SOURCE[0]%/*}/codex_rustc_timing.sh"
 codex_timing_init
+# Link each accounting transition to the rustc crate and (for generic test
+# targets) the source path, regardless of interleaved Cargo progress output.
+codex_timing_identify_compiler "$@"
 # Confirm a compiler actually loaded this implementation, once per Cargo
 # stage. The build's wrapper-path banner alone cannot prove execution.
 if [[ -n "${CODEX_ANDROID_RUSTC_TIMING_DIR:-}" ]] \
@@ -554,6 +557,7 @@ while true; do
     >"$codex_compiler_stdout" 2>"$codex_compiler_stderr" &
   codex_compiler_pid=$!
   codex_timing_launch
+  codex_timing_emit_start
   codex_guard_mark_running
   codex_compiler_started_epoch_us="${EPOCHREALTIME/./}"
   codex_compiler_ended_epoch_us=""

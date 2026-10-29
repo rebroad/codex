@@ -59,22 +59,45 @@ assert_ledger() {
 }
 
 codex_timing_init
+# Diagnostic rustc probes are not actual crates; keep them out of the log.
+codex_timing_identify_compiler /usr/bin/rustc -vV
+codex_timing_emit_start 2>"$temp/probe-transition"
+codex_timing_emit_transition kept 2>>"$temp/probe-transition"
+[[ ! -s "$temp/probe-transition" ]]
+
+# Extract crate identity from real Cargo/rustc flags, not interleaved Cargo
+# "Compiling" messages. Generic test crate names get their input path.
+codex_timing_identify_compiler /usr/bin/rustc --crate-name=all --test app-server/tests/all.rs
+[[ "$codex_timing_crate" == all ]]
+[[ "$codex_timing_source" == 'app-server/tests/all.rs' ]]
+codex_compiler_pid=515
+codex_timing_emit_start 2>"$temp/started"
+grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2} ▶ compiling crate=all file=app-server/tests/all.rs$' "$temp/started"
+codex_timing_identify_compiler /usr/bin/rustc --crate-name codex_core core/src/lib.rs
+[[ "$codex_timing_crate" == codex_core ]]
+[[ "$codex_timing_source" == 'core/src/lib.rs' ]]
+codex_timing_identify_compiler /usr/bin/rustc --crate-name codex_core /data/data/com.termux/files/home/src/codex/codex-rs/core/src/lib.rs
+[[ "$codex_timing_source" == 'core/src/lib.rs' ]]
+
 # First attempt: 10s active + 4s paused + 4s active, then discarded.
 codex_compiler_pid=101
 clock=2000000; codex_timing_launch
 clock=12000000; codex_timing_pause
 clock=16000000; codex_timing_resume
-clock=20000000; codex_timing_lost
+clock=20000000; codex_timing_lost 2>"$temp/lost-transition"
 codex_compiler_pid=""
+grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2} ✗ discarded crate=codex_core file=core/src/lib.rs$' "$temp/lost-transition"
 assert_ledger 0 4000000 14000000
 
 # Second attempt: 10s active + 3s paused + 4s active, then retained.
 codex_compiler_pid=102
+codex_timing_identify_compiler /usr/bin/rustc --crate-name codex_app_server app-server/src/lib.rs
 clock=21000000; codex_timing_launch
 clock=31000000; codex_timing_pause
 clock=34000000; codex_timing_resume
-clock=38000000; codex_timing_success
+clock=38000000; codex_timing_success 2>"$temp/kept-transition"
 codex_compiler_pid=""
+[[ ! -s "$temp/kept-transition" ]]
 assert_ledger 14000000 7000000 14000000
 
 # Waiting for memory is suspended, not useful or lost.
@@ -91,6 +114,16 @@ codex_timing_format 232000000 time_3m52s
 [[ "$time_3m52s" == '3m52s' ]]
 codex_timing_format 0 time_zero
 [[ "$time_zero" == '0s' ]]
+
+# The periodic snapshot identifies the current compilation unit without a PID,
+# while an idle snapshot does not repeat already-printed crate and file data.
+codex_compiler_pid=303
+active_report="$(codex_timing_emit 14000000 13000000 14000000 2000000 2>&1)"
+[[ "$active_report" == *'this=2s crate=codex_app_server file=app-server/src/lib.rs'* ]]
+codex_compiler_pid=""
+idle_report="$(codex_timing_emit 14000000 13000000 14000000 0 2>&1)"
+[[ "$idle_report" == *'this=0s' ]]
+[[ "$idle_report" != *' last='* && "$idle_report" != *' file='* ]]
 
 # Reports do not mutate past classifications or decrease counters.
 clock=46000000

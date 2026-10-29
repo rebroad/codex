@@ -58,6 +58,16 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(len(self.buffer.getvalue().splitlines()), 2)
         self.assertIn("▶️ Rust resumed", self.buffer.getvalue().splitlines()[1])
 
+    def test_guard_events_use_time_first_and_hide_successful_finishes(self):
+        self.f.process_line(
+            "⏸ Rust suspended at 2026-10-28T23:30:01+0100: PSI")
+        self.f.process_line(
+            "23:30:02 ✓ finished crate=ctor "
+            "file=ctor-0.6.3/src/lib.rs")
+        lines = self.buffer.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "23:30:01 ⏸ Rust suspended: PSI")
+
     def test_other_build_output_passes_through_immediately(self):
         self.f.process_line("⏹ Rust attempt stopped: PSI; waiting to retry")
         self.clock.t += .01
@@ -140,6 +150,35 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertTrue(lines[0].startswith("14:16:30 kept="))
         self.assertTrue(lines[1].startswith("14:17:30 kept="))
+
+    def test_compiler_start_and_discard_bypass_timing_throttle(self):
+        self.f.process_line(
+            "15:37:03 kept=24m slept=0s lost=0s this=2m "
+            "crate=codex_app_server file=app-server/src/lib.rs")
+        self.clock.t += .3
+        # No routine finish notification: completion changes the aggregate.
+        self.f.process_line("15:37:25 kept=26m22s slept=0s lost=0s this=0s")
+        self.f.process_line(
+            "15:37:25 ▶️ compiling crate=core_test_support "
+            "file=core/tests/common/lib.rs")
+        self.clock.t += .2
+        self.f.process_line(
+            "15:37:41 ✗ discarded crate=core_test_support "
+            "file=core/tests/common/lib.rs")
+        self.f.process_line("15:37:41 kept=26m22s slept=0s lost=3s this=0s")
+        self.f.process_line(
+            "15:37:41 ▶️ compiling crate=all file=app-server/tests/all.rs")
+        lines = self.buffer.getvalue().splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertIn("this=2m crate=codex_app_server file=app-server/src/lib.rs",
+                      lines[0])
+        self.assertIn("▶️ compiling crate=core_test_support", lines[1])
+        self.assertIn("✗ discarded crate=core_test_support", lines[2])
+        self.assertIn("▶️ compiling crate=all file=app-server/tests/all.rs", lines[3])
+        self.assertFalse(any(" pid=" in line or "✓ finished" in line
+                             for line in lines))
+        # Only one periodic aggregate snapshot in this minute.
+        self.assertEqual(sum(" kept=" in line for line in lines), 1)
 
     def test_multiline_status_has_global_throttle(self):
         self.f.process_line("⏹ Rust attempt stopped: full PSI; waiting to retry")
