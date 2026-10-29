@@ -59,6 +59,12 @@ assert_ledger() {
 }
 
 codex_timing_init
+# Diagnostic rustc probes are not actual crates; keep them out of the log.
+codex_timing_identify_compiler /usr/bin/rustc -vV
+codex_timing_emit_start 2>"$temp/probe-transition"
+codex_timing_emit_transition kept 2>>"$temp/probe-transition"
+[[ ! -s "$temp/probe-transition" ]]
+
 # Extract crate identity from real Cargo/rustc flags, not interleaved Cargo
 # "Compiling" messages. Generic test crate names get their input path.
 codex_timing_identify_compiler /usr/bin/rustc --crate-name=all --test app-server/tests/all.rs
