@@ -1162,6 +1162,9 @@ PY
     if [[ -n "${ANDROID_RUST_TIMING_DIR}" ]]; then
       rm -rf -- "${ANDROID_RUST_TIMING_DIR}"
       ANDROID_RUST_TIMING_DIR=""
+      # Avoid leaking a removed stage ledger into later auxiliary Cargo
+      # commands; the per-run aggregate remains exported and unchanged.
+      unset CODEX_ANDROID_RUSTC_TIMING_DIR
     fi
     return "${status}"
   }
