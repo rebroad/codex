@@ -97,7 +97,7 @@ clock=31000000; codex_timing_pause
 clock=34000000; codex_timing_resume
 clock=38000000; codex_timing_success 2>"$temp/kept-transition"
 codex_compiler_pid=""
-grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2} ✓ finished crate=codex_app_server file=app-server/src/lib.rs$' "$temp/kept-transition"
+[[ ! -s "$temp/kept-transition" ]]
 assert_ledger 14000000 7000000 14000000
 
 # Waiting for memory is suspended, not useful or lost.
@@ -116,13 +116,14 @@ codex_timing_format 0 time_zero
 [[ "$time_zero" == '0s' ]]
 
 # The periodic snapshot identifies the current compilation unit without a PID,
-# and an idle snapshot names the file whose completion last changed Kept.
+# while an idle snapshot does not repeat already-printed crate and file data.
 codex_compiler_pid=303
 active_report="$(codex_timing_emit 14000000 13000000 14000000 2000000 2>&1)"
 [[ "$active_report" == *'this=2s crate=codex_app_server file=app-server/src/lib.rs'* ]]
 codex_compiler_pid=""
 idle_report="$(codex_timing_emit 14000000 13000000 14000000 0 2>&1)"
-[[ "$idle_report" == *'this=0s last=codex_app_server file=app-server/src/lib.rs'* ]]
+[[ "$idle_report" == *'this=0s' ]]
+[[ "$idle_report" != *' last='* && "$idle_report" != *' file='* ]]
 
 # Reports do not mutate past classifications or decrease counters.
 clock=46000000
