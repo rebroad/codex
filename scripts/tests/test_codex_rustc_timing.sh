@@ -82,10 +82,20 @@ clock=39000000; codex_timing_pause
 clock=45000000; codex_timing_resume
 assert_ledger 14000000 13000000 14000000
 
+# Formatting is compact and omits zero-valued trailing units.
+codex_timing_format 7590000000 time_2h6m30s
+[[ "$time_2h6m30s" == '2h6m30s' ]]
+codex_timing_format 7560000000 time_2h6m
+[[ "$time_2h6m" == '2h6m' ]]
+codex_timing_format 232000000 time_3m52s
+[[ "$time_3m52s" == '3m52s' ]]
+codex_timing_format 0 time_zero
+[[ "$time_zero" == '0s' ]]
+
 # Reports do not mutate past classifications or decrease counters.
 clock=46000000
 report="$(codex_report_timing_counters 2>&1)"
-[[ "$report" == *"Rust time: kept 00:00:14; suspended 00:00:13; lost 00:00:14"* ]] || {
+[[ "$report" =~ [0-9]{2}:[0-9]{2}:[0-9]{2}\ kept=14s\ slept=13s\ lost=14s\ this=0s ]] || {
   echo "unexpected timing report: $report" >&2
   exit 1
 }
@@ -115,7 +125,7 @@ assert_ledger 19000000 13000000 14000000
   clock=58000000; codex_timing_launch
   clock=60000000; codex_timing_success
   report="$(codex_report_timing_counters 2>&1)"
-  [[ "$report" == *"Rust time: kept 00:00:21; suspended 00:00:13; lost 00:00:14"* ]]
+  [[ "$report" =~ [0-9]{2}:[0-9]{2}:[0-9]{2}\ kept=21s\ slept=13s\ lost=14s\ this=0s ]]
 )
 assert_ledger 21000000 13000000 14000000
 read -r stage_kept stage_suspended stage_lost <"$temp/totals"
