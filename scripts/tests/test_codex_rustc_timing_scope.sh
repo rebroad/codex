@@ -1,53 +1,76 @@
 #!/usr/bin/env bash
-# Managed Cargo owns a shared timing ledger. Preparatory/nested Cargo commands
-# must not inherit the guarded wrapper without that directory.
+# One Rust guard/timing initialization for just test and build_codex.sh.
+# No Android required: use a fake Rust wrapper with the actual setup helper.
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-build_script="${script_dir}/../build_codex.sh"
+test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+scripts_dir="${test_dir}/.."
+build_script="${scripts_dir}/build_codex.sh"
+shared_cargo_env="${scripts_dir}/codex_cargo_env.sh"
+justfile="${scripts_dir}/../justfile"
 temp="$(mktemp -d)"
 trap 'rm -rf -- "$temp"' EXIT
 
-# Exercise the production scoping helper without executing the full build.
-awk '
-  /^codex_scope_managed_rustc_wrapper\(\) \{/ { in_function=1 }
-  in_function {
-    print
-    if ($0 == "}") {
-      complete=1
-      exit
-    }
-  }
-  END { if (!complete) exit 1 }
-' "$build_script" >"${temp}/scope.sh"
-source "${temp}/scope.sh"
-
-export CODEX_ANDROID_RUSTC_MEMORY_GUARD=1
-export RUSTC_WRAPPER="/tmp/test-managed-rustc-wrapper"
-codex_scope_managed_rustc_wrapper
-[[ "$CODEX_MANAGED_RUSTC_WRAPPER" == "/tmp/test-managed-rustc-wrapper" ]]
-[[ "$RUSTC_WRAPPER" == "/tmp/test-managed-rustc-wrapper" ]]
-
-# The external Cargo environment no longer receives an orphaned wrapper.
-if env | grep -q '^RUSTC_WRAPPER='; then
-  echo "RUSTC_WRAPPER leaked into a preparatory Cargo invocation" >&2
+# Both entry points call the exact same Cargo --emit setup; it in turn loads
+# the same reusable Rust guard helper (without changing the user's justfile).
+grep -Fq 'eval "${cargo_env_output}"' "$build_script"
+grep -Fq 'eval \"$codex_cargo_env_output\"' "$justfile"
+grep -Fq 'codex_rust_guard_setup' "$shared_cargo_env"
+grep -Fq 'codex_rust_guard_start_stage' "$build_script"
+if grep -Fq 'codex_scope_managed_rustc_wrapper' "$build_script"; then
+  echo "build_codex.sh must not privately override the shared RUSTC_WRAPPER" >&2
   exit 1
 fi
 
-# The main Cargo invocation explicitly receives the wrapper with the ledger.
-env RUSTC_WRAPPER="$CODEX_MANAGED_RUSTC_WRAPPER" \
-  CODEX_ANDROID_RUSTC_TIMING_DIR="$temp" \
-  bash -c '[[ "$RUSTC_WRAPPER" == /tmp/test-managed-rustc-wrapper ]] && [[ -d "$CODEX_ANDROID_RUSTC_TIMING_DIR" ]] && command -v flock >/dev/null'
+source "${scripts_dir}/codex_rust_guard_env.sh"
+mkdir -p "$temp/source" "$temp/stages"
+printf '#!/bin/sh\nexit 0\n' >"$temp/rustc-wrapper"
+chmod +x "$temp/rustc-wrapper"
+export CODEX_ANDROID_RUSTC_MEMORY_GUARD=1 RUSTC_WRAPPER="$temp/rustc-wrapper"
 
-# No guard: leave the ordinary environment helper's wrapper untouched.
-export CODEX_ANDROID_RUSTC_MEMORY_GUARD=0
-export RUSTC_WRAPPER="/tmp/test-standard-rustc-wrapper"
-codex_scope_managed_rustc_wrapper
-[[ -z "$CODEX_MANAGED_RUSTC_WRAPPER" ]]
-[[ "$(env | grep '^RUSTC_WRAPPER=')" == 'RUSTC_WRAPPER=/tmp/test-standard-rustc-wrapper' ]]
+codex_rust_guard_setup "$temp/source"
+global="${CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR}"
+[[ "$global" == "$temp/source/build/codex-rust-timing-global" ]]
+[[ -d "$global" && -w "$global" ]]
+[[ "$(env | grep '^CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR=')" == "CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR=$global" ]]
+[[ "$(env | grep '^RUSTC_WRAPPER=')" == "RUSTC_WRAPPER=$temp/rustc-wrapper" ]]
 
-# Verify that build_codex.sh actually passes the scoped wrapper into its
-# managed Cargo environment, and checks that both variables reach the stage.
-grep -Fq 'env_args+=(RUSTC_WRAPPER="${CODEX_MANAGED_RUSTC_WRAPPER}")' "$build_script"
-grep -Fq 'ballast_env_args+=(CODEX_ANDROID_RUSTC_TIMING_DIR="${ANDROID_RUST_TIMING_DIR}")' "$build_script"
-echo 'rustc stage scope: wrapper and shared ledger travel together'
+# just test: no temporary stage, but wrapper and global ledger are present.
+(
+  unset CODEX_ANDROID_RUSTC_TIMING_DIR
+  bash -c '[[ -f "$RUSTC_WRAPPER" && -d "$CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR" ]]'
+  source "${scripts_dir}/codex_rustc_timing.sh"
+  codex_timing_init
+  [[ "$codex_timing_file" == "$global/totals" ]]
+  [[ -z "$codex_timing_stage_file" ]]
+)
+
+# build_codex.sh: same wrapper and global ledger; only the stage is extra.
+codex_rust_guard_start_stage "$temp/stages"
+[[ -d "$CODEX_ANDROID_RUSTC_TIMING_DIR" ]]
+(
+  bash -c '[[ -f "$RUSTC_WRAPPER" && -d "$CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR" && -d "$CODEX_ANDROID_RUSTC_TIMING_DIR" ]]'
+  source "${scripts_dir}/codex_rustc_timing.sh"
+  codex_timing_init
+  [[ "$codex_timing_file" == "$global/totals" ]]
+  [[ "$codex_timing_stage_file" == "$CODEX_ANDROID_RUSTC_TIMING_DIR/totals" ]]
+)
+
+# A nonexistent wrapper must be rejected before a long Cargo operation.
+(
+  export RUSTC_WRAPPER="$temp/nonexistent-wrapper"
+  if codex_rust_guard_setup "$temp/source" 2>/dev/null; then
+    echo "failed to reject invalid guarded compiler wrapper" >&2
+    exit 1
+  fi
+)
+
+# Guard disabled: helper has no effects on non-Android builds.
+(
+  export CODEX_ANDROID_RUSTC_MEMORY_GUARD=0
+  unset CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR
+  codex_rust_guard_setup "$temp/source"
+  [[ -z "${CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR:-}" ]]
+)
+
+echo 'rustc timing environment: just and build use one shared setup and global ledger OK'
