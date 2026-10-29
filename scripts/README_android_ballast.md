@@ -179,9 +179,19 @@ The guard now distinguishes **reversible pressure** from **hard memory danger**:
   resumed, with **30 seconds** of PSI-only suspension grace so Rust can make
   forward progress. A compiler waiting to start is likewise admitted after
   a five-second PSI-only wait.
-- Critically low `MemAvailable`, insufficient combined RAM/swap headroom,
-  and a genuine Android LMKD reclaim event **still allow immediate stop and
-  retry**. Those overrides remain effective during PSI grace.
+- Critically low `MemAvailable` and insufficient combined RAM/swap headroom
+  **still allow immediate stop and retry**, even during PSI grace. An actual
+  unexpected rustc exit is also reported to Cargo.
+- **LMKD reclaim of another Android app is advisory, never an automatic rustc
+  hard stop or a reason to wait for a five-check quiet period.** The guard
+  requests immediate relief from any remaining ballast, keeps the compiler's
+  work, and continues evaluating real RAM/swap danger and reversible PSI.
+- Each LMKD notice is written by the rustc wrapper to **stderr** (to keep
+  Cargo's compiler output protocol clean), then the build-wide log filter
+  timestamps and forwards advisories to the **build's original stdout**.
+  This deliberately bypasses the command substitution that captures
+  `cargo_build()`'s binary path. All other Cargo output stays on stderr.
+  Rapid notices share the existing one-per-second status rate limit.
 - The ballast still gets requests to release reserved memory before the
   ordinary PSI thresholds, independently of these compiler actions.
 
@@ -192,10 +202,11 @@ alter the hard memory headroom thresholds. This favors retaining already
 completed compiler work under reclaim stalls but cannot prevent Android
 itself from killing a process under real memory exhaustion.
 
-Run the pause-policy regression test:
+Run the pause-policy and LMKD advisory regression tests:
 
 ```sh
 bash scripts/tests/test_codex_rustc_suspend_state.sh
+bash scripts/tests/test_codex_rustc_lmkd_advisory.sh
 ```
 
 ## Rust OOM-wrapper timing
