@@ -74,7 +74,7 @@ class GuardOutputTest(unittest.TestCase):
             output=stderr, lmkd_output=stdout, now=self.clock,
             date_stamp=lambda: "2026-10-29T07:16:58+01:00")
         line = ("ℹ️ Android LMKD reclaimed com.samsung.mfcontents; "
-                "advisory only (rustc preserved)")
+                "advisory only (no rustc stop from this event)")
         f.process_line(line)
         self.assertIn("[2026-10-29T07:16:58+01:00] " + line,
                       stdout.getvalue())
@@ -90,7 +90,7 @@ class GuardOutputTest(unittest.TestCase):
         self.clock.t += .2
         f.process_line(
             "ℹ️ Android LMKD reclaimed com.google.android.tts; "
-            "advisory only (rustc preserved)")
+            "advisory only (no rustc stop from this event)")
         self.clock.t += .1
         f.process_line("▶️ Rust resumed at now: PSI")
         self.clock.t += .7
@@ -105,7 +105,7 @@ class GuardOutputTest(unittest.TestCase):
             [sys.executable, "-u", str(script)],
             input=("   Compiling codex-app-server\n"
                    "ℹ️ Android LMKD reclaimed com.samsung.mfcontents; "
-                   "advisory only (rustc preserved)\n"
+                   "advisory only (no rustc stop from this event)\n"
                    "⏸ Rust suspended at now: PSI\n"),
             capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
