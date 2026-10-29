@@ -20,15 +20,15 @@ codex_rust_guard_setup() {
   # both enter here through codex_cargo_env.sh. A second Cargo stage from the
   # same shell reuses its ledger; an independent invocation gets fresh totals.
   # Unique directories avoid destroying the totals of a concurrent run.
-  # Bash $ is stable across command substitutions (cargo_build uses these)
+  # Bash $$ is stable across command substitutions (cargo_build uses these)
   # and distinct for new top-level Bash invocations.
-  if [[ "${CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER:-}" != "$" \
+  if [[ "${CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER:-}" != "$$" \
     || -z "${CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR:-}" \
     || ! -d "$CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR" ]]; then
     local run_root="${source_repo}/build/codex-rust-timing-runs"
     mkdir -p -- "$run_root" || return 1
     CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR="$(mktemp -d "${run_root%/}/run.XXXXXX")" || return 1
-    CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER="$"
+    CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER="$$"
     export CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR CODEX_ANDROID_RUSTC_TIMING_RUN_OWNER
   fi
   if [[ ! -w "$CODEX_ANDROID_RUSTC_GLOBAL_TIMING_DIR" ]]; then
