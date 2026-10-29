@@ -151,6 +151,27 @@ async fn cloned_guard_reports_its_own_context_before_releasing_membership() {
 }
 
 #[tokio::test]
+async fn startup_release_unblocks_handoff_without_releasing_session_membership() {
+    let runtime = runtime();
+    let startup = runtime
+        .admit_start()
+        .expect("startup should be admitted")
+        .into_teardown_guard("session_startup", /*thread_id*/ None);
+    let session = startup.clone_for_teardown("session_loop", /*thread_id*/ None);
+
+    startup.release_admission();
+    startup.complete();
+    assert!(runtime.seal_for_handoff().await);
+
+    let shutdown = runtime.request_shutdown();
+    let wait = shutdown.wait_detailed();
+    tokio::pin!(wait);
+    assert!(futures::poll!(&mut wait).is_pending());
+    drop(session);
+    assert_eq!(wait.await, Ok(()));
+}
+
+#[tokio::test]
 async fn concurrent_failures_are_retained_for_every_waiter() {
     let runtime = runtime();
     let barrier = Arc::new(Barrier::new(/*n*/ 3));

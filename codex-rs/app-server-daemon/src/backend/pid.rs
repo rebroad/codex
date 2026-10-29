@@ -2,6 +2,9 @@
 
 #[path = "pid_identity.rs"]
 mod identity;
+pub(crate) use identity::ProcessIdentity;
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+pub(crate) use identity::read_process_details as read_process_identity_details;
 
 #[cfg(any(unix, windows))]
 use std::borrow::Cow;
@@ -41,6 +44,8 @@ pub(crate) struct PidBackend {
     pid_file: PathBuf,
     lock_file: PathBuf,
     command_kind: PidCommandKind,
+    #[cfg(unix)]
+    pub(super) executor_state_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +114,8 @@ impl PidBackend {
             command_kind: PidCommandKind::AppServer {
                 remote_control_enabled,
             },
+            #[cfg(unix)]
+            executor_state_file: None,
         }
     }
 
@@ -124,6 +131,8 @@ impl PidBackend {
             pid_file,
             lock_file,
             command_kind: PidCommandKind::UpdateLoop { restore_release },
+            #[cfg(unix)]
+            executor_state_file: None,
         }
     }
 

@@ -18,10 +18,14 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 use tokio_tungstenite::tungstenite::handshake::server::Response;
 
+use super::super::handoff_executor_url_from_manifest;
 use super::RemoteEnvironmentOptions;
 use crate::EnvironmentManager;
 use crate::InitializeParams;
 use crate::InitializeResponse;
+use crate::client::LazyRemoteExecServerClient;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
+use crate::client_api::ExecServerTransportParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::JSONRPCMessage;
@@ -41,6 +45,23 @@ fn remote_environment_options_redact_header_values() {
     let debug = format!("{options:?}");
     assert!(debug.contains("<redacted>"));
     assert!(!debug.contains("secret-customer-token"));
+}
+
+#[test]
+fn handoff_executor_manifest_resolves_the_matching_session_generation() {
+    let manifest = r#"[
+        {"pid": 10, "url": "ws://127.0.0.1:41001", "sessionId": "old-session"},
+        {"pid": 20, "url": "ws://127.0.0.1:42002", "sessionId": "older-session"}
+    ]"#;
+
+    assert_eq!(
+        handoff_executor_url_from_manifest(manifest, "old-session").as_deref(),
+        Some("ws://127.0.0.1:41001")
+    );
+    assert_eq!(
+        handoff_executor_url_from_manifest(manifest, "missing-session"),
+        None
+    );
 }
 
 #[test]
@@ -252,6 +273,40 @@ async fn trusted_headers_are_sent_on_initial_websocket_and_session_reconnect() {
 
     finish_tx.send(()).expect("test should finish");
     server.await.expect("server task should finish");
+}
+
+#[tokio::test]
+async fn managed_executor_client_resumes_the_saved_generation_session() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!(
+        "ws://{}",
+        listener.local_addr().expect("listener should have address")
+    );
+    let server = tokio::spawn(async move {
+        let mut websocket = accept_hdr_async(
+            listener.accept().await.expect("websocket should connect").0,
+            |_request: &Request, response: Response| Ok(response),
+        )
+        .await
+        .expect("websocket handshake should succeed");
+        complete_websocket_initialize(&mut websocket, Some("old-generation-session")).await;
+    });
+
+    let client = LazyRemoteExecServerClient::new_with_resume_session_id(
+        ExecServerTransportParams::websocket_url(
+            websocket_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        ),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        "old-generation-session".to_string(),
+    );
+    client
+        .wait_until_ready()
+        .await
+        .expect("saved session should resume");
+    server.await.expect("mock executor should finish");
 }
 
 async fn accept_routing_headers_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {

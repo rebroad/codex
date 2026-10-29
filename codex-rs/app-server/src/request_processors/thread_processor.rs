@@ -461,7 +461,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(crate) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) thread_watch_manager: ThreadWatchManager,
-    pub(super) thread_list_state_permit: Arc<Semaphore>,
+    pub(super) thread_list_state_permit: Arc<RwLock<()>>,
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
     pub(super) state_db: Option<StateDbHandle>,
     pub(super) log_db: Option<LogDbLayer>,
@@ -474,7 +474,7 @@ pub(crate) struct ThreadRequestProcessor {
 /// Whether resume attaches a client or restores a cold runtime during daemon startup.
 pub(crate) enum ThreadResumeTarget {
     Client(ConnectionRequestId),
-    DaemonRecovery(Option<codex_app_server_transport::daemon_recovery::InterruptedTurn>),
+    DaemonRecovery,
 }
 
 /// Outcome of trying to satisfy a resume request from an already loaded thread.
@@ -501,7 +501,7 @@ impl ThreadRequestProcessor {
         pending_thread_unloads: PendingThreadUnloads,
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
-        thread_list_state_permit: Arc<Semaphore>,
+        thread_list_state_permit: Arc<RwLock<()>>,
         thread_goal_processor: ThreadGoalRequestProcessor,
         state_db: Option<StateDbHandle>,
         log_db: Option<LogDbLayer>,
@@ -993,13 +993,8 @@ impl ThreadRequestProcessor {
 
     pub(super) async fn acquire_thread_list_state_permit(
         &self,
-    ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
-        self.thread_list_state_permit
-            .acquire()
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to acquire thread list state permit: {err}"))
-            })
+    ) -> Result<RwLockWriteGuard<'_, ()>, JSONRPCErrorError> {
+        Ok(self.thread_list_state_permit.write().await)
     }
 
     async fn set_app_server_client_info(
@@ -3884,7 +3879,7 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self.thread_list_state_permit.read().await;
         let stored_thread_from_running_probe = match target {
             ThreadResumeTarget::Client(request_id) => match self
                 .resume_running_thread(
@@ -3904,15 +3899,11 @@ impl ThreadRequestProcessor {
                 }
                 RunningThreadResumeResult::NotRunning(stored_thread) => stored_thread,
             },
-            ThreadResumeTarget::DaemonRecovery(saved) => {
+            ThreadResumeTarget::DaemonRecovery => {
                 let thread_id = ThreadId::from_string(&params.thread_id)
                     .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
                 // Recheck under the same permit as client resume, including after config loading.
                 if self.thread_manager.get_thread(thread_id).await.is_ok() {
-                    if let Some(saved) = saved {
-                        self.continue_daemon_turn(&params.thread_id, saved.clone())
-                            .await;
-                    }
                     return Ok(ControlFlow::Break(()));
                 }
                 None
@@ -3944,7 +3935,7 @@ impl ThreadRequestProcessor {
         let history_load_started_at = std::time::Instant::now();
         let progress_request = match target {
             ThreadResumeTarget::Client(request_id) => Some(request_id.clone()),
-            ThreadResumeTarget::DaemonRecovery(_) => None,
+            ThreadResumeTarget::DaemonRecovery => None,
         };
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
@@ -4000,6 +3991,35 @@ impl ThreadRequestProcessor {
                 resumed.conversation_id
             )));
         }
+        if let InitialHistory::Resumed(resumed) = &thread_history
+            && self
+                .thread_manager
+                .get_thread(resumed.conversation_id)
+                .await
+                .is_ok()
+        {
+            match target {
+                ThreadResumeTarget::Client(request_id) => {
+                    if let RunningThreadResumeResult::Handled(completion) = self
+                        .resume_running_thread(
+                            request_id,
+                            params,
+                            app_server_client_name.clone(),
+                            app_server_client_version.clone(),
+                            /*cold_resume_history*/ None,
+                        )
+                        .await?
+                    {
+                        drop(_thread_list_state_permit);
+                        let _ = completion.await;
+                        return Ok(ControlFlow::Break(()));
+                    }
+                }
+                ThreadResumeTarget::DaemonRecovery => {
+                    return Ok(ControlFlow::Break(()));
+                }
+            }
+        }
         tracing::info!(
             thread_id = %thread_id,
             history_load_ms = history_load_started_at.elapsed().as_millis(),
@@ -4028,10 +4048,26 @@ impl ThreadRequestProcessor {
             && let Some((source, _)) = thread_history.get_resumed_session_sources()
             && !can_accept_direct_input(thread_history.get_multi_agent_version(), &source)
         {
+            let child_thread_id = resumed_history.conversation_id;
+            if matches!(target, ThreadResumeTarget::DaemonRecovery) {
+                self.thread_manager
+                    .ensure_multi_agent_v2_child_loaded(child_thread_id)
+                    .await
+                    .map_err(|err| {
+                        tracing::warn!(
+                            thread_id = %child_thread_id,
+                            error = %err,
+                            "failed to restore a multi-agent v2 child through its parent"
+                        );
+                        invalid_request(format!(
+                            "cannot restore multi-agent v2 child {child_thread_id} through its parent: {err}"
+                        ))
+                    })?;
+                return Ok(ControlFlow::Break(()));
+            }
             let ThreadResumeTarget::Client(request_id) = target else {
                 return Ok(ControlFlow::Break(()));
             };
-            let child_thread_id = resumed_history.conversation_id;
             self.thread_manager
                 .ensure_multi_agent_v2_child_loaded(child_thread_id)
                 .await
@@ -4262,7 +4298,7 @@ impl ThreadRequestProcessor {
                     ThreadResumeTarget::Client(request_id) => {
                         self.request_trace_context(request_id).await
                     }
-                    ThreadResumeTarget::DaemonRecovery(_) => None,
+                    ThreadResumeTarget::DaemonRecovery => None,
                 },
                 client_mcp_extensions,
                 ..StartThreadOptions::new(config)
@@ -4276,6 +4312,12 @@ impl ThreadRequestProcessor {
                 ..
             }) => {
                 let ThreadResumeTarget::Client(request_id) = target else {
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        thread_create_ms = thread_create_started_at.elapsed().as_millis(),
+                        paginated = paginated_resume,
+                        "daemon recovery thread created"
+                    );
                     // Observe lifecycle events without attaching a client subscription.
                     self.thread_watch_manager
                         .upsert_thread(&thread_id.to_string())
@@ -4284,10 +4326,6 @@ impl ThreadRequestProcessor {
                     codex_thread
                         .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
                         .await;
-                    if let ThreadResumeTarget::DaemonRecovery(Some(saved)) = target {
-                        self.continue_daemon_turn(&thread_id.to_string(), saved.clone())
-                            .await;
-                    }
                     let state = self.thread_state_manager.thread_state(thread_id).await;
                     self.ensure_listener_task_running(thread_id, Arc::clone(&codex_thread), state)
                         .await?;

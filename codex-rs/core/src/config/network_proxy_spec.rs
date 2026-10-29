@@ -23,10 +23,12 @@ use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::Platform;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkProxySpec {
     base_config: NetworkProxyConfig,
     requirements: Option<NetworkConstraints>,

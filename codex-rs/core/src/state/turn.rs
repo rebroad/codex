@@ -25,6 +25,7 @@ use crate::session::turn_context::TurnEnvironment;
 use crate::tasks::AnySessionTask;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::turn_input::PendingTurnInteraction;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -94,6 +95,8 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<AcceptedUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
+    pending_interactions: HashMap<String, PendingTurnInteraction>,
+    recovered_interactions: HashMap<String, PendingTurnInteraction>,
     pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     pub(crate) tool_calls: u64,
@@ -133,6 +136,8 @@ impl TurnState {
         &mut self,
         key: &str,
     ) -> Option<oneshot::Sender<ReviewDecision>> {
+        self.pending_interactions
+            .remove(&interaction_key("approval", key));
         self.pending_approvals.remove(key)
     }
 
@@ -142,6 +147,8 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
+        self.pending_interactions.clear();
+        self.recovered_interactions.clear();
     }
 
     pub(crate) fn insert_pending_request_permissions(
@@ -157,6 +164,8 @@ impl TurnState {
         &mut self,
         key: &str,
     ) -> Option<PendingRequestPermissions> {
+        self.pending_interactions
+            .remove(&interaction_key("permissions", key));
         self.pending_request_permissions.remove(key)
     }
 
@@ -172,6 +181,8 @@ impl TurnState {
         &mut self,
         key: &str,
     ) -> Option<oneshot::Sender<AcceptedUserInputResponse>> {
+        self.pending_interactions
+            .remove(&interaction_key("user_input", key));
         self.pending_user_input.remove(key)
     }
 
@@ -190,6 +201,9 @@ impl TurnState {
         server_name: &str,
         request_id: &RequestId,
     ) -> Option<oneshot::Sender<ElicitationResponse>> {
+        let key = format!("{server_name}:{}", request_id);
+        self.pending_interactions
+            .remove(&interaction_key("elicitation", &key));
         self.pending_elicitations
             .remove(&(server_name.to_string(), request_id.clone()))
     }
@@ -206,7 +220,76 @@ impl TurnState {
         &mut self,
         key: &str,
     ) -> Option<oneshot::Sender<DynamicToolResponse>> {
+        self.pending_interactions
+            .remove(&interaction_key("dynamic_tool", key));
         self.pending_dynamic_tools.remove(key)
+    }
+
+    pub(crate) fn record_pending_interaction(
+        &mut self,
+        kind: &str,
+        key: &str,
+        event: codex_protocol::protocol::EventMsg,
+    ) {
+        let correlation_id = interaction_key(kind, key);
+        let replay_key = interaction_replay_key(&event);
+        if let Some(recovered_id) = self
+            .recovered_interactions
+            .iter()
+            .find_map(|(id, recovered)| {
+                (interaction_replay_key(&recovered.event) == replay_key).then(|| id.clone())
+            })
+            .or_else(|| {
+                let mut matching = self
+                    .recovered_interactions
+                    .iter()
+                    .filter(|(_, recovered)| same_elicitation_server(&recovered.event, &event));
+                let (id, _) = matching.next()?;
+                matching.next().is_none().then(|| id.clone())
+            })
+        {
+            self.recovered_interactions.remove(&recovered_id);
+        }
+        self.pending_interactions.insert(
+            correlation_id.clone(),
+            PendingTurnInteraction {
+                correlation_id,
+                model_context: match &event {
+                    codex_protocol::protocol::EventMsg::ExecApprovalRequest(event) => {
+                        event.model_context.as_ref().map(|context| {
+                            codex_protocol::turn_input::SuspendedInteractionModelContext {
+                                model_slug: context.model_slug.clone(),
+                                reasoning_effort: context.reasoning_effort.clone(),
+                            }
+                        })
+                    }
+                    _ => None,
+                },
+                event,
+            },
+        );
+    }
+
+    pub(crate) fn pending_interactions(&self) -> Vec<PendingTurnInteraction> {
+        let mut interactions = self
+            .pending_interactions
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        interactions.extend(self.recovered_interactions.values().cloned());
+        interactions.sort_by(|left, right| left.correlation_id.cmp(&right.correlation_id));
+        interactions
+    }
+
+    pub(crate) fn restore_pending_interactions(
+        &mut self,
+        interactions: Vec<PendingTurnInteraction>,
+    ) {
+        self.recovered_interactions.extend(
+            interactions
+                .into_iter()
+                .map(|interaction| (interaction.correlation_id.clone(), interaction)),
+        );
     }
 
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
@@ -220,4 +303,43 @@ impl TurnState {
     pub(crate) fn set_mailbox_delivery_phase(&mut self, phase: MailboxDeliveryPhase) {
         self.mailbox_delivery_phase = phase;
     }
+}
+
+/// Produces a semantic key that ignores IDs and timestamps regenerated while a turn resumes.
+fn interaction_replay_key(event: &codex_protocol::protocol::EventMsg) -> String {
+    let mut value = serde_json::to_value(event).unwrap_or_default();
+    let volatile_fields: &[&str] = match event {
+        codex_protocol::protocol::EventMsg::ExecApprovalRequest(_)
+        | codex_protocol::protocol::EventMsg::ApplyPatchApprovalRequest(_)
+        | codex_protocol::protocol::EventMsg::RequestPermissions(_)
+        | codex_protocol::protocol::EventMsg::RequestUserInput(_)
+        | codex_protocol::protocol::EventMsg::DynamicToolCallRequest(_) => {
+            &["call_id", "approval_id", "turn_id", "started_at_ms"]
+        }
+        codex_protocol::protocol::EventMsg::ElicitationRequest(_) => &["id", "turn_id"],
+        _ => &[],
+    };
+    if let Some(object) = value.as_object_mut() {
+        for field in volatile_fields {
+            object.remove(*field);
+        }
+    }
+    serde_json::to_string(&value).unwrap_or_default()
+}
+
+fn same_elicitation_server(
+    left: &codex_protocol::protocol::EventMsg,
+    right: &codex_protocol::protocol::EventMsg,
+) -> bool {
+    use codex_protocol::protocol::EventMsg;
+    match (left, right) {
+        (EventMsg::ElicitationRequest(left), EventMsg::ElicitationRequest(right)) => {
+            left.server_name == right.server_name
+        }
+        _ => false,
+    }
+}
+
+fn interaction_key(kind: &str, key: &str) -> String {
+    format!("{kind}:{key}")
 }

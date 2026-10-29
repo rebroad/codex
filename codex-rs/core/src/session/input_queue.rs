@@ -6,8 +6,11 @@ use crate::state::TurnState;
 use codex_diagnostics::GaugeGuard;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::turn_input::SuspendedQueuedInput;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
@@ -102,6 +105,11 @@ pub(crate) struct PendingMailboxCommunication {
     pub(crate) communication: InterAgentCommunication,
     start_options: TurnStartOptions,
     _diagnostics_guard: GaugeGuard,
+}
+
+pub(crate) struct RestoredPendingInput {
+    turn_inputs: Vec<TurnInput>,
+    mailbox_mails: Vec<(InterAgentCommunication, TurnStartOptions)>,
 }
 
 impl InputQueue {
@@ -242,36 +250,81 @@ impl InputQueue {
 
     pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, TurnStartOptions) {
         let pending_mails = self.drain_mailbox().await;
-        // A later follow-up supersedes the earlier choice, including an omitted choice.
-        let mut start_options = pending_mails
-            .iter()
-            .rev()
-            .find(|mail| mail.communication.trigger_turn)
-            .map(|mail| mail.start_options.clone())
-            .unwrap_or_default();
-        start_options.parent_turn_id = pending_mails
-            .iter()
-            .filter(|mail| mail.communication.trigger_turn)
-            .map(|mail| mail.start_options.parent_turn_id.as_deref())
-            .reduce(|expected, candidate| expected.filter(|id| candidate == Some(*id)))
-            .and_then(|id| id.filter(|id| !id.trim().is_empty()).map(str::to_string));
-        start_options.root_turn_id = pending_mails
-            .iter()
-            .find(|mail| mail.communication.trigger_turn)
-            .and_then(|mail| {
-                mail.start_options
-                    .parent_turn_id
-                    .as_deref()
-                    .filter(|id| !id.trim().is_empty())
-                    .and(mail.start_options.root_turn_id.as_deref())
-                    .filter(|id| !id.trim().is_empty())
-            })
-            .map(str::to_string);
+        let start_options = merge_mailbox_start_options(
+            pending_mails
+                .iter()
+                .map(|mail| (&mail.communication, &mail.start_options)),
+        );
         let items = pending_mails
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
         (items, start_options)
+    }
+
+    pub(crate) fn decode_handoff_inputs(
+        mut fallback_start_options: TurnStartOptions,
+        pending_input: Vec<SuspendedQueuedInput>,
+    ) -> CodexResult<(TurnStartOptions, RestoredPendingInput)> {
+        let mut restored = RestoredPendingInput {
+            turn_inputs: Vec::new(),
+            mailbox_mails: Vec::new(),
+        };
+        for queued in pending_input {
+            let input = serde_json::from_value::<TurnInput>(queued.input).map_err(|error| {
+                CodexErr::Fatal(format!("failed to restore accepted turn input: {error}"))
+            })?;
+            match (input, queued.start_options) {
+                (TurnInput::InterAgentCommunication(communication), Some(start_options)) => {
+                    restored.mailbox_mails.push((communication, start_options));
+                }
+                (TurnInput::InterAgentCommunication(_), None) => {
+                    return Err(CodexErr::Fatal(
+                        "restored mailbox input is missing start options".to_string(),
+                    ));
+                }
+                (input, Some(_)) => {
+                    return Err(CodexErr::Fatal(format!(
+                        "restored non-mailbox input unexpectedly has start options: {input:?}"
+                    )));
+                }
+                (input, None) => restored.turn_inputs.push(input),
+            }
+        }
+        if restored
+            .mailbox_mails
+            .iter()
+            .any(|(communication, _)| communication.trigger_turn)
+        {
+            let mailbox_options = merge_mailbox_start_options(
+                restored
+                    .mailbox_mails
+                    .iter()
+                    .map(|(communication, start_options)| (communication, start_options)),
+            );
+            fallback_start_options.turn_trigger = mailbox_options.turn_trigger;
+            fallback_start_options.final_output_json_schema =
+                mailbox_options.final_output_json_schema;
+            fallback_start_options.service_tier = mailbox_options.service_tier;
+            fallback_start_options.parent_turn_id = mailbox_options.parent_turn_id;
+            fallback_start_options.initiating_agent_path = mailbox_options.initiating_agent_path;
+            fallback_start_options.root_turn_id = mailbox_options.root_turn_id;
+            fallback_start_options.cyber_access_program = mailbox_options.cyber_access_program;
+        }
+        Ok((fallback_start_options, restored))
+    }
+
+    pub(crate) async fn restore_handoff_inputs(
+        &self,
+        turn_state: &Mutex<TurnState>,
+        restored: RestoredPendingInput,
+    ) {
+        self.extend_pending_input_for_turn_state(turn_state, restored.turn_inputs)
+            .await;
+        for (communication, start_options) in restored.mailbox_mails {
+            self.enqueue_mailbox_communication(communication, start_options)
+                .await;
+        }
     }
 
     pub(crate) async fn turn_state_for_sub_id(
@@ -317,6 +370,61 @@ impl InputQueue {
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.clear_pending_waiters();
         turn_state.pending_input.items.clear();
+    }
+
+    /// Snapshot accepted in-memory input in the same order as the next turn delivery.
+    pub(crate) async fn snapshot_pending_for_handoff(
+        &self,
+        active_turn: &Mutex<Option<ActiveTurn>>,
+    ) -> CodexResult<Vec<SuspendedQueuedInput>> {
+        let queued_inputs = {
+            let active = active_turn.lock().await;
+            match active.as_ref() {
+                Some(active_turn) => active_turn
+                    .turn_state
+                    .lock()
+                    .await
+                    .pending_input
+                    .items
+                    .clone(),
+                None => Vec::new(),
+            }
+        };
+        let mut pending = queued_inputs
+            .into_iter()
+            .map(|input| {
+                serde_json::to_value(input)
+                    .map(|input| SuspendedQueuedInput {
+                        input,
+                        start_options: None,
+                    })
+                    .map_err(|error| {
+                        CodexErr::Fatal(format!("failed to serialize queued turn input: {error}"))
+                    })
+            })
+            .collect::<CodexResult<Vec<_>>>()?;
+        let mut mailbox = self.mailbox_pending_mails.lock().await;
+        self.read_mailbox(&mut mailbox);
+        pending.extend(
+            mailbox
+                .iter()
+                .map(|mail| {
+                    serde_json::to_value(TurnInput::InterAgentCommunication(
+                        mail.communication.clone(),
+                    ))
+                    .map(|input| SuspendedQueuedInput {
+                        input,
+                        start_options: Some(mail.start_options.clone()),
+                    })
+                    .map_err(|error| {
+                        CodexErr::Fatal(format!(
+                            "failed to serialize queued mailbox input: {error}"
+                        ))
+                    })
+                })
+                .collect::<CodexResult<Vec<_>>>()?,
+        );
+        Ok(pending)
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
@@ -459,6 +567,38 @@ impl InputQueue {
     }
 }
 
+fn merge_mailbox_start_options<'a>(
+    pending_mails: impl Iterator<Item = (&'a InterAgentCommunication, &'a TurnStartOptions)>,
+) -> TurnStartOptions {
+    let pending_mails = pending_mails.collect::<Vec<_>>();
+    // A later follow-up supersedes the earlier choice, including an omitted choice.
+    let mut start_options = pending_mails
+        .iter()
+        .rev()
+        .find(|(communication, _)| communication.trigger_turn)
+        .map(|(_, start_options)| (*start_options).clone())
+        .unwrap_or_default();
+    start_options.parent_turn_id = pending_mails
+        .iter()
+        .filter(|(communication, _)| communication.trigger_turn)
+        .map(|(_, start_options)| start_options.parent_turn_id.as_deref())
+        .reduce(|expected, candidate| expected.filter(|id| candidate == Some(*id)))
+        .and_then(|id| id.filter(|id| !id.trim().is_empty()).map(str::to_string));
+    start_options.root_turn_id = pending_mails
+        .iter()
+        .find(|(communication, _)| communication.trigger_turn)
+        .and_then(|(_, start_options)| {
+            start_options
+                .parent_turn_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .and(start_options.root_turn_id.as_deref())
+                .filter(|id| !id.trim().is_empty())
+        })
+        .map(str::to_string);
+    start_options
+}
+
 impl TurnInputQueue {
     fn has_user_input(&self) -> bool {
         self.items
@@ -563,6 +703,82 @@ mod tests {
             content.to_string(),
             trigger_turn,
         )
+    }
+
+    #[tokio::test]
+    async fn handoff_recovery_restores_mailbox_options_with_normal_precedence() {
+        let first = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "first",
+            true,
+        );
+        let latest = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "latest",
+            true,
+        );
+        let pending = vec![
+            (
+                first,
+                TurnStartOptions {
+                    turn_trigger: Some("first-trigger".to_string()),
+                    service_tier: Some("priority".to_string()),
+                    parent_turn_id: Some("parent-1".to_string()),
+                    root_turn_id: Some("root-1".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                latest,
+                TurnStartOptions {
+                    turn_trigger: Some("latest-trigger".to_string()),
+                    parent_turn_id: Some("parent-1".to_string()),
+                    root_turn_id: Some("root-1".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .map(|(communication, start_options)| SuspendedQueuedInput {
+            input: serde_json::to_value(TurnInput::InterAgentCommunication(communication))
+                .expect("serialize mailbox input"),
+            start_options: Some(start_options),
+        })
+        .collect();
+        let fallback = TurnStartOptions {
+            cyber_access_program: Some(codex_protocol::turn_input::CyberAccessProgram::Standard),
+            ..Default::default()
+        };
+
+        let (start_options, restored) =
+            InputQueue::decode_handoff_inputs(fallback, pending).expect("decode handoff input");
+        assert_eq!(
+            start_options.turn_trigger.as_deref(),
+            Some("latest-trigger")
+        );
+        assert_eq!(start_options.service_tier, None);
+        assert_eq!(start_options.parent_turn_id.as_deref(), Some("parent-1"));
+        assert_eq!(start_options.root_turn_id.as_deref(), Some("root-1"));
+        assert_eq!(
+            start_options.cyber_access_program, None,
+            "latest trigger options replace omitted choices"
+        );
+
+        let input_queue = InputQueue::new();
+        let turn_state = Mutex::new(TurnState::default());
+        input_queue
+            .restore_handoff_inputs(&turn_state, restored)
+            .await;
+        let (restored_items, restored_options) = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(restored_items.len(), 2);
+        assert_eq!(
+            restored_options.turn_trigger.as_deref(),
+            Some("latest-trigger")
+        );
+        assert_eq!(restored_options.parent_turn_id.as_deref(), Some("parent-1"));
+        assert_eq!(restored_options.root_turn_id.as_deref(), Some("root-1"));
     }
 
     #[tokio::test]

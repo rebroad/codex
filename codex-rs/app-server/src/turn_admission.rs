@@ -1,6 +1,8 @@
-//! Tracks client runtime changes and turn starts admitted before a shutdown drain.
+//! Tracks client work admitted before a shutdown drain.
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_extension_api::CoreWorkAdmission;
+use codex_extension_api::CoreWorkKind;
 use codex_extension_api::TurnStartAdmission;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -18,6 +20,7 @@ struct AdmissionState {
 pub(crate) struct TurnAdmission {
     state: Arc<Mutex<AdmissionState>>,
     active_tx: watch::Sender<usize>,
+    open_tx: watch::Sender<bool>,
 }
 
 impl Default for TurnAdmission {
@@ -25,6 +28,7 @@ impl Default for TurnAdmission {
         Self {
             state: Arc::new(Mutex::new(AdmissionState::default())),
             active_tx: watch::channel(0).0,
+            open_tx: watch::channel(true).0,
         }
     }
 }
@@ -37,6 +41,15 @@ impl TurnAdmission {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .closed = true;
+        self.open_tx.send_replace(false);
+    }
+
+    pub(crate) fn reopen(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = false;
+        self.open_tx.send_replace(true);
     }
 
     pub(crate) fn subscribe_active(&self) -> watch::Receiver<usize> {
@@ -67,6 +80,19 @@ impl TurnStartAdmission for TurnAdmission {
     fn admit_turn_start(&self) -> Option<Box<dyn Send>> {
         self.try_admit()
             .map(|permit| Box::new(permit) as Box<dyn Send>)
+    }
+}
+
+impl CoreWorkAdmission for TurnAdmission {
+    fn acquire_work_start(
+        &self,
+        _kind: CoreWorkKind,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<Box<dyn Send>>> + Send + '_>>
+    {
+        Box::pin(async move {
+            self.try_admit()
+                .map(|permit| Box::new(permit) as Box<dyn Send>)
+        })
     }
 }
 

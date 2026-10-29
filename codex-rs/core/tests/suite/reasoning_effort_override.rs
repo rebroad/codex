@@ -514,6 +514,7 @@ async fn reasoning_effort_override_recovery_reuses_trusted_tail_update() -> anyh
                 turn_id: turn_id.clone(),
                 thread_settings: Default::default(),
                 trace: None,
+                final_output_json_schema: None,
                 cyber_access_program: None,
             })
             .await?,

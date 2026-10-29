@@ -23,7 +23,7 @@ pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
 pub(crate) use crate::runtime::network_proxy_state_for_policy;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NetworkProxyConstraints {
     pub enabled: Option<bool>,
     pub mode: Option<NetworkMode>,

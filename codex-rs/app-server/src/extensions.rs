@@ -11,6 +11,7 @@ use codex_app_server_protocol::WarningNotification;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::CoreWorkAdmission;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -45,6 +46,7 @@ pub(crate) struct ThreadExtensionDependencies {
     /// Process-scoped queue shared by idle dispatch and app-server requests.
     pub(crate) queue_service: Option<Arc<QueuedItemService>>,
     pub(crate) turn_start_admission: Option<Arc<dyn TurnStartAdmission>>,
+    pub(crate) core_work_admission: Option<Arc<dyn CoreWorkAdmission>>,
 }
 
 pub(crate) fn thread_extensions(
@@ -63,10 +65,14 @@ pub(crate) fn thread_extensions(
         http_client_factory,
         queue_service,
         turn_start_admission,
+        core_work_admission,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::clone(&event_sink));
     if let Some(admission) = turn_start_admission {
         builder.turn_start_admission(admission);
+    }
+    if let Some(admission) = core_work_admission {
+        builder.core_work_admission(admission);
     }
     if let Some(queue_service) = queue_service {
         codex_queue_extension::install(&mut builder, queue_service);

@@ -150,6 +150,7 @@ impl std::fmt::Debug for WriteStdinInteractionEvent<'_> {
 pub(crate) struct ProcessStore {
     processes: HashMap<i32, ProcessEntry>,
     reserved_process_ids: HashSet<i32>,
+    restored_call_ids: HashSet<String>,
 }
 
 impl ProcessStore {
@@ -157,7 +158,9 @@ impl ProcessStore {
         if !process_manager::should_use_deterministic_process_ids() {
             self.reserved_process_ids.remove(&process_id);
         }
-        self.processes.remove(&process_id)
+        let entry = self.processes.remove(&process_id)?;
+        self.restored_call_ids.remove(&entry.call_id);
+        Some(entry)
     }
 }
 
@@ -192,7 +195,7 @@ struct ProcessEntry {
     hook_command: String,
     tty: bool,
     environment_id: String,
-    permissions: TerminalPermissions,
+    permissions: Option<TerminalPermissions>,
     network_approval: Option<DeferredNetworkApproval>,
     session: Weak<Session>,
     last_used: tokio::time::Instant,

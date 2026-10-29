@@ -707,6 +707,16 @@ impl Session {
             id,
             request,
         });
+        if let Some(at) = self.active_turn.lock().await.as_mut() {
+            let EventMsg::ElicitationRequest(request) = &event else {
+                unreachable!("MCP elicitation event has a stable variant")
+            };
+            at.turn_state.lock().await.record_pending_interaction(
+                "elicitation",
+                &format!("{}:{}", request.server_name, request.id),
+                event.clone(),
+            );
+        }
         let plugin_install_telemetry = plugin_install_elicitation_telemetry_metadata(&event);
         turn_context
             .turn_metadata_state

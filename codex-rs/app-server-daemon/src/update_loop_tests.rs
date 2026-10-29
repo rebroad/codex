@@ -59,7 +59,7 @@ fn test_daemon_with_managed_install(home: &TempDir) -> (Daemon, String) {
     std::fs::create_dir_all(bin.parent().expect("binary parent")).expect("release directory");
     codex_utils_cargo_bin::write_executable(
         &bin,
-        "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo codex 1.0.0; else exec sleep 30; fi\n",
+        "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo codex 1.0.0; elif [ \"$1\" = exec-server ]; then exec python3 -u -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\",0)); s.listen(); print(\"ws://%s:%s\" % s.getsockname(),flush=True); exec(\"while True:\\\\n c,_=s.accept()\\\\n c.close()\")'; else exec sleep 30; fi\n",
     )
     .expect("managed binary");
     std::os::unix::fs::symlink(format!("releases/{release}"), standalone.join("current"))
@@ -150,7 +150,7 @@ async fn daemon_start_and_restart_preserve_launch_features() {
         )
         .unwrap();
         codex_utils_cargo_bin::write_executable(&daemon.managed_codex_bin, &format!(
-        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex 1.0.0; exit; fi\nif [ \"$3\" = --help ]; then exit; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex 1.0.0; exit; fi\nif [ \"$1\" = exec-server ]; then exec python3 -u -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\",0)); s.listen(); print(\"ws://%s:%s\" % s.getsockname(),flush=True); exec(\"while True:\\\\n c,_=s.accept()\\\\n c.close()\")'; fi\nif [ \"$3\" = --help ]; then exit; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
         args_path.display(),
     )).unwrap();
         let control = async {
@@ -173,9 +173,9 @@ async fn daemon_start_and_restart_preserve_launch_features() {
             features
         );
         let expected = if features.is_empty() {
-            "app-server\n--listen\nunix://\n--analytics-default-enabled\n--managed-daemon\n"
+            "app-server\n--remote-control\n--listen\nunix://\n--analytics-default-enabled\n--managed-daemon\n"
         } else {
-            "app-server\n--listen\nunix://\n--analytics-default-enabled\n-c\nfeatures.api_key_model_discovery=true\n-c\nfeatures.code_mode_host=false\n--managed-daemon\n"
+            "app-server\n--remote-control\n--listen\nunix://\n--analytics-default-enabled\n-c\nfeatures.api_key_model_discovery=true\n-c\nfeatures.code_mode_host=false\n--managed-daemon\n"
         };
         assert_eq!(std::fs::read_to_string(&args_path).unwrap(), expected);
         let reused = daemon

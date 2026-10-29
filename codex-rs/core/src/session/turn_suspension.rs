@@ -13,6 +13,7 @@ use tracing::warn;
 pub(super) async fn suspend_turn_and_shutdown(
     session: &Arc<Session>,
     submission_id: String,
+    tree_handoff: bool,
 ) -> CodexResult<SuspendTurnOutcome> {
     {
         let active = session.active_turn.lock().await;
@@ -26,13 +27,14 @@ pub(super) async fn suspend_turn_and_shutdown(
 
     // This is a snapshot of currently loaded descendants, not a spawn-admission seal.
     // Previously closed descendants and concurrent future spawns remain best effort.
-    if session
-        .services
-        .local_agent_runtime
-        .list_live_agent_subtree_thread_ids(session.thread_id)
-        .await?
-        .len()
-        > 1
+    if !tree_handoff
+        && session
+            .services
+            .local_agent_runtime
+            .list_live_agent_subtree_thread_ids(session.thread_id)
+            .await?
+            .len()
+            > 1
     {
         return Ok(SuspendTurnOutcome::HasLiveDescendants);
     }
@@ -93,14 +95,18 @@ pub(super) async fn suspend_turn_and_shutdown(
             let _ = task_handle.await;
         }
     }
-    // Pending accepted input and interactive waiters live only in this process. Handoff
-    // intentionally drops that state; persisting or replaying it needs a separate protocol.
+    // The host has already persisted accepted input and interaction reports from prepare.
+    // Remove the old one-shot waiters only after that checkpoint is durable.
     session.input_queue.clear_pending(&turn).await;
 
     // Stop all producers before flushing their final history and closing its writer.
     // If either persistence step fails, do not report success: the current worker
     // retains ownership until worker-failure recovery can take responsibility.
-    handlers::shutdown_session_runtime(session).await;
+    if tree_handoff {
+        handlers::shutdown_session_runtime_for_handoff(session).await;
+    } else {
+        handlers::shutdown_session_runtime(session).await;
+    }
     live_thread.flush().await.map_err(|error| {
         CodexErr::Fatal(format!("flush after root turn suspension failed: {error}"))
     })?;
