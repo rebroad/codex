@@ -67,6 +67,54 @@ class GuardOutputTest(unittest.TestCase):
         self.assertTrue(guard_status("⏹ Rust attempt stopped at some time"))
         self.assertFalse(guard_status("   Compiling codex-core"))
 
+    def test_lmkd_reclaim_goes_only_to_stdout_with_timestamp(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        f = CargoLogFilter(
+            output=stderr, lmkd_output=stdout, now=self.clock,
+            date_stamp=lambda: "2026-10-29T07:16:58+01:00")
+        line = ("ℹ️ Android LMKD reclaimed com.samsung.mfcontents; "
+                "advisory only (no rustc stop from this event)")
+        f.process_line(line)
+        self.assertIn("07:16:58 " + line,
+                      stdout.getvalue())
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_pending_lmkd_advisory_cannot_be_overwritten_by_guard(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        f = CargoLogFilter(
+            output=stderr, lmkd_output=stdout, now=self.clock,
+            date_stamp=lambda: "2026-10-29T07:17:00+01:00")
+        f.process_line("⏸ Rust suspended at now: PSI")
+        self.clock.t += .2
+        f.process_line(
+            "ℹ️ Android LMKD reclaimed com.google.android.tts; "
+            "advisory only (no rustc stop from this event)")
+        self.clock.t += .1
+        f.process_line("▶️ Rust resumed at now: PSI")
+        self.clock.t += .7
+        f.flush_due()
+        self.assertEqual(stdout.getvalue().count("LMKD reclaimed"), 1)
+        self.assertNotIn("LMKD reclaimed", stderr.getvalue())
+        self.assertEqual(len(stderr.getvalue().splitlines()), 1)
+
+    def test_subprocess_separates_lmkd_stdout_from_cargo_stderr(self):
+        script = Path(__file__).resolve().parents[1] / "codex_rust_guard_output.py"
+        result = subprocess.run(
+            [sys.executable, "-u", str(script)],
+            input=("   Compiling codex-app-server\n"
+                   "ℹ️ Android LMKD reclaimed com.samsung.mfcontents; "
+                   "advisory only (no rustc stop from this event)\n"
+                   "⏸ Rust suspended at now: PSI\n"),
+            capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("LMKD reclaimed com.samsung.mfcontents", result.stdout)
+        self.assertNotIn("Compiling codex-app-server", result.stdout)
+        self.assertNotIn("LMKD reclaimed", result.stderr)
+        self.assertIn("Compiling codex-app-server", result.stderr)
+        self.assertIn("Rust suspended", result.stderr)
+
     def test_timing_and_ballast_preserve_one_minute_rate(self):
         self.f.process_line("Rust time: kept 00:01:00; suspended 0; lost 0")
         self.f.process_line("🧠 Ballast: 32/256 MiB held")
@@ -92,6 +140,22 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(len(self.buffer.getvalue().splitlines()), 2)
         self.assertIn("coalesced 12 rapid guard updates", self.buffer.getvalue())
 
+    def test_original_stdout_fd_does_not_corrupt_captured_binary_path(self):
+        # build_codex.sh captures cargo_build() stdout as an executable path.
+        # Advisory notices must bypass that capture through a saved stdout fd.
+        script = (
+            'exec {status_fd}>&1; '
+            'binary="$(printf /tmp/codex-bin; '
+            'printf \'LMKD advisory\\n\' >&${status_fd})"; '
+            'printf \'captured:%s\\n\' "$binary" >&2'
+        )
+        result = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "LMKD advisory\n")
+        self.assertIn("captured:/tmp/codex-bin", result.stderr)
+        self.assertNotIn("advisory", result.stderr)
+
     def test_pipe_idle_flushes_queued_resume(self):
         script = Path(__file__).resolve().parents[1] / "codex_rust_guard_output.py"
         proc = subprocess.Popen([sys.executable, "-u", str(script)],
@@ -103,8 +167,9 @@ class GuardOutputTest(unittest.TestCase):
             proc.stdin.flush()
             proc.stdin.close()
             proc.wait(timeout=5)
-            output = proc.stdout.read()
-            self.assertEqual(proc.returncode, 0, proc.stderr.read())
+            output = proc.stderr.read()
+            self.assertEqual(proc.returncode, 0, output)
+            self.assertEqual(proc.stdout.read(), "")
             self.assertIn("⏸ Rust suspended", output)
             self.assertIn("▶️ Rust resumed", output)
             self.assertEqual(len(output.splitlines()), 2)

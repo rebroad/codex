@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# cargo_build() returns the binary path on stdout and callers capture it in
+# command substitutions. Keep an independent handle to the entrypoint's
+# original stdout for informational LMKD notices: never mix them into the
+# binary path or rustc's output protocol.
+exec {CODEX_BUILD_ADVISORY_STDOUT_FD}>&1
+
 # Keep the logical path here: the designated build sibling may itself be a
 # symlink into a separate build filesystem, and source discovery depends on
 # its logical .build/.make name.
@@ -1092,7 +1098,7 @@ PY
     stderr_log="$(mktemp "${temp_root%/}/codex-cargo-stderr.XXXXXX")"
     if (cd "${BUILD_WORKSPACE}" && run_timed_build "${stage}" "${target_mode}" "${profile}" env "${env_args[@]}" "${ballast_env_args[@]}" "${cmd[@]}") 2>&1 \
       | tee "${stderr_log}" \
-      | python3 -u "${SOURCE_REPO}/scripts/codex_rust_guard_output.py" >&2; then
+      | python3 -u "${SOURCE_REPO}/scripts/codex_rust_guard_output.py" >&${CODEX_BUILD_ADVISORY_STDOUT_FD}; then
       status=0
     else
       status=$?
@@ -1741,6 +1747,7 @@ run_preflight() {
       scripts/codex_rustc_timing.sh \
       scripts/tests/test_codex_rustc_timing.sh \
       scripts/tests/test_codex_rustc_suspend_state.sh \
+      scripts/tests/test_codex_rustc_lmkd_advisory.sh \
       scripts/build_armv7.sh \
       scripts/resolve_rusty_v8_artifacts.sh \
       scripts/package_npm.sh \
@@ -1753,6 +1760,7 @@ run_preflight() {
       scripts/stage_npm_packages.py
     # Catch stale suspension-state regressions before a long Cargo build.
     bash scripts/tests/test_codex_rustc_suspend_state.sh >/dev/null
+    bash scripts/tests/test_codex_rustc_lmkd_advisory.sh >/dev/null
   )
   require_cmd cargo
   if command -v rustup >/dev/null 2>&1; then
