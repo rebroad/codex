@@ -130,6 +130,17 @@ class GuardOutputTest(unittest.TestCase):
         self.assertNotIn("0/256 MiB held", text)
         self.assertRegex(text.splitlines()[1], r"^\d{2}:\d{2}:\d{2} 🧠 Ballast:")
 
+    def test_compact_timing_lines_preserve_one_minute_rate(self):
+        self.f.process_line("14:16:30 kept=2h6m slept=3m52s lost=8m52s this=3m2s")
+        self.clock.t += 5
+        self.f.process_line("14:16:35 kept=2h6m5s slept=3m52s lost=8m52s this=3m7s")
+        self.clock.t += 55
+        self.f.process_line("14:17:30 kept=2h9m slept=3m52s lost=8m52s this=0s")
+        lines = self.buffer.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("14:16:30 kept="))
+        self.assertTrue(lines[1].startswith("14:17:30 kept="))
+
     def test_multiline_status_has_global_throttle(self):
         self.f.process_line("⏹ Rust attempt stopped: full PSI; waiting to retry")
         for _ in range(12):
