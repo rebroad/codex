@@ -19,11 +19,17 @@ codex_timing_init() {
   # The build script supplies one unique directory to ALL rustc wrappers.
   # Android restricts /proc/<pid>/stat, so never require it to share counters.
   codex_timing_file=""
-  if [[ -n "${CODEX_ANDROID_RUSTC_TIMING_DIR:-}" && -d "${CODEX_ANDROID_RUSTC_TIMING_DIR}" ]] \
-    && command -v flock >/dev/null 2>&1; then
-    codex_timing_file="${CODEX_ANDROID_RUSTC_TIMING_DIR}/totals"
+  local timing_dir="${CODEX_ANDROID_RUSTC_TIMING_DIR:-}"
+  if [[ -z "$timing_dir" ]]; then
+    echo 'warning: shared Rust time ledger unavailable: CODEX_ANDROID_RUSTC_TIMING_DIR is unset (compiler not in a managed Cargo timing stage)' >&2
+  elif [[ ! -d "$timing_dir" ]]; then
+    printf 'warning: shared Rust time ledger unavailable: timing directory does not exist: %s\n' "$timing_dir" >&2
+  elif ! command -v flock >/dev/null 2>&1; then
+    printf 'warning: shared Rust time ledger unavailable: flock not found in compiler PATH: %s\n' "${PATH:-}" >&2
+  elif [[ ! -w "$timing_dir" ]]; then
+    printf 'warning: shared Rust time ledger unavailable: timing directory not writable: %s\n' "$timing_dir" >&2
   else
-    echo "warning: shared Rust time ledger unavailable (missing timing directory or flock)" >&2
+    codex_timing_file="$timing_dir/totals"
   fi
   codex_timing_mode=idle
   codex_timing_attempt_us=0
