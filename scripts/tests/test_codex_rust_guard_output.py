@@ -140,6 +140,22 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(len(self.buffer.getvalue().splitlines()), 2)
         self.assertIn("coalesced 12 rapid guard updates", self.buffer.getvalue())
 
+    def test_original_stdout_fd_does_not_corrupt_captured_binary_path(self):
+        # build_codex.sh captures cargo_build() stdout as an executable path.
+        # Advisory notices must bypass that capture through a saved stdout fd.
+        script = (
+            'exec {status_fd}>&1; '
+            'binary="$(printf /tmp/codex-bin; '
+            'printf \'LMKD advisory\\n\' >&${status_fd})"; '
+            'printf \'captured:%s\\n\' "$binary" >&2'
+        )
+        result = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "LMKD advisory\\n")
+        self.assertIn("captured:/tmp/codex-bin", result.stderr)
+        self.assertNotIn("advisory", result.stderr)
+
     def test_pipe_idle_flushes_queued_resume(self):
         script = Path(__file__).resolve().parents[1] / "codex_rust_guard_output.py"
         proc = subprocess.Popen([sys.executable, "-u", str(script)],
