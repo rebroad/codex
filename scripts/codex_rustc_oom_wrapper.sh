@@ -45,13 +45,13 @@ codex_uint() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
 
-codex_swap_guard_percent="${CODEX_ANDROID_RUSTC_SWAP_FREE_GUARD_PERCENT:-50}"
-codex_memavailable_guard_percent="${CODEX_ANDROID_RUSTC_MEMAVAILABLE_GUARD_PERCENT:-20}"
+codex_swap_headroom_percent="${CODEX_ANDROID_RUSTC_SWAP_HEADROOM_PERCENT:-50}"
+codex_memavailable_critical_percent="${CODEX_ANDROID_RUSTC_MEMAVAILABLE_CRITICAL_PERCENT:-5}"
 codex_psi_some_guard_ms="${CODEX_ANDROID_RUSTC_PSI_SOME_GUARD_MS:-35}"
 codex_psi_full_guard_ms="${CODEX_ANDROID_RUSTC_PSI_FULL_GUARD_MS:-60}"
 for codex_threshold in \
-  "$codex_swap_guard_percent" \
-  "$codex_memavailable_guard_percent" \
+  "$codex_swap_headroom_percent" \
+  "$codex_memavailable_critical_percent" \
   "$codex_psi_some_guard_ms" \
   "$codex_psi_full_guard_ms"; do
   if ! codex_uint "$codex_threshold"; then
@@ -215,12 +215,14 @@ if [[ "$codex_psi_notice_probe" == true ]]; then
 fi
 
 codex_memory_guard_reason() {
-  if ((codex_mem_available_kb * 100 <= codex_mem_total_kb * codex_memavailable_guard_percent)); then
-    codex_guard_reason="MemAvailable ${codex_mem_available_kb}kB <= ${codex_memavailable_guard_percent}% of RAM"
+  if ((codex_mem_available_kb * 100 <= codex_mem_total_kb * codex_memavailable_critical_percent)); then
+    codex_guard_reason="MemAvailable ${codex_mem_available_kb}kB <= ${codex_memavailable_critical_percent}% critical RAM floor"
     return 0
   fi
-  if ((codex_swap_total_kb > 0 && codex_swap_free_kb * 100 <= codex_swap_total_kb * codex_swap_guard_percent)); then
-    codex_guard_reason="free swap ${codex_swap_free_kb}kB <= ${codex_swap_guard_percent}% of total swap"
+  if ((codex_swap_total_kb > 0 \
+    && (codex_mem_available_kb + codex_swap_free_kb) * 100 \
+      <= codex_swap_total_kb * codex_swap_headroom_percent)); then
+    codex_guard_reason="combined RAM and swap headroom $((codex_mem_available_kb + codex_swap_free_kb))kB <= ${codex_swap_headroom_percent}% of configured swap"
     return 0
   fi
   if [[ "${1:-}" == memory-only ]]; then
