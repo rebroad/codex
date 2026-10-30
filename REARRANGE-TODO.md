@@ -9,6 +9,7 @@ Latest ownership review found `feat(app-server): support active turn handoff` an
 - [ ] Finish the 848-commit semantic and repeated-file inventory, including the mixed handoff/WIP commits and the linked high-touch Rust-build files listed in `REARRANGE-DONE.md`.
 - [ ] Create a new uniquely named operation checkpoint at the clean reviewed `alpha` tip; record its exact commit and tree before rearranging refs or commits.
 - [ ] Split `f5567e53099892a52cc0413e6b6ba0d71efde065`, whose compiler-loss fixup subject masks separate notice-transition and periodic-report changes; verify each resulting hunk's owner and preserve independent purposes.
+- [ ] Split `84158b998a`, whose `scripts/codex_android_ballast.py` changes extend both release/refill measurements and PSI-gated recovery refill behavior; assign each hunk to its behavior owner before consolidation.
 - [ ] Consolidate later repairs/completions with their downstream owners while preserving independent purposes.
 - [ ] Retain relevant functionality; record material omissions and unresolved ownership decisions.
 - [ ] Rearrange history without running tests/builds or changing source/test contents.
