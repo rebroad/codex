@@ -5,6 +5,39 @@ use super::DaemonSettings;
 use super::MAX_SHUTDOWN_GRACE_SECONDS;
 
 #[tokio::test]
+async fn remote_control_defaults_to_enabled_and_can_be_disabled() {
+    let temp = TempDir::new().expect("temp dir");
+    let path = temp.path().join("settings.json");
+
+    assert!(
+        DaemonSettings::load(&path)
+            .await
+            .expect("load missing settings")
+            .remote_control_enabled
+    );
+
+    tokio::fs::write(&path, r#"{}"#)
+        .await
+        .expect("write settings without remote control preference");
+    assert!(
+        DaemonSettings::load(&path)
+            .await
+            .expect("load settings without remote control preference")
+            .remote_control_enabled
+    );
+
+    tokio::fs::write(&path, r#"{"remoteControlEnabled":false}"#)
+        .await
+        .expect("write disabled settings");
+    assert!(
+        !DaemonSettings::load(&path)
+            .await
+            .expect("load disabled settings")
+            .remote_control_enabled
+    );
+}
+
+#[tokio::test]
 async fn remote_control_save_preserves_updater_settings() {
     let temp = TempDir::new().expect("temp dir");
     let path = temp.path().join("settings.json");
