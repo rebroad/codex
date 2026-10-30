@@ -1,5 +1,10 @@
 # Rearrangement audit trail
 
+## Current operation base resolution
+
+- Resolved upstream annotated tag `rust-v0.163.0-alpha.11` from `https://github.com/openai/codex.git` as tag object `40f4a054d875a76b18a2b733b6224976cf64a826`, peeling to locked commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. The similarly prefixed `.1` and `.2` tags are different releases and are excluded.
+- Before this preparatory record update, `alpha` was clean at `717be43fd2ef9b443352c5efd95e9dcdc96ddc43`, tree `97fd66c08aac37930aa38b56767f66bf8ee2b05d`; the locked base commit exists locally. No refs or history have been changed for this operation yet.
+
 > Entries before “Post-rebase ownership corrections and repeated-path audit” record earlier branch states. Their counts, commit hashes, and merge-base claims are archival unless explicitly refreshed in that post-rebase section.
 
 ## Fixed-base continuation started 2026-10-22
