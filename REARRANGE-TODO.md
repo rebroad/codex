@@ -18,7 +18,7 @@ Resolved package-root ownership: `e2ad84f1db` replaces a `CODEX_REPO_ROOT` requi
 - [ ] Consolidate later repairs/completions with their downstream owners while preserving independent purposes.
 - [x] Retarget `fca975f429` as a fixup to `17845ddb71`; its only changes are imports needed by that sandbox implementation and full-access fixture adaptation.
 - [x] Remove the fully reverted markdown snapshot URL refresh `5ea87e2287` from the final series and omit its exact inverse hunk from branding commit `bdbe346e0e`; preserve the current checkpoint blob and all other branding changes.
-- [ ] Reclassify rewritten source-tree symlink commit `b96ab21e31` as the standalone `build: allow intentional source-tree build symlink` feature. Autosquash showed the resolver owner does not yet contain the build orchestrator or Cargo environment files; preserve the feature at its original point where all five changed paths exist.
+- [x] Reclassify rewritten source-tree symlink commit as standalone `build: allow intentional source-tree build symlink` (`026651ffaf50d39b92ffc2db0006e2226e4a9eb2`). The resolver owner lacks the build orchestrator and Cargo environment files, so this new feature stays at the point where all five changed paths exist.
 - [ ] Retain relevant functionality; record material omissions and unresolved ownership decisions.
 - [x] Rearrange history without running tests/builds or changing source/test contents.
 - [ ] Verify clean `alpha`, unchanged locked merge-base, exact checkpoint tree equality, and intended fixup ownership using Git history/range-diffs only.
