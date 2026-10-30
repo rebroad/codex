@@ -26,7 +26,7 @@ pub(crate) struct DaemonSettings {
 impl Default for DaemonSettings {
     fn default() -> Self {
         Self {
-            remote_control_enabled: false,
+            remote_control_enabled: true,
             feature_overrides: BTreeMap::new(),
             auto_update_enabled: true,
             update_interval_minutes: DEFAULT_UPDATE_INTERVAL_MINUTES,
@@ -44,7 +44,7 @@ struct StopSettings {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredSettings {
-    #[serde(default)]
+    #[serde(default = "default_remote_control_enabled")]
     remote_control_enabled: bool,
     #[serde(default)]
     feature_overrides: BTreeMap<String, bool>,
@@ -57,7 +57,7 @@ struct StoredSettings {
 impl Default for StoredSettings {
     fn default() -> Self {
         Self {
-            remote_control_enabled: false,
+            remote_control_enabled: default_remote_control_enabled(),
             feature_overrides: BTreeMap::new(),
             shutdown_grace_seconds: DEFAULT_SHUTDOWN_GRACE_SECONDS,
             updater: UpdaterSettings::default(),
@@ -84,6 +84,10 @@ impl Default for UpdaterSettings {
 }
 
 fn default_auto_update_enabled() -> bool {
+    true
+}
+
+fn default_remote_control_enabled() -> bool {
     true
 }
 
