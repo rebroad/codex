@@ -6,7 +6,7 @@ Current operation: resolved the annotated tag from `https://github.com/openai/co
 
 Latest ownership review found `feat(app-server): support active turn handoff` and its WIP checkpoint commit contain independent Android-memory, build-tree-symlink, and sccache changes. Split those to their downstream owners and retain the version-only Cargo lock normalization as a scoped standalone commit before any autosquash.
 
-- [ ] Record and create a fresh unique checkpoint for clean `alpha` `dd505a03149201d3f69665385e08d58ad7d665bb` (tree `664939c664432a8e088f147516f6a3d99d54d615`); prior claimed checkpoint is missing and unusable.
+- [ ] Create the pre-recorded unique checkpoint `alpha.before-rearrange-20261030-resume2` at clean starting commit `dd505a03149201d3f69665385e08d58ad7d665bb` (tree `664939c664432a8e088f147516f6a3d99d54d615`); prior claimed checkpoint is missing and unusable.
 - [ ] Finish the 860-commit semantic and repeated-file inventory, including the mixed handoff/WIP commits and any split-owner edits.
 - [ ] Verify every fixup hunk against its behavior owner; split/retarget the mixed commits and preserve independent historical purposes.
 - [ ] Consolidate later repairs/completions with their downstream owners while preserving independent purposes.
