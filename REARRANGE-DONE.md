@@ -4,6 +4,7 @@
 
 - Resolved upstream annotated tag `rust-v0.163.0-alpha.11` from `https://github.com/openai/codex.git` as tag object `40f4a054d875a76b18a2b733b6224976cf64a826`, peeling to locked commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. The similarly prefixed `.1` and `.2` tags are different releases and are excluded.
 - Before this preparatory record update, `alpha` was clean at `717be43fd2ef9b443352c5efd95e9dcdc96ddc43`, tree `97fd66c08aac37930aa38b56767f66bf8ee2b05d`; the locked base commit exists locally. No refs or history have been changed for this operation yet.
+- Committed this base-resolution record, then verified clean `alpha` and created unique checkpoint `alpha.before-rearrange-20261030-resume` at `684c4fdcca4685f5366e809979f60c2704eac2b0`, tree `7045441150eaebf4621f65c9a20ea0c80e702bab`. Merge-base is the locked SHA. The downstream range has 860 commits and 29 `fixup!`/`squash!` subjects; ownership audit remains open. No source/test files, tests, or builds are involved.
 
 > Entries before “Post-rebase ownership corrections and repeated-path audit” record earlier branch states. Their counts, commit hashes, and merge-base claims are archival unless explicitly refreshed in that post-rebase section.
 
