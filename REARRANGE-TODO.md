@@ -23,3 +23,4 @@ Resolved package-root ownership: `e2ad84f1db` replaces a `CODEX_REPO_ROOT` requi
 - [x] Rearrange history without running tests/builds or changing source/test contents.
 - [ ] Verify clean `alpha`, unchanged locked merge-base, exact checkpoint tree equality, and intended fixup ownership using Git history/range-diffs only.
 - [ ] Update `REARRANGE-DONE.md` with final evidence; reduce this file to a one-line completion marker.
+- [ ] Restore `codex_timing_periodic_report` from checkpoint-06 while retaining the intended guard-transition reporting removals; checkpoint the corrected tree and autosquash this repair into its owner.
