@@ -13,6 +13,7 @@ Latest ownership review found `feat(app-server): support active turn handoff` an
 - [ ] Split `719ac665e3` in the rollout inspector: `recordCatalog`, omission summaries/coverage, and token-usage row rendering continue ordinal usage owner `056b383b35`; bounded structured tool-output decoding and safe preview rendering remain a separate new behavior.
 - [ ] Continue the all-path repeated-file audit for paths with three or more touches that are not yet covered by `REARRANGE-DONE.md`.
 - [ ] Consolidate later repairs/completions with their downstream owners while preserving independent purposes.
+- [ ] Retarget `fca975f429` as a fixup to `17845ddb71`; its only changes are imports needed by that sandbox implementation and full-access fixture adaptation.
 - [ ] Retain relevant functionality; record material omissions and unresolved ownership decisions.
 - [ ] Rearrange history without running tests/builds or changing source/test contents.
 - [ ] Verify clean `alpha`, unchanged locked merge-base, exact checkpoint tree equality, and intended fixup ownership using Git history/range-diffs only.
