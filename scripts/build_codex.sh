@@ -1013,6 +1013,32 @@ print(f"Patched {count} embedded version string(s) in {path}")
 PY
 }
 
+strip_installed_binary() {
+  local binary="${1}" host strip_cmd
+  host="$(native_target_host)"
+  case "${host}" in
+    *apple-darwin)
+      if ! strip -S -x "${binary}"; then
+        echo "Unable to strip debug symbols from ${binary}." >&2
+        return 1
+      fi
+      ;;
+    *)
+      for strip_cmd in "${STRIP:-}" llvm-strip strip; do
+        [[ -n "${strip_cmd}" ]] || continue
+        command -v "${strip_cmd}" >/dev/null 2>&1 || continue
+        if "${strip_cmd}" --strip-debug --strip-unneeded "${binary}"; then
+          echo "Stripped debug symbols from ${binary} with ${strip_cmd}."
+          return 0
+        fi
+      done
+      echo "Unable to strip debug symbols from ${binary}: no compatible strip tool succeeded." >&2
+      return 1
+      ;;
+  esac
+  echo "Stripped debug symbols from ${binary}."
+}
+
 install_binary() {
   local binary="${1}" version="${2}" short
   [[ -x "${binary}" ]] || die "built binary not found: ${binary}"
@@ -1020,6 +1046,10 @@ install_binary() {
   short="$(git -C "${SOURCE_REPO}" rev-parse --short=10 HEAD)"
   local name="codex-${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/${name}"
+  if ! strip_installed_binary "${INSTALL_BIN_DIR}/${name}"; then
+    rm -f "${INSTALL_BIN_DIR}/${name}"
+    return 1
+  fi
   if ! patch_timestamp "${INSTALL_BIN_DIR}/${name}" "${version}" "${short}"; then
     rm -f "${INSTALL_BIN_DIR}/${name}"
     return 1
@@ -1112,6 +1142,10 @@ install_code_mode_host() {
   local binary="${1}"
   [[ -x "${binary}" ]] || die "built code-mode host not found: ${binary}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/codex-code-mode-host"
+  if ! strip_installed_binary "${INSTALL_BIN_DIR}/codex-code-mode-host"; then
+    rm -f "${INSTALL_BIN_DIR}/codex-code-mode-host"
+    return 1
+  fi
   echo "Installed ${INSTALL_BIN_DIR}/codex-code-mode-host"
 }
 
@@ -1119,6 +1153,10 @@ install_test_stdio_server() {
   local binary="${1}"
   [[ -x "${binary}" ]] || die "built test stdio server not found: ${binary}"
   install -m 0755 "${binary}" "${INSTALL_BIN_DIR}/test_stdio_server"
+  if ! strip_installed_binary "${INSTALL_BIN_DIR}/test_stdio_server"; then
+    rm -f "${INSTALL_BIN_DIR}/test_stdio_server"
+    return 1
+  fi
   echo "Installed ${INSTALL_BIN_DIR}/test_stdio_server"
 }
 
