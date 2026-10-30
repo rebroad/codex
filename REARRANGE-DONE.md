@@ -435,3 +435,5 @@ The dependency-aware autosquash pass completed and preserved checkpoint-05 sourc
 ## Periodic timing call tree correction (2026-10-30)
 
 The final autosquash audit found that the periodic timing-report fixup had also removed `codex_timing_periodic_report` from the compiler monitor loop. Checkpoint-06 retains this call; only the guard-transition notice and pending guard retry loop are meant to be removed. Restore the periodic call and attach this correction to `Print Rust state only on transition and throttle timing snapshots to active work`. The source-tree comparison continues to exclude only `REARRANGE-DONE.md` and `REARRANGE-TODO.md`. No tests/builds ran.
+
+Before the final timing-call autosquash retry, locked `rust-v0.163.0-alpha.11` to peeled commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. Created checkpoint `alpha.before-rearrange-20261030-autosquash-07` at commit `9b1aeff135beaa31d5f90e089884fe32fea2dd72`, tree `2f1da7fbd5c0072712923e214ad291a5afb18880`. Its source paths match checkpoint-06 exactly; only the two evolving audit records differ. The next pass autosquashes the restored timing call into owner `f7eac48436`.
