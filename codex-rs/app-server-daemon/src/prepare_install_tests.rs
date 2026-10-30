@@ -277,8 +277,9 @@ async fn explicit_selection_requires_unchanged_cli_and_pins_all_versions() {
             Some(&source),
             &bin,
             |_| {
-                let mut rebuilt = std::fs::read(&bin)?;
-                rebuilt.extend_from_slice(b"# rebuilt during confirmation\n");
+                let original = std::fs::read_to_string(&bin)?;
+                let rebuilt = original.replace("codex 0.152.0", "codex 0.152.1");
+                anyhow::ensure!(rebuilt != original, "test CLI version marker was missing");
                 std::fs::write(&bin, rebuilt)?;
                 Ok(true)
             },
@@ -288,7 +289,7 @@ async fn explicit_selection_requires_unchanged_cli_and_pins_all_versions() {
         assert!(
             error
                 .to_string()
-                .contains("differs from the running executable")
+                .contains("CLI package changed while preparing the daemon")
         );
         assert_eq!(
             initial_root.join("current").canonicalize().unwrap(),
