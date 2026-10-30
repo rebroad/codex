@@ -8,7 +8,7 @@ Latest ownership review found `feat(app-server): support active turn handoff` an
 
 - [ ] Finish the fixed-base semantic and repeated-file inventory, including mixed handoff/WIP commits, linked Android Rust-build files, hunk-level ownership for the 107 paths with three or more touches, and the 127 paths with exactly two touches.
 - [ ] Create a new uniquely named operation checkpoint at the clean reviewed `alpha` tip; record its exact commit and tree before rearranging refs or commits.
-- [ ] Split `f5567e53099892a52cc0413e6b6ba0d71efde065`, whose compiler-loss fixup subject masks separate notice-transition and periodic-report changes; verify each resulting hunk's owner and preserve independent purposes.
+- [ ] Split `f5567e53099892a52cc0413e6b6ba0d71efde065`: move notice-state/reporting hunks to `7b85ac6aab`, compiler stop/resume accounting to `b9bb6b1aaf`, and account for the periodic-report removal from `895d7fc67f` while preserving its later reintroduction/policy in `79c3b52ced`.
 - [ ] Split `84158b998a`, whose `scripts/codex_android_ballast.py` changes extend both release/refill measurements and PSI-gated recovery refill behavior; assign each hunk to its behavior owner before consolidation.
 - [ ] Split `719ac665e3` in the rollout inspector: ordinal/omitted-record coverage continues `056b383b35`, while structured tool-output decoding has a separate purpose and no earlier owner.
 - [ ] Continue the all-path repeated-file audit for paths with three or more touches that are not yet covered by `REARRANGE-DONE.md`.
