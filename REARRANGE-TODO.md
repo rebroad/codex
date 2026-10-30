@@ -6,7 +6,7 @@ Current operation: resolved the annotated tag from `https://github.com/openai/co
 
 Latest ownership review found `feat(app-server): support active turn handoff` and its WIP checkpoint commit contain independent Android-memory, build-tree-symlink, and sccache changes. Split those to their downstream owners and retain the version-only Cargo lock normalization as a scoped standalone commit before any autosquash.
 
-- [ ] Finish the 848-commit semantic and repeated-file inventory, including the mixed handoff/WIP commits and the linked high-touch Rust-build files listed in `REARRANGE-DONE.md`.
+- [ ] Finish the full fixed-base semantic and repeated-file inventory, including mixed handoff/WIP commits, the linked Android Rust-build files, and other high-touch paths such as `scripts/build_codex.sh` (31 first-parent commits).
 - [ ] Create a new uniquely named operation checkpoint at the clean reviewed `alpha` tip; record its exact commit and tree before rearranging refs or commits.
 - [ ] Split `f5567e53099892a52cc0413e6b6ba0d71efde065`, whose compiler-loss fixup subject masks separate notice-transition and periodic-report changes; verify each resulting hunk's owner and preserve independent purposes.
 - [ ] Split `84158b998a`, whose `scripts/codex_android_ballast.py` changes extend both release/refill measurements and PSI-gated recovery refill behavior; assign each hunk to its behavior owner before consolidation.
