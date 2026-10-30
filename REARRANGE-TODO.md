@@ -17,6 +17,7 @@ Resolved two more owner paths: the explicit source-tree symlink commit `e85b55b0
 - [ ] Continue the all-path repeated-file audit for paths with three or more touches that are not yet covered by `REARRANGE-DONE.md`.
 - [ ] Consolidate later repairs/completions with their downstream owners while preserving independent purposes.
 - [ ] Retarget `fca975f429` as a fixup to `17845ddb71`; its only changes are imports needed by that sandbox implementation and full-access fixture adaptation.
+- [ ] Remove the fully reverted markdown snapshot URL refresh `5ea87e2287` from the final series and omit its exact inverse hunk from branding commit `bdbe346e0e`; preserve the current checkpoint blob and all other branding changes.
 - [ ] Retarget `e85b55b012` as a fixup to `5e8d8ddaac`; its source symlink handling, sync/build/Cargo adjustments, and tests all extend the resolver's source/build-tree contract.
 - [ ] Retain relevant functionality; record material omissions and unresolved ownership decisions.
 - [ ] Rearrange history without running tests/builds or changing source/test contents.
