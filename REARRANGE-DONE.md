@@ -4,7 +4,7 @@
 
 - Current `alpha` is clean at `dd505a03149201d3f69665385e08d58ad7d665bb`, tree `664939c664432a8e088f147516f6a3d99d54d615`, and its merge-base with locked commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3` is unchanged.
 - The previously recorded `alpha.before-rearrange-20261030-resume` ref is absent, and its claimed commit `684c4fdcca4685f5366e809979f60c2704eac2b0` is unavailable in the local object database. That checkpoint claim is invalid; no rearrangement has begun from it. The TODO now requires a fresh checkpoint at the current clean tip before any history changes.
-- Planned replacement checkpoint: `alpha.before-rearrange-20261030-resume2` at starting commit `dd505a03149201d3f69665385e08d58ad7d665bb`, tree `664939c664432a8e088f147516f6a3d99d54d615`. Create it only after this record is committed, then verify the branch points to that commit/tree.
+- Verified preparatory checkpoint `alpha.before-rearrange-20261030-resume2` at commit `dd505a03149201d3f69665385e08d58ad7d665bb`, tree `664939c664432a8e088f147516f6a3d99d54d615`. The actual rearrangement start is `ab084c061d930b29047e9e890f61179e60294240`, tree `88c0890f3bfadb97fa0c939cf065a27bd3e28d36`; a separate operation checkpoint will be created there after the records documenting it are committed.
 - The fixed annotated tag still resolves locally: tag object `40f4a054d875a76b18a2b733b6224976cf64a826`, peeled commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. No source/test files, tests, or builds were involved.
 
 ## Current operation base resolution
