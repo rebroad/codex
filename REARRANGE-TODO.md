@@ -14,6 +14,7 @@ Latest ownership review found `feat(app-server): support active turn handoff` an
 - [ ] Continue the all-path repeated-file audit for paths with three or more touches that are not yet covered by `REARRANGE-DONE.md`.
 - [ ] Consolidate later repairs/completions with their downstream owners while preserving independent purposes.
 - [ ] Retarget `fca975f429` as a fixup to `17845ddb71`; its only changes are imports needed by that sandbox implementation and full-access fixture adaptation.
+- [ ] Retarget `e85b55b012` as a fixup to `5e8d8ddaac`; its source symlink handling, sync/build/Cargo adjustments, and tests all extend the resolver's source/build-tree contract.
 - [ ] Retain relevant functionality; record material omissions and unresolved ownership decisions.
 - [ ] Rearrange history without running tests/builds or changing source/test contents.
 - [ ] Verify clean `alpha`, unchanged locked merge-base, exact checkpoint tree equality, and intended fixup ownership using Git history/range-diffs only.
