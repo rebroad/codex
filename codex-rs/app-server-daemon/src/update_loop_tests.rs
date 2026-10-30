@@ -4,38 +4,37 @@ use super::update_modes_for_identities;
 use crate::Daemon;
 use crate::RestartMode;
 use crate::UpdaterRefreshMode;
-use crate::managed_install::executable_identity_from_reader;
+use crate::managed_install::ExecutableIdentity;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 #[cfg(unix)]
 use std::time::Duration;
 #[cfg(unix)]
 use tempfile::TempDir;
 
 #[test]
-fn unchanged_updater_uses_version_based_restart() -> std::io::Result<()> {
+fn unchanged_updater_uses_version_based_restart() {
     assert_eq!(
         update_modes_for_identities(
-            &executable_identity_from_reader(&b"same"[..])?,
-            &executable_identity_from_reader(&b"same"[..])?,
+            &ExecutableIdentity::new("1.2.3".to_string(), Path::new("/codex")),
+            &ExecutableIdentity::new("1.2.3".to_string(), Path::new("/codex")),
         ),
         (RestartMode::IfVersionChanged, UpdaterRefreshMode::None)
     );
-    Ok(())
 }
 
 #[test]
-fn changed_updater_forces_refresh_even_when_version_may_match() -> std::io::Result<()> {
+fn changed_updater_forces_refresh_when_versions_differ() {
     assert_eq!(
         update_modes_for_identities(
-            &executable_identity_from_reader(&b"old"[..])?,
-            &executable_identity_from_reader(&b"new"[..])?,
+            &ExecutableIdentity::new("1.2.2".to_string(), Path::new("/codex")),
+            &ExecutableIdentity::new("1.2.3".to_string(), Path::new("/codex")),
         ),
         (
             RestartMode::Always,
             UpdaterRefreshMode::ReexecIfManagedBinaryChanged,
         )
     );
-    Ok(())
 }
 
 #[tokio::test]
