@@ -6,6 +6,8 @@ Current operation: resolved the annotated tag from `https://github.com/openai/co
 
 Latest ownership review found `feat(app-server): support active turn handoff` and its WIP checkpoint commit contain independent Android-memory, build-tree-symlink, and sccache changes. Split those to their downstream owners and retain the version-only Cargo lock normalization as a scoped standalone commit before any autosquash.
 
+Resolved two more owner paths: the explicit source-tree symlink commit `e85b55b012` extends downstream resolver `5e8d8ddaac` and is queued as its fixup; package-root discovery `e2ad84f1db` replaces a `CODEX_REPO_ROOT` requirement already present at the locked base, so it remains standalone rather than targeting upstream history.
+
 - [ ] Finish the fixed-base semantic and repeated-file inventory, including mixed handoff/WIP commits, linked Android Rust-build files, hunk-level ownership for the 107 paths with three or more touches, and the full 127-path exactly-two-touch inventory. Continue pair-by-pair review across remaining app-server daemon/transport paths, SDK, and tooling, then close the remaining core/sandbox pairs.
 - [ ] Create a new uniquely named operation checkpoint at the clean reviewed `alpha` tip; record its exact commit and tree before rearranging refs or commits.
 - [ ] Split `f5567e53099892a52cc0413e6b6ba0d71efde065`: move notice-state/reporting hunks to `7b85ac6aab`, compiler stop/resume accounting to `b9bb6b1aaf`, and account for the periodic-report removal from `895d7fc67f` while preserving its later reintroduction/policy in `79c3b52ced`.
