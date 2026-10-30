@@ -245,6 +245,8 @@ codex_memory_guard_reason() {
 
 codex_compiler_pid=""
 codex_compiler_suspended_at=""
+codex_compiler_stdout=""
+codex_compiler_stderr=""
 codex_guard_report_window_started_us="${EPOCHREALTIME/./}"
 codex_guard_pending_transition_count=0
 codex_guard_pending_suspend_count=0
@@ -351,9 +353,15 @@ codex_stop_compiler() {
   done
   kill -KILL -- "-$codex_compiler_pid" 2>/dev/null || true
 }
-trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; exit 130' INT
-trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; exit 143' TERM
-trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; exit 129' HUP
+codex_cleanup_compiler_output() {
+  [[ -z "$codex_compiler_stdout" ]] || rm -f "$codex_compiler_stdout"
+  [[ -z "$codex_compiler_stderr" ]] || rm -f "$codex_compiler_stderr"
+  codex_compiler_stdout=""
+  codex_compiler_stderr=""
+}
+trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; codex_cleanup_compiler_output; exit 130' INT
+trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; codex_cleanup_compiler_output; exit 143' TERM
+trap 'codex_stop_compiler; codex_stop_psi_stream; [[ -z "$codex_compiler_pid" ]] || wait "$codex_compiler_pid" 2>/dev/null || true; codex_cleanup_compiler_output; exit 129' HUP
 
 codex_wait_for_memory() {
   while true; do
@@ -387,7 +395,11 @@ while true; do
     exit 1
   fi
   codex_guard_mark_running
-  /system/bin/setsid "${codex_compiler_command[@]}" &
+  codex_temp_root="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
+  codex_compiler_stdout="$(mktemp "${codex_temp_root%/}/codex-rustc-stdout.XXXXXX")"
+  codex_compiler_stderr="$(mktemp "${codex_temp_root%/}/codex-rustc-stderr.XXXXXX")"
+  /system/bin/setsid "${codex_compiler_command[@]}" \
+    >"$codex_compiler_stdout" 2>"$codex_compiler_stderr" &
   codex_compiler_pid=$!
   codex_restart_compiler=false
   codex_compiler_suspended=false
@@ -427,6 +439,10 @@ while true; do
         codex_stop_compiler
         wait "$codex_compiler_pid" 2>/dev/null || true
         codex_compiler_pid=""
+        # A killed rustc may have emitted only part of Cargo's JSON artifact
+        # stream. Discard that attempt so a retry cannot report duplicate or
+        # incomplete artifacts to Cargo's dependency queue.
+        codex_cleanup_compiler_output
         codex_restart_compiler=true
         break
       fi
@@ -456,9 +472,11 @@ while true; do
     continue
   fi
   codex_stop_psi_stream
-  if wait "$codex_compiler_pid"; then
-    exit 0
-  else
-    exit "$?"
-  fi
+  codex_compiler_status=0
+  wait "$codex_compiler_pid" || codex_compiler_status=$?
+  codex_compiler_pid=""
+  cat "$codex_compiler_stdout"
+  cat "$codex_compiler_stderr" >&2
+  codex_cleanup_compiler_output
+  exit "$codex_compiler_status"
 done
