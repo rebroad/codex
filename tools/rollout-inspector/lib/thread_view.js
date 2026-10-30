@@ -41,13 +41,27 @@ function pushTurnItem(state, item, reason) {
 }
 
 function summarizeToolOutput(payload, maxToolChars) {
-  const output = typeof payload.output === "string" ? payload.output : "";
-  const outputBytes = bytesOf(output);
+  const output = payload.output;
+  const outputText = typeof output === "string"
+    ? output
+    : Array.isArray(output)
+      ? output.map((part) => {
+          if (typeof part?.text === "string") return part.text;
+          return part?.type ? `[${part.type} content]` : "[non-text content]";
+        }).join("\n")
+      : output == null
+        ? ""
+        : JSON.stringify(output);
+  const outputBytes = bytesOf(outputText);
   return {
     type: "toolOutput",
     callId: payload.call_id ?? null,
     outputBytes,
-    outputPreview: clip(output, maxToolChars),
+    outputPreview: outputText
+      ? clip(outputText, maxToolChars)
+      : Object.hasOwn(payload, "output")
+        ? "(empty output)"
+        : "(output field missing)",
   };
 }
 

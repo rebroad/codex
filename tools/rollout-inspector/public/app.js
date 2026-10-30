@@ -98,9 +98,10 @@ function renderThread(thread) {
           `<span class="kind">tool call: ${item.name || "(unknown)"}</span>` +
           `${item.argsPreview || "(no args)"}`;
       } else if (item.type === "toolOutput") {
-        msgNode.innerHTML =
-          `<span class="kind">tool output: ${formatBytes(item.outputBytes || 0)}</span>` +
-          `${item.outputPreview || "(no output)"}`;
+        const kind = document.createElement("span");
+        kind.className = "kind";
+        kind.textContent = `tool output: ${formatBytes(item.outputBytes || 0)}`;
+        msgNode.append(kind, document.createTextNode(item.outputPreview));
       } else if (item.type === "reasoning") {
         msgNode.innerHTML =
           `<span class="kind">reasoning</span>` +
