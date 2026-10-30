@@ -11,6 +11,8 @@
 - A separate `git-filter-repo` trial was discarded after it changed the merge-base in its isolated clone. It did not alter the source checkout, checkpoint, `alpha`, or the already-published rearrangement branch.
 - No source-code edits, builds, or tests were made; this goal is Git-history-only.
 
-## Remaining gate
+## Publication and closure
 
-Transfer the verified branch to the source checkout, publish it under a new remote branch, and confirm the remote tip. Existing `alpha` and `alpha.rearrange-20261030` remain untouched.
+- Published `alpha.rearrange-record-churn-final-20261030` to `origin` at `c8b04525ddae50f1d154898970fbd9d0ca11918a` after verifying the fixed base and checkpoint source tree. Existing `alpha` and `alpha.rearrange-20261030` were not rewritten.
+- The final DONE audit and one-line TODO completion marker are separate commits. After adding them, the fixed-base range contains 599 commits, no merges, no fixup/squash subjects, and two touches per audit file.
+- The final closure commits are pushed to the same new branch; verify the final remote tip equals local HEAD and the non-record source paths still match the checkpoint.
