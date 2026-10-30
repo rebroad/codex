@@ -1,5 +1,11 @@
 # Rearrangement audit trail
 
+## 2026-10-30 checkpoint claim correction
+
+- Current `alpha` is clean at `dd505a03149201d3f69665385e08d58ad7d665bb`, tree `664939c664432a8e088f147516f6a3d99d54d615`, and its merge-base with locked commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3` is unchanged.
+- The previously recorded `alpha.before-rearrange-20261030-resume` ref is absent, and its claimed commit `684c4fdcca4685f5366e809979f60c2704eac2b0` is unavailable in the local object database. That checkpoint claim is invalid; no rearrangement has begun from it. The TODO now requires a fresh checkpoint at the current clean tip before any history changes.
+- The fixed annotated tag still resolves locally: tag object `40f4a054d875a76b18a2b733b6224976cf64a826`, peeled commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. No source/test files, tests, or builds were involved.
+
 ## Current operation base resolution
 
 - Resolved upstream annotated tag `rust-v0.163.0-alpha.11` from `https://github.com/openai/codex.git` as tag object `40f4a054d875a76b18a2b733b6224976cf64a826`, peeling to locked commit `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. The similarly prefixed `.1` and `.2` tags are different releases and are excluded.
