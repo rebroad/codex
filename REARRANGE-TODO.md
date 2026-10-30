@@ -6,7 +6,7 @@ Current operation: resolved `rust-v0.163.0-alpha.11` to tag object `40f4a054d875
 
 Historical correction: reviewed handoff commits `f9b4603fb1` and `638dca833f` are object-only, not ancestors of current `alpha`. Reachable handoff commit `72325dcdbb` is focused; its test-build selection and deleted-worktree cleanup are handoff behavior. Android memory preemption, build-tree routing, symlink resolution, and in-process sccache have separate reachable owners. See the correction in `REARRANGE-DONE.md`; do not perform the obsolete split or retain the unreachable lock-normalization plan.
 
-Resolved two more owner paths: the explicit source-tree symlink commit `e85b55b012` extends downstream resolver `5e8d8ddaac` and is queued as its fixup; package-root discovery `e2ad84f1db` replaces a `CODEX_REPO_ROOT` requirement already present at the locked base, so it remains standalone rather than targeting upstream history.
+Resolved package-root ownership: `e2ad84f1db` replaces a `CODEX_REPO_ROOT` requirement already present at the locked base, so it remains standalone rather than targeting upstream history. Reclassified source-tree symlink support after autosquash exposed that the feature changes `scripts/build_codex.sh` and `scripts/codex_cargo_env.sh`, absent from resolver owner `5e8d8ddaac`; preserve the feature as a standalone commit at its original place.
 
 - [x] Finish semantic verification of the fixed-base inventory: all 107 paths with three or more touches and all 127 exactly-two-touch paths are path-mapped in `REARRANGE-DONE.md`; mixed-commit ownership and Android build cross-file decisions are recorded before replay.
 - [x] Create a fresh unique operation checkpoint at the clean reviewed `alpha` tip and record its exact commit/tree before rearranging refs or commits.
@@ -18,7 +18,7 @@ Resolved two more owner paths: the explicit source-tree symlink commit `e85b55b0
 - [ ] Consolidate later repairs/completions with their downstream owners while preserving independent purposes.
 - [x] Retarget `fca975f429` as a fixup to `17845ddb71`; its only changes are imports needed by that sandbox implementation and full-access fixture adaptation.
 - [x] Remove the fully reverted markdown snapshot URL refresh `5ea87e2287` from the final series and omit its exact inverse hunk from branding commit `bdbe346e0e`; preserve the current checkpoint blob and all other branding changes.
-- [x] Retarget `e85b55b012` as a fixup to `5e8d8ddaac`; its source symlink handling, sync/build/Cargo adjustments, and tests all extend the resolver's source/build-tree contract.
+- [ ] Reclassify rewritten source-tree symlink commit `b96ab21e31` as the standalone `build: allow intentional source-tree build symlink` feature. Autosquash showed the resolver owner does not yet contain the build orchestrator or Cargo environment files; preserve the feature at its original point where all five changed paths exist.
 - [ ] Retain relevant functionality; record material omissions and unresolved ownership decisions.
 - [x] Rearrange history without running tests/builds or changing source/test contents.
 - [ ] Verify clean `alpha`, unchanged locked merge-base, exact checkpoint tree equality, and intended fixup ownership using Git history/range-diffs only.
