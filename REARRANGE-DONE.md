@@ -3,6 +3,7 @@
 ## Fresh pre-rewrite checkpoint
 
 - After the ownership audit, verified clean `alpha` at `f30481b83ce7fd03972e4c56f8d1750019b0c89d`, tree `6978130716d52ac445bfb73b2abb6a868f1a1e25`. The merge-base remains locked at `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`; the range has 909 commits and no merges. Created unique branch `alpha.before-rearrange-20261030-audit-final-01` at that exact commit/tree before any history rearrangement. This is the exact baseline for the upcoming Git-only replay; source and test files have not been changed and no tests/builds were run.
+- Tree-gate clarification from the user: verify exact equality for the source tree, excluding the two required evolving audit records `REARRANGE-DONE.md` and `REARRANGE-TODO.md`. The user explicitly allows those records to differ from their checkpoint versions; compare all other paths to the checkpoint tree.
 
 ## 2026-10-30 checkpoint claim correction
 
