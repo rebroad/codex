@@ -6,6 +6,7 @@ use std::io;
 use std::path::PathBuf;
 
 use codex_app_server_transport::daemon_recovery;
+use codex_app_server_transport::daemon_recovery::RecoverySnapshot;
 
 pub(crate) async fn snapshot(
     path: PathBuf,
@@ -32,7 +33,20 @@ pub(crate) async fn start_recovery(
         move || daemon_recovery::read_snapshot(&path)
     })
     .await
-    .map_err(io::Error::other)??;
+    .map_err(io::Error::other)?;
+    let candidates = match candidates {
+        Ok(candidates) => candidates,
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+            tracing::warn!("discarding invalid daemon recovery snapshot: {err}");
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(remove_err) if remove_err.kind() == io::ErrorKind::NotFound => {}
+                Err(remove_err) => return Err(remove_err),
+            }
+            RecoverySnapshot::default()
+        }
+        Err(err) => return Err(err),
+    };
     Ok(tokio::spawn(async move {
         processor.restore_daemon_threads(candidates).await;
         if let Err(err) = std::fs::remove_file(&path)

@@ -55,6 +55,13 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
     let recovery_file = daemon_recovery_file_path(home.path());
     std::fs::create_dir_all(recovery_file.parent().context("snapshot parent")?)?;
     std::fs::write(&recovery_file, "invalid JSON")?;
+    #[cfg(unix)]
+    let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
+    #[cfg(unix)]
+    let _executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
+    #[cfg(unix)]
+    let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
+    #[cfg(not(unix))]
     let mut server = spawn_server(home.path(), &socket_path)?;
     let mut client = connect_daemon_client(
         &socket_path,
@@ -118,6 +125,9 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
     let mut saved = daemon_recovery::read_candidates(&recovery_file)?;
     saved.insert("!missing".into());
     daemon_recovery::write_candidates(&recovery_file, &saved)?;
+    #[cfg(unix)]
+    let mut successor = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
+    #[cfg(not(unix))]
     let mut successor = spawn_server(home.path(), &socket_path)?;
     // No client reconnects until the goal has made an inference request.
     wait_for_requests(&mock, /*count*/ 2).await?;

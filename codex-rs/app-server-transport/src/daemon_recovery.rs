@@ -36,7 +36,8 @@ const INTERRUPTION_PREFIX: &str = "codex-interrupted-v1:";
 
 pub fn read_snapshot(path: &Path) -> io::Result<RecoverySnapshot> {
     let mut loaded: BTreeSet<String> = match std::fs::read(path) {
-        Ok(contents) => serde_json::from_slice(&contents).map_err(io::Error::other)?,
+        Ok(contents) => serde_json::from_slice(&contents)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(RecoverySnapshot::default()),
         Err(err) => return Err(err),
     };
