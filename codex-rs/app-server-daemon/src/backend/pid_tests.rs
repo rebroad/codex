@@ -598,6 +598,8 @@ fn update_loop_uses_hidden_app_server_subcommand() {
         command_kind: PidCommandKind::UpdateLoop {
             restore_release: None,
         },
+        #[cfg(unix)]
+        executor_state_file: None,
     };
 
     assert_eq!(
