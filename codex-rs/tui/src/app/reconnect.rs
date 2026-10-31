@@ -36,6 +36,29 @@ pub(super) async fn reconnect(
     task_tools: ThreadToolTransport,
     presentation: ReconnectPresentation,
 ) -> Result<Reconnected> {
+    reconnect_with_attempt_timeout(
+        target,
+        config,
+        local_settings,
+        thread_id,
+        remote_cwd,
+        task_tools,
+        presentation,
+        Duration::from_secs(/*secs*/ 120),
+    )
+    .await
+}
+
+pub(super) async fn reconnect_with_attempt_timeout(
+    target: AppServerTarget,
+    config: Config,
+    local_settings: crate::local_settings::LocalSettings,
+    thread_id: Option<ThreadId>,
+    remote_cwd: Option<PathBuf>,
+    task_tools: ThreadToolTransport,
+    presentation: ReconnectPresentation,
+    attempt_timeout: Duration,
+) -> Result<Reconnected> {
     let mode = target.thread_params_mode();
     if matches!(target, AppServerTarget::Embedded) {
         color_eyre::eyre::bail!("in-process sessions have no connection to restore");
@@ -118,7 +141,7 @@ pub(super) async fn reconnect(
                 thread,
             })
         };
-        let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 120), attempt).await;
+        let result = tokio::time::timeout(attempt_timeout, attempt).await;
         match result {
             Ok(Ok(connected)) => return Ok(connected),
             Ok(Err(error)) => match error.downcast_ref::<TypedRequestError>() {

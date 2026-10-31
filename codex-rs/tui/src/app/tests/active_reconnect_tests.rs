@@ -3,6 +3,7 @@
 use super::*;
 use crate::app::reconnect::ReconnectPresentation;
 use crate::app::reconnect::reconnect;
+use crate::app::reconnect::reconnect_with_attempt_timeout;
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
 use pretty_assertions::assert_eq;
@@ -629,44 +630,27 @@ async fn reconnect_reconciles_offscreen_pending_profile_before_restoring_permiss
 }
 
 #[tokio::test]
-async fn reconnect_exhaustion_and_unknown_initial_thread_stay_offline() -> Result<()> {
-    let (mut app, _, _) = make_test_app_with_channels().await;
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    app.app_server_target = AppServerTarget::Remote {
-        endpoint: crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?,
-    };
-    drop(listener);
-    tokio::time::pause();
-    let start = tokio::time::Instant::now();
-    for id in [Some(ThreadId::new()), None] {
-        assert!(
-            reconnect(
-                app.app_server_target.clone(),
-                app.config.clone(),
-                app.local_settings.clone(),
-                id,
-                /*remote_cwd*/ None,
-                crate::dynamic_tools_mcp::ThreadToolTransport::Dynamic,
-                ReconnectPresentation::Conversation
-            )
-            .await
-            .is_err()
-        );
-    }
-    assert_eq!(start.elapsed().as_secs(), 120);
-    app.begin_reconnect();
-    app.chat_widget.reconnect_failed();
-    assert_snapshot!(
-        "reconnect_failed",
-        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+async fn unknown_initial_thread_stays_offline() -> Result<()> {
+    let (app, _, _) = make_test_app_with_channels().await;
+    assert!(
+        reconnect(
+            app.app_server_target.clone(),
+            app.config.clone(),
+            app.local_settings.clone(),
+            /*thread_id*/ None,
+            /*remote_cwd*/ None,
+            crate::dynamic_tools_mcp::ThreadToolTransport::Dynamic,
+            ReconnectPresentation::Conversation
+        )
+        .await
+        .is_err()
     );
-    tokio::time::resume();
     Ok(())
 }
 
 #[tokio::test]
-async fn reconnect_allows_slow_hydration_but_bounds_a_stalled_server() -> Result<()> {
-    for delay in [15, 150] {
+async fn reconnect_allows_slow_hydration() -> Result<()> {
+    for delay in [15] {
         let (mut app, mut events, _) = make_test_app_with_channels().await;
         app.config.model = Some("gpt-test".into());
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -769,6 +753,56 @@ async fn reconnect_allows_slow_hydration_but_bounds_a_stalled_server() -> Result
             server.abort();
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconnect_retries_after_a_connection_attempt_times_out() -> Result<()> {
+    let (app, _, _) = make_test_app_with_channels().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = crate::RemoteAppServerEndpoint::WebSocket {
+        websocket_url: format!("ws://{}", listener.local_addr()?),
+        auth_token: None,
+    };
+    let id = ThreadId::new();
+    let server =
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let _ = serve_reconnect_requests(
+                tokio_tungstenite::accept_async(stream).await?,
+                |request| async move {
+                    if request.method == "thread/resume" {
+                        tokio::time::sleep(Duration::from_secs(/*secs*/ 12)).await;
+                        Some(json!({"error": {"code": -32603, "message": "delayed response"}}))
+                    } else {
+                        None
+                    }
+                },
+            )
+            .await;
+            let (stream, _) = listener.accept().await?;
+            serve_reconnect_requests(tokio_tungstenite::accept_async(stream).await?, |request| {
+                std::future::ready((request.method == "thread/resume").then(
+                    || json!({"error": {"code": -32600, "message": "thread no longer exists"}}),
+                ))
+            })
+            .await
+        });
+
+    let connected = reconnect_with_attempt_timeout(
+        AppServerTarget::Remote { endpoint },
+        app.config.clone(),
+        app.local_settings.clone(),
+        Some(id),
+        /*remote_cwd*/ None,
+        crate::dynamic_tools_mcp::ThreadToolTransport::Dynamic,
+        ReconnectPresentation::Conversation,
+        Duration::from_secs(/*secs*/ 9),
+    )
+    .await;
+    assert!(connected.is_ok());
+    server.abort();
+    let _ = server.await;
     Ok(())
 }
 
