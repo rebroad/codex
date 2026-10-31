@@ -2,10 +2,7 @@ use super::ExecutorSupervisor;
 
 #[tokio::test]
 async fn repeated_rotation_keeps_each_executor_generation_available_for_handoff() {
-    let directory = tempfile::Builder::new()
-        .prefix("codex-executor-test-")
-        .tempdir_in("/var/tmp")
-        .expect("executor state directory should be created");
+    let directory = test_tempdir("codex-executor-test-");
     let executable = directory.path().join("fake-codex");
     std::fs::write(
         &executable,
@@ -73,10 +70,7 @@ async fn repeated_rotation_keeps_each_executor_generation_available_for_handoff(
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn legacy_executor_waits_for_its_child_before_retiring() {
-    let directory = tempfile::Builder::new()
-        .prefix("codex-legacy-executor-test-")
-        .tempdir_in("/var/tmp")
-        .expect("executor state directory should be created");
+    let directory = test_tempdir("codex-legacy-executor-test-");
     let executable = directory.path().join("fake-codex");
     std::fs::write(
         &executable,
@@ -138,4 +132,26 @@ async fn legacy_executor_waits_for_its_child_before_retiring() {
         .stop()
         .await
         .expect("current and draining executor generations should stop cleanly");
+}
+
+fn test_tempdir(prefix: &str) -> tempfile::TempDir {
+    let root = std::env::var_os("TMPDIR")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            #[cfg(target_os = "android")]
+            {
+                std::env::var_os("PREFIX")
+                    .map(|prefix| std::path::PathBuf::from(prefix).join("tmp"))
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                None
+            }
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp"));
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(root)
+        .expect("temporary directory should be created")
 }

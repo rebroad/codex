@@ -2124,6 +2124,125 @@ mod tests {
         client.shutdown().await.expect("shutdown should complete");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remote_unix_client_reconnects_after_app_server_socket_replacement() {
+        let socket_dir = test_tempdir("codex-app-server-reconnect-");
+        let socket_path = AbsolutePathBuf::from_absolute_path(socket_dir.path().join("codex.sock"))
+            .expect("socket path should resolve");
+        let mut listener = UnixListener::bind(socket_path.as_path())
+            .await
+            .expect("first listener should bind");
+        let server_socket_path = socket_path.clone();
+        let (replacement_bound_tx, replacement_bound_rx) = tokio::sync::oneshot::channel();
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (reconnected_tx, reconnected_rx) = tokio::sync::oneshot::channel();
+        let mut server = tokio::spawn(async move {
+            let stream = listener
+                .accept()
+                .await
+                .expect("first connection should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("first websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            websocket
+                .close(None)
+                .await
+                .expect("old server should close the client");
+            drop(listener);
+            match tokio::fs::remove_file(server_socket_path.as_path()).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("old socket should be removed: {error}"),
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut listener = UnixListener::bind(server_socket_path.as_path())
+                .await
+                .expect("replacement listener should bind the same endpoint");
+            replacement_bound_tx
+                .send(())
+                .expect("replacement listener observer should still be waiting");
+            let stream = listener
+                .accept()
+                .await
+                .expect("client should reconnect to the replacement server");
+            accepted_tx
+                .send(())
+                .expect("replacement connection observer should still be waiting");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("replacement websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            reconnected_tx
+                .send(())
+                .expect("reconnect observer should still be waiting");
+            let _ = websocket.next().await;
+        });
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+            client_name: "codex-tui".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            mcp_server_openai_form_elicitation: false,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
+        })
+        .await
+        .expect("client should connect to the first server");
+
+        timeout(Duration::from_secs(2), replacement_bound_rx)
+            .await
+            .expect("replacement listener should be ready")
+            .expect("replacement listener should bind");
+        tokio::select! {
+            result = timeout(Duration::from_secs(5), accepted_rx) => {
+                result
+                    .expect("client should reconnect to the replacement socket")
+                    .expect("replacement server should accept the reconnect");
+            }
+            result = &mut server => panic!("replacement server task exited before reconnect: {result:?}"),
+        }
+        timeout(Duration::from_secs(5), reconnected_rx)
+            .await
+            .expect("client should finish initialize after socket replacement")
+            .expect("replacement server should observe the reconnect");
+        assert!(matches!(
+            timeout(Duration::from_millis(100), client.next_event())
+                .await
+                .expect("reconnected event should arrive"),
+            Some(AppServerEvent::Reconnected)
+        ));
+        client
+            .shutdown()
+            .await
+            .expect("client shutdown should complete");
+        server.await.expect("replacement server should finish");
+    }
+
+    fn test_tempdir(prefix: &str) -> TempDir {
+        let root = std::env::var_os("TMPDIR")
+            .filter(|path| !path.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                #[cfg(target_os = "android")]
+                {
+                    std::env::var_os("PREFIX")
+                        .map(|prefix| std::path::PathBuf::from(prefix).join("tmp"))
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    None
+                }
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp"));
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(root)
+            .expect("temporary directory should be created")
+    }
+
     #[tokio::test]
     async fn remote_shutdown_interrupts_reconnect_handshake() {
         let listener = TcpListener::bind("127.0.0.1:0")
