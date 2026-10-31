@@ -795,9 +795,9 @@ async fn windows_sandbox_setup_starts_a_fresh_status_clock() {
 
     chat.clear_windows_sandbox_setup_status();
     chat.bottom_pane.set_task_running(/*running*/ true);
-    let working = render_bottom_popup(&chat, /*width*/ 80);
-    assert!(working.contains("Working"));
-    assert!(!working.contains("Setting up sandbox"));
+    let model_wait = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(model_wait.contains("Awaiting model response"));
+    assert!(!model_wait.contains("Setting up sandbox"));
 }
 
 #[tokio::test]

@@ -1198,7 +1198,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Awaiting model response");
     assert_eq!(status.details(), None);
 }
 
@@ -1640,7 +1640,7 @@ async fn thread_snapshot_replayed_turn_started_marks_task_running() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Awaiting model response");
 }
 
 #[tokio::test]
@@ -1731,7 +1731,10 @@ async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_heade
 
     replay_agent_message_delta(&mut chat, "hello", ReplayKind::ThreadSnapshot);
 
-    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Awaiting model response"
+    );
     assert_eq!(chat.status_state.current_status.details, None);
     assert!(chat.status_state.retry_status_header.is_none());
     assert!(chat.bottom_pane.status_widget().is_none());
@@ -1751,7 +1754,10 @@ async fn stream_recovery_restores_previous_status_header() {
     drain_insert_history(&mut rx);
     handle_agent_message_delta(&mut chat, "hello");
 
-    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Awaiting model response"
+    );
     assert_eq!(chat.status_state.current_status.details, None);
     assert!(chat.status_state.retry_status_header.is_none());
     assert!(chat.bottom_pane.status_widget().is_none());

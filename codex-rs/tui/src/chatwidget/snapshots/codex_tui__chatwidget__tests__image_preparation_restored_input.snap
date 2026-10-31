@@ -1,7 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/composer_submission.rs
-expression: "render_bottom_popup(&chat, 80)"
+assertion_line: 2722
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
 ---
+• Awaiting model response (4m 59s • esc to interrupt)
+
+
   [Image #1]
 
 › [Image #2] describe $file

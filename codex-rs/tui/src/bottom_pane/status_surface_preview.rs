@@ -51,7 +51,7 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::ProjectRoot => "my-project",
             StatusSurfacePreviewItem::CurrentDir => "~/my-project/subdir",
             StatusSurfacePreviewItem::Hostname => "my-host",
-            StatusSurfacePreviewItem::Status => "Working",
+            StatusSurfacePreviewItem::Status => "Running task",
             StatusSurfacePreviewItem::ThreadName => "thread name",
             StatusSurfacePreviewItem::ThreadTitle => "thread title",
             StatusSurfacePreviewItem::GitBranch => "feat/awesome-feature",

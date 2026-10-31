@@ -894,7 +894,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Awaiting model response");
 
     let item = AppServerThreadItem::AgentMessage {
         id: "msg-1".to_string(),
@@ -954,7 +954,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 }
 
 #[tokio::test]
-async fn live_app_server_wait_notifications_render_countdown_and_restore_working() {
+async fn live_app_server_wait_notifications_render_countdown_and_restore_model_wait() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
@@ -998,7 +998,7 @@ async fn live_app_server_wait_notifications_render_countdown_and_restore_working
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Waiting");
+    assert_eq!(status.header(), "Waiting for tool");
 
     chat.handle_server_notification(
         ServerNotification::ThreadStatusChanged(
@@ -1017,7 +1017,7 @@ async fn live_app_server_wait_notifications_render_countdown_and_restore_working
         .bottom_pane
         .status_widget()
         .expect("status indicator should remain visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Awaiting model response");
 }
 
 #[tokio::test]
@@ -1871,7 +1871,10 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         /*replay_kind*/ None,
     );
 
-    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Awaiting model response"
+    );
     assert_eq!(chat.status_state.current_status.details, None);
     assert!(chat.status_state.retry_status_header.is_none());
     assert!(chat.bottom_pane.status_widget().is_none());

@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: snapshot
 ---
 "                                                                                "
-"• Working (0s • esc to interrupt)                                               "
+"• Awaiting AI response (4m 59s • esc to interrupt)                              "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

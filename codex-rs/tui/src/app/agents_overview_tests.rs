@@ -1062,8 +1062,15 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
         "/tmp/project  1{}",
         " ".repeat(project.len().saturating_sub("/tmp/project".len()))
     );
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 96)
+        .replace(&format!("{project}  1"), &normalized_group)
+        .replace(&project, "/tmp/project");
+    assert!(
+        rendered.contains("● Checking cold-start regressions"),
+        "expected live reasoning in task details: {rendered}"
+    );
     insta::with_settings!({snapshot_path => "../snapshots"}, {
-        insta::assert_snapshot!("agents_overview_live_activity", render_bottom_popup(&app.chat_widget, /*width*/ 96).replace(&format!("{project}  1"), &normalized_group).replace(&project, "/tmp/project"));
+        insta::assert_snapshot!("agents_overview_live_activity", rendered);
     });
     assert!(app.agents_overview.request_id.is_none());
 
