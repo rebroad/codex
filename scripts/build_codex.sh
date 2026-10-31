@@ -71,7 +71,7 @@ RUSTY_V8_ARMV7_PREPARED="false"
 RUSTY_V8_BUILD_REPO=""
 LOCKFILE_REGENERATION_REQUIRED="false"
 ALLOW_CONCURRENT_BUILD="false"
-RESTART_APP_SERVER="false"
+RESTART_APP_SERVER=""
 PROFILE_OPTION_SET="false"
 SOURCE_LOCK_BACKUP=""
 ANDROID_PSI_NOTICE_DIR=""
@@ -128,7 +128,8 @@ Options:
   --preflight-only         Run syntax/tooling checks without compiling
   --no-sync                Reuse the already-synced external source tree
   --allow-concurrent-build  Bypass the shared Cargo target lock and share the target directory
-  --restart-if-idle        Restart local/remote app-servers after changed installs when idle
+  --restart                 Restart local/remote app-servers after installation
+  --restart-if-idle         Restart local/remote app-servers after changed installs when idle
   --jobs N                 Set CARGO_BUILD_JOBS
   --install TARGETS        Build and install to targets (SSH hosts or localhost), optionally
                            with per-target profiles: localhost:dev,pi3:dev-small
@@ -1277,7 +1278,11 @@ install_binary() {
     running_commit="${BASH_REMATCH[1]}"
   fi
   local installed_version="${version}-${short}${BUILD_TIMESTAMP_SEPARATOR}${TIMESTAMP}"
-  if [[ "${RESTART_APP_SERVER}" == true \
+  if [[ "${RESTART_APP_SERVER}" == restart ]]; then
+    echo "Requesting an app-server restart."
+    nohup "${INSTALL_BIN_DIR}/codex" app-server daemon restart \
+      </dev/null >/dev/null 2>&1 &
+  elif [[ "${RESTART_APP_SERVER}" == restart-if-idle \
     && ( "${running_commit}" != "${short}" || "${running_version}" != "${installed_version}" ) ]]; then
     echo "Requesting a graceful app-server restart after active turns finish."
     nohup "${INSTALL_BIN_DIR}/codex" app-server daemon restart-if-idle \
@@ -1449,7 +1454,7 @@ set -euo pipefail
 install_dir="$1"
 name="$2"
 remote_tmp="$3"
-restart_if_idle="$4"
+restart_mode="$4"
 mkdir -p "$install_dir"
 remote_size="$(stat -c '%s' "$remote_tmp")"
 previous_commit=""
@@ -1491,7 +1496,11 @@ case ":${PATH}:" in
 esac
 rm -f "$remote_tmp"
 printf 'Installed %s/%s\nLinked %s/codex\n' "$install_dir" "$name" "$install_dir"
-if [[ "$restart_if_idle" == true \
+if [[ "$restart_mode" == restart ]]; then
+  printf 'Requesting an app-server restart on the remote target.\n'
+  nohup "$install_dir/codex" app-server daemon restart \
+    </dev/null >/dev/null 2>&1 &
+elif [[ "$restart_mode" == restart-if-idle \
   && ( "$previous_commit" != "$new_commit" || "$previous_size" != "$new_size" ) ]]; then
   printf 'Requesting an idle app-server restart on the remote target.\n'
   nohup "$install_dir/codex" app-server daemon restart-if-idle \
@@ -1838,7 +1847,8 @@ while (($#)); do
     --preflight-only) PREFLIGHT_ONLY=true; shift ;;
     --no-sync) NO_SYNC=1; shift ;;
     --allow-concurrent-build) ALLOW_CONCURRENT_BUILD=true; shift ;;
-    --restart-if-idle) RESTART_APP_SERVER=true; shift ;;
+    --restart) RESTART_APP_SERVER=restart; shift ;;
+    --restart-if-idle) RESTART_APP_SERVER=restart-if-idle; shift ;;
     --jobs) CARGO_BUILD_JOBS="${2:-}"; shift 2 ;;
     --jobs=*) CARGO_BUILD_JOBS="${1#*=}"; shift ;;
     --install) INSTALL_TARGETS="${2:-}"; shift 2 ;;
