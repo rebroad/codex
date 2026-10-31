@@ -4,6 +4,7 @@ use std::time::Instant;
 use codex_build_info::BuildInfo;
 use codex_exec_server_protocol::JSONRPCMessage;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::debug;
 use tracing::warn;
@@ -39,6 +40,7 @@ pub(crate) struct ConnectionProcessor {
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
+    retirement_shutdown: CancellationToken,
 }
 
 impl ConnectionProcessor {
@@ -68,6 +70,7 @@ impl ConnectionProcessor {
             telemetry,
             http_client_factory,
             request_dispatch_mode,
+            retirement_shutdown: CancellationToken::new(),
         }
     }
 
@@ -103,6 +106,11 @@ impl ConnectionProcessor {
         self.capability_prewarm.abort();
         self.session_registry.shutdown().await;
     }
+
+    pub(crate) async fn retire_when_idle(&self) {
+        self.session_registry.retire_when_idle().await;
+        self.retirement_shutdown.cancel();
+    }
 }
 
 async fn run_connection(
@@ -119,6 +127,7 @@ async fn run_connection(
         telemetry,
         http_client_factory,
         request_dispatch_mode,
+        retirement_shutdown,
     } = processor;
     let _connection_metrics = telemetry.connection_started(transport);
     let JsonRpcConnection {
@@ -178,6 +187,10 @@ async fn run_connection(
             }
             _ = disconnected_rx.changed() => {
                 debug!("exec-server transport disconnected");
+                break;
+            }
+            _ = retirement_shutdown.cancelled() => {
+                debug!("exec-server connection closed after retirement");
                 break;
             }
             event = incoming_rx.recv() => {
@@ -354,6 +367,7 @@ mod tests {
                     codex_http_client::OutboundProxyPolicy::ReqwestDefault,
                 ),
                 request_dispatch_mode: crate::server::RequestDispatchMode::Inline,
+                retirement_shutdown: tokio_util::sync::CancellationToken::new(),
             }
         }
     }

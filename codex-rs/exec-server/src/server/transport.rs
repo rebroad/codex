@@ -200,15 +200,42 @@ async fn run_websocket_listener(
         .route("/readyz", get(readiness_handler))
         .layer(middleware::from_fn(reject_requests_with_origin_header))
         .with_state(ExecServerWebSocketState {
-            processor,
+            processor: processor.clone(),
             auth_policy,
         });
+    let retirement_processor = processor.clone();
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(async move {
+        wait_for_retirement_signal().await;
+        retirement_processor.retire_when_idle().await;
+    })
     .await?;
+    processor.shutdown().await;
     Ok(())
+}
+
+#[cfg(unix)]
+async fn wait_for_retirement_signal() {
+    use tokio::signal::unix::SignalKind;
+
+    match tokio::signal::unix::signal(SignalKind::user_defined1()) {
+        Ok(mut signal) => {
+            signal.recv().await;
+            info!("exec-server retirement requested");
+        }
+        Err(error) => {
+            warn!(%error, "failed to listen for exec-server retirement signal");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_retirement_signal() {
+    std::future::pending::<()>().await;
 }
 
 #[derive(Clone)]

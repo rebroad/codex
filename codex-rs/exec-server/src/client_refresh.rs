@@ -255,6 +255,7 @@ impl LazyRemoteExecServerClient {
                     transport.clone(),
                     self.http_client_factory.clone(),
                     self.session_id_file.clone(),
+                    self.resume_session_id.clone(),
                     &mut observation.started,
                 ) => result,
             };

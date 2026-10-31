@@ -514,6 +514,8 @@ impl Daemon {
             backend
                 .stop_with_grace(settings.shutdown_grace_seconds)
                 .await?;
+            #[cfg(unix)]
+            managed.rotate_managed_executor().await?;
         }
 
         // Persist changed launch settings only after the old process has stopped.
@@ -569,6 +571,7 @@ impl Daemon {
             eprintln!("warning: failed to clear stale daemon recovery before restart: {err}");
         }
         backend.stop_gracefully().await?;
+        managed.rotate_managed_executor().await?;
         let pid = managed.start_managed_backend(&settings).await?;
         let info = managed.wait_until_ready().await?;
         if let Err(err) = managed.ensure_managed_updater(&settings).await {
@@ -1104,6 +1107,17 @@ impl Daemon {
             self.pid_file.with_file_name("exec-server.json"),
         )
         .ensure_running()
+        .await
+        .map(|_| ())
+    }
+
+    #[cfg(unix)]
+    async fn rotate_managed_executor(&self) -> Result<()> {
+        backend::ExecutorSupervisor::new(
+            self.backend_codex_bin().to_path_buf(),
+            self.pid_file.with_file_name("exec-server.json"),
+        )
+        .rotate()
         .await
         .map(|_| ())
     }

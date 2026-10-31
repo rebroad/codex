@@ -19,6 +19,8 @@ use tracing::info;
 use tracing::warn;
 
 const EXECUTOR_EXECUTABLE_ENV: &str = "CODEX_MANAGED_EXECUTOR_EXECUTABLE";
+const EXEC_SERVER_URL_ENV: &str = "CODEX_EXEC_SERVER_URL";
+const EXEC_SERVER_SESSION_ID_FILE_ENV: &str = "CODEX_EXEC_SERVER_SESSION_ID_FILE";
 const EXECUTOR_STATE_FILE: &str = "local-executor.json";
 const EXECUTOR_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -38,6 +40,27 @@ pub(crate) async fn ensure(
     codex_home: &Path,
     codex_executable: Option<&Path>,
 ) -> io::Result<LocalExecutorEndpoint> {
+    if let Some(url) = std::env::var_os(EXEC_SERVER_URL_ENV) {
+        let url = url.to_string_lossy().into_owned();
+        if executor_is_ready(&url).await {
+            let session_id_file = std::env::var_os(EXEC_SERVER_SESSION_ID_FILE_ENV)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    codex_home
+                        .join("app-server-daemon")
+                        .join("exec-server-session-id")
+                });
+            return Ok(LocalExecutorEndpoint {
+                url,
+                session_id_file,
+            });
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "managed exec-server supplied by app-server daemon is not reachable",
+        ));
+    }
+
     let directory = codex_home.join("app-server-daemon");
     tokio::fs::create_dir_all(&directory).await?;
     let state_file = directory.join(EXECUTOR_STATE_FILE);

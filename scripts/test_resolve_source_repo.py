@@ -135,6 +135,35 @@ class ResolveSourceRepoTests(unittest.TestCase):
             with patch.dict("os.environ", {}, clear=True):
                 self.assertEqual(resolve_source_repo(build_root), source_root)
 
+    def test_resolves_sibling_build_symlink_without_following_it_first(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_root = root / "codex"
+            build_target = root / "external" / "codex.build"
+            build_root = root / "codex.build"
+            for repo in (source_root, build_target):
+                (repo / "codex-rs").mkdir(parents=True)
+                (repo / "justfile").touch()
+            build_root.symlink_to(build_target, target_is_directory=True)
+
+            with patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(resolve_source_repo(build_root), source_root)
+
+    def test_resolves_source_recorded_by_build_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_root = root / "source" / "codex"
+            build_root = root / "elsewhere" / "codex.build"
+            for repo in (source_root, build_root):
+                (repo / "codex-rs").mkdir(parents=True)
+                (repo / "justfile").touch()
+            marker = build_root / "build" / ".codex-source-repo"
+            marker.parent.mkdir()
+            marker.write_text(f"{source_root}\n", encoding="utf-8")
+
+            with patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(resolve_source_repo(build_root), source_root)
+
     def test_keeps_source_checkout_as_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             source_root = Path(temp_dir) / "codex"

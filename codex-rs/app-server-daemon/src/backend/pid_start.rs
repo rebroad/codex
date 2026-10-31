@@ -14,6 +14,8 @@ use crate::backend::ExecutorSupervisor;
 #[cfg(unix)]
 use crate::backend::exec_server_url_env;
 #[cfg(unix)]
+use crate::backend::handoff_executor_manifest_env;
+#[cfg(unix)]
 use crate::backend::session_id_file_env;
 use crate::managed_install::executable_identity;
 use anyhow::Context;
@@ -167,6 +169,12 @@ impl PidBackend {
                 session_id_file_env(),
                 state_file.with_file_name("exec-server-session-id"),
             );
+            command.env_remove(handoff_executor_manifest_env());
+            if let Some(manifest) =
+                ExecutorSupervisor::handoff_manifest_from_state(state_file).await
+            {
+                command.env(handoff_executor_manifest_env(), manifest);
+            }
         }
 
         crate::background_command::set_working_directory(

@@ -260,12 +260,14 @@ impl UnifiedExecProcess {
         self.finish_termination();
     }
 
-    pub(super) fn executor_handoff_ids(&self) -> Option<(String, String)> {
+    pub(super) fn executor_handoff_ids(&self) -> Option<(String, String, Option<String>)> {
         match &self.process_handle {
             ProcessHandle::Local(_) => None,
-            ProcessHandle::ExecServer(process) => {
-                Some((process.process_id().to_string(), process.session_id()?))
-            }
+            ProcessHandle::ExecServer(process) => Some((
+                process.process_id().to_string(),
+                process.session_id()?,
+                process.executor_url(),
+            )),
         }
     }
 

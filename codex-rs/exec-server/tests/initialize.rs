@@ -13,6 +13,7 @@ use codex_exec_server_protocol::JSONRPCError;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::ReadResponse;
 use common::TEST_BUILD_COMMIT;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server_with_env;
@@ -101,6 +102,136 @@ async fn exec_server_accepts_initialize(version: Option<&str>) -> anyhow::Result
         expected_environment
     );
 
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_exits_after_sigusr1_retirement_request() -> anyhow::Result<()> {
+    let mut server = common::exec_server::exec_server().await?;
+    let initialize_id = server
+        .send_request(
+            "initialize",
+            serde_json::to_value(InitializeParams {
+                client_name: "exec-server-retirement-test".to_string(),
+                resume_session_id: None,
+            })?,
+        )
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, .. }) = server.next_event().await? else {
+        anyhow::bail!("expected initialize response");
+    };
+    assert_eq!(id, initialize_id);
+    server
+        .send_notification("initialized", serde_json::json!({}))
+        .await?;
+
+    let pid = server
+        .pid()
+        .context("exec-server subprocess should have a process ID")?;
+    let pid = libc::pid_t::try_from(pid)?;
+    // SAFETY: pid comes from the live child process managed by the test harness.
+    anyhow::ensure!(unsafe { libc::kill(pid, libc::SIGUSR1) } == 0);
+
+    let exit_status = server.wait_for_exit().await?;
+    anyhow::ensure!(
+        exit_status.success(),
+        "exec-server exited with {exit_status}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_finishes_in_flight_process_after_sigusr1_retirement_request()
+-> anyhow::Result<()> {
+    let mut server = common::exec_server::exec_server().await?;
+    let initialize_id = server
+        .send_request(
+            "initialize",
+            serde_json::to_value(InitializeParams {
+                client_name: "exec-server-retirement-test".to_string(),
+                resume_session_id: None,
+            })?,
+        )
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, .. }) = server.next_event().await? else {
+        anyhow::bail!("expected initialize response");
+    };
+    assert_eq!(id, initialize_id);
+    server
+        .send_notification("initialized", serde_json::json!({}))
+        .await?;
+
+    let process_id = "retirement-in-flight";
+    let cwd = codex_utils_path_uri::PathUri::from_host_native_path(std::env::current_dir()?)?;
+    let start_id = server
+        .send_request(
+            "process/start",
+            serde_json::json!({
+                "processId": process_id,
+                "argv": ["/bin/sh", "-c", "sleep 1"],
+                "cwd": cwd,
+                "env": {},
+                "tty": false,
+                "arg0": null,
+                "sandbox": null,
+                "enforceManagedNetwork": false,
+            }),
+        )
+        .await?;
+    server
+        .wait_for_event(
+            |event| matches!(event, JSONRPCMessage::Response(response) if response.id == start_id),
+        )
+        .await?;
+
+    let pid = server
+        .pid()
+        .context("exec-server subprocess should have a process ID")?;
+    let pid = libc::pid_t::try_from(pid)?;
+    // SAFETY: pid comes from the live child process managed by the test harness.
+    anyhow::ensure!(unsafe { libc::kill(pid, libc::SIGUSR1) } == 0);
+
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            server.wait_for_exit()
+        )
+        .await
+        .is_err(),
+        "exec-server exited before its in-flight process finished"
+    );
+
+    let read_id = server
+        .send_request(
+            "process/read",
+            serde_json::json!({
+                "processId": process_id,
+                "afterSeq": null,
+                "maxBytes": null,
+                "waitMs": 1500,
+            }),
+        )
+        .await?;
+    let response = server
+        .wait_for_event(
+            |event| matches!(event, JSONRPCMessage::Response(response) if response.id == read_id),
+        )
+        .await?;
+    let JSONRPCMessage::Response(response) = response else {
+        unreachable!("event predicate only accepts responses");
+    };
+    let output: ReadResponse = serde_json::from_value(response.result)?;
+    anyhow::ensure!(
+        output.exited,
+        "in-flight process should finish during retirement"
+    );
+
+    // Completed output remains replayable for EXITED_PROCESS_RETENTION before server shutdown.
+    // This test verifies the active command is allowed to finish; the idle lifecycle test above
+    // verifies the retirement path exits once no process output is retained.
     server.shutdown().await?;
     Ok(())
 }

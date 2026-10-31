@@ -16,6 +16,7 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::shell_environment::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR;
+use serde::Deserialize;
 
 use crate::CapabilityRootsDiscoverParams;
 use crate::CapabilityRootsDiscoverResponse;
@@ -103,6 +104,7 @@ pub struct EnvironmentManager {
     default_environment: Option<String>,
     pub(super) environments: RwLock<HashMap<String, Arc<Environment>>>,
     local_environment: Option<Arc<Environment>>,
+    managed_local_executor_url: Option<String>,
     local_runtime_paths: Option<ExecServerRuntimeOptions>,
     http_client_factory: HttpClientFactory,
 }
@@ -116,6 +118,21 @@ pub struct EnvironmentReadyInfo {
 
 /// Maximum capability roots accepted from environment ready information.
 pub const MAX_SELECTED_CAPABILITY_ROOTS: usize = 256;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HandoffExecutorRecord {
+    session_id: Option<String>,
+    url: String,
+}
+
+fn handoff_executor_url_from_manifest(manifest: &str, session_id: &str) -> Option<String> {
+    serde_json::from_str::<Vec<HandoffExecutorRecord>>(manifest)
+        .ok()?
+        .into_iter()
+        .find(|executor| executor.session_id.as_deref() == Some(session_id))
+        .map(|executor| executor.url)
+}
 
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
 pub const REMOTE_ENVIRONMENT_ID: &str = "remote";
@@ -145,6 +162,35 @@ pub enum EnvironmentObservedStatus {
 }
 
 impl EnvironmentManager {
+    /// Finds a superseded managed executor by its client session ID.
+    pub fn handoff_executor_url(&self, session_id: &str) -> Option<String> {
+        std::env::var("CODEX_EXEC_SERVER_HANDOFF_EXECUTORS")
+            .ok()
+            .and_then(|manifest| handoff_executor_url_from_manifest(&manifest, session_id))
+    }
+
+    /// Reattaches to a process on the executor that owned it before app-server replacement.
+    pub fn managed_executor_backend_for_session(
+        &self,
+        websocket_url: String,
+        session_id: String,
+    ) -> Arc<dyn ExecBackend> {
+        if self.managed_local_executor_url.as_deref() == Some(websocket_url.as_str())
+            && let Some(environment) = &self.local_environment
+        {
+            return environment.get_exec_backend();
+        }
+        let client = LazyRemoteExecServerClient::new_with_resume_session_id(
+            ExecServerTransportParams::websocket_url(
+                websocket_url.clone(),
+                DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+            ),
+            self.http_client_factory.clone(),
+            session_id,
+        );
+        Arc::new(RemoteProcess::new_with_executor_url(client, websocket_url))
+    }
+
     /// Routes local command execution through an external executor owned by the managed daemon.
     ///
     /// The local filesystem and HTTP capabilities remain in this process. The executor transport
@@ -167,11 +213,12 @@ impl EnvironmentManager {
                     )
                 })?;
         let environment = Arc::new(Environment::local_with_managed_executor(
-            websocket_url,
+            websocket_url.clone(),
             session_id_file,
             local_runtime_paths,
             self.http_client_factory.clone(),
         ));
+        self.managed_local_executor_url = Some(websocket_url);
         environment.start_connecting();
         self.environments
             .write()
@@ -190,6 +237,7 @@ impl EnvironmentManager {
                 Arc::new(Environment::default_for_tests()),
             )])),
             local_environment: Some(Arc::new(Environment::default_for_tests())),
+            managed_local_executor_url: None,
             local_runtime_paths: None,
             // Test-only construction has no application config from which to resolve proxy policy.
             http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
@@ -202,6 +250,7 @@ impl EnvironmentManager {
             default_environment: None,
             environments: RwLock::new(HashMap::new()),
             local_environment: None,
+            managed_local_executor_url: None,
             local_runtime_paths: None,
             http_client_factory,
         }
@@ -283,6 +332,7 @@ impl EnvironmentManager {
             default_environment: Some(REMOTE_ENVIRONMENT_ID.to_string()),
             environments: RwLock::new(HashMap::new()),
             local_environment: None,
+            managed_local_executor_url: None,
             local_runtime_paths,
             http_client_factory,
         };
@@ -399,6 +449,7 @@ impl EnvironmentManager {
             default_environment,
             environments: RwLock::new(environment_map),
             local_environment,
+            managed_local_executor_url: None,
             local_runtime_paths,
             http_client_factory,
         })
@@ -851,7 +902,7 @@ impl Environment {
     ) -> Self {
         let client = LazyRemoteExecServerClient::new_with_session_id_file(
             ExecServerTransportParams::websocket_url(
-                websocket_url,
+                websocket_url.clone(),
                 DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
             ),
             http_client_factory.clone(),
@@ -864,7 +915,7 @@ impl Environment {
             ready_info: Arc::new(ArcSwapOption::empty()),
             provisioning_status_tx: None,
             startup_task: Arc::new(Mutex::new(None)),
-            exec_backend: Arc::new(RemoteProcess::new(client)),
+            exec_backend: Arc::new(RemoteProcess::new_with_executor_url(client, websocket_url)),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
             )),

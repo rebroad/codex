@@ -242,6 +242,7 @@ impl LazyRemoteExecServerClient {
         Self {
             transport_params: None,
             session_id_file: None,
+            resume_session_id: None,
             http_client_factory,
             recovery_policy: super::RecoveryPolicy::Wait,
             startup: std::sync::Arc::new(super::ConnectionAttempt {

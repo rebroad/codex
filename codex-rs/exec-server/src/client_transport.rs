@@ -332,6 +332,7 @@ impl ExecServerClient {
         transport_params: ExecServerTransportParams,
         http_client_factory: HttpClientFactory,
         managed_session_id_file: Option<std::path::PathBuf>,
+        resume_session_id: Option<String>,
         started: &mut Option<Instant>,
     ) -> Result<Self, ExecServerError> {
         let (transport_params, deferred_readiness) = match transport_params {
@@ -427,7 +428,7 @@ impl ExecServerClient {
                 client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
                 connect_timeout,
                 initialize_timeout,
-                resume_session_id: None,
+                resume_session_id,
                 http_client_factory,
             },
             http_headers,
@@ -541,8 +542,12 @@ impl ExecServerClient {
         http_headers: HeaderMap,
         managed_session_id_file: Option<std::path::PathBuf>,
     ) -> Result<Self, ExecServerError> {
-        let session_id_file = managed_session_id_file
-            .or_else(|| crate::session_id_store::session_id_file_for_url(&args.websocket_url));
+        let session_id_file = managed_session_id_file.or_else(|| {
+            args.resume_session_id
+                .is_none()
+                .then(|| crate::session_id_store::session_id_file_for_url(&args.websocket_url))
+                .flatten()
+        });
         args.resume_session_id = crate::session_id_store::resume_session_id(
             args.resume_session_id,
             session_id_file.as_deref(),

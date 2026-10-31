@@ -69,6 +69,9 @@ pub struct SuspendedExecutorProcess {
     pub unified_process_id: i32,
     pub call_id: String,
     pub environment_id: String,
+    /// WebSocket endpoint of the exec-server that owns this process.
+    #[serde(default)]
+    pub executor_url: Option<String>,
     pub exec_server_process_id: String,
     pub exec_server_session_id: String,
     pub after_seq: u64,

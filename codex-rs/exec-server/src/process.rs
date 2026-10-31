@@ -204,6 +204,11 @@ pub trait ExecProcess: Send + Sync {
         None
     }
 
+    /// Returns the WebSocket endpoint of the executor that owns this process, when known.
+    fn executor_url(&self) -> Option<String> {
+        None
+    }
+
     fn subscribe_wake(&self) -> watch::Receiver<u64>;
 
     fn subscribe_events(&self) -> ExecProcessEventReceiver;

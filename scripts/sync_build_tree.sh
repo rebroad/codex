@@ -40,4 +40,7 @@ if ! command -v cpto >/dev/null 2>&1; then
   echo "cpto is required to synchronize source and build trees" >&2
   exit 1
 fi
-exec cpto --no-lngit "${source_repo}" "${build_repo}"
+cpto --no-lngit "${source_repo}" "${build_repo}"
+mkdir -p "${build_repo}/build"
+printf '%s\n' "$(cd -- "${source_repo}" && pwd -P)" \
+  >"${build_repo}/build/.codex-source-repo"

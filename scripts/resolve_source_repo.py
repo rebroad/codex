@@ -64,6 +64,19 @@ def source_for_worktree(build_root: Path) -> Path | None:
     )
 
 
+def source_for_synced_build_tree(build_root: Path) -> Path | None:
+    """Read the source path recorded by sync_build_tree.sh."""
+    for root in (build_root, build_root.resolve()):
+        marker = root / "build" / ".codex-source-repo"
+        try:
+            source_root = Path(marker.read_text(encoding="utf-8").strip()).resolve()
+        except (OSError, ValueError):
+            continue
+        if is_repository(source_root):
+            return source_root
+    return None
+
+
 def is_build_repo_inside_source(source_root: Path, build_root: Path) -> bool:
     """Return whether the build tree is nested in source, excluding a source alias symlink."""
     build_repo_is_symlink = build_root.is_symlink()
@@ -88,7 +101,10 @@ def is_build_tree_root(repo_root: Path) -> bool:
 
 
 def resolve_source_repo(repo_root: Path) -> Path:
-    repo_root = repo_root.resolve()
+    # Keep the invocation path before resolving symlinks. External build trees
+    # are commonly exposed as a sibling symlink (for example codex.build ->
+    # /var/tmp/builds/...); resolving it first loses the source/build pairing.
+    repo_root = repo_root.absolute()
     override = os.environ.get("CODEX_SOURCE_REPO")
     if override:
         source_root = Path(override).resolve()
@@ -99,8 +115,13 @@ def resolve_source_repo(repo_root: Path) -> Path:
         return source_root
 
     if is_build_tree_root(repo_root):
-        source_root = source_for_worktree(repo_root) or mirrored_source_for_build_tree(
-            repo_root
+        sibling_name = repo_root.name.removesuffix(".build").removesuffix(".make")
+        sibling_source = repo_root.with_name(sibling_name)
+        source_root = (
+            source_for_worktree(repo_root)
+            or source_for_synced_build_tree(repo_root)
+            or (sibling_source if is_repository(sibling_source) else None)
+            or mirrored_source_for_build_tree(repo_root)
         )
         if source_root is None:
             raise ValueError(
@@ -118,7 +139,7 @@ def resolve_source_repo(repo_root: Path) -> Path:
 
 def resolve_build_repo(repo_root: Path) -> Path:
     """Find the external sibling build checkout for this source or build tree."""
-    repo_root = repo_root.resolve()
+    repo_root = repo_root.absolute()
     source_root = resolve_source_repo(repo_root)
     if repo_root != source_root and is_build_tree_root(repo_root):
         return repo_root

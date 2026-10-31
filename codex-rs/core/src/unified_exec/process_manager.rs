@@ -459,6 +459,7 @@ impl UnifiedExecProcessManager {
         session: &Arc<crate::session::session::Session>,
     ) -> Result<(), String> {
         let mut restored = Vec::with_capacity(suspended.len());
+        let mut executor_backends = HashMap::new();
         for saved in suspended {
             if saved.tty {
                 return Err(format!(
@@ -474,16 +475,38 @@ impl UnifiedExecProcessManager {
                         saved.environment_id, saved.unified_process_id
                     )
                 })?;
-            let started = environment
-                .get_exec_backend()
-                .reattach_process(saved.exec_server_process_id.clone().into(), saved.after_seq)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "failed to reattach executor process {}: {error}",
-                        saved.unified_process_id
+            let process_id = saved.exec_server_process_id.clone().into();
+            let executor_url = saved.executor_url.clone().or_else(|| {
+                environment_manager.handoff_executor_url(&saved.exec_server_session_id)
+            });
+            let executor_url_for_error = executor_url.clone();
+            let started = if let Some(executor_url) = executor_url {
+                let key = (executor_url.clone(), saved.exec_server_session_id.clone());
+                let backend = Arc::clone(executor_backends.entry(key).or_insert_with(|| {
+                    environment_manager.managed_executor_backend_for_session(
+                        executor_url.clone(),
+                        saved.exec_server_session_id.clone(),
                     )
-                })?;
+                }));
+                backend.reattach_process(process_id, saved.after_seq).await
+            } else {
+                environment
+                    .get_exec_backend()
+                    .reattach_process(process_id, saved.after_seq)
+                    .await
+            }
+            .map_err(|error| {
+                tracing::warn!(
+                    process_id = saved.unified_process_id,
+                    executor_url = ?executor_url_for_error,
+                    %error,
+                    "failed to reattach suspended executor process"
+                );
+                format!(
+                    "failed to reattach executor process {}: {error}",
+                    saved.unified_process_id
+                )
+            })?;
             if started.process.session_id().as_deref()
                 != Some(saved.exec_server_session_id.as_str())
             {
@@ -2002,7 +2025,7 @@ impl UnifiedExecProcessManager {
                     entry.process_id
                 ));
             }
-            let Some((exec_server_process_id, exec_server_session_id)) =
+            let Some((exec_server_process_id, exec_server_session_id, executor_url)) =
                 entry.process.executor_handoff_ids()
             else {
                 return Err(format!(
@@ -2014,6 +2037,7 @@ impl UnifiedExecProcessManager {
                 unified_process_id: entry.process_id,
                 call_id: entry.call_id.clone(),
                 environment_id: entry.environment_id.clone(),
+                executor_url,
                 exec_server_process_id,
                 exec_server_session_id,
                 after_seq: entry.process.last_exec_server_seq(),

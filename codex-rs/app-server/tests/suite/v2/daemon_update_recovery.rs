@@ -846,6 +846,13 @@ async fn managed_handoff_reattaches_a_running_local_command() -> Result<()> {
         suspended.executor_processes[0].unified_process_id,
         process_session_id as i32
     );
+    assert!(
+        suspended.executor_processes[0]
+            .executor_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("ws://127.0.0.1:")),
+        "handoff snapshot should retain the owning exec-server endpoint"
+    );
     let _ = release_old_response.send(());
     let poll_response = responses::sse(vec![
         responses::ev_response_created("handoff-process-poll-response"),

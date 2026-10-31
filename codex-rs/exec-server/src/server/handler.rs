@@ -191,6 +191,7 @@ impl ExecServerHandler {
         params: ExecParams,
         launch_context: Option<SpanContext>,
     ) -> Result<ExecResponse, JSONRPCErrorError> {
+        let _process_start_guard = self.session_registry.process_start_guard().await?;
         let session = self.require_initialized_for("exec")?;
         session
             .process()

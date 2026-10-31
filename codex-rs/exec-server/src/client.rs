@@ -400,6 +400,7 @@ pub(super) type ConnectionObserver =
 pub(crate) struct LazyRemoteExecServerClient {
     transport_params: Option<ExecServerTransportParams>,
     session_id_file: Option<std::path::PathBuf>,
+    resume_session_id: Option<String>,
     http_client_factory: HttpClientFactory,
     recovery_policy: RecoveryPolicy,
     // Saves the first startup result so callers share it; retryable failures use reconnect.
@@ -428,6 +429,7 @@ impl LazyRemoteExecServerClient {
         Self {
             transport_params: Some(transport_params),
             session_id_file,
+            resume_session_id: None,
             http_client_factory,
             recovery_policy: RecoveryPolicy::Wait,
             startup: Arc::new(ConnectionAttempt::default()),
@@ -440,6 +442,16 @@ impl LazyRemoteExecServerClient {
             )
             .0,
         }
+    }
+
+    pub(crate) fn new_with_resume_session_id(
+        transport_params: ExecServerTransportParams,
+        http_client_factory: HttpClientFactory,
+        resume_session_id: String,
+    ) -> Self {
+        let mut client = Self::new(transport_params, http_client_factory);
+        client.resume_session_id = Some(resume_session_id);
+        client
     }
 
     pub(crate) fn subscribe_connection_state(&self) -> watch::Receiver<EnvironmentConnectionState> {
@@ -2578,6 +2590,7 @@ mod tests {
             codex_http_client::HttpClientFactory::new(
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
+            None,
             None,
             /*started*/ &mut None,
         )
