@@ -36,6 +36,29 @@ pub(super) async fn reconnect(
     task_tools: ThreadToolTransport,
     presentation: ReconnectPresentation,
 ) -> Result<Reconnected> {
+    reconnect_with_attempt_timeout(
+        target,
+        config,
+        local_settings,
+        thread_id,
+        remote_cwd,
+        task_tools,
+        presentation,
+        Duration::from_secs(/*secs*/ 30),
+    )
+    .await
+}
+
+pub(super) async fn reconnect_with_attempt_timeout(
+    target: AppServerTarget,
+    config: Config,
+    local_settings: crate::local_settings::LocalSettings,
+    thread_id: Option<ThreadId>,
+    remote_cwd: Option<PathBuf>,
+    task_tools: ThreadToolTransport,
+    presentation: ReconnectPresentation,
+    attempt_timeout: Duration,
+) -> Result<Reconnected> {
     let mode = target.thread_params_mode();
     if matches!(target, AppServerTarget::Embedded) {
         color_eyre::eyre::bail!("in-process sessions have no connection to restore");
@@ -48,9 +71,8 @@ pub(super) async fn reconnect(
             "The initial thread may have been created, but its ID was not received. Nothing was retried. Your prompt is editable; inspect your tasks before relaunching."
         );
     }
-    // Connecting already has transport deadlines. Give healthy history/inventory hydration one
-    // shared budget instead of repeatedly discarding its progress on a short per-attempt timer.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 120);
+    // Give each connection and hydration attempt enough time to finish, while allowing the TUI
+    // to outlast a long graceful daemon shutdown and keep retrying until its replacement is ready.
     for (attempt_number, delay) in [0, 1, 2, 4]
         .into_iter()
         .chain(std::iter::repeat(/*elt*/ 8))
@@ -119,7 +141,7 @@ pub(super) async fn reconnect(
                 thread,
             })
         };
-        let result = tokio::time::timeout_at(deadline, attempt).await;
+        let result = tokio::time::timeout(attempt_timeout, attempt).await;
         match result {
             Ok(Ok(connected)) => return Ok(connected),
             Ok(Err(error)) => match error.downcast_ref::<TypedRequestError>() {
@@ -158,7 +180,6 @@ pub(super) async fn reconnect(
                     failure_stage,
                     "app-server reconnect attempt timed out"
                 );
-                break;
             }
         }
         // Transport errors can contain endpoint credentials. Do not render or log them.
