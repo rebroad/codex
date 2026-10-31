@@ -20,10 +20,11 @@ impl ChatWidget {
     fn clear_guardian_review_status(&mut self) {
         self.status_state.pending_guardian_review_status.clear();
         if self.status_state.current_status.is_guardian_review() {
-            let header = self
-                .mcp_startup_status_header()
-                .unwrap_or_else(|| String::from("Working"));
-            self.set_status_header(header);
+            if let Some(header) = self.mcp_startup_status_header() {
+                self.set_status_header(header);
+            } else {
+                self.set_awaiting_model_response();
+            }
         }
     }
 
@@ -118,7 +119,7 @@ impl ChatWidget {
             .set_interrupt_hint_visible(/*visible*/ true);
         self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
         if self.mcp_startup_status.is_none() || !self.status_header_is_mcp_startup_owned() {
-            self.set_status_header(String::from("Working"));
+            self.set_awaiting_model_response();
         }
         self.reasoning_summary_parts.clear();
         self.reasoning_buffer.clear();
