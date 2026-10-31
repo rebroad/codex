@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source_repo="${1:?source checkout path is required}"
-build_repo="${2:?build tree path is required}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source_repo="${1:-$(cd -- "${script_dir}/.." && pwd -P)}"
+build_repo="${2:-${source_repo}/../codex.build}"
 
 if [[ ! -d "${source_repo}/codex-rs" ]]; then
   echo "source checkout not found at ${source_repo}" >&2
@@ -14,7 +15,7 @@ if [[ ! -d "${build_repo}/codex-rs" ]]; then
     exit 1
   fi
   if ! mkdir -p "${build_repo}"; then
-    echo "cannot create build tree at ${build_repo}; check that the external build volume is mounted and writable, or set CODEX_BUILD_REPO to another external path" >&2
+    echo "cannot create build tree at ${build_repo}; check that its parent is writable, or pass a build tree path as the second argument" >&2
     exit 1
   fi
 fi
