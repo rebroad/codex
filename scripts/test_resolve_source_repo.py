@@ -57,6 +57,27 @@ class ResolveSourceRepoTests(unittest.TestCase):
                 "Using source checkout as the build tree via symlink", result.stderr
             )
 
+    def test_sync_defaults_to_codex_build_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_root = root / "codex"
+            (source_root / "scripts").mkdir(parents=True)
+            (source_root / "codex-rs").mkdir()
+            script = source_root / "scripts" / "sync_build_tree.sh"
+            shutil.copyfile(Path(__file__).with_name(script.name), script)
+
+            result = subprocess.run(
+                [shutil.which("bash") or "bash", str(script)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={"PATH": "/usr/bin:/bin"},
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertTrue((root / "codex.build").is_dir())
+            self.assertIn("cpto is required", result.stderr)
+
     def test_resolves_worktree_under_build_container_to_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
