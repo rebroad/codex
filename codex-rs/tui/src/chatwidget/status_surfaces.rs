@@ -336,7 +336,6 @@ impl ChatWidget {
     pub(super) fn iterm_session_detail(&self, status: ProgramStatus) -> Option<&str> {
         (status == ProgramStatus::Working && self.bottom_pane.is_task_running())
             .then_some(self.status_state.current_status.header.as_str())
-            .filter(|detail| *detail != "Working")
     }
 
     pub(super) fn terminal_title_shows_action_required(&self) -> bool {
@@ -1034,7 +1033,7 @@ impl ChatWidget {
             TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
                 "Ready".to_string()
             }
-            TerminalTitleStatusKind::Working => "Working".to_string(),
+            TerminalTitleStatusKind::Working => self.status_state.current_status.header.clone(),
             TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
             TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
         }

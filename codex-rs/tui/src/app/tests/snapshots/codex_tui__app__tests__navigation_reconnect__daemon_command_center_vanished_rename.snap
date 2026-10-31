@@ -1,10 +1,9 @@
 ---
 source: tui/src/app/tests/navigation_reconnect_tests.rs
-assertion_line: 407
 expression: "crate::version::normalize_cli_version_for_snapshot(&render_bottom_popup(&app.chat_widget,\n100))"
 ---
   Agent command center  Group: Project  g
-   All 2   Needs you 0   Working 1   Ready 1   Inactive 0                          tab/⇧tab filter
+   All 2   Needs you 0   Model / tool activity 1   Ready 1   Inactive 0            tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                               │ Task details
   /tmp/project  2                                         │

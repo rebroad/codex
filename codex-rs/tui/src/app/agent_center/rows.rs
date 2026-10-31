@@ -11,7 +11,13 @@ use crate::resume_picker::format_relative_time;
 use crate::status::format_directory_display;
 
 fn columns(area: Rect) -> (Rect, Rect, Rect) {
-    let metadata = if area.width >= 56 { 24 } else { 0 };
+    let metadata = if area.width >= 76 {
+        34
+    } else if area.width >= 56 {
+        24
+    } else {
+        0
+    };
     let gutter = area.width.min(/*other*/ 4);
     let title = Rect::new(
         area.x + gutter,
@@ -28,7 +34,11 @@ fn columns(area: Rect) -> (Rect, Rect, Rect) {
     let status = Rect::new(
         title.right() + metadata.min(/*other*/ 2),
         area.y,
-        if metadata == 24 { 11 } else { 0 },
+        match metadata {
+            34 => 21,
+            24 => 11,
+            _ => 0,
+        },
         area.height,
     );
     (title, status, updated)

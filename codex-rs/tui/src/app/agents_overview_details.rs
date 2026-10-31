@@ -37,6 +37,7 @@ pub(super) fn preview_markdown(text: &str) -> String {
 pub(super) struct AgentsOverviewDetails {
     pub(super) lines: Vec<Line<'static>>,
     pub(super) usage_lines: Vec<Line<'static>>,
+    pub(super) activity_status: Option<String>,
     pub(super) last_message: Option<(String, AbsolutePathBuf)>,
 }
 
@@ -200,11 +201,14 @@ impl App {
         let activity = self.agents_overview.activity.get(&thread_id).filter(|_| {
             channel.is_none_or(|channel| channel.attachment() == ThreadEventAttachment::Live)
         });
-        if matches!(source.status, ThreadStatus::Active { .. })
-            && let Some(header) = activity
+        let activity_status = if matches!(source.status, ThreadStatus::Active { .. }) {
+            activity
                 .and_then(|activity| activity.reasoning.as_ref())
-                .and_then(|reasoning| reasoning.header.as_ref())
-        {
+                .and_then(|reasoning| reasoning.header.clone())
+        } else {
+            None
+        };
+        if let Some(header) = activity_status.as_ref() {
             if !is_child {
                 lines.push(Line::default());
             }
@@ -222,6 +226,7 @@ impl App {
                 .and_then(|id| self.agents_overview.usage.get(&id))
                 .map(super::agents_overview_usage::usage_lines)
                 .unwrap_or_default(),
+            activity_status,
             last_message,
         }
     }

@@ -53,7 +53,7 @@ pub(crate) enum StatusDetailsCapitalization {
 
 /// Displays a single-line in-progress status with optional wrapped details.
 pub(crate) struct StatusIndicatorWidget {
-    /// Animated header text (defaults to "Working").
+    /// Animated header text.
     header: String,
     header_started_at: Instant,
     details: Option<String>,
@@ -99,7 +99,7 @@ impl StatusIndicatorWidget {
         effects: codex_config::types::TuiEffects,
     ) -> Self {
         Self {
-            header: String::from("Working"),
+            header: String::from("Awaiting model response"),
             header_started_at: Instant::now(),
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
@@ -134,15 +134,19 @@ impl StatusIndicatorWidget {
         }
     }
 
-    pub(crate) fn set_waiting(&mut self, duration: Duration) {
-        self.set_waiting_at(duration, Instant::now());
+    pub(crate) fn set_waiting(&mut self, header: String, duration: Duration) {
+        self.set_waiting_at(header, duration, Instant::now());
     }
 
-    fn set_waiting_at(&mut self, duration: Duration, now: Instant) {
-        self.header = String::from("Waiting");
+    fn set_waiting_at(&mut self, header: String, duration: Duration, now: Instant) {
+        self.update_header(header);
         self.waiting_duration = Some(duration);
         self.waiting_started_at = now;
         self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn is_waiting_with_header(&self, header: &str) -> bool {
+        self.waiting_duration.is_some() && self.header == header
     }
 
     pub(crate) fn clear_waiting(&mut self) {
@@ -404,7 +408,7 @@ mod tests {
         );
         let previous = Instant::now() - Duration::from_secs(/*secs*/ 1);
         row.header_started_at = previous;
-        row.update_header("Working".to_owned());
+        row.update_header("Awaiting model response".to_owned());
         assert_eq!(row.header_started_at, previous);
         row.update_header("Mapping the app structure".to_owned());
         assert!(row.header_started_at > previous);
@@ -425,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_with_working_header() {
+    fn renders_with_model_wait_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let timer = StatusTimer::default();
@@ -516,11 +520,11 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
 
-        assert!(line.starts_with("Working (0s • esc to interrupt)"));
+        assert!(line.starts_with("Awaiting model response (0s • esc to interrupt)"));
     }
 
     #[test]
-    fn renders_waiting_countdown() {
+    fn renders_model_wait_countdown() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(
@@ -530,7 +534,11 @@ mod tests {
             Default::default(),
         );
         let baseline = Instant::now();
-        w.set_waiting_at(Duration::from_secs(125), baseline);
+        w.set_waiting_at(
+            String::from("Awaiting model response"),
+            Duration::from_secs(125),
+            baseline,
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
         let timer = StatusTimer::default();
@@ -590,7 +598,11 @@ mod tests {
             Default::default(),
         );
         let baseline = Instant::now();
-        w.set_waiting_at(Duration::from_secs(10), baseline);
+        w.set_waiting_at(
+            String::from("Waiting for tool"),
+            Duration::from_secs(10),
+            baseline,
+        );
 
         assert_eq!(
             w.waiting_duration_at(baseline + Duration::from_secs(15)),
@@ -645,7 +657,7 @@ mod tests {
             ),
         ] {
             w.update_inline_message(background.map(str::to_string));
-            let mut expected = "Working (0s • esc to interrupt)".to_string();
+            let mut expected = "Awaiting model response (0s • esc to interrupt)".to_string();
             if let Some(background) = background {
                 expected.push_str(&format!(" · {background}"));
             }

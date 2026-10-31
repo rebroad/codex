@@ -711,7 +711,7 @@ impl ChatWidget {
         );
         if self.submit_op(op) {
             self.input_queue.user_turn_pending_start = true;
-            self.set_status_header("Working".to_string());
+            self.set_awaiting_model_response();
             self.request_redraw();
         }
     }
@@ -1006,7 +1006,7 @@ impl ChatWidget {
                     self.reasoning_buffer.clear();
                     self.reasoning_header = None;
                     self.reasoning_summary_parts.clear();
-                    self.set_status_header(String::from("Working"));
+                    self.set_awaiting_model_response();
                     self.submit_user_message_with_shell_escape_policy(
                         user_message,
                         ShellEscapePolicy::Disallow,

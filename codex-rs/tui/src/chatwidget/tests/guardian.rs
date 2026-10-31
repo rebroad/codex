@@ -120,7 +120,10 @@ async fn app_server_guardian_write_stdin_denial_preserves_child_action() {
         /*replay_kind*/ None,
     );
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
-    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Awaiting model response"
+    );
     let history = drain_insert_history(&mut rx);
     let [denial] = history.as_slice() else {
         panic!("expected only the stdin denial in history");
@@ -174,7 +177,10 @@ async fn app_server_guardian_write_stdin_approval_and_timeout_clear_review_statu
     }
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
-    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Awaiting model response"
+    );
 
     for status in [
         GuardianApprovalReviewStatus::InProgress,
@@ -187,7 +193,10 @@ async fn app_server_guardian_write_stdin_approval_and_timeout_clear_review_statu
     }
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
     assert!(chat.review.recent_auto_review_denials.is_empty());
-    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Awaiting model response"
+    );
     let history = drain_insert_history(&mut rx);
     let [timeout] = history.as_slice() else {
         panic!("expected only the stdin timeout in history");
@@ -442,7 +451,10 @@ async fn guardian_approved_request_permissions_clears_status_without_history() {
     });
 
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
-    assert_eq!(chat.status_state.current_status.header, "Working");
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Awaiting model response"
+    );
 
     let width: u16 = 110;
     let ui_height: u16 = chat.desired_height(width);
