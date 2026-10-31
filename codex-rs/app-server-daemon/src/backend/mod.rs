@@ -1,6 +1,8 @@
 #[cfg(unix)]
 mod executor;
 #[cfg(unix)]
+mod legacy_retirement;
+#[cfg(unix)]
 pub(crate) use executor::ExecutorSupervisor;
 #[cfg(unix)]
 pub(crate) use executor::exec_server_url_env;

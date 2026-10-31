@@ -27,13 +27,15 @@ const SESSION_ID_FILE_ENV: &str = "CODEX_EXEC_SERVER_SESSION_ID_FILE";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ExecutorRecord {
-    pid: u32,
-    url: String,
+pub(super) struct ExecutorRecord {
+    pub(super) pid: u32,
+    pub(super) url: String,
     #[serde(default)]
-    session_id: Option<String>,
+    pub(super) retirement_supported: bool,
     #[serde(default)]
-    process_identity: Option<ProcessIdentity>,
+    pub(super) session_id: Option<String>,
+    #[serde(default)]
+    pub(super) process_identity: Option<ProcessIdentity>,
 }
 
 pub(crate) struct ExecutorSupervisor {
@@ -50,6 +52,7 @@ impl ExecutorSupervisor {
     }
 
     pub(crate) async fn ensure_running(&self) -> Result<String> {
+        self.resume_legacy_retirements().await?;
         if let Some(record) = self.read_record().await? {
             if self.record_is_active(&record).await {
                 return Ok(record.url);
@@ -134,6 +137,7 @@ impl ExecutorSupervisor {
         let record = ExecutorRecord {
             pid,
             url: url.clone(),
+            retirement_supported: true,
             session_id: None,
             process_identity,
         };
@@ -169,7 +173,9 @@ impl ExecutorSupervisor {
                 .map(|session_id| session_id.trim().to_string())
                 .filter(|session_id| !session_id.is_empty());
             self.write_draining_record(&record).await?;
-            signal_retirement(&record)?;
+            if record.retirement_supported {
+                signal_retirement(&record)?;
+            }
         }
         let _ = tokio::fs::remove_file(&self.state_file).await;
         self.ensure_running().await
@@ -244,6 +250,25 @@ impl ExecutorSupervisor {
             .with_context(|| format!("failed to publish {}", path.display()))
     }
 
+    async fn resume_legacy_retirements(&self) -> Result<()> {
+        let path = self.draining_state_file();
+        let contents = match tokio::fs::read(&path).await {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(err).with_context(|| format!("failed to read {}", path.display()));
+            }
+        };
+        let records = serde_json::from_slice::<Vec<ExecutorRecord>>(&contents)
+            .context("invalid draining exec-server state")?;
+        for record in records {
+            if !record.retirement_supported && self.record_is_active(&record).await {
+                super::legacy_retirement::spawn(record);
+            }
+        }
+        Ok(())
+    }
+
     fn draining_state_file(&self) -> PathBuf {
         self.state_file.with_file_name("exec-server-draining.json")
     }
@@ -259,7 +284,18 @@ impl ExecutorSupervisor {
         let draining_file = state_file.with_file_name("exec-server-draining.json");
         let contents = tokio::fs::read(draining_file).await.ok()?;
         let records = serde_json::from_slice::<Vec<ExecutorRecord>>(&contents).ok()?;
-        serde_json::to_string(&records).ok()
+        let supervisor = Self::new(PathBuf::new(), state_file.to_path_buf());
+        let mut active_records = Vec::with_capacity(records.len());
+        for record in records {
+            if supervisor.record_is_active(&record).await {
+                active_records.push(record);
+            }
+        }
+        if active_records.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&active_records).ok()
+        }
     }
 
     pub(crate) fn session_id_file(&self) -> PathBuf {
@@ -353,7 +389,7 @@ fn signal_retirement(_record: &ExecutorRecord) -> Result<()> {
     Ok(())
 }
 
-async fn tcp_connects(url: &str) -> bool {
+pub(super) async fn tcp_connects(url: &str) -> bool {
     let Some(address) = url.strip_prefix("ws://") else {
         return false;
     };
