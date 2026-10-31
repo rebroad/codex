@@ -1589,6 +1589,16 @@ async fn run_ratatui_app(
     }
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
+    if !cli.resume_picker && (cli.resume_session_id.is_some() || cli.resume_last) {
+        startup_draft.begin_resume_progress(
+            crate::resume_progress::ResumeProgressEstimate::load(
+                config.codex_home.clone(),
+                None,
+                None,
+            ),
+            tokio::time::Instant::from_std(resume_launch_started_at.unwrap_or_else(Instant::now)),
+        );
+    }
     let mut session_selection = if cli.agents_overview {
         resume_picker::SessionSelection::AgentsOverview
     } else if use_fork {
