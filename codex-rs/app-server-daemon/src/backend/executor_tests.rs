@@ -35,6 +35,13 @@ async fn repeated_rotation_keeps_each_executor_generation_available_for_handoff(
     assert_ne!(old_url, new_url);
     assert_ne!(old_url, middle_url);
     assert_ne!(middle_url, new_url);
+    assert_eq!(
+        ExecutorSupervisor::endpoint_from_state(&state_file)
+            .await
+            .as_deref(),
+        Some(new_url.as_str()),
+        "new app-server launches should resolve to the newest executor generation"
+    );
     assert!(super::tcp_connects(&old_url).await);
     assert!(super::tcp_connects(&middle_url).await);
     assert!(super::tcp_connects(&new_url).await);

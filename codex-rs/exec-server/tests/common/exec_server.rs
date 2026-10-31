@@ -236,7 +236,14 @@ impl ExecServerHarness {
     }
 
     pub(crate) async fn wait_for_exit(&mut self) -> anyhow::Result<ExitStatus> {
-        timeout(CONNECT_TIMEOUT, self.child.wait())
+        self.wait_for_exit_with_timeout(CONNECT_TIMEOUT).await
+    }
+
+    pub(crate) async fn wait_for_exit_with_timeout(
+        &mut self,
+        wait_timeout: Duration,
+    ) -> anyhow::Result<ExitStatus> {
+        timeout(wait_timeout, self.child.wait())
             .await
             .map_err(|_| anyhow!("timed out waiting for exec-server shutdown"))?
             .map_err(Into::into)
