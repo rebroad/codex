@@ -57,7 +57,7 @@ impl ChatWidget {
             || self.status_state.current_status.is_guardian_review()
         {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-            self.set_status_header(String::from("Working"));
+            self.set_status_header(String::from("Generating response"));
         }
     }
 
@@ -204,6 +204,9 @@ impl ChatWidget {
     }
 
     pub(super) fn on_agent_message_delta(&mut self, delta: String) {
+        if self.status_state.current_status.header == "Awaiting model response" {
+            self.set_status_header(String::from("Generating response"));
+        }
         self.handle_streaming_delta(delta);
     }
 

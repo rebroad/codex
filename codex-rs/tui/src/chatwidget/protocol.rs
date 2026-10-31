@@ -116,12 +116,15 @@ impl ChatWidget {
                         .map(|duration| duration.as_millis() as i64)
                         .unwrap_or_default();
                     let remaining_ms = waiting_until_ms.saturating_sub(now_ms).max(0) as u64;
-                    self.set_waiting_status(Some(Duration::from_millis(remaining_ms)));
+                    self.set_waiting_status(
+                        "Waiting for tool",
+                        Some(Duration::from_millis(remaining_ms)),
+                    );
                 } else if matches!(
                     notification.status,
                     codex_app_server_protocol::ThreadStatus::Active { .. }
                 ) {
-                    self.set_status_header(String::from("Working"));
+                    self.set_awaiting_model_response();
                 }
             }
             ServerNotification::ItemStarted(notification) => {

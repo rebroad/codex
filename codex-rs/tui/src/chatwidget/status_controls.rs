@@ -7,11 +7,19 @@
 use super::*;
 
 impl ChatWidget {
-    pub(super) fn set_waiting_status(&mut self, duration: Option<Duration>) {
+    pub(super) fn set_awaiting_model_response(&mut self) {
+        self.set_waiting_status(
+            "Awaiting model response",
+            Some(self.config.model_provider.stream_idle_timeout()),
+        );
+    }
+
+    pub(super) fn set_waiting_status(&mut self, header: &str, duration: Option<Duration>) {
         self.bottom_pane.ensure_status_indicator();
-        self.set_status_header(String::from("Waiting"));
+        self.set_status_header(header.to_string());
         if let Some(duration) = duration {
-            self.bottom_pane.set_status_waiting(duration);
+            self.bottom_pane
+                .set_status_waiting(header.to_string(), duration);
         } else {
             self.bottom_pane.clear_status_waiting();
         }

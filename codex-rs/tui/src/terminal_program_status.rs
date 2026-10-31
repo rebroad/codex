@@ -93,7 +93,7 @@ impl ProgramStatus {
     fn iterm_label(self) -> &'static str {
         match self {
             Self::Idle => "Idle",
-            Self::Working => "Working",
+            Self::Working => "Model / tool activity",
             Self::Blocked => "Waiting",
         }
     }

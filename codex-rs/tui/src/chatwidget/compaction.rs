@@ -35,7 +35,7 @@ impl ChatWidget {
         if self.status_state.compaction.take().is_some() {
             self.bottom_pane
                 .set_status_timer_origin(/*started_at*/ None);
-            self.set_status_header("Working".to_string());
+            self.set_awaiting_model_response();
         }
     }
 

@@ -55,7 +55,7 @@ async fn reasoning_status_accepts_bold_text_with_a_plain_suffix() {
 
     insta::assert_debug_snapshot!(vec![before_close, after_close], @r###"
     [
-        "Working",
+        "Awaiting model response",
         "Checking tests: running suite",
     ]
     "###);
@@ -140,7 +140,7 @@ async fn reasoning_status_tracks_items_and_restores_after_tool_activity() {
     chat.on_task_started();
     assert_eq!(
         chat.bottom_pane.status_widget().unwrap().header(),
-        "Working"
+        "Awaiting model response"
     );
 }
 

@@ -91,7 +91,7 @@ impl AgentsOverviewGroup {
     fn label(self) -> &'static str {
         match self {
             Self::NeedsYou => "Needs input",
-            Self::Working => "Working",
+            Self::Working => "Model / tool activity",
             Self::Ready => "Ready",
             Self::Finished => "Inactive",
         }
@@ -409,16 +409,44 @@ impl AgentsOverviewView {
         true
     }
 
-    fn status(row: &AgentsOverviewRow) -> (&'static str, Span<'static>) {
-        match row.group {
+    fn status(row: &AgentsOverviewRow) -> (String, Span<'static>) {
+        let label = match row.group {
             AgentsOverviewGroup::NeedsYou if row.thread.status == ThreadStatus::SystemError => {
-                ("Error", "!".red())
+                ("Error".to_string(), "!".red())
             }
-            AgentsOverviewGroup::NeedsYou => ("Needs input", "●".red()),
-            AgentsOverviewGroup::Working => ("Working", "●".green()),
-            AgentsOverviewGroup::Ready => ("Ready", "○".cyan()),
-            AgentsOverviewGroup::Finished => ("Inactive", "○".dim()),
-        }
+            AgentsOverviewGroup::NeedsYou => ("Needs input".to_string(), "●".red()),
+            AgentsOverviewGroup::Working => {
+                let label = match &row.thread.status {
+                    ThreadStatus::Active { active_flags }
+                        if active_flags.contains(&ThreadActiveFlag::WaitingOnApproval) =>
+                    {
+                        "Waiting for approval".to_string()
+                    }
+                    ThreadStatus::Active { active_flags }
+                        if active_flags.contains(&ThreadActiveFlag::WaitingOnUserInput) =>
+                    {
+                        "Waiting for your response".to_string()
+                    }
+                    ThreadStatus::Active { active_flags }
+                        if active_flags.contains(&ThreadActiveFlag::WaitingOnTool) =>
+                    {
+                        "Waiting for tool".to_string()
+                    }
+                    ThreadStatus::Active { .. } => row
+                        .details
+                        .activity_status
+                        .clone()
+                        .unwrap_or_else(|| "Awaiting model response".to_string()),
+                    ThreadStatus::Idle | ThreadStatus::SystemError | ThreadStatus::NotLoaded => {
+                        "Awaiting model response".to_string()
+                    }
+                };
+                (label, "●".green())
+            }
+            AgentsOverviewGroup::Ready => ("Ready".to_string(), "○".cyan()),
+            AgentsOverviewGroup::Finished => ("Inactive".to_string(), "○".dim()),
+        };
+        label
     }
 
     fn render_details(&self, area: Rect, buf: &mut Buffer) {

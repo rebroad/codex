@@ -175,7 +175,7 @@ impl ChatWidget {
         };
         self.bottom_pane.ensure_status_indicator();
         self.set_status(
-            "Working".to_string(),
+            "Checking response safety".to_string(),
             Some(status_details),
             StatusDetailsCapitalization::Preserve,
             /*details_max_lines*/ 6,

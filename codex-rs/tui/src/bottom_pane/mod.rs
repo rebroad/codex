@@ -1281,7 +1281,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Update the status indicator header (defaults to "Working") and details below it.
+    /// Update the status indicator header and details below it.
     ///
     /// Passing `None` clears any existing details. Returns whether the active status indicator
     /// was updated and requested a redraw.
@@ -1293,7 +1293,7 @@ impl BottomPane {
         details_max_lines: usize,
     ) -> bool {
         if let Some(status) = self.status.as_mut() {
-            if header != "Waiting" {
+            if !status.is_waiting_with_header(&header) {
                 status.clear_waiting();
             }
             status.update_header(header);
@@ -1442,9 +1442,9 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn set_status_waiting(&mut self, duration: Duration) {
+    pub(crate) fn set_status_waiting(&mut self, header: String, duration: Duration) {
         if let Some(status) = self.status.as_mut() {
-            status.set_waiting(duration);
+            status.set_waiting(header, duration);
             self.request_redraw();
         }
     }
@@ -3459,7 +3459,7 @@ mod tests {
             "no active modal view after denial"
         );
 
-        // Render and ensure the top row includes the Working header and a composer line below.
+        // Render and ensure the top row names the current phase above the composer.
         // Give the animation thread a moment to tick.
         std::thread::sleep(Duration::from_millis(120));
         let area = Rect::new(0, 0, 40, 6);
@@ -3470,8 +3470,8 @@ mod tests {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            row0.contains("Working"),
-            "expected Working header after denial on row 0: {row0:?}"
+            row0.contains("Awaiting model response"),
+            "expected model-wait status after denial on row 0: {row0:?}"
         );
 
         // Composer placeholder should be visible somewhere below.
@@ -3517,7 +3517,10 @@ mod tests {
         pane.render(area, &mut buf);
 
         let bufs = snapshot_buffer(&buf);
-        assert!(bufs.contains("• Working"), "expected Working header");
+        assert!(
+            bufs.contains("• Awaiting model response"),
+            "expected model-wait header"
+        );
 
         pane.reset_status_timer(Duration::from_secs(/*secs*/ 42));
         pane.hide_status_indicator();
@@ -3671,7 +3674,7 @@ mod tests {
 
         pane.set_task_running(/*running*/ true);
         pane.update_status(
-            "Working".to_string(),
+            "Awaiting model response".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
