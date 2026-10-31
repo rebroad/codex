@@ -294,6 +294,53 @@ async fn pid_record_captures_the_resolved_launch_binary() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn managed_app_server_launch_uses_current_executor_endpoint() {
+    let temp = TempDir::new().expect("temp dir");
+    let codex_bin = temp.path().join("codex");
+    let endpoint_file = temp.path().join("exec-server-url");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = app-server ] && [ \"$2\" = --managed-daemon ] && [ \"$3\" = --help ]; then exit 0; fi\n\
+         printf '%s' \"${{CODEX_EXEC_SERVER_URL-unset}}\" > '{}'\n\
+         exec sleep 30\n",
+        endpoint_file.display()
+    );
+    codex_utils_cargo_bin::write_executable(&codex_bin, &script).expect("fake Codex executable");
+
+    let pid_file = temp.path().join("app-server.pid");
+    let executor_state_file = temp.path().join("exec-server.json");
+    tokio::fs::write(
+        &executor_state_file,
+        serde_json::json!({
+            "pid": 123,
+            "url": "ws://127.0.0.1:45678",
+            "retirementSupported": true,
+        })
+        .to_string(),
+    )
+    .await
+    .expect("write current executor endpoint");
+    let mut backend = PidBackend::new(codex_bin, pid_file, /*remote_control_enabled*/ false);
+    backend.executor_state_file = Some(executor_state_file);
+
+    backend.start().await.expect("start managed app-server");
+    let launched_endpoint = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(endpoint) = tokio::fs::read_to_string(&endpoint_file).await {
+                break endpoint;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fake app-server should record its executor endpoint");
+    backend.stop().await.expect("stop managed app-server");
+
+    assert_eq!(launched_endpoint, "ws://127.0.0.1:45678");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn legacy_start_time_mismatch_preserves_record_and_process() {
     let temp = TempDir::new().unwrap();
     let backend = PidBackend::new(
