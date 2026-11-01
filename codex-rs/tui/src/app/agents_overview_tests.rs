@@ -2419,11 +2419,11 @@ async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
 #[tokio::test]
 async fn command_center_handles_resume_failure_and_success() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    trust_fixture_folders(&mut app);
     std::fs::write(
         app.config.codex_home.join("config.toml"),
         "[tui]\nresume_cwd = \"current\"\n",
     )?;
+    trust_fixture_folders(&mut app);
     let timestamp = "2025-01-05T12-00-00";
     let id = app_test_support::create_fake_rollout(
         app.config.codex_home.as_path(),
