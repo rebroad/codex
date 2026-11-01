@@ -3803,6 +3803,15 @@ git-worktree-root = {}
             String::from_utf8_lossy(&result.stderr)
         );
     }
+    let committed_agents = Command::new("git")
+        .current_dir(&source)
+        .args(["show", "HEAD:AGENTS.md"])
+        .output()?;
+    assert!(committed_agents.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&committed_agents.stdout).trim_end(),
+        "committed worktree instructions"
+    );
     fs::write(
         source.join(".codex/config.toml"),
         r#"developer_instructions = "dirty policy"
@@ -4072,8 +4081,9 @@ terminal_visualization_instructions = true
             Some("committed policy")
         );
         assert_eq!(
-            fs::read_to_string(checkout.cwd.join("AGENTS.md"))?,
-            "committed worktree instructions"
+            fs::read_to_string(checkout.root.join("AGENTS.md"))?,
+            "committed worktree instructions",
+            "{mode:?} worktree repository root"
         );
         let fork = matches!(mode, ManagedWorktreeMode::Fork);
         let method = if fork { "thread/fork" } else { "thread/start" };
