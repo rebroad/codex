@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/questions_tests.rs
+assertion_line: 614
 expression: "format!(\"OPEN\\n{open}\\n\\nONLY QUESTIONS\\n{completed}\")"
 ---
 OPEN
-• Working (0s • esc to interrupt)
+• Awaiting model response (0s • esc to interrupt)
 
 • Queued follow-up inputs
   ↳ queued follow-up

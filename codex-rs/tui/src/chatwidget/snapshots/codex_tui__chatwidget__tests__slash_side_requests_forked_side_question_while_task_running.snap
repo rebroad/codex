@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/side.rs
+assertion_line: 275
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
-"• Working (0s • esc to interrupt)                                               "
+"• Awaiting model response (4m 59s • esc to interrupt)                           "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

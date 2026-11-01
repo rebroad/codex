@@ -1,16 +1,17 @@
 ---
 source: tui/src/app/agent_center_tests.rs
+assertion_line: 96
 expression: "format!(\"Initial display:\\n{before}\\n\\nAfter progress updates:\\n{after}\")"
 ---
 Initial display:
   Agent command center  Group: Status  g
-   All 5   Needs you 1   Working 3   Ready 1   Inactive 0                          tab/⇧tab filter
+   All 5   Needs you 1   Model / tool activity 3   Ready 1   Inactive 0            tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                               │ Task details
   Needs input  1                                          │
     ! Needs input                                         │ Alpha
-                                                          │ ● Working
-  Working  3                                              │
+                                                          │ ● Awaiting model response
+  Model / tool activity  3                                │
     ● Bravo                                               │ Model: Unknown
     ● Charlie                                             │ Reasoning: Unknown
   › ● Alpha                                               │
@@ -24,13 +25,13 @@ Initial display:
 
 After progress updates:
   Agent command center  Group: Status  g
-   All 5   Needs you 1   Working 3   Ready 1   Inactive 0                          tab/⇧tab filter
+   All 5   Needs you 1   Model / tool activity 3   Ready 1   Inactive 0            tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                               │ Task details
   Needs input  1                                          │
     ! Needs input                                         │ Alpha
-                                                          │ ● Working
-  Working  3                                              │
+                                                          │ ● Awaiting model response
+  Model / tool activity  3                                │
     ● Bravo                                               │ Model: Unknown
     ● Charlie                                             │ Reasoning: Unknown
   › ● Alpha                                               │

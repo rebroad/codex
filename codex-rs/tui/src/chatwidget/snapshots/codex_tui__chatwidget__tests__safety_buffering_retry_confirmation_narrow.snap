@@ -1,8 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 267
 expression: "render_bottom_popup(&chat, 40)"
 ---
-•   Stop this attempt and retry?
+•   Stop this attempt and retry?      o…
 
     This will stop the current
     attempt and retry in a new        be

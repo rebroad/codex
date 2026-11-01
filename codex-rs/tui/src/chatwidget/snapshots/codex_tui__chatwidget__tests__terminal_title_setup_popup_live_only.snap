@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_surface_previews.rs
+assertion_line: 481
 expression: terminal_title_popup_snapshot(&mut chat)
 ---
   Configure Terminal Title
@@ -14,7 +15,7 @@ expression: terminal_title_popup_snapshot(&mut chat)
   [ ] app-name       Codex app name
   [ ] current-dir    Current working directory
   [ ] activity       Spinner while working, action-required message while blocked
-  [ ] run-state      Compact session run-state text (Ready, Working, Thinking)
+  [ ] run-state      Current session phase, such as awaiting a model response
 ↓
   preview-live-root | Live preview thread | feature/live-preview-branch | Tasks 2/5
   space toggle · ←/→ reorder · enter save · esc cancel

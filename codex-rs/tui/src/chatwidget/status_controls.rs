@@ -15,6 +15,10 @@ impl ChatWidget {
     }
 
     pub(super) fn set_waiting_status(&mut self, header: &str, duration: Option<Duration>) {
+        if self.status_state.compaction.is_some() && self.status_state.retry_status_header.is_none()
+        {
+            return;
+        }
         self.bottom_pane.ensure_status_indicator();
         self.set_status_header(header.to_string());
         if let Some(duration) = duration {
