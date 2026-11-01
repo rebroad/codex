@@ -57,7 +57,40 @@ impl ChatWidget {
             || self.status_state.current_status.is_guardian_review()
         {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-            self.set_status_header(String::from("Generating response"));
+            self.set_status_header(String::from("Awaiting model response"));
+        }
+    }
+
+    /// Record answer text delivered by the live backend for one assistant message item.
+    pub(super) fn record_response_text_delta(&mut self, item_id: &str, delta: &str) {
+        let progress = &mut self.status_state.response_receive;
+        if progress.item_id.as_deref() != Some(item_id) {
+            progress.item_id = Some(item_id.to_string());
+            progress.bytes_received = 0;
+        }
+        progress.bytes_received = progress.bytes_received.saturating_add(delta.len() as u64);
+        progress.last_received_at = Some(Instant::now());
+    }
+
+    pub(super) fn refresh_response_receive_details(&mut self, now: Instant) {
+        if self.status_state.current_status.header != "Receiving response" {
+            return;
+        }
+        let Some(last_received_at) = self.status_state.response_receive.last_received_at else {
+            return;
+        };
+        let age_secs = now.saturating_duration_since(last_received_at).as_secs();
+        let details = format!(
+            "{} text bytes received · last chunk {age_secs}s ago",
+            self.status_state.response_receive.bytes_received
+        );
+        if self.status_state.current_status.details.as_deref() != Some(&details) {
+            self.set_status(
+                String::from("Receiving response"),
+                Some(details),
+                StatusDetailsCapitalization::Preserve,
+                STATUS_DETAILS_DEFAULT_MAX_LINES,
+            );
         }
     }
 
@@ -204,8 +237,25 @@ impl ChatWidget {
     }
 
     pub(super) fn on_agent_message_delta(&mut self, delta: String) {
-        if self.status_state.current_status.header == "Awaiting model response" {
-            self.set_status_header(String::from("Generating response"));
+        if self.status_state.compaction.is_none()
+            && self.status_state.pending_guardian_review_status.is_empty()
+            && self.mcp_startup_status.is_none()
+            && (self.mcp_startup_expected_servers.is_none()
+                || self.mcp_startup_ignore_updates_until_next_start)
+            && !self.safety_buffering_is_waiting()
+            && self.unified_exec_wait_streak.is_none()
+        {
+            self.bottom_pane.ensure_status_indicator();
+            self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+            self.set_status(
+                String::from("Receiving response"),
+                Some(format!(
+                    "{} text bytes received · last chunk 0s ago",
+                    self.status_state.response_receive.bytes_received
+                )),
+                StatusDetailsCapitalization::Preserve,
+                STATUS_DETAILS_DEFAULT_MAX_LINES,
+            );
         }
         self.handle_streaming_delta(delta);
     }
@@ -487,6 +537,15 @@ impl ChatWidget {
                 }
                 Some(MessagePhase::Commentary | MessagePhase::PartialAnswer) => true,
             };
+        if self.status_state.pending_status_indicator_restore
+            && self.mcp_startup_status.is_none()
+            && matches!(
+                self.status_state.current_status.header.as_str(),
+                "Receiving response" | "Running command"
+            )
+        {
+            self.set_awaiting_model_response();
+        }
         self.maybe_restore_status_indicator_after_stream_idle();
     }
 
@@ -522,7 +581,9 @@ impl ChatWidget {
             now,
         );
         for cell in outcome.cells {
-            self.bottom_pane.hide_status_indicator();
+            if self.status_state.current_status.header != "Receiving response" {
+                self.bottom_pane.hide_status_indicator();
+            }
             self.add_boxed_history(cell);
         }
         if scope == CommitTickScope::AnyMode || outcome.has_controller {
@@ -639,7 +700,9 @@ impl ChatWidget {
                 return self.clear_active_stream_tail();
             }
 
-            self.bottom_pane.hide_status_indicator();
+            if self.status_state.current_status.header != "Receiving response" {
+                self.bottom_pane.hide_status_indicator();
+            }
             let cell = history_cell::StreamingAgentTailCell::new(
                 tail_lines,
                 controller.tail_starts_stream(),

@@ -32,6 +32,66 @@ fn complete(chat: &mut ChatWidget, id: &str) {
     );
 }
 
+fn response_delta(chat: &mut ChatWidget, item_id: &str, text: &str) {
+    chat.handle_server_notification(
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: item_id.to_string(),
+                delta: text.to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+}
+
+#[tokio::test]
+async fn receiving_response_reports_item_text_bytes_and_last_chunk_age() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    response_delta(&mut chat, "message-1", "héllo");
+    response_delta(&mut chat, "message-1", "!");
+    assert_eq!(chat.status_state.response_receive.bytes_received, 7);
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Receiving response"
+    );
+    assert_eq!(
+        chat.status_state.current_status.details.as_deref(),
+        Some("7 text bytes received · last chunk 0s ago")
+    );
+
+    let last_received_at = chat
+        .status_state
+        .response_receive
+        .last_received_at
+        .expect("response delta timestamp");
+    chat.refresh_response_receive_details(last_received_at + std::time::Duration::from_secs(3));
+    assert_eq!(
+        chat.status_state.current_status.details.as_deref(),
+        Some("7 text bytes received · last chunk 3s ago")
+    );
+
+    response_delta(&mut chat, "message-2", "ok");
+    assert_eq!(chat.status_state.response_receive.bytes_received, 2);
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2)).expect("create terminal");
+    terminal
+        .draw(|frame| {
+            chat.bottom_pane
+                .status_widget()
+                .expect("receiving status")
+                .with_timer(&crate::status_indicator_widget::StatusTimer::default())
+                .render(frame.area(), frame.buffer_mut());
+        })
+        .expect("render receiving status");
+    assert_chatwidget_snapshot!("receiving_response_status", terminal.backend());
+}
+
 #[tokio::test]
 async fn reasoning_status_accepts_bold_text_with_a_plain_suffix() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;

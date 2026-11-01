@@ -1873,11 +1873,19 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
 
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Receiving response"
     );
-    assert_eq!(chat.status_state.current_status.details, None);
+    assert_eq!(
+        chat.status_state.current_status.details.as_deref(),
+        Some("5 text bytes received · last chunk 0s ago")
+    );
     assert!(chat.status_state.retry_status_header.is_none());
-    assert!(chat.bottom_pane.status_widget().is_none());
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .map(|status| status.header()),
+        Some("Receiving response")
+    );
     assert!(chat.active_cell_is_stream_tail());
 }
 

@@ -32,6 +32,15 @@ impl ChatWidget {
         };
         let (_command, parsed_cmd) = command_execution_command_and_parsed(command, command_actions);
         self.flush_answer_stream_with_separator();
+        if self.status_state.compaction.is_none()
+            && !self.status_state.current_status.is_guardian_review()
+            && self.status_state.pending_guardian_review_status.is_empty()
+            && self.mcp_startup_status.is_none()
+            && (self.mcp_startup_expected_servers.is_none()
+                || self.mcp_startup_ignore_updates_until_next_start)
+        {
+            self.set_status_header(String::from("Running command"));
+        }
         if is_unified_exec_source(*source) {
             if *source == ExecCommandSource::UnifiedExecStartup {
                 self.track_unified_exec_process_begin(id, process_id.as_deref(), command);
@@ -505,6 +514,12 @@ impl ChatWidget {
         }
         if is_user_shell {
             self.maybe_send_next_queued_input();
+        }
+        if self.bottom_pane.is_task_running()
+            && self.running_commands.is_empty()
+            && self.status_state.current_status.header == "Running command"
+        {
+            self.set_awaiting_model_response();
         }
     }
 }

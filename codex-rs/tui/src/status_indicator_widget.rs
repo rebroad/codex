@@ -368,9 +368,12 @@ impl StatusIndicator<'_> {
         if self.row.animations_enabled
             || self.timer.display_started_at.is_some()
             || self.row.waiting_duration.is_some()
+            || self.row.header == "Receiving response"
         {
             let interval_ms = if self.row.waiting_duration.is_some() {
                 200
+            } else if self.row.header == "Receiving response" {
+                1_000
             } else if self.row.animations_enabled
                 && (self.row.effects.progress || self.row.effects.shimmer)
             {
