@@ -3470,7 +3470,7 @@ mod tests {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            row0.contains("Awaiting model response"),
+            row0.contains("Awaiting AI response"),
             "expected model-wait status after denial on row 0: {row0:?}"
         );
 
@@ -3518,7 +3518,7 @@ mod tests {
 
         let bufs = snapshot_buffer(&buf);
         assert!(
-            bufs.contains("• Awaiting model response"),
+            bufs.contains("• Awaiting AI response"),
             "expected model-wait header"
         );
 
@@ -3674,7 +3674,7 @@ mod tests {
 
         pane.set_task_running(/*running*/ true);
         pane.update_status(
-            "Awaiting model response".to_string(),
+            "Awaiting AI response".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,

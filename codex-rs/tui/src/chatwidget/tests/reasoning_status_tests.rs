@@ -32,6 +32,86 @@ fn complete(chat: &mut ChatWidget, id: &str) {
     );
 }
 
+fn response_delta(chat: &mut ChatWidget, item_id: &str, text: &str) {
+    chat.handle_server_notification(
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: item_id.to_string(),
+                delta: text.to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+}
+
+#[tokio::test]
+async fn visible_response_stream_hides_duplicate_receive_details() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    response_delta(&mut chat, "message-1", "héllo");
+    response_delta(&mut chat, "message-1", "!");
+    assert_eq!(chat.status_state.response_receive.bytes_received, 7);
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Streaming AI response"
+    );
+    assert_eq!(chat.status_state.current_status.details.as_deref(), None);
+
+    let last_received_at = chat
+        .status_state
+        .response_receive
+        .last_received_at
+        .expect("response delta timestamp");
+    chat.refresh_response_receive_details(last_received_at + std::time::Duration::from_secs(3));
+    assert_eq!(chat.status_state.current_status.details.as_deref(), None);
+
+    response_delta(&mut chat, "message-2", "ok");
+    assert_eq!(chat.status_state.response_receive.bytes_received, 2);
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2)).expect("create terminal");
+    terminal
+        .draw(|frame| {
+            chat.bottom_pane
+                .status_widget()
+                .expect("receiving status")
+                .with_timer(&crate::status_indicator_widget::StatusTimer::default())
+                .render(frame.area(), frame.buffer_mut());
+        })
+        .expect("render receiving status");
+    assert_chatwidget_snapshot!("receiving_response_status", terminal.backend());
+}
+
+#[tokio::test]
+async fn receive_details_show_when_no_answer_text_is_visible() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_state.response_receive.item_id = Some("message-1".to_string());
+    chat.status_state.response_receive.bytes_received = 7;
+    chat.status_state.response_receive.last_received_at = Some(std::time::Instant::now());
+    chat.set_status(
+        String::from("Streaming AI response"),
+        None,
+        crate::status_indicator_widget::StatusDetailsCapitalization::Preserve,
+        crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES,
+    );
+
+    let last_received_at = chat
+        .status_state
+        .response_receive
+        .last_received_at
+        .expect("response delta timestamp");
+    chat.refresh_response_receive_details(last_received_at + std::time::Duration::from_secs(3));
+
+    assert_eq!(
+        chat.status_state.current_status.details.as_deref(),
+        Some("7 text bytes received · last chunk 3s ago")
+    );
+}
+
 #[tokio::test]
 async fn reasoning_status_accepts_bold_text_with_a_plain_suffix() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -55,7 +135,7 @@ async fn reasoning_status_accepts_bold_text_with_a_plain_suffix() {
 
     insta::assert_debug_snapshot!(vec![before_close, after_close], @r###"
     [
-        "Awaiting model response",
+        "Awaiting AI response",
         "Checking tests: running suite",
     ]
     "###);
@@ -140,7 +220,7 @@ async fn reasoning_status_tracks_items_and_restores_after_tool_activity() {
     chat.on_task_started();
     assert_eq!(
         chat.bottom_pane.status_widget().unwrap().header(),
-        "Awaiting model response"
+        "Awaiting AI response"
     );
 }
 

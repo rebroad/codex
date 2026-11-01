@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/questions_tests.rs
 assertion_line: 834
 expression: rendered
 ---
-• Awaiting model response (0s • esc to interrupt)
+• Awaiting AI response (0s • esc to interrupt)
 
 • Queued follow-up inputs
 

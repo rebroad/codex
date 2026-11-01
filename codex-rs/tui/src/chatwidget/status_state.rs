@@ -1,6 +1,7 @@
 //! Status indicator and terminal-title state for `ChatWidget`.
 
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
+use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StatusIndicatorState {
@@ -12,7 +13,7 @@ pub(super) struct StatusIndicatorState {
 impl StatusIndicatorState {
     pub(super) fn working() -> Self {
         Self {
-            header: String::from("Awaiting model response"),
+            header: String::from("Awaiting AI response"),
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
         }
@@ -123,6 +124,16 @@ pub(super) struct StatusState {
     pub(super) retry_status_header: Option<String>,
     pub(super) pending_status_indicator_restore: bool,
     pub(super) thread_title_generation_pending: bool,
+    /// Text bytes received for the current assistant message item.
+    pub(super) response_receive: ResponseReceiveProgress,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ResponseReceiveProgress {
+    pub(super) item_id: Option<String>,
+    pub(super) bytes_received: u64,
+    pub(super) last_received_at: Option<Instant>,
+    pub(super) answer_visible: bool,
 }
 
 impl Default for StatusState {
@@ -138,6 +149,7 @@ impl Default for StatusState {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             thread_title_generation_pending: false,
+            response_receive: ResponseReceiveProgress::default(),
         }
     }
 }

@@ -534,7 +534,7 @@ async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming
     }
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
     assert!(drain_insert_history(&mut rx).is_empty());
 

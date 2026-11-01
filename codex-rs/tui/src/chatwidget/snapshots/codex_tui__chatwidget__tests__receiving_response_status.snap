@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/reasoning_status_tests.rs
+expression: terminal.backend()
+---
+"• Streaming AI response (0s • esc to interrupt)                                 "
+"                                                                                "

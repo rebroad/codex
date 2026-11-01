@@ -13,7 +13,7 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 
 
-• Awaiting model response (4m 59s • esc to interrupt)
+• Awaiting AI response (4m 59s • esc to interrupt)
 
 • Messages to be submitted at end of turn
   ↳ Steer submitted while /compact was running.
