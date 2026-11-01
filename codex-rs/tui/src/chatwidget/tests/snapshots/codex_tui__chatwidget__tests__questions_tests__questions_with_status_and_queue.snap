@@ -4,7 +4,7 @@ assertion_line: 614
 expression: "format!(\"OPEN\\n{open}\\n\\nONLY QUESTIONS\\n{completed}\")"
 ---
 OPEN
-• Awaiting model response (0s • esc to interrupt)
+• Awaiting AI response (0s • esc to interrupt)
 
 • Queued follow-up inputs
   ↳ queued follow-up

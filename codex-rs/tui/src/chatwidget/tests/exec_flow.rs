@@ -897,7 +897,7 @@ async fn final_worked_for_uses_cumulative_turn_duration_snapshot() {
         assert!(chat.bottom_pane.status_indicator_visible());
         assert_eq!(
             chat.bottom_pane.status_widget().unwrap().header(),
-            "Receiving response"
+            "Streaming AI response"
         );
         assert_eq!(
             chat.bottom_pane.status_widget().unwrap().details(),
@@ -965,13 +965,13 @@ async fn unified_exec_empty_poll_for_finished_process_does_not_show_waiting_stat
 
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
     let status = chat
         .bottom_pane
         .status_widget()
         .expect("task status indicator should remain visible");
-    assert_eq!(status.header(), "Awaiting model response");
+    assert_eq!(status.header(), "Awaiting AI response");
     assert!(chat.unified_exec_wait_streak.is_none());
 }
 
@@ -1595,6 +1595,27 @@ async fn interrupt_preserves_unified_exec_processes() {
     );
 
     let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn ps_refreshes_stale_background_terminal_footer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    // Simulate a stale footer after its widget process list has been cleared.
+    chat.bottom_pane
+        .set_unified_exec_processes(vec!["sleep 5".to_string()]);
+    chat.add_ps_output();
+
+    let width = 100;
+    let area = Rect::new(0, 0, width, chat.bottom_pane.desired_height(width));
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    chat.bottom_pane.render(area, &mut buffer);
+    let rendered: String = buffer
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    assert!(!rendered.contains("background terminal running"));
 }
 
 #[tokio::test]

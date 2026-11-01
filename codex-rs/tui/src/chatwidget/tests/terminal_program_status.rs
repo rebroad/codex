@@ -75,7 +75,7 @@ async fn session_status_detail_uses_only_foreground_activity() {
         .map(|detail| detail.unwrap_or_else(|| "-".to_string()))
         .join("\n");
     insta::assert_snapshot!(details, @r"
-    Awaiting model response
+    Awaiting AI response
     Reading source
     -
     -

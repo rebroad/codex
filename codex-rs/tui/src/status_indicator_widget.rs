@@ -99,7 +99,7 @@ impl StatusIndicatorWidget {
         effects: codex_config::types::TuiEffects,
     ) -> Self {
         Self {
-            header: String::from("Awaiting model response"),
+            header: String::from("Awaiting AI response"),
             header_started_at: Instant::now(),
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
@@ -368,11 +368,11 @@ impl StatusIndicator<'_> {
         if self.row.animations_enabled
             || self.timer.display_started_at.is_some()
             || self.row.waiting_duration.is_some()
-            || self.row.header == "Receiving response"
+            || self.row.header == "Streaming AI response"
         {
             let interval_ms = if self.row.waiting_duration.is_some() {
                 200
-            } else if self.row.header == "Receiving response" {
+            } else if self.row.header == "Streaming AI response" {
                 1_000
             } else if self.row.animations_enabled
                 && (self.row.effects.progress || self.row.effects.shimmer)
@@ -411,7 +411,7 @@ mod tests {
         );
         let previous = Instant::now() - Duration::from_secs(/*secs*/ 1);
         row.header_started_at = previous;
-        row.update_header("Awaiting model response".to_owned());
+        row.update_header("Awaiting AI response".to_owned());
         assert_eq!(row.header_started_at, previous);
         row.update_header("Mapping the app structure".to_owned());
         assert!(row.header_started_at > previous);
@@ -523,7 +523,7 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
 
-        assert!(line.starts_with("Awaiting model response (0s • esc to interrupt)"));
+        assert!(line.starts_with("Awaiting AI response (0s • esc to interrupt)"));
     }
 
     #[test]
@@ -538,7 +538,7 @@ mod tests {
         );
         let baseline = Instant::now();
         w.set_waiting_at(
-            String::from("Awaiting model response"),
+            String::from("Awaiting AI response"),
             Duration::from_secs(125),
             baseline,
         );
@@ -660,7 +660,7 @@ mod tests {
             ),
         ] {
             w.update_inline_message(background.map(str::to_string));
-            let mut expected = "Awaiting model response (0s • esc to interrupt)".to_string();
+            let mut expected = "Awaiting AI response (0s • esc to interrupt)".to_string();
             if let Some(background) = background {
                 expected.push_str(&format!(" · {background}"));
             }

@@ -10,7 +10,7 @@ Initial display:
       Tasks                                               │ Task details
   Needs input  1                                          │
     ! Needs input                                         │ Alpha
-                                                          │ ● Awaiting model response
+                                                          │ ● Awaiting AI response
   Model / tool activity  3                                │
     ● Bravo                                               │ Model: Unknown
     ● Charlie                                             │ Reasoning: Unknown
@@ -30,7 +30,7 @@ After progress updates:
       Tasks                                               │ Task details
   Needs input  1                                          │
     ! Needs input                                         │ Alpha
-                                                          │ ● Awaiting model response
+                                                          │ ● Awaiting AI response
   Model / tool activity  3                                │
     ● Bravo                                               │ Model: Unknown
     ● Charlie                                             │ Reasoning: Unknown

@@ -122,7 +122,7 @@ async fn app_server_guardian_write_stdin_denial_preserves_child_action() {
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
     let history = drain_insert_history(&mut rx);
     let [denial] = history.as_slice() else {
@@ -179,7 +179,7 @@ async fn app_server_guardian_write_stdin_approval_and_timeout_clear_review_statu
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
 
     for status in [
@@ -195,7 +195,7 @@ async fn app_server_guardian_write_stdin_approval_and_timeout_clear_review_statu
     assert!(chat.review.recent_auto_review_denials.is_empty());
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
     let history = drain_insert_history(&mut rx);
     let [timeout] = history.as_slice() else {
@@ -453,7 +453,7 @@ async fn guardian_approved_request_permissions_clears_status_without_history() {
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
 
     let width: u16 = 110;

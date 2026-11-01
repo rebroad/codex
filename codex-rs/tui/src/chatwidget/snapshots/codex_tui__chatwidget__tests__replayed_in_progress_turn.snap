@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/history_replay.rs
 assertion_line: 1680
 expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
 ---
-• Awaiting model response (4m 59s • esc to interrupt)
+• Awaiting AI response (4m 59s • esc to interrupt)
 
 
 › Ask Codex to do anything

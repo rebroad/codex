@@ -56,7 +56,7 @@ async fn receiving_response_reports_item_text_bytes_and_last_chunk_age() {
     assert_eq!(chat.status_state.response_receive.bytes_received, 7);
     assert_eq!(
         chat.status_state.current_status.header,
-        "Receiving response"
+        "Streaming AI response"
     );
     assert_eq!(
         chat.status_state.current_status.details.as_deref(),
@@ -115,7 +115,7 @@ async fn reasoning_status_accepts_bold_text_with_a_plain_suffix() {
 
     insta::assert_debug_snapshot!(vec![before_close, after_close], @r###"
     [
-        "Awaiting model response",
+        "Awaiting AI response",
         "Checking tests: running suite",
     ]
     "###);
@@ -200,7 +200,7 @@ async fn reasoning_status_tracks_items_and_restores_after_tool_activity() {
     chat.on_task_started();
     assert_eq!(
         chat.bottom_pane.status_widget().unwrap().header(),
-        "Awaiting model response"
+        "Awaiting AI response"
     );
 }
 

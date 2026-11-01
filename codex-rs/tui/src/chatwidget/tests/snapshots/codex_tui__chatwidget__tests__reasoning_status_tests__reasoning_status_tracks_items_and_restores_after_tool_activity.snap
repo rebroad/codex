@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/reasoning_status_tests.rs
 expression: headers
 ---
 [
-    "Awaiting model response",
+    "Awaiting AI response",
     "Researching backend freshness",
     "Researching backend freshness",
     "Running command",

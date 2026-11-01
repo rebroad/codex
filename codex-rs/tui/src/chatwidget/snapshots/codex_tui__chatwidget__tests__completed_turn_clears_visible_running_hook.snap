@@ -5,7 +5,7 @@ expression: "format!(\"before completion:\\n{before_completion}\\nafter completi
 ---
 before completion:
 "                                                                                "
-"• Awaiting model response (4m 59s • esc to interrupt) · Running hook            "
+"• Awaiting AI response (4m 59s • esc to interrupt) · Running hook            "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

@@ -894,7 +894,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Awaiting model response");
+    assert_eq!(status.header(), "Awaiting AI response");
 
     let item = AppServerThreadItem::AgentMessage {
         id: "msg-1".to_string(),
@@ -1017,7 +1017,7 @@ async fn live_app_server_wait_notifications_render_countdown_and_restore_model_w
         .bottom_pane
         .status_widget()
         .expect("status indicator should remain visible");
-    assert_eq!(status.header(), "Awaiting model response");
+    assert_eq!(status.header(), "Awaiting AI response");
 }
 
 #[tokio::test]
@@ -1873,7 +1873,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
 
     assert_eq!(
         chat.status_state.current_status.header,
-        "Receiving response"
+        "Streaming AI response"
     );
     assert_eq!(
         chat.status_state.current_status.details.as_deref(),
@@ -1884,7 +1884,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         chat.bottom_pane
             .status_widget()
             .map(|status| status.header()),
-        Some("Receiving response")
+        Some("Streaming AI response")
     );
     assert!(chat.active_cell_is_stream_tail());
 }

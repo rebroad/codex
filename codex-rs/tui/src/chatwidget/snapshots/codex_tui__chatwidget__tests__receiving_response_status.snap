@@ -2,5 +2,5 @@
 source: tui/src/chatwidget/tests/reasoning_status_tests.rs
 expression: terminal.backend()
 ---
-"• Receiving response (0s • esc to interrupt)                                    "
+"• Streaming AI response (0s • esc to interrupt)                                 "
 "  └ 2 text bytes received · last chunk 0s ago                                   "

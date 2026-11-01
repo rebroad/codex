@@ -1198,7 +1198,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Awaiting model response");
+    assert_eq!(status.header(), "Awaiting AI response");
     assert_eq!(status.details(), None);
 }
 
@@ -1640,7 +1640,7 @@ async fn thread_snapshot_replayed_turn_started_marks_task_running() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Awaiting model response");
+    assert_eq!(status.header(), "Awaiting AI response");
 }
 
 #[tokio::test]
@@ -1733,7 +1733,7 @@ async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_heade
 
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
     assert_eq!(chat.status_state.current_status.details, None);
     assert!(chat.status_state.retry_status_header.is_none());
@@ -1756,7 +1756,7 @@ async fn stream_recovery_restores_previous_status_header() {
 
     assert_eq!(
         chat.status_state.current_status.header,
-        "Receiving response"
+        "Streaming AI response"
     );
     assert_eq!(
         chat.status_state.current_status.details.as_deref(),
@@ -1767,7 +1767,7 @@ async fn stream_recovery_restores_previous_status_header() {
         chat.bottom_pane
             .status_widget()
             .map(|status| status.header()),
-        Some("Receiving response")
+        Some("Streaming AI response")
     );
     assert!(chat.active_cell_is_stream_tail());
 }

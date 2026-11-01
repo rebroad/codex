@@ -2440,7 +2440,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     assert_eq!(chat.bottom_pane.is_task_running(), true);
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
 
     complete_user_message(
@@ -2478,7 +2478,7 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     assert_eq!(chat.bottom_pane.is_task_running(), true);
     assert_eq!(
         chat.status_state.current_status.header,
-        "Awaiting model response"
+        "Awaiting AI response"
     );
 
     begin_exec(&mut chat, "call-1", "echo hi");

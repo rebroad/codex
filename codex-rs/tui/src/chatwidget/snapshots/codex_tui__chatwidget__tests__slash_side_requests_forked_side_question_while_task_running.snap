@@ -4,7 +4,7 @@ assertion_line: 275
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
-"• Awaiting model response (4m 59s • esc to interrupt)                           "
+"• Awaiting AI response (4m 59s • esc to interrupt)                           "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

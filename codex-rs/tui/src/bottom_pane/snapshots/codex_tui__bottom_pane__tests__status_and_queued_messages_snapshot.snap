@@ -3,7 +3,7 @@ source: tui/src/bottom_pane/mod.rs
 assertion_line: 3756
 expression: "render_snapshot(&pane, area)"
 ---
-• Awaiting model response (0s • esc to interrup…
+• Awaiting AI response (0s • esc to interrup…
                                                 
 • Queued follow-up inputs                       
   ↳ Queued follow-up question                   

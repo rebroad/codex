@@ -3,7 +3,7 @@ source: tui/src/bottom_pane/mod.rs
 assertion_line: 3599
 expression: "render_snapshot(&pane, area)"
 ---
-• Awaiting model response (0s…
+• Awaiting AI response (0s…
                               
                               
 › Ask Codex to do anything    

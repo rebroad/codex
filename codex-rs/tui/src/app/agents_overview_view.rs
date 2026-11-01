@@ -436,9 +436,9 @@ impl AgentsOverviewView {
                         .details
                         .activity_status
                         .clone()
-                        .unwrap_or_else(|| "Awaiting model response".to_string()),
+                        .unwrap_or_else(|| "Awaiting AI response".to_string()),
                     ThreadStatus::Idle | ThreadStatus::SystemError | ThreadStatus::NotLoaded => {
-                        "Awaiting model response".to_string()
+                        "Awaiting AI response".to_string()
                     }
                 };
                 (label, "●".green())

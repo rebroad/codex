@@ -57,7 +57,7 @@ impl ChatWidget {
             || self.status_state.current_status.is_guardian_review()
         {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-            self.set_status_header(String::from("Awaiting model response"));
+            self.set_status_header(String::from("Awaiting AI response"));
         }
     }
 
@@ -73,7 +73,7 @@ impl ChatWidget {
     }
 
     pub(super) fn refresh_response_receive_details(&mut self, now: Instant) {
-        if self.status_state.current_status.header != "Receiving response" {
+        if self.status_state.current_status.header != "Streaming AI response" {
             return;
         }
         let Some(last_received_at) = self.status_state.response_receive.last_received_at else {
@@ -86,7 +86,7 @@ impl ChatWidget {
         );
         if self.status_state.current_status.details.as_deref() != Some(&details) {
             self.set_status(
-                String::from("Receiving response"),
+                String::from("Streaming AI response"),
                 Some(details),
                 StatusDetailsCapitalization::Preserve,
                 STATUS_DETAILS_DEFAULT_MAX_LINES,
@@ -248,7 +248,7 @@ impl ChatWidget {
             self.bottom_pane.ensure_status_indicator();
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
             self.set_status(
-                String::from("Receiving response"),
+                String::from("Streaming AI response"),
                 Some(format!(
                     "{} text bytes received · last chunk 0s ago",
                     self.status_state.response_receive.bytes_received
@@ -541,7 +541,7 @@ impl ChatWidget {
             && self.mcp_startup_status.is_none()
             && matches!(
                 self.status_state.current_status.header.as_str(),
-                "Receiving response" | "Running command"
+                "Streaming AI response" | "Running command"
             )
         {
             self.set_awaiting_model_response();
@@ -581,7 +581,7 @@ impl ChatWidget {
             now,
         );
         for cell in outcome.cells {
-            if self.status_state.current_status.header != "Receiving response" {
+            if self.status_state.current_status.header != "Streaming AI response" {
                 self.bottom_pane.hide_status_indicator();
             }
             self.add_boxed_history(cell);
@@ -700,7 +700,7 @@ impl ChatWidget {
                 return self.clear_active_stream_tail();
             }
 
-            if self.status_state.current_status.header != "Receiving response" {
+            if self.status_state.current_status.header != "Streaming AI response" {
                 self.bottom_pane.hide_status_indicator();
             }
             let cell = history_cell::StreamingAgentTailCell::new(

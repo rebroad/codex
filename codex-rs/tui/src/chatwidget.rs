@@ -1485,6 +1485,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_ps_output(&mut self) {
+        // `/ps` is also an explicit refresh point for the footer summary. This keeps
+        // the visible count aligned with the process list shown in the command output.
+        self.sync_unified_exec_footer();
         let processes = self
             .unified_exec_processes
             .iter()

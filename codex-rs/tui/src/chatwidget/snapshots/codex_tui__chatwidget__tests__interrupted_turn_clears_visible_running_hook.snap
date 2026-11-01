@@ -5,7 +5,7 @@ expression: "format!(\"before interrupt:\\n{before_interrupt}\\nafter interrupt:
 ---
 before interrupt:
 "                                                                                "
-"• Awaiting model response (4m 59s • esc to interrupt) · checking command policy "
+"• Awaiting AI response (4m 59s • esc to interrupt) · checking command policy "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

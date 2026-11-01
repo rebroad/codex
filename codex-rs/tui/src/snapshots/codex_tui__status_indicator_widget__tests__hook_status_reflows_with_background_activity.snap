@@ -3,19 +3,19 @@ source: tui/src/status_indicator_widget.rs
 expression: "frames.join(\"\\n\")"
 ---
 140 columns:
-"Awaiting model response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(123, " "), (125, " "), (127, " "), (130, " "), (132, " ")]
+"Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(123, " "), (125, " "), (127, " "), (130, " "), (132, " ")]
 "  └ existing details                                                                                                                        "
 
 139 columns:
-"Awaiting model response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close                             "
+"Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close                             "
 "  └ checking 日本語 ｶﾞﾊﾟ policy                                                                                                            " Hidden by multi-width symbols: [(14, " "), (16, " "), (18, " "), (21, " "), (23, " ")]
 "  └ existing details                                                                                                                       "
 
 24 columns:
-"Awaiting model response…"
+"Awaiting AI response…"
 "  └ checking 日本語 ｶﾞ… " Hidden by multi-width symbols: [(14, " "), (16, " "), (18, " "), (21, " ")]
 "  └ existing details    "
 
 140 columns:
-"Awaiting model response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(123, " "), (125, " "), (127, " "), (130, " "), (132, " ")]
+"Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(123, " "), (125, " "), (127, " "), (130, " "), (132, " ")]
 "  └ existing details                                                                                                                        "

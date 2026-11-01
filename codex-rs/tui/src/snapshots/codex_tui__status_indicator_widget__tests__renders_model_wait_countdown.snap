@@ -2,4 +2,4 @@
 source: tui/src/status_indicator_widget.rs
 expression: terminal.backend()
 ---
-"Awaiting model response (1m 00s • esc to interrupt)                             "
+"Awaiting AI response (1m 00s • esc to interrupt)                             "

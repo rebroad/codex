@@ -38,7 +38,7 @@ async fn compaction_status_survives_follow_up_and_preserves_turn_time() {
     assert!(chat.bottom_pane.status_indicator_visible());
     assert_eq!(
         chat.bottom_pane.status_widget().unwrap().header(),
-        "Receiving response"
+        "Streaming AI response"
     );
     assert_eq!(
         chat.bottom_pane.status_widget().unwrap().details(),
@@ -91,7 +91,7 @@ async fn compaction_status_survives_follow_up_and_preserves_turn_time() {
     assert!(chat.status_state.compaction.is_none());
     assert_eq!(
         chat.bottom_pane.status_widget().unwrap().header(),
-        "Awaiting model response"
+        "Awaiting AI response"
     );
     assert!(chat.bottom_pane.status_elapsed().unwrap() >= Duration::from_secs(/*secs*/ 600));
 }
@@ -136,7 +136,7 @@ async fn compaction_status_clears_when_turn_ends_without_item_completion() {
         handle_turn_started(&mut chat, "turn-2");
         assert_eq!(
             chat.bottom_pane.status_widget().unwrap().header(),
-            "Awaiting model response"
+            "Awaiting AI response"
         );
     }
 }
@@ -198,7 +198,7 @@ async fn compaction_snapshot_restores_elapsed_time_and_clears_on_replayed_comple
     assert!(chat.status_state.compaction.is_none());
     assert_eq!(
         chat.bottom_pane.status_widget().unwrap().header(),
-        "Awaiting model response"
+        "Awaiting AI response"
     );
     let lines: Vec<_> = drain_insert_history(&mut rx)
         .into_iter()
