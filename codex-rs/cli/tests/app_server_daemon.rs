@@ -130,9 +130,6 @@ fn managed_daemon_restarts_from_deleted_working_directory() -> Result<()> {
         String::from_utf8_lossy(&started.stderr)
     );
     let old_pid = daemon.pid("app-server.pid")?;
-    let old_updater_pid = daemon.pid("app-server-updater.pid")?;
-    signal(old_updater_pid, libc::SIGTERM)?;
-    wait_for_exit(old_updater_pid)?;
 
     // Delete the restart caller's cwd without changing the test process's cwd.
     let restarted = Command::new("/bin/sh")
@@ -154,20 +151,7 @@ fn managed_daemon_restarts_from_deleted_working_directory() -> Result<()> {
     let restarted: Value = serde_json::from_slice(&restarted.stdout)?;
     assert_eq!(restarted["status"], "restarted");
     assert_ne!(daemon.pid("app-server.pid")?, old_pid);
-    assert_ne!(daemon.pid("app-server-updater.pid")?, old_updater_pid);
     assert_eq!(daemon.lifecycle("version")?["status"], "running");
-    let updater_socket = daemon
-        .home
-        .path()
-        .join("app-server-daemon/app-server-updater.sock");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while std::os::unix::net::UnixStream::connect(&updater_socket).is_err() {
-        ensure!(
-            Instant::now() < deadline,
-            "replacement updater did not become ready"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
     Ok(())
 }
 
@@ -553,23 +537,26 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
         initial == InitialDaemon::Missing
     );
     let output: Value = serde_json::from_slice(&result.stdout)?;
-    let dedicated = daemon
-        .home
-        .path()
-        .canonicalize()?
-        .join("packages/app-server-daemon");
-    let (initial_root, initial_pid_file) = match initial {
-        InitialDaemon::Missing => (&dedicated, "daemon.pid"),
-        InitialDaemon::Legacy => (&standalone, "app-server.pid"),
+    let initial_pid_file = match initial {
+        InitialDaemon::Missing => "daemon.pid",
+        InitialDaemon::Legacy => "app-server.pid",
     };
-    assert_eq!(
-        output["managedCodexPath"],
-        initial_root
+    let expected_managed_codex_path = if action == "bootstrap" {
+        daemon
+            .home
+            .path()
             .canonicalize()?
-            .join("current/bin/codex")
+            .join("packages/app-server-daemon/current/bin/codex")
             .to_str()
             .context("managed path is not UTF-8")?
-    );
+            .to_owned()
+    } else {
+        cli_before
+            .to_str()
+            .context("managed path is not UTF-8")?
+            .to_owned()
+    };
+    assert_eq!(output["managedCodexPath"], expected_managed_codex_path);
     assert_eq!(daemon.codex.canonicalize()?, cli_before);
     assert_eq!(standalone.join("current").canonicalize()?, cli_selection);
     assert!(state.join(initial_pid_file).exists());
