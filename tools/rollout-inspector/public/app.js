@@ -480,6 +480,9 @@ async function loadThread() {
     includeReasoning,
     includeSystemMessages,
   });
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("from")) query.set("from", params.get("from"));
+  if (params.has("to")) query.set("to", params.get("to"));
   const thread = await getJson(`/api/thread?${query.toString()}`);
   renderThread(thread);
 }

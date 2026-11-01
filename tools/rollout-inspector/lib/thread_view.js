@@ -184,6 +184,8 @@ async function buildThreadView(filePath, options = {}) {
   const includeReasoning = options.includeReasoning ?? false;
   const includeSystemMessages = options.includeSystemMessages ?? false;
   const maxToolChars = options.maxToolChars ?? 800;
+  const from = options.from ? Date.parse(options.from) : null;
+  const to = options.to ? Date.parse(options.to) : null;
 
   const state = {
     sessionMeta: null,
@@ -201,6 +203,14 @@ async function buildThreadView(filePath, options = {}) {
   };
 
   for await (const lineRec of readJsonlLines(filePath)) {
+    if (from !== null || to !== null) {
+      const timestampMatch = /\"timestamp\"\s*:\s*\"([^\"]+)\"/.exec(lineRec.line);
+      const recordTime = timestampMatch ? Date.parse(timestampMatch[1]) : NaN;
+      // Keep session metadata available even when its timestamp predates the requested range.
+      if (!/^\s*\{\s*"type"\s*:\s*"session_meta"/.test(lineRec.line)) {
+        if (!Number.isFinite(recordTime) || (from !== null && recordTime < from) || (to !== null && recordTime > to)) continue;
+      }
+    }
     state.totals.lines += 1;
     state.totals.bytes += lineRec.lineBytes;
 
