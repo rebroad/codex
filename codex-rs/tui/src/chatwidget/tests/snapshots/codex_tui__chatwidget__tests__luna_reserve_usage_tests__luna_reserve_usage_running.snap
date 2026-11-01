@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/luna_reserve_usage_tests.rs
 assertion_line: 213
 expression: rendered
 ---
-• Awaiting model response (0s • esc to interrupt)
+• Awaiting AI response (0s • esc to interrupt)
 
 
 › x

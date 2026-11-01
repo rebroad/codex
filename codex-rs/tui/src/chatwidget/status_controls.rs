@@ -9,7 +9,7 @@ use super::*;
 impl ChatWidget {
     pub(super) fn set_awaiting_model_response(&mut self) {
         self.set_waiting_status(
-            "Awaiting model response",
+            "Awaiting AI response",
             Some(self.config.model_provider.stream_idle_timeout()),
         );
     }

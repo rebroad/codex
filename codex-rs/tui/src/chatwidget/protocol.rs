@@ -142,7 +142,12 @@ impl ChatWidget {
                             &notification.item_id,
                         ))
                 {
-                    self.on_agent_message_delta(notification.delta);
+                    if from_replay {
+                        self.handle_streaming_delta(notification.delta);
+                    } else {
+                        self.record_response_text_delta(&notification.item_id, &notification.delta);
+                        self.on_agent_message_delta(notification.delta);
+                    }
                 }
             }
             ServerNotification::PlanDelta(notification) => {
