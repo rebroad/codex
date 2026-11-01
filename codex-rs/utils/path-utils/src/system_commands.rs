@@ -119,7 +119,7 @@ fn system_directories() -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(target_os = "android")]
 fn termux_prefix() -> Option<PathBuf> {
     let prefix = dunce::canonicalize(std::env::var_os("PREFIX")?).ok()?;
     is_termux_prefix(&prefix).then_some(prefix)
