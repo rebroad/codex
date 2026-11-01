@@ -58,7 +58,6 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
     #[cfg(unix)]
     let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
     #[cfg(unix)]
-    let _executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
     #[cfg(unix)]
     let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
     #[cfg(not(unix))]
@@ -416,7 +415,6 @@ async fn managed_handoff_checkpoints_active_parent_and_child_turns() -> Result<(
     )?;
     let socket_path = home.path().join("control/server.sock");
     let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
-    let _executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
     let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
     let mut client = connect_default_daemon_client(&socket_path).await?;
     let parent = start_thread(&mut client, /*id*/ 2, json!({})).await?;
@@ -509,7 +507,6 @@ async fn managed_handoff_reissues_pending_user_interaction_after_replacement() -
     create_config_toml(home.path(), mock.uri(), "on-request")?;
     let socket_path = home.path().join("control/server.sock");
     let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
-    let _executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
     let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
     let mut client = connect_daemon_client(
         &socket_path,
@@ -724,7 +721,6 @@ async fn managed_handoff_reattaches_a_running_local_command() -> Result<()> {
     create_config_toml(home.path(), mock.uri(), "on-request")?;
     let socket_path = home.path().join("control/server.sock");
     let executor_binary = codex_utils_cargo_bin::cargo_bin("exec-server")?;
-    let executor_cleanup = ManagedExecutorCleanup::new(home.path(), &executor_binary)?;
     let mut server = spawn_server_with_executor(home.path(), &socket_path, &executor_binary)?;
     let mut client = connect_daemon_client(
         &socket_path,
@@ -930,7 +926,6 @@ async fn managed_handoff_reattaches_a_running_local_command() -> Result<()> {
         .await
         .context("final response did not finish")?;
     mock.shutdown().await;
-    drop(executor_cleanup);
     Ok(())
 }
 
@@ -1220,17 +1215,20 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
             )
             .await?;
             let turns = response["thread"]["turns"].as_array().context("turns")?;
-            if let Some(continued) = turns.last()
+            if let Some(continued) = turns
+                .iter()
+                .find(|candidate| candidate["id"] == turn["turn"]["id"])
                 && continued["status"] == "completed"
             {
                 assert_eq!(continued["id"], turn["turn"]["id"]);
-                assert!(
-                    continued["items"]
-                        .as_array()
-                        .context("items")?
-                        .iter()
-                        .all(|item| item["type"] != "userMessage")
-                );
+                let user_messages = continued["items"]
+                    .as_array()
+                    .context("items")?
+                    .iter()
+                    .filter(|item| item["type"] == "userMessage")
+                    .collect::<Vec<_>>();
+                assert_eq!(user_messages.len(), 1, "{continued}");
+                assert_eq!(user_messages[0]["content"][0]["text"], "Do the work");
                 break;
             }
             sleep(Duration::from_millis(25)).await;
@@ -1313,8 +1311,28 @@ pub(super) async fn connect_daemon_client(
     connect_initialized(socket_path, capabilities, "daemon_recovery_test", "0.1.0").await
 }
 
-pub(super) fn spawn_server(home: &Path, socket_path: &Path) -> Result<Child> {
+pub(super) fn spawn_server(home: &Path, socket_path: &Path) -> Result<ManagedServer> {
     spawn_server_inner(home, socket_path, None, None)
+}
+
+pub(super) struct ManagedServer {
+    child: Child,
+    #[cfg(unix)]
+    _executor_cleanup: ManagedExecutorCleanup,
+}
+
+impl std::ops::Deref for ManagedServer {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for ManagedServer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
 }
 
 #[cfg(unix)]
@@ -1367,7 +1385,7 @@ fn spawn_server_with_executor(
     home: &Path,
     socket_path: &Path,
     executor_binary: &Path,
-) -> Result<Child> {
+) -> Result<ManagedServer> {
     let sandbox_binary = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")?;
     spawn_server_inner(
         home,
@@ -1382,7 +1400,7 @@ fn spawn_server_inner(
     socket_path: &Path,
     executor_binary: Option<&Path>,
     sandbox_binary: Option<&Path>,
-) -> Result<Child> {
+) -> Result<ManagedServer> {
     let binary = codex_utils_cargo_bin::cargo_bin("codex-app-server")?;
     let mut command = Command::new(binary);
     command
@@ -1402,13 +1420,20 @@ fn spawn_server_inner(
             codex_app_server_transport::DAEMON_SHUTDOWN_SOCKET_ENV,
             socket_path,
         );
-    if let Some(executor_binary) = executor_binary {
-        command.env("CODEX_MANAGED_EXECUTOR_EXECUTABLE", executor_binary);
-    }
+    #[cfg(unix)]
+    let executor_binary = if let Some(executor_binary) = executor_binary {
+        executor_binary.to_path_buf()
+    } else {
+        codex_utils_cargo_bin::cargo_bin("exec-server")?
+    };
+    #[cfg(unix)]
+    command.env("CODEX_MANAGED_EXECUTOR_EXECUTABLE", &executor_binary);
+    #[cfg(not(unix))]
+    let _ = executor_binary;
     if let Some(sandbox_binary) = sandbox_binary {
         command.env("CODEX_TEST_LINUX_SANDBOX_EXE", sandbox_binary);
     }
-    Ok(command
+    let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(
@@ -1419,7 +1444,12 @@ fn spawn_server_inner(
             },
         )
         .kill_on_drop(true)
-        .spawn()?)
+        .spawn()?;
+    Ok(ManagedServer {
+        child,
+        #[cfg(unix)]
+        _executor_cleanup: ManagedExecutorCleanup::new(home, &executor_binary)?,
+    })
 }
 
 #[cfg(unix)]

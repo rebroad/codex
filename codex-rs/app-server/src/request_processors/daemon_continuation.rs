@@ -135,6 +135,7 @@ impl ThreadRequestProcessor {
                         turn_id: saved.turn_id.clone(),
                         thread_settings: Default::default(),
                         trace: None,
+                        final_output_json_schema: saved.output_schema.clone(),
                         cyber_access_program: saved.cyber_access_program,
                     },
                     suspended.pending_input.clone(),

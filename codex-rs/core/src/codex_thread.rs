@@ -604,10 +604,12 @@ impl CodexThread {
             turn_id,
             thread_settings,
             trace,
+            final_output_json_schema,
             cyber_access_program,
         } = request;
         let start_options = TurnStartOptions {
             cyber_access_program,
+            final_output_json_schema,
             ..self.session.recovered_turn_start_options(&turn_id).await
         };
         match self
