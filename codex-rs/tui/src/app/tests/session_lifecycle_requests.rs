@@ -3781,7 +3781,10 @@ git-worktree-root = {}
         toml::Value::String(project_pool.display().to_string()),
     );
     fs::write(source.join(".codex/config.toml"), destination)?;
-    fs::write(source.join("AGENTS.md"), "committed worktree instructions")?;
+    fs::write(
+        source.join("AGENTS.md"),
+        "committed worktree instructions\n",
+    )?;
     for args in [
         vec!["init", "--quiet"],
         vec!["add", "-f", "."],
@@ -3809,8 +3812,8 @@ git-worktree-root = {}
         .output()?;
     assert!(committed_agents.status.success());
     assert_eq!(
-        String::from_utf8_lossy(&committed_agents.stdout).trim_end(),
-        "committed worktree instructions"
+        String::from_utf8_lossy(&committed_agents.stdout),
+        "committed worktree instructions\n"
     );
     fs::write(
         source.join(".codex/config.toml"),
@@ -4082,7 +4085,7 @@ terminal_visualization_instructions = true
         );
         assert_eq!(
             fs::read_to_string(checkout.root.join("AGENTS.md"))?,
-            "committed worktree instructions",
+            "committed worktree instructions\n",
             "{mode:?} worktree repository root"
         );
         let fork = matches!(mode, ManagedWorktreeMode::Fork);
