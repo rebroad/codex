@@ -1241,7 +1241,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
         let checkout = result.checkout.as_ref().unwrap().clone();
         let file_contents = std::fs::read_to_string(checkout.cwd.join("file"))?;
         assert_eq!(
-            file_contents, "default branch",
+            file_contents, "default branch\n",
             "remote_only={remote_only}, stale_local={stale_local}, contents={file_contents:?}"
         );
         assert!(!checkout.cwd.join("untracked").exists());
