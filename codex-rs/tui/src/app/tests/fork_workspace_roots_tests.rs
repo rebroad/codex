@@ -35,6 +35,12 @@ async fn check_fork_dispatch(mode: ThreadParamsMode) -> Result<()> {
             ),
         )?;
     }
+    crate::legacy_core::config::set_project_trust_level(
+        server_home.path(),
+        &remote_cwd,
+        codex_protocol::config_types::TrustLevel::Trusted,
+    )
+    .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
     app.config.codex_home = client_home.path().to_path_buf().abs();
     app.config.sqlite = codex_state::SqliteConfig::new_for_testing(client_home.path().abs());
     let server_config = ConfigBuilder::default()
