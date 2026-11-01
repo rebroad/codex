@@ -47,6 +47,19 @@ Useful options:
 - `--no-analyze`: load thread view only
 - `--port <n>`: preferred local port (default: 8787)
 - `--codex-home <path>`: root used for "Recent Files"
+- `--from <time>`: include records at or after a timestamp
+- `--to <time>`: include records at or before a timestamp
+
+Time bounds accept `YYYY-MM-DD`, `YYYY-MM-DDTHH`, `YYYY-MM-DDTHH:MM`, or
+`YYYY-MM-DDTHH:MM:SS` (optionally with milliseconds). Omitted fields are zero,
+and bounds are interpreted as UTC to match rollout timestamps. For example:
+
+```bash
+view-rollout 01a17d0f-7e1c-7de0-a541-d11609f34cca --from 2026-11-01T19:04 --to 2026-11-01T19:30
+```
+
+With either bound present, only records in that range are parsed into the thread
+view, and automatic payload analysis is skipped.
 
 If the requested port is occupied, `view-rollout` selects the next available
 port and prints the selected port to stderr.

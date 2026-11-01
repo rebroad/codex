@@ -257,6 +257,8 @@ async function handleApi(req, res, urlObj, codexHome) {
             urlObj.searchParams.get("maxToolChars") ?? "800",
             10,
           ) || 800,
+        from: urlObj.searchParams.get("from"),
+        to: urlObj.searchParams.get("to"),
       });
       json(res, 200, thread);
     } catch (error) {

@@ -47,6 +47,7 @@ Options:
   --codex-home <path>  Root path for "Recent Files" list (default: ~/.codex)
   --no-open            Do not launch browser; print URL only
   --no-analyze         Do not auto-run payload analysis on page load
+  --from <time>        Include records at or after this UTC rollout time
   --help, -h           Show help
 `);
 }
@@ -150,6 +151,8 @@ function parseArgs(argv) {
     codexHome: null,
     openBrowser: true,
     autoAnalyze: true,
+    from: null,
+    to: null,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -176,6 +179,13 @@ function parseArgs(argv) {
       args.autoAnalyze = false;
       continue;
     }
+    if (arg === "--from" || arg === "--to") {
+      const value = argv[i + 1];
+      if (!value || value.startsWith("--")) throw new Error(`missing value for ${arg}`);
+      args[arg.slice(2)] = value;
+      i += 1;
+      continue;
+    }
     if (!args.file) {
       args.file = path.resolve(arg);
       continue;
@@ -190,8 +200,27 @@ function parseArgs(argv) {
   if (!Number.isFinite(args.port) || args.port <= 0) {
     throw new Error(`invalid --port value: ${args.port}`);
   }
+  for (const name of ["from", "to"]) {
+    if (args[name] && parseTimeBound(args[name]) === null) {
+      throw new Error(`invalid --${name} value: ${args[name]} (expected YYYY-MM-DD[THH[:MM[:SS]]])`);
+    }
+    if (args[name]) args[name] = new Date(parseTimeBound(args[name])).toISOString();
+  }
+  if (args.from && args.to && parseTimeBound(args.from) > parseTimeBound(args.to)) {
+    throw new Error("--from must be earlier than or equal to --to");
+  }
 
   return args;
+}
+
+function parseTimeBound(value) {
+  const match = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2})(?::(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?)?$/.exec(value);
+  if (!match) return null;
+  const [, date, hour = "00", minute = "00", second = "00", fraction = "0"] = match;
+  const millis = Number(fraction.padEnd(3, "0"));
+  const iso = `${date}T${hour}:${minute}:${second}.${String(millis).padStart(3, "0")}Z`;
+  const timestamp = Date.parse(iso);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === iso ? timestamp : null;
 }
 
 function openBrowser(url) {
@@ -311,7 +340,9 @@ async function main() {
   } else {
     pageUrl.searchParams.set("file", args.file);
     pageUrl.searchParams.set("autoload", "1");
-    pageUrl.searchParams.set("analyze", args.autoAnalyze ? "1" : "0");
+    pageUrl.searchParams.set("analyze", args.autoAnalyze && !args.from && !args.to ? "1" : "0");
+    if (args.from) pageUrl.searchParams.set("from", args.from);
+    if (args.to) pageUrl.searchParams.set("to", args.to);
   }
 
   if (args.openBrowser) {
@@ -337,4 +368,5 @@ module.exports = {
   resolveRolloutFile,
   isPortAvailable,
   findAvailablePort,
+  parseTimeBound,
 };
