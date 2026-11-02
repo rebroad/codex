@@ -36,6 +36,10 @@ async fn start_session(
 
 #[tokio::test]
 async fn archived_session_requires_confirmation_before_resume_or_fork() -> Result<()> {
+    Box::pin(archived_session_requires_confirmation_before_resume_or_fork_inner()).await
+}
+
+async fn archived_session_requires_confirmation_before_resume_or_fork_inner() -> Result<()> {
     for action in [
         SessionStartAction::Resume(
             ResumeModelSettings::RestoreFromThread,
