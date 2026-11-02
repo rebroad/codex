@@ -2190,7 +2190,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn replacement_client_reattaches_to_running_process() -> anyhow::Result<()> {
+    async fn replacement_client_reattaches_to_running_tty_process() -> anyhow::Result<()> {
         use crate::ExecServerRuntimeOptions;
         use crate::protocol::ExecParams;
         use crate::server::ConnectionProcessor;
@@ -2252,13 +2252,14 @@ mod tests {
                     argv: vec![
                         "/bin/sh".to_string(),
                         "-c".to_string(),
-                        "sleep 1; printf reattached".to_string(),
+                        r#"printf 'BEFORE\\n'; IFS= read -r line; printf 'HANDOFF:%s\\n' "$line""#
+                            .to_string(),
                     ],
                     cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
                     shell_snapshot: None,
                     env_policy: None,
                     env,
-                    tty: false,
+                    tty: true,
                     pipe_stdin: false,
                     arg0: None,
                     sandbox: None,
@@ -2290,18 +2291,40 @@ mod tests {
             Some(session_id.as_str())
         );
         let reattached = replacement_client.reattach_process(&process_id, 0).await?;
+        assert_eq!(
+            replacement_client
+                .write(
+                    &process_id,
+                    b"hello from replacement\n".to_vec(),
+                    "handoff-tty-write-1".to_string(),
+                )
+                .await?
+                .status,
+            WriteStatus::Accepted
+        );
         let response = timeout(
             Duration::from_secs(5),
             reattached.read(Some(0), None, Some(4_000)),
         )
         .await??;
+        let output = response
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.chunk.0.iter().copied())
+            .collect::<Vec<_>>();
+        let output = String::from_utf8_lossy(&output);
+        assert!(
+            output.contains("BEFORE"),
+            "missing replayed output: {output:?}"
+        );
+        assert!(
+            output.contains("HANDOFF:hello from replacement"),
+            "missing TTY input result: {output:?}"
+        );
         assert_eq!(
-            response
-                .chunks
-                .iter()
-                .flat_map(|chunk| chunk.chunk.0.iter().copied())
-                .collect::<Vec<_>>(),
-            b"reattached"
+            output.matches("HANDOFF:").count(),
+            1,
+            "duplicate TTY result: {output:?}"
         );
 
         reattached.terminate().await?;

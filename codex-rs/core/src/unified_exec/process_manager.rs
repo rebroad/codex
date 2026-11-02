@@ -461,12 +461,6 @@ impl UnifiedExecProcessManager {
         let mut restored = Vec::with_capacity(suspended.len());
         let mut executor_backends = HashMap::new();
         for saved in suspended {
-            if saved.tty {
-                return Err(format!(
-                    "interactive terminal {} cannot be restored safely after handoff",
-                    saved.unified_process_id
-                ));
-            }
             let environment = environment_manager
                 .get_environment(&saved.environment_id)
                 .ok_or_else(|| {
@@ -533,6 +527,17 @@ impl UnifiedExecProcessManager {
                     saved.unified_process_id
                 )
             })?;
+            let permissions = saved
+                .terminal_permissions
+                .clone()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| {
+                    format!(
+                        "invalid terminal permission state for process {}: {error}",
+                        saved.unified_process_id
+                    )
+                })?;
             let process = Arc::new(process);
             restored.push((
                 saved,
@@ -546,7 +551,7 @@ impl UnifiedExecProcessManager {
                     hook_command: saved.command.clone(),
                     tty: saved.tty,
                     environment_id: saved.environment_id.clone(),
-                    permissions: None,
+                    permissions,
                     network_approval: None,
                     session: Arc::downgrade(session),
                     last_used: Instant::now(),
@@ -2019,12 +2024,6 @@ impl UnifiedExecProcessManager {
             if has_exited {
                 continue;
             }
-            if entry.tty {
-                return Err(format!(
-                    "interactive terminal {} cannot survive app-server handoff",
-                    entry.process_id
-                ));
-            }
             let Some((exec_server_process_id, exec_server_session_id, executor_url)) =
                 entry.process.executor_handoff_ids()
             else {
@@ -2032,6 +2031,21 @@ impl UnifiedExecProcessManager {
                     "active local process {} cannot survive app-server handoff",
                     entry.process_id
                 ));
+            };
+            let terminal_permissions = if entry.tty {
+                entry
+                    .permissions
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        format!(
+                            "failed to persist terminal permission state for process {}: {error}",
+                            entry.process_id
+                        )
+                    })?
+            } else {
+                None
             };
             handoff.push(SuspendedExecutorProcess {
                 unified_process_id: entry.process_id,
@@ -2044,6 +2058,7 @@ impl UnifiedExecProcessManager {
                 command: entry.hook_command.clone(),
                 cwd: entry.cwd.to_string(),
                 tty: entry.tty,
+                terminal_permissions,
             });
         }
         handoff.sort_by_key(|process| process.unified_process_id);

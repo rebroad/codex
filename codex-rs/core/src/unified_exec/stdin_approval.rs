@@ -22,13 +22,16 @@ use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use serde::Deserialize;
+use serde::Serialize;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) enum TerminalSandboxSource {
     Native,
     Executor,
 }
 
+#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) struct TerminalPermissions {
     policy: TerminalPolicy,
     sandbox_source: TerminalSandboxSource,
@@ -39,7 +42,7 @@ pub(crate) struct TerminalPermissions {
 }
 
 /// Host-owned launch settings. Never serialize these into approval messages.
-#[derive(PartialEq, Eq)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct TerminalPolicy {
     sandbox: FileSystemSandboxContext,
     environment_network: Option<EnvironmentNetworkPolicy>,

@@ -78,6 +78,9 @@ pub struct SuspendedExecutorProcess {
     pub command: String,
     pub cwd: String,
     pub tty: bool,
+    /// Host-owned launch permission state needed to review stdin after reattachment.
+    #[serde(default)]
+    pub terminal_permissions: Option<serde_json::Value>,
 }
 
 /// One accepted input item and the options retained with it when queued as mailbox work.

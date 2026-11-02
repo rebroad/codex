@@ -36,6 +36,24 @@ fn terminal_permissions(profile: &PermissionProfile) -> TerminalPermissions {
 }
 
 #[test]
+fn terminal_permissions_survive_handoff_serialization() -> anyhow::Result<()> {
+    let mut permissions = terminal_permissions(&PermissionProfile::Disabled);
+    permissions.policy.controller_network = Some(NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig {
+            enabled: true,
+            ..Default::default()
+        },
+        /*requirements*/ None,
+        &PermissionProfile::Disabled,
+    )?);
+    let serialized = serde_json::to_value(&permissions)?;
+    let restored: TerminalPermissions = serde_json::from_value(serialized)?;
+
+    assert_eq!(restored, permissions);
+    Ok(())
+}
+
+#[test]
 fn reduced_permissions_require_review() -> anyhow::Result<()> {
     let permissions = terminal_permissions(&PermissionProfile::Disabled);
     let baseline = PermissionProfile::read_only();
