@@ -1,9 +1,8 @@
 ---
 source: tui/src/bottom_pane/mod.rs
-assertion_line: 3626
 expression: "render_snapshot(&pane, area)"
 ---
-• Awaiting AI response (0s • esc to interrup…
+• Awaiting AI response (0s • esc to interrupt)  
                                                 
                                                 
 › Ask Codex to do anything                      

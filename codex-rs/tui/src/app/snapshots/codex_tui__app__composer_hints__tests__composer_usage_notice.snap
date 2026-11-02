@@ -1,6 +1,5 @@
 ---
 source: tui/src/app/composer_hints_tests.rs
-assertion_line: 121
 expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
 ---
 80 columns, 10 rows, running=false, queued=false
@@ -32,7 +31,7 @@ Conversation
 32 columns, 10 rows, running=true, queued=false
   Run /status for a breakdown.
 
-• Awaiting AI response (4m 5…
+• Awaiting AI response (4m 59s …
 
                   ⚠ 5h <1% left
 
@@ -44,7 +43,7 @@ Conversation
 18 columns, 10 rows, running=true, queued=false
   a breakdown.
 
-• Awaiting model …
+• Awaiting AI res…
 
      ⚠ 5h 5% left
 

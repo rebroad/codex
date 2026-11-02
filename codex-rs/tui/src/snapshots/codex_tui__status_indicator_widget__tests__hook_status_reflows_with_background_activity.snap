@@ -2,20 +2,20 @@
 source: tui/src/status_indicator_widget.rs
 expression: "frames.join(\"\\n\")"
 ---
-140 columns:
-"Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(123, " "), (125, " "), (127, " "), (130, " "), (132, " ")]
-"  └ existing details                                                                                                                        "
+137 columns:
+"Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(120, " "), (122, " "), (124, " "), (127, " "), (129, " ")]
+"  └ existing details                                                                                                                     "
 
-139 columns:
+136 columns:
 "Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close                             "
-"  └ checking 日本語 ｶﾞﾊﾟ policy                                                                                                            " Hidden by multi-width symbols: [(14, " "), (16, " "), (18, " "), (21, " "), (23, " ")]
-"  └ existing details                                                                                                                       "
+"  └ checking 日本語 ｶﾞﾊﾟ policy                                                                                                         " Hidden by multi-width symbols: [(14, " "), (16, " "), (18, " "), (21, " "), (23, " ")]
+"  └ existing details                                                                                                                    "
 
 24 columns:
-"Awaiting AI response…"
+"Awaiting AI response (0…"
 "  └ checking 日本語 ｶﾞ… " Hidden by multi-width symbols: [(14, " "), (16, " "), (18, " "), (21, " ")]
 "  └ existing details    "
 
-140 columns:
-"Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(123, " "), (125, " "), (127, " "), (130, " "), (132, " ")]
-"  └ existing details                                                                                                                        "
+137 columns:
+"Awaiting AI response (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · checking 日本語 ｶﾞﾊﾟ policy" Hidden by multi-width symbols: [(120, " "), (122, " "), (124, " "), (127, " "), (129, " ")]
+"  └ existing details                                                                                                                     "
