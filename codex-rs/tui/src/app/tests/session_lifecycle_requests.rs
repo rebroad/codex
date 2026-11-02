@@ -2855,6 +2855,10 @@ async fn transcript_alt_beginning_loads_every_older_history_page() -> Result<()>
 
 #[tokio::test]
 async fn remote_legacy_history_start_negotiates_once_for_resume_and_fork() -> Result<()> {
+    Box::pin(remote_legacy_history_start_negotiates_once_for_resume_and_fork_inner()).await
+}
+
+async fn remote_legacy_history_start_negotiates_once_for_resume_and_fork_inner() -> Result<()> {
     let (app, _codex_home) = make_history_test_app().await?;
     let legacy_thread_id =
         create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "legacy history")?;
