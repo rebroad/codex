@@ -3848,6 +3848,12 @@ mod tests {
     #[tokio::test]
     async fn side_fork_skips_parent_title_lookup_but_normal_ephemeral_fork_keeps_it() -> Result<()>
     {
+        Box::pin(side_fork_skips_parent_title_lookup_but_normal_ephemeral_fork_keeps_it_inner())
+            .await
+    }
+
+    async fn side_fork_skips_parent_title_lookup_but_normal_ephemeral_fork_keeps_it_inner()
+    -> Result<()> {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let config = build_config(&codex_home).await;
         let source_thread_id = ThreadId::from_string(
