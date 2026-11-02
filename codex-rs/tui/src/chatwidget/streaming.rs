@@ -67,13 +67,18 @@ impl ChatWidget {
         if progress.item_id.as_deref() != Some(item_id) {
             progress.item_id = Some(item_id.to_string());
             progress.bytes_received = 0;
+            progress.last_received_at = None;
+            progress.answer_visible = false;
         }
         progress.bytes_received = progress.bytes_received.saturating_add(delta.len() as u64);
         progress.last_received_at = Some(Instant::now());
     }
 
     pub(super) fn refresh_response_receive_details(&mut self, now: Instant) {
-        if self.status_state.current_status.header != "Streaming AI response" {
+        if self.status_state.current_status.header != "Streaming AI response"
+            || self.status_state.response_receive.answer_visible
+            || self.has_active_stream_tail()
+        {
             return;
         }
         let Some(last_received_at) = self.status_state.response_receive.last_received_at else {
@@ -237,27 +242,52 @@ impl ChatWidget {
     }
 
     pub(super) fn on_agent_message_delta(&mut self, delta: String) {
-        if self.status_state.compaction.is_none()
+        let should_update_status = self.status_state.compaction.is_none()
             && self.status_state.pending_guardian_review_status.is_empty()
             && self.mcp_startup_status.is_none()
             && (self.mcp_startup_expected_servers.is_none()
                 || self.mcp_startup_ignore_updates_until_next_start)
             && !self.safety_buffering_is_waiting()
-            && self.unified_exec_wait_streak.is_none()
-        {
+            && self.unified_exec_wait_streak.is_none();
+        if should_update_status {
             self.bottom_pane.ensure_status_indicator();
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
             self.set_status(
                 String::from("Streaming AI response"),
-                Some(format!(
-                    "{} text bytes received · last chunk 0s ago",
-                    self.status_state.response_receive.bytes_received
-                )),
+                None,
                 StatusDetailsCapitalization::Preserve,
                 STATUS_DETAILS_DEFAULT_MAX_LINES,
             );
         }
-        self.handle_streaming_delta(delta);
+        let answer_changed = self.handle_streaming_delta(delta);
+        let answer_visible = answer_changed || self.has_active_stream_tail();
+        if self
+            .status_state
+            .response_receive
+            .last_received_at
+            .is_some()
+        {
+            self.status_state.response_receive.answer_visible |= answer_visible;
+        }
+        if should_update_status
+            && !answer_visible
+            && self
+                .status_state
+                .response_receive
+                .last_received_at
+                .is_some()
+        {
+            let details = format!(
+                "{} text bytes received · last chunk 0s ago",
+                self.status_state.response_receive.bytes_received
+            );
+            self.set_status(
+                String::from("Streaming AI response"),
+                Some(details),
+                StatusDetailsCapitalization::Preserve,
+                STATUS_DETAILS_DEFAULT_MAX_LINES,
+            );
+        }
     }
 
     pub(super) fn on_plan_delta(&mut self, delta: String) {
@@ -640,7 +670,7 @@ impl ChatWidget {
     }
 
     #[inline]
-    pub(super) fn handle_streaming_delta(&mut self, delta: String) {
+    pub(super) fn handle_streaming_delta(&mut self, delta: String) -> bool {
         if !delta.is_empty() {
             self.mark_safety_buffering_agent_message_started();
         }
@@ -679,6 +709,7 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
             self.run_catch_up_commit_tick();
         }
+        changed
     }
 
     pub(super) fn active_cell_is_stream_tail(&self) -> bool {

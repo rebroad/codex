@@ -899,10 +899,7 @@ async fn final_worked_for_uses_cumulative_turn_duration_snapshot() {
             chat.bottom_pane.status_widget().unwrap().header(),
             "Streaming AI response"
         );
-        assert_eq!(
-            chat.bottom_pane.status_widget().unwrap().details(),
-            Some("16 text bytes received · last chunk 0s ago")
-        );
+        assert_eq!(chat.bottom_pane.status_widget().unwrap().details(), None);
 
         complete_assistant_message(
             &mut chat,

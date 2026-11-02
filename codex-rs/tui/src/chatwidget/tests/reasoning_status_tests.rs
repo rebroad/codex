@@ -47,7 +47,7 @@ fn response_delta(chat: &mut ChatWidget, item_id: &str, text: &str) {
 }
 
 #[tokio::test]
-async fn receiving_response_reports_item_text_bytes_and_last_chunk_age() {
+async fn visible_response_stream_hides_duplicate_receive_details() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
 
@@ -58,10 +58,7 @@ async fn receiving_response_reports_item_text_bytes_and_last_chunk_age() {
         chat.status_state.current_status.header,
         "Streaming AI response"
     );
-    assert_eq!(
-        chat.status_state.current_status.details.as_deref(),
-        Some("7 text bytes received · last chunk 0s ago")
-    );
+    assert_eq!(chat.status_state.current_status.details.as_deref(), None);
 
     let last_received_at = chat
         .status_state
@@ -69,10 +66,7 @@ async fn receiving_response_reports_item_text_bytes_and_last_chunk_age() {
         .last_received_at
         .expect("response delta timestamp");
     chat.refresh_response_receive_details(last_received_at + std::time::Duration::from_secs(3));
-    assert_eq!(
-        chat.status_state.current_status.details.as_deref(),
-        Some("7 text bytes received · last chunk 3s ago")
-    );
+    assert_eq!(chat.status_state.current_status.details.as_deref(), None);
 
     response_delta(&mut chat, "message-2", "ok");
     assert_eq!(chat.status_state.response_receive.bytes_received, 2);
@@ -90,6 +84,32 @@ async fn receiving_response_reports_item_text_bytes_and_last_chunk_age() {
         })
         .expect("render receiving status");
     assert_chatwidget_snapshot!("receiving_response_status", terminal.backend());
+}
+
+#[tokio::test]
+async fn receive_details_show_when_no_answer_text_is_visible() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_state.response_receive.item_id = Some("message-1".to_string());
+    chat.status_state.response_receive.bytes_received = 7;
+    chat.status_state.response_receive.last_received_at = Some(std::time::Instant::now());
+    chat.set_status(
+        String::from("Streaming AI response"),
+        None,
+        crate::status_indicator_widget::StatusDetailsCapitalization::Preserve,
+        crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES,
+    );
+
+    let last_received_at = chat
+        .status_state
+        .response_receive
+        .last_received_at
+        .expect("response delta timestamp");
+    chat.refresh_response_receive_details(last_received_at + std::time::Duration::from_secs(3));
+
+    assert_eq!(
+        chat.status_state.current_status.details.as_deref(),
+        Some("7 text bytes received · last chunk 3s ago")
+    );
 }
 
 #[tokio::test]

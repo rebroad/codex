@@ -1875,10 +1875,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         chat.status_state.current_status.header,
         "Streaming AI response"
     );
-    assert_eq!(
-        chat.status_state.current_status.details.as_deref(),
-        Some("5 text bytes received · last chunk 0s ago")
-    );
+    assert_eq!(chat.status_state.current_status.details.as_deref(), None);
     assert!(chat.status_state.retry_status_header.is_none());
     assert_eq!(
         chat.bottom_pane

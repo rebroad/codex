@@ -133,6 +133,7 @@ pub(super) struct ResponseReceiveProgress {
     pub(super) item_id: Option<String>,
     pub(super) bytes_received: u64,
     pub(super) last_received_at: Option<Instant>,
+    pub(super) answer_visible: bool,
 }
 
 impl Default for StatusState {

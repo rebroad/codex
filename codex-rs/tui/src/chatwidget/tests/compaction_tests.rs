@@ -40,10 +40,7 @@ async fn compaction_status_survives_follow_up_and_preserves_turn_time() {
         chat.bottom_pane.status_widget().unwrap().header(),
         "Streaming AI response"
     );
-    assert_eq!(
-        chat.bottom_pane.status_widget().unwrap().details(),
-        Some("20 text bytes received · last chunk 0s ago")
-    );
+    assert_eq!(chat.bottom_pane.status_widget().unwrap().details(), None);
     chat.handle_server_notification(compaction_started("compact-1"), /*replay_kind*/ None);
     chat.on_commit_tick();
     assert!(chat.bottom_pane.status_indicator_visible());
