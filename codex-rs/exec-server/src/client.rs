@@ -30,6 +30,7 @@ use tokio::time::timeout;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::instrument::WithSubscriber;
+use uuid::Uuid;
 
 use crate::ProcessId;
 use crate::client::http_client::response_body_stream::MAX_QUEUED_HTTP_BODY_BYTES;
@@ -228,6 +229,7 @@ pub(crate) struct SessionState {
     events: ExecProcessEventLog,
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
+    write_id_prefix: Uuid,
     next_write_id: AtomicU64,
     network_policy: NetworkPolicyState,
 }
@@ -1533,6 +1535,7 @@ impl SessionState {
             ),
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
+            write_id_prefix: Uuid::new_v4(),
             next_write_id: AtomicU64::new(1),
             network_policy: NetworkPolicyState {
                 controller: ArcSwapOption::empty(),
@@ -1719,9 +1722,11 @@ impl SessionState {
     }
 
     fn next_write_id(&self) -> String {
-        self.next_write_id
-            .fetch_add(1, Ordering::Relaxed)
-            .to_string()
+        format!(
+            "{}-{}",
+            self.write_id_prefix,
+            self.next_write_id.fetch_add(1, Ordering::Relaxed)
+        )
     }
 }
 
@@ -2252,7 +2257,7 @@ mod tests {
                     argv: vec![
                         "/bin/sh".to_string(),
                         "-c".to_string(),
-                        r#"printf 'BEFORE\\n'; IFS= read -r line; printf 'HANDOFF:%s\\n' "$line""#
+                        r#"printf 'READY\n'; IFS= read -r first; printf 'FIRST:%s\n' "$first"; IFS= read -r second; printf 'HANDOFF:%s\n' "$second""#
                             .to_string(),
                     ],
                     cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
@@ -2270,6 +2275,28 @@ mod tests {
                 /*network_policy_decider*/ None,
             )
             .await?;
+        assert_eq!(
+            first_session
+                .write(b"hello before handoff\n".to_vec())
+                .await?
+                .status,
+            WriteStatus::Accepted
+        );
+        let first_response = timeout(
+            Duration::from_secs(5),
+            first_session.read(Some(0), None, Some(4_000)),
+        )
+        .await??;
+        let first_output = first_response
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.chunk.0.iter().copied())
+            .collect::<Vec<_>>();
+        assert!(
+            String::from_utf8_lossy(&first_output).contains("FIRST:hello before handoff"),
+            "pre-handoff TTY input was not processed: {:?}",
+            String::from_utf8_lossy(&first_output)
+        );
         let session_id = first_session
             .session_id()
             .expect("initialize should return a session id");
@@ -2292,30 +2319,41 @@ mod tests {
         );
         let reattached = replacement_client.reattach_process(&process_id, 0).await?;
         assert_eq!(
-            replacement_client
-                .write(
-                    &process_id,
-                    b"hello from replacement\n".to_vec(),
-                    "handoff-tty-write-1".to_string(),
-                )
+            reattached
+                .write(b"hello from replacement\n".to_vec())
                 .await?
                 .status,
             WriteStatus::Accepted
         );
-        let response = timeout(
-            Duration::from_secs(5),
-            reattached.read(Some(0), None, Some(4_000)),
-        )
-        .await??;
-        let output = response
-            .chunks
-            .iter()
-            .flat_map(|chunk| chunk.chunk.0.iter().copied())
-            .collect::<Vec<_>>();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut after_seq = 0;
+        let mut output = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let response = timeout(
+                remaining,
+                reattached.read(Some(after_seq), None, Some(4_000)),
+            )
+            .await??;
+            output.extend(
+                response
+                    .chunks
+                    .iter()
+                    .flat_map(|chunk| chunk.chunk.0.iter().copied()),
+            );
+            if String::from_utf8_lossy(&output).contains("HANDOFF:hello from replacement") {
+                break;
+            }
+            after_seq = response.next_seq.saturating_sub(1);
+        }
         let output = String::from_utf8_lossy(&output);
         assert!(
-            output.contains("BEFORE"),
+            output.contains("READY"),
             "missing replayed output: {output:?}"
+        );
+        assert!(
+            output.contains("FIRST:hello before handoff"),
+            "missing pre-handoff TTY input result: {output:?}"
         );
         assert!(
             output.contains("HANDOFF:hello from replacement"),
