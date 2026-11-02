@@ -114,6 +114,11 @@ async fn history_fixture(
 #[tokio::test]
 async fn history_hydration_metadata_tracks_missing_turns_and_stale_completions_keep_new_request()
 -> Result<()> {
+    Box::pin(history_hydration_metadata_tracks_missing_turns_and_stale_completions_keep_new_request_inner()).await
+}
+
+async fn history_hydration_metadata_tracks_missing_turns_and_stale_completions_keep_new_request_inner()
+-> Result<()> {
     let (mut app, _codex_home, target) =
         history_fixture(&[1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1]).await?;
     app.local_settings.transcript_mode = TranscriptMode::Terminal;
