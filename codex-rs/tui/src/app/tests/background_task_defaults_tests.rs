@@ -37,6 +37,7 @@ async fn confirm_permission_selection(
 
 fn trust_launch_folder(app: &mut App) {
     for cwd in [
+        test_path_buf("/"),
         app.config.cwd.to_path_buf(),
         app.chat_widget.config_ref().cwd.to_path_buf(),
     ] {
@@ -264,6 +265,18 @@ async fn command_center_new_reads_server_defaults_for_actual_destination() -> Re
             "model = \"destination-model\"\nservice_tier = \"flex\"\n",
         )?;
         for home in [client_home.path(), server_home.path()] {
+            crate::legacy_core::config::set_project_trust_level(
+                home,
+                &test_path_buf("/"),
+                codex_protocol::config_types::TrustLevel::Trusted,
+            )
+            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+            crate::legacy_core::config::set_project_trust_level(
+                home,
+                launch.path(),
+                codex_protocol::config_types::TrustLevel::Trusted,
+            )
+            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
             crate::legacy_core::config::set_project_trust_level(
                 home,
                 destination.path(),
