@@ -3757,6 +3757,11 @@ async fn cold_paginated_subagent_transcript_excludes_inherited_parent_history() 
 
 #[tokio::test]
 async fn managed_worktree_transitions_bind_owner_and_preserve_only_fork_history() -> Result<()> {
+    Box::pin(managed_worktree_transitions_bind_owner_and_preserve_only_fork_history_inner()).await
+}
+
+async fn managed_worktree_transitions_bind_owner_and_preserve_only_fork_history_inner() -> Result<()>
+{
     use crate::app_event::ManagedWorktreeMode;
     use std::fs;
     use std::process::Command;
