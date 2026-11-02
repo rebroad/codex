@@ -463,7 +463,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Result<()> {
     let mut app = make_test_app().await;
-    trust_fixture_folders(&mut app);
+    trust_fixture_folders(&mut app).await?;
     let mut ids = Vec::new();
     for day in 1..=12 {
         let source = match day {
@@ -1602,15 +1602,12 @@ async fn failed_root_switch_keeps_background_requests_on_the_active_session() ->
 async fn root_switch_preserves_vim_line_yank() -> Result<()> {
     // Keep the large setup and root-switch futures off the test thread's stack.
     let mut app = Box::pin(make_test_app()).await;
-    trust_fixture_folders(&mut app);
     std::fs::write(
         app.local_settings.user_config_path.as_path(),
         "[tui]\nresume_cwd = \"session\"\n",
     )?;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await?;
+    trust_fixture_folders(&mut app).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let previous = Box::pin(app_server.start_thread(&app.config)).await?;
     app.enqueue_primary_thread_session(previous.session, previous.turns)
         .await?;
@@ -1660,11 +1657,12 @@ async fn root_switch_preserves_vim_line_yank() -> Result<()> {
 async fn root_switch_loads_local_preferences_from_disk() -> Result<()> {
     // Keep the large setup and root-switch futures off the test thread's stack.
     let mut app = Box::pin(make_test_app()).await;
-    trust_fixture_folders(&mut app);
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await?;
+    std::fs::write(
+        app.local_settings.user_config_path.as_path(),
+        "[tui]\ntheme = \"dracula\"\nresume_cwd = \"session\"\n[history]\npersistence = \"none\"\n",
+    )?;
+    trust_fixture_folders(&mut app).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let previous = Box::pin(app_server.start_thread(&app.config)).await?;
     app.enqueue_primary_thread_session(previous.session, previous.turns)
         .await?;
@@ -1678,10 +1676,6 @@ async fn root_switch_loads_local_preferences_from_disk() -> Result<()> {
             /*git_info*/ None,
         )
         .expect("materialize target rollout"),
-    )?;
-    std::fs::write(
-        app.local_settings.user_config_path.as_path(),
-        "[tui]\ntheme = \"dracula\"\nresume_cwd = \"session\"\n[history]\npersistence = \"none\"\n",
     )?;
     let config = Box::pin(app.rebuild_config_for_cwd(app.config.cwd.to_path_buf())).await?;
     let expected = crate::local_settings::LocalSettings::from(&config);
@@ -1700,11 +1694,8 @@ async fn root_switch_loads_local_preferences_from_disk() -> Result<()> {
 #[tokio::test]
 async fn root_switch_preserves_idle_root_with_running_subagent() -> Result<()> {
     let mut app = make_test_app().await;
-    trust_fixture_folders(&mut app);
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await?;
+    trust_fixture_folders(&mut app).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let previous = app_server.start_thread(&app.config).await?;
     let previous_root_id = previous.session.thread_id;
     app.enqueue_primary_thread_session(previous.session, previous.turns)
@@ -1774,11 +1765,11 @@ async fn root_switch_preserves_idle_root_with_running_subagent() -> Result<()> {
 #[tokio::test]
 async fn overview_selection_applies_user_permissions_only_to_unloaded_threads() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    trust_fixture_folders(&mut app);
     std::fs::write(
         app.config.codex_home.join("config.toml"),
         "[tui]\nresume_cwd = \"session\"\n",
     )?;
+    trust_fixture_folders(&mut app).await?;
     let mut server_config = app.config.clone();
     server_config
         .permissions
@@ -1852,6 +1843,14 @@ async fn overview_selection_applies_user_permissions_only_to_unloaded_threads() 
                 app.config.codex_home.join("config.toml"),
                 "approvals_reviewer = \"auto_review\"\n[tui]\nresume_cwd = \"session\"\n",
             )?;
+            for path in [test_path_buf("/"), app.config.cwd.to_path_buf()] {
+                crate::legacy_core::config::set_project_trust_level(
+                    &app.config.codex_home,
+                    path.as_path(),
+                    codex_protocol::config_types::TrustLevel::Trusted,
+                )
+                .expect("persist trusted fixture folder");
+            }
             app.harness_overrides.sandbox_mode =
                 Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite);
             app.harness_overrides.approval_policy =
@@ -1981,7 +1980,6 @@ async fn overview_cold_resume_honors_working_directory_selection() -> Result<()>
     ] {
         // Keep the large setup and cold-resume futures off the Windows test stack.
         let mut app = Box::pin(make_test_app()).await;
-        trust_fixture_folders(&mut app);
         let chosen = app.config.codex_home.join("chosen");
         let overridden = app.config.codex_home.join("overridden");
         std::fs::create_dir(&chosen)?;
@@ -1990,6 +1988,7 @@ async fn overview_cold_resume_honors_working_directory_selection() -> Result<()>
             app.config.codex_home.join("config.toml"),
             format!("[tui]\nresume_cwd = \"{mode}\"\n"),
         )?;
+        trust_fixture_folders(&mut app).await?;
         crate::legacy_core::config::set_project_trust_level(
             app.config.codex_home.as_path(),
             &chosen,
@@ -2319,11 +2318,11 @@ async fn resume_failure_keeps_command_center_available() {
 #[tokio::test]
 async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    trust_fixture_folders(&mut app);
     std::fs::write(
         app.config.codex_home.join("config.toml"),
         "[tui]\nresume_cwd = \"current\"\n",
     )?;
+    trust_fixture_folders(&mut app).await?;
     let mut targets = Vec::new();
     for (timestamp, name) in [
         ("2025-01-05T12-00-00", "First task"),
@@ -2423,7 +2422,7 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
         app.config.codex_home.join("config.toml"),
         "[tui]\nresume_cwd = \"current\"\n",
     )?;
-    trust_fixture_folders(&mut app);
+    trust_fixture_folders(&mut app).await?;
     let timestamp = "2025-01-05T12-00-00";
     let id = app_test_support::create_fake_rollout(
         app.config.codex_home.as_path(),
@@ -2491,11 +2490,11 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
 #[tokio::test]
 async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    trust_fixture_folders(&mut app);
     std::fs::write(
         app.config.codex_home.join("config.toml"),
         "[tui]\nresume_cwd = \"current\"\n",
     )?;
+    trust_fixture_folders(&mut app).await?;
     for cwd in [test_path_buf("/"), app.config.cwd.to_path_buf()] {
         crate::legacy_core::config::set_project_trust_level(
             app.config.codex_home.as_path(),
@@ -2843,11 +2842,11 @@ async fn overview_fork_keeps_idle_source_input_queued() -> Result<()> {
     for cached_primary in [false, true] {
         let (app, mut events, _) = make_test_app_with_channels().await;
         let mut app = Box::pin(app);
-        trust_fixture_folders(&mut app);
         std::fs::write(
             app.config.codex_home.join("config.toml"),
             "[tui]\nresume_cwd = \"session\"\n",
         )?;
+        trust_fixture_folders(&mut app).await?;
         let source = ThreadId::from_string(
             &app_test_support::create_fake_rollout(
                 app.config.codex_home.as_path(),
@@ -2954,15 +2953,19 @@ async fn overview_fork_keeps_idle_source_input_queued() -> Result<()> {
     Ok(())
 }
 
-fn trust_fixture_folders(app: &mut App) {
-    let projects = serde_json::json!({
-        test_path_buf("/").display().to_string(): {"trust_level": "trusted"},
-        app.config.cwd.display().to_string(): {"trust_level": "trusted"},
-    });
-    app.cli_kv_overrides.push((
-        "projects".into(),
-        toml::Value::try_from(projects).expect("trust fixture"),
-    ));
+async fn trust_fixture_folders(app: &mut App) -> Result<()> {
+    for path in [test_path_buf("/"), app.config.cwd.to_path_buf()] {
+        crate::legacy_core::config::set_project_trust_level(
+            &app.config.codex_home,
+            path.as_path(),
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .expect("persist trusted fixture folder");
+    }
+    app.config = app
+        .rebuild_config_for_cwd(app.config.cwd.to_path_buf())
+        .await?;
+    Ok(())
 }
 
 #[path = "agents_overview_usage_tests.rs"]
