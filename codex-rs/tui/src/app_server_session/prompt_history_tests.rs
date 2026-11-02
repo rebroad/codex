@@ -9,6 +9,10 @@ use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn lifecycle_metadata_uses_local_prompt_history() -> Result<()> {
+    Box::pin(lifecycle_metadata_uses_local_prompt_history_inner()).await
+}
+
+async fn lifecycle_metadata_uses_local_prompt_history_inner() -> Result<()> {
     let local_home = tempfile::tempdir()?;
     let local_config = ConfigBuilder::default()
         .codex_home(local_home.path().to_path_buf())
