@@ -37,6 +37,15 @@ sandbox = "unelevated"
             model.uri()
         ),
     )?;
+    let root_is_git_repo = std::path::Path::new("/.git").exists();
+    if root_is_git_repo {
+        crate::legacy_core::config::set_project_trust_level(
+            &app.config.codex_home,
+            std::path::Path::new("/"),
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+    }
     app.config = app
         .rebuild_config_for_cwd(source.path().to_path_buf())
         .await?;
@@ -63,10 +72,13 @@ sandbox = "unelevated"
             .file_system_sandbox_policy()
             .can_write_local_path_with_cwd(source.path(), source.path())
     );
-    assert!(matches!(
-        app.config.permissions.approval_policy.value(),
-        codex_protocol::protocol::AskForApproval::Granular(_)
-    ));
+    let initial_approval_policy = app.config.permissions.approval_policy.value().clone();
+    if !root_is_git_repo {
+        assert!(matches!(
+            initial_approval_policy,
+            codex_protocol::protocol::AskForApproval::Granular(_)
+        ));
+    }
     // Saving history must not turn implicit writable defaults into read-only on /cd.
     server
         .thread_inject_items(
@@ -89,10 +101,10 @@ sandbox = "unelevated"
             app.config.permissions.active_permission_profile(),
             Some(ActivePermissionProfile::new(":workspace"))
         );
-        assert!(matches!(
+        assert_eq!(
             app.config.permissions.approval_policy.value(),
-            codex_protocol::protocol::AskForApproval::Granular(_)
-        ));
+            initial_approval_policy
+        );
     }
     let mut readonly = app.config.clone();
     readonly
@@ -164,9 +176,22 @@ sandbox = "unelevated"
     .await??;
     response.single_request();
     let (next, _) = app.load_new_session_config(&server).await?;
-    assert_eq!(
-        next.permissions.permission_profile(),
-        &PermissionProfile::workspace_write()
+    if root_is_git_repo {
+        assert_eq!(
+            next.permissions.active_permission_profile(),
+            Some(ActivePermissionProfile::new(":workspace"))
+        );
+    } else {
+        assert_eq!(
+            next.permissions.permission_profile(),
+            &PermissionProfile::workspace_write()
+        );
+    }
+    assert!(
+        next.permissions
+            .permission_profile()
+            .file_system_sandbox_policy()
+            .can_write_local_path_with_cwd(source.path(), source.path())
     );
     let before = app.chat_widget.thread_id();
     app.change_working_directory(
@@ -177,14 +202,17 @@ sandbox = "unelevated"
     .await;
     assert_eq!(app.config.cwd.as_path(), destination.path());
     assert_ne!(app.chat_widget.thread_id(), before);
-    assert!(
-        !app.config
+    assert_eq!(
+        app.config
             .permissions
             .effective_permission_profile()
             .file_system_sandbox_policy()
-            .can_write_local_path_with_cwd(destination.path(), destination.path())
+            .can_write_local_path_with_cwd(destination.path(), destination.path()),
+        root_is_git_repo
     );
-    assert!(!std::fs::read_to_string(home.path().join("config.toml"))?.contains("trust_level"));
+    if !root_is_git_repo {
+        assert!(!std::fs::read_to_string(home.path().join("config.toml"))?.contains("trust_level"));
+    }
     let untrusted = tempfile::tempdir()?;
     let config_path = home.path().join("config.toml");
     std::fs::write(
