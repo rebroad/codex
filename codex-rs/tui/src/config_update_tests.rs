@@ -55,7 +55,16 @@ async fn local_projectless_child_of_trusted_folder_requires_own_trust() -> Resul
         None
     );
 
-    let undecided = Some(RemoteProjectTrust {
+    let undecided_local = Some(RemoteProjectTrust {
+        trust_level: None,
+        cwd: bin.clone(),
+        trust_target: if Path::new("/.git").exists() {
+            PathBuf::from("/")
+        } else {
+            bin.clone()
+        },
+    });
+    let undecided_remote = Some(RemoteProjectTrust {
         trust_level: None,
         cwd: bin.clone(),
         trust_target: bin.clone(),
@@ -63,12 +72,12 @@ async fn local_projectless_child_of_trusted_folder_requires_own_trust() -> Resul
     assert_eq!(
         read_remote_project_trust(app_server.request_handle(), &bin, ProjectTrustHost::Local)
             .await?,
-        undecided
+        undecided_local
     );
     assert_eq!(
         read_remote_project_trust(app_server.request_handle(), &bin, ProjectTrustHost::Remote)
             .await?,
-        undecided
+        undecided_remote
     );
 
     write_trusted_project(app_server.request_handle(), &bin).await?;
@@ -336,7 +345,11 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
             RemoteProjectTrust {
                 trust_level: None,
                 cwd: canonical_project_cwd.clone(),
-                trust_target: canonical_project_cwd.clone(),
+                trust_target: if Path::new("/.git").exists() {
+                    PathBuf::from("/")
+                } else {
+                    canonical_project_cwd.clone()
+                },
             }
         };
         assert_eq!(
