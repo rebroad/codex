@@ -7,6 +7,10 @@ use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn starts_and_forks_use_server_provider_unless_explicitly_selected() -> Result<()> {
+    Box::pin(starts_and_forks_use_server_provider_unless_explicitly_selected_inner()).await
+}
+
+async fn starts_and_forks_use_server_provider_unless_explicitly_selected_inner() -> Result<()> {
     let home = tempfile::tempdir()?;
     std::fs::write(
         home.path().join("config.toml"),
