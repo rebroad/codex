@@ -737,7 +737,7 @@ async fn reconnect_allows_slow_hydration() -> Result<()> {
                 )
             );
             session.shutdown().await?;
-            assert!((15..120).contains(&elapsed), "{elapsed}");
+            assert!((15..30).contains(&elapsed), "{elapsed}");
             let methods = server.await??;
             assert_eq!(
                 methods
