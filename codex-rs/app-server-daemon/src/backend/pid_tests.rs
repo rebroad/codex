@@ -301,7 +301,7 @@ async fn managed_app_server_launch_uses_current_executor_endpoint() {
     let script = format!(
         "#!/bin/sh\n\
          if [ \"$1\" = app-server ] && [ \"$2\" = --managed-daemon ] && [ \"$3\" = --help ]; then exit 0; fi\n\
-         printf '%s' \"${{CODEX_EXEC_SERVER_URL-unset}}\" > '{}'\n\
+         printf '%s' \"${{CODEX_MANAGED_EXEC_SERVER_URL-unset}}\" > '{}'\n\
          exec sleep 30\n",
         endpoint_file.display()
     );

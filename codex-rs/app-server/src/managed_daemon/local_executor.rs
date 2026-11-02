@@ -19,7 +19,7 @@ use tracing::info;
 use tracing::warn;
 
 const EXECUTOR_EXECUTABLE_ENV: &str = "CODEX_MANAGED_EXECUTOR_EXECUTABLE";
-const EXEC_SERVER_URL_ENV: &str = "CODEX_EXEC_SERVER_URL";
+const EXEC_SERVER_URL_ENV: &str = "CODEX_MANAGED_EXEC_SERVER_URL";
 const EXEC_SERVER_SESSION_ID_FILE_ENV: &str = "CODEX_EXEC_SERVER_SESSION_ID_FILE";
 const EXECUTOR_STATE_FILE: &str = "local-executor.json";
 const EXECUTOR_READY_TIMEOUT: Duration = Duration::from_secs(30);

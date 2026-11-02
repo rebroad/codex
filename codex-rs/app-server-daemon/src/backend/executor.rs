@@ -22,7 +22,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const PRESERVE_SESSIONS_ENV: &str = "CODEX_EXEC_SERVER_PRESERVE_SESSIONS";
-const EXEC_SERVER_URL_ENV: &str = "CODEX_EXEC_SERVER_URL";
+const MANAGED_EXEC_SERVER_URL_ENV: &str = "CODEX_MANAGED_EXEC_SERVER_URL";
 const SESSION_ID_FILE_ENV: &str = "CODEX_EXEC_SERVER_SESSION_ID_FILE";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -417,8 +417,8 @@ async fn read_process_identity(_pid: u32) -> Option<ProcessIdentity> {
     None
 }
 
-pub(crate) const fn exec_server_url_env() -> &'static str {
-    EXEC_SERVER_URL_ENV
+pub(crate) const fn managed_exec_server_url_env() -> &'static str {
+    MANAGED_EXEC_SERVER_URL_ENV
 }
 
 pub(crate) const fn session_id_file_env() -> &'static str {

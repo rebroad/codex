@@ -5,9 +5,9 @@ mod legacy_retirement;
 #[cfg(unix)]
 pub(crate) use executor::ExecutorSupervisor;
 #[cfg(unix)]
-pub(crate) use executor::exec_server_url_env;
-#[cfg(unix)]
 pub(crate) use executor::handoff_executor_manifest_env;
+#[cfg(unix)]
+pub(crate) use executor::managed_exec_server_url_env;
 #[cfg(unix)]
 pub(crate) use executor::session_id_file_env;
 mod pid;

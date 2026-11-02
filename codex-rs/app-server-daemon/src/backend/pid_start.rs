@@ -12,9 +12,9 @@ use super::read_process_start_time;
 #[cfg(unix)]
 use crate::backend::ExecutorSupervisor;
 #[cfg(unix)]
-use crate::backend::exec_server_url_env;
-#[cfg(unix)]
 use crate::backend::handoff_executor_manifest_env;
+#[cfg(unix)]
+use crate::backend::managed_exec_server_url_env;
 #[cfg(unix)]
 use crate::backend::session_id_file_env;
 use crate::managed_install::executable_identity;
@@ -161,9 +161,9 @@ impl PidBackend {
         if matches!(self.command_kind, super::PidCommandKind::AppServer { .. })
             && let Some(state_file) = &self.executor_state_file
         {
-            command.env_remove(exec_server_url_env());
+            command.env_remove("CODEX_EXEC_SERVER_URL");
             if let Some(url) = ExecutorSupervisor::endpoint_from_state(state_file).await {
-                command.env(exec_server_url_env(), url);
+                command.env(managed_exec_server_url_env(), url);
             }
             command.env(
                 session_id_file_env(),
