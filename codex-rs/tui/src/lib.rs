@@ -2893,6 +2893,11 @@ requires_openai_auth = {requires_openai_auth}
 
     #[tokio::test]
     async fn startup_resume_and_fork_use_configured_or_explicit_cwd() -> color_eyre::Result<()> {
+        Box::pin(startup_resume_and_fork_use_configured_or_explicit_cwd_inner()).await
+    }
+
+    async fn startup_resume_and_fork_use_configured_or_explicit_cwd_inner() -> color_eyre::Result<()>
+    {
         for (action, configured_mode, has_explicit_cwd, expected_directory) in [
             (CwdPromptAction::Resume, "current", false, "launch"),
             (CwdPromptAction::Resume, "session", false, "session"),
