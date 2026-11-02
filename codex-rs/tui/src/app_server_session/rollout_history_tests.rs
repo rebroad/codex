@@ -61,6 +61,11 @@ async fn build_config(temp_dir: &TempDir) -> Config {
 
 #[tokio::test]
 async fn remote_resume_restores_saved_server_profile_without_permission_overrides() -> Result<()> {
+    Box::pin(remote_resume_restores_saved_server_profile_without_permission_overrides_inner()).await
+}
+
+async fn remote_resume_restores_saved_server_profile_without_permission_overrides_inner()
+-> Result<()> {
     let home = tempfile::tempdir()?;
     std::fs::write(
         home.path().join("config.toml"),
