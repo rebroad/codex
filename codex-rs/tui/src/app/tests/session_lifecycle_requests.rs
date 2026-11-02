@@ -4331,6 +4331,11 @@ terminal_visualization_instructions = true
 
 #[tokio::test]
 async fn changing_directory_preserves_project_trust_permissions_history_and_hooks() -> Result<()> {
+    Box::pin(changing_directory_preserves_project_trust_permissions_history_and_hooks_inner()).await
+}
+
+async fn changing_directory_preserves_project_trust_permissions_history_and_hooks_inner()
+-> Result<()> {
     use codex_protocol::config_types::TrustLevel as T;
     use serde_json::json;
     use std::fs;
