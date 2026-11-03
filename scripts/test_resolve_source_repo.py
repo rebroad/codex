@@ -119,7 +119,7 @@ class ResolveSourceRepoTests(unittest.TestCase):
                 capture_output=True,
             )
 
-            self.assertEqual(resolve_source_repo(build_root), source_root)
+            self.assertEqual(resolve_source_repo(build_root), source_root.resolve())
             self.assertEqual(resolve_build_repo(build_root), build_root)
             self.assertFalse(is_build_repo_inside_source(source_root, build_root))
 
