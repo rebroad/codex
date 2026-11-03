@@ -461,7 +461,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(crate) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) thread_watch_manager: ThreadWatchManager,
-    pub(super) thread_list_state_permit: Arc<Semaphore>,
+    pub(super) thread_list_state_permit: Arc<RwLock<()>>,
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
     pub(super) state_db: Option<StateDbHandle>,
     pub(super) log_db: Option<LogDbLayer>,
@@ -501,7 +501,7 @@ impl ThreadRequestProcessor {
         pending_thread_unloads: PendingThreadUnloads,
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
-        thread_list_state_permit: Arc<Semaphore>,
+        thread_list_state_permit: Arc<RwLock<()>>,
         thread_goal_processor: ThreadGoalRequestProcessor,
         state_db: Option<StateDbHandle>,
         log_db: Option<LogDbLayer>,
@@ -993,13 +993,8 @@ impl ThreadRequestProcessor {
 
     pub(super) async fn acquire_thread_list_state_permit(
         &self,
-    ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
-        self.thread_list_state_permit
-            .acquire()
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to acquire thread list state permit: {err}"))
-            })
+    ) -> Result<RwLockWriteGuard<'_, ()>, JSONRPCErrorError> {
+        Ok(self.thread_list_state_permit.write().await)
     }
 
     async fn set_app_server_client_info(
@@ -3884,7 +3879,7 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self.thread_list_state_permit.read().await;
         let stored_thread_from_running_probe = match target {
             ThreadResumeTarget::Client(request_id) => match self
                 .resume_running_thread(
@@ -3995,6 +3990,35 @@ impl ThreadRequestProcessor {
                 "thread {} is closing; retry thread/resume after the thread is closed",
                 resumed.conversation_id
             )));
+        }
+        if let InitialHistory::Resumed(resumed) = &thread_history
+            && self
+                .thread_manager
+                .get_thread(resumed.conversation_id)
+                .await
+                .is_ok()
+        {
+            match target {
+                ThreadResumeTarget::Client(request_id) => {
+                    if let RunningThreadResumeResult::Handled(completion) = self
+                        .resume_running_thread(
+                            request_id,
+                            params,
+                            app_server_client_name.clone(),
+                            app_server_client_version.clone(),
+                            /*cold_resume_history*/ None,
+                        )
+                        .await?
+                    {
+                        drop(_thread_list_state_permit);
+                        let _ = completion.await;
+                        return Ok(ControlFlow::Break(()));
+                    }
+                }
+                ThreadResumeTarget::DaemonRecovery => {
+                    return Ok(ControlFlow::Break(()));
+                }
+            }
         }
         tracing::info!(
             thread_id = %thread_id,
@@ -4288,6 +4312,12 @@ impl ThreadRequestProcessor {
                 ..
             }) => {
                 let ThreadResumeTarget::Client(request_id) = target else {
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        thread_create_ms = thread_create_started_at.elapsed().as_millis(),
+                        paginated = paginated_resume,
+                        "daemon recovery thread created"
+                    );
                     // Observe lifecycle events without attaching a client subscription.
                     self.thread_watch_manager
                         .upsert_thread(&thread_id.to_string())
