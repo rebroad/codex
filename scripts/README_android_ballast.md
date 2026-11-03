@@ -244,10 +244,10 @@ the reporting compiler process. The timer now also identifies its associated
 compilation unit:
 
 ```text
-15:36:02 ▶ compiling crate=codex_app_server file=app-server/src/lib.rs
+15:36:02 ▶️ compiling crate=codex_app_server file=app-server/src/lib.rs
 15:37:03 kept=24m slept=0s lost=0s this=2m crate=codex_app_server file=app-server/src/lib.rs
 15:37:25 kept=26m22s slept=0s lost=0s this=0s
-15:37:26 ▶ compiling crate=core_test_support file=core/tests/common/lib.rs
+15:37:26 ▶️ compiling crate=core_test_support file=core/tests/common/lib.rs
 ```
 
 The crate name and source entry file come directly from Rustc's arguments.

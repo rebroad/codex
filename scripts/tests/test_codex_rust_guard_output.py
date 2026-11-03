@@ -35,9 +35,9 @@ class GuardOutputTest(unittest.TestCase):
         self.clock.t += .2
         self.f.process_line(
             "stopping Rust compile before Android low-memory kill: PSI; waiting to retry")
-        self.assertEqual(self.buffer.getvalue().count("2026-10-28T23:30:01"), 1)
+        self.assertEqual(self.buffer.getvalue().count("2026-10-28T23:30:01"), 0)
         self.assertTrue(self.buffer.getvalue().startswith(
-            "[2026-10-28T23:30:01+01:00] stopping Rust compile"))
+            "23:30:01 stopping Rust compile"))
         self.clock.t += .64
         self.f.flush_due()
         self.assertEqual(len(self.buffer.getvalue().splitlines()), 1)
@@ -46,7 +46,7 @@ class GuardOutputTest(unittest.TestCase):
         lines = self.buffer.getvalue().splitlines()
         self.assertEqual(len(lines), 2)
         self.assertIn("coalesced 2 rapid guard updates", lines[1])
-        self.assertTrue(lines[1].startswith("[2026-10-28T23:30:01+01:00]"))
+        self.assertTrue(lines[1].startswith("23:30:01"))
 
     def test_fast_suspend_resume_keeps_latest_state(self):
         self.f.process_line("⏸ Rust suspended at 23:30:01: PSI")
@@ -58,12 +58,22 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(len(self.buffer.getvalue().splitlines()), 2)
         self.assertIn("▶️ Rust resumed", self.buffer.getvalue().splitlines()[1])
 
+    def test_guard_events_use_time_first_and_hide_successful_finishes(self):
+        self.f.process_line(
+            "⏸ Rust suspended at 2026-10-28T23:30:01+0100: PSI")
+        self.f.process_line(
+            "23:30:02 ✓ finished crate=ctor "
+            "file=ctor-0.6.3/src/lib.rs")
+        lines = self.buffer.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "23:30:01 ⏸ Rust suspended: PSI")
+
     def test_other_build_output_passes_through_immediately(self):
         self.f.process_line("⏹ Rust attempt stopped: PSI; waiting to retry")
         self.clock.t += .01
         self.f.process_line("   Compiling codex-core v0.2")
         self.assertIn("   Compiling codex-core", self.buffer.getvalue())
-        self.assertEqual(self.buffer.getvalue().count("2026-10-28"), 1)
+        self.assertEqual(self.buffer.getvalue().count("2026-10-28"), 0)
         self.assertTrue(guard_status("⏹ Rust attempt stopped at some time"))
         self.assertFalse(guard_status("   Compiling codex-core"))
 
@@ -76,7 +86,7 @@ class GuardOutputTest(unittest.TestCase):
         line = ("ℹ️ Android LMKD reclaimed com.samsung.mfcontents; "
                 "advisory only (no rustc stop from this event)")
         f.process_line(line)
-        self.assertIn("[2026-10-29T07:16:58+01:00] " + line,
+        self.assertIn("07:16:58 " + line,
                       stdout.getvalue())
         self.assertEqual(stderr.getvalue(), "")
 
@@ -128,6 +138,7 @@ class GuardOutputTest(unittest.TestCase):
         self.assertEqual(text.count("Rust time: kept"), 2)
         self.assertEqual(text.count("🧠 Ballast:"), 2)
         self.assertNotIn("0/256 MiB held", text)
+        self.assertRegex(text.splitlines()[1], r"^\d{2}:\d{2}:\d{2} 🧠 Ballast:")
 
     def test_compact_timing_lines_preserve_one_minute_rate(self):
         self.f.process_line("14:16:30 kept=2h6m slept=3m52s lost=8m52s this=3m2s")
@@ -148,7 +159,7 @@ class GuardOutputTest(unittest.TestCase):
         # No routine finish notification: completion changes the aggregate.
         self.f.process_line("15:37:25 kept=26m22s slept=0s lost=0s this=0s")
         self.f.process_line(
-            "15:37:25 ▶ compiling crate=core_test_support "
+            "15:37:25 ▶️ compiling crate=core_test_support "
             "file=core/tests/common/lib.rs")
         self.clock.t += .2
         self.f.process_line(
@@ -156,14 +167,14 @@ class GuardOutputTest(unittest.TestCase):
             "file=core/tests/common/lib.rs")
         self.f.process_line("15:37:41 kept=26m22s slept=0s lost=3s this=0s")
         self.f.process_line(
-            "15:37:41 ▶ compiling crate=all file=app-server/tests/all.rs")
+            "15:37:41 ▶️ compiling crate=all file=app-server/tests/all.rs")
         lines = self.buffer.getvalue().splitlines()
         self.assertEqual(len(lines), 4)
         self.assertIn("this=2m crate=codex_app_server file=app-server/src/lib.rs",
                       lines[0])
-        self.assertIn("▶ compiling crate=core_test_support", lines[1])
+        self.assertIn("▶️ compiling crate=core_test_support", lines[1])
         self.assertIn("✗ discarded crate=core_test_support", lines[2])
-        self.assertIn("▶ compiling crate=all file=app-server/tests/all.rs", lines[3])
+        self.assertIn("▶️ compiling crate=all file=app-server/tests/all.rs", lines[3])
         self.assertFalse(any(" pid=" in line or "✓ finished" in line
                              for line in lines))
         # Only one periodic aggregate snapshot in this minute.

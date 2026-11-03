@@ -123,7 +123,7 @@ codex_timing_emit_transition() {
 codex_timing_emit_start() {
   [[ "${codex_timing_crate:-unknown}" != unknown || -n "${codex_timing_source:-}" ]] || return 0
   codex_timing_compiler_context
-  printf '%s ▶ compiling %s\n' "$(date '+%H:%M:%S')" "$codex_timing_context" >&2
+  printf '%s ▶️ compiling %s\n' "$(date '+%H:%M:%S')" "$codex_timing_context" >&2
 }
 
 codex_timing_emit() {

@@ -42,6 +42,8 @@ GUARD_MIN_INTERVAL = 1.0
 PROGRESS_MIN_INTERVAL = 60.0
 COMPACT_TIMING = re.compile(
     r"^\d{2}:\d{2}:\d{2} kept=\d+(?:h|m|s)")
+EMBEDDED_TIMESTAMP = re.compile(r" at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}")
+FINISHED_COMPILATION = re.compile(r"^\d{2}:\d{2}:\d{2} ✓ finished\b")
 
 
 def guard_status(line):
@@ -69,7 +71,8 @@ class CargoLogFilter:
                   if coalesced else "")
         destination = (self.lmkd_output if line.startswith(LMKD_ADVISORY_PREFIX)
                        else self.output)
-        destination.write(f"[{self.date_stamp()}] {line}{suffix}\n")
+        line = EMBEDDED_TIMESTAMP.sub("", line)
+        destination.write(f"{self.date_stamp()[11:19]} {line}{suffix}\n")
         destination.flush()
         self.last_guard_at = at
 
@@ -104,6 +107,8 @@ class CargoLogFilter:
             return
 
         self.flush_due(at)
+        if FINISHED_COMPILATION.match(line):
+            return
         if line.startswith("Rust time: kept ") or COMPACT_TIMING.match(line):
             if (self.last_timing_at is not None
                     and at - self.last_timing_at < PROGRESS_MIN_INTERVAL):
@@ -114,7 +119,7 @@ class CargoLogFilter:
                     and at - self.last_ballast_at < PROGRESS_MIN_INTERVAL):
                 return
             self.last_ballast_at = at
-            line = f"[{datetime.now().astimezone():%H:%M:%S}] {line}"
+            line = f"{datetime.now().astimezone():%H:%M:%S} {line}"
         self.output.write(line + "\n")
         self.output.flush()
 
