@@ -56,7 +56,7 @@ def source_for_worktree(build_root: Path) -> Path | None:
     if result.returncode != 0:
         return None
 
-    source_root = Path(result.stdout.strip()).resolve().parent
+    source_root = Path(result.stdout.strip()).parent
     return (
         source_root
         if source_root != build_root and is_repository(source_root)
@@ -107,7 +107,7 @@ def resolve_source_repo(repo_root: Path) -> Path:
     repo_root = repo_root.absolute()
     override = os.environ.get("CODEX_SOURCE_REPO")
     if override:
-        source_root = Path(override).resolve()
+        source_root = Path(override).absolute()
         if not is_repository(source_root):
             raise ValueError(
                 f"CODEX_SOURCE_REPO is not a Codex source checkout: {source_root}"
