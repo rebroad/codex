@@ -69,7 +69,7 @@ def source_for_synced_build_tree(build_root: Path) -> Path | None:
     for root in (build_root, build_root.resolve()):
         marker = root / "build" / ".codex-source-repo"
         try:
-            source_root = Path(marker.read_text(encoding="utf-8").strip()).resolve()
+            source_root = Path(marker.read_text(encoding="utf-8").strip()).absolute()
         except (OSError, ValueError):
             continue
         if is_repository(source_root):
