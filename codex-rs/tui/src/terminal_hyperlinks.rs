@@ -124,6 +124,15 @@ impl TerminalHyperlink {
         }
     }
 
+    pub(crate) fn trusted_local_file(columns: Range<usize>, destination: Url) -> Self {
+        debug_assert_eq!(destination.scheme(), "file");
+        Self {
+            columns,
+            destination: destination.to_string(),
+            destination_kind: DestinationKind::TrustedFile,
+        }
+    }
+
     pub(crate) fn with_columns(&self, columns: Range<usize>) -> Self {
         Self {
             columns,

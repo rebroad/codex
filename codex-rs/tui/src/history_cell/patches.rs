@@ -4,6 +4,7 @@ use super::*;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use codex_ansi_escape::ansi_escape;
 use codex_utils_path_uri::LegacyAppPathString;
+use url::Url;
 
 #[cfg(test)]
 #[path = "patches_tests.rs"]
@@ -165,30 +166,70 @@ pub(crate) struct ViewImageHistoryCell {
 
 impl HistoryCell for ViewImageHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let line = vec![
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let line = Line::from(vec![
             "• ".dim(),
             "Viewed image ".bold(),
             self.filename.replace(['\n', '\r', '\t'], " ").dim(),
-        ]
-        .into();
-        vec![truncate_line_with_ellipsis_if_overflow(
-            line,
-            width as usize,
-        )]
+        ]);
+        let line = truncate_line_with_ellipsis_if_overflow(line, width as usize);
+        let mut linked = HyperlinkLine::new(line);
+        if let Some(destination) = image_file_url(&self.path_label) {
+            linked.hyperlinks.push(
+                crate::terminal_hyperlinks::TerminalHyperlink::trusted_local_file(
+                    2..15,
+                    destination,
+                ),
+            );
+        }
+        vec![linked]
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        PrefixedWrappedHistoryCell::new(
+        visible_lines(self.transcript_hyperlink_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let lines = PrefixedWrappedHistoryCell::new(
             Line::from(vec!["Viewed image ".bold(), self.path_label.clone().dim()]),
             vec!["• ".dim()],
             "  ",
         )
-        .display_lines(width)
+        .display_lines(width);
+        let Some(destination) = image_file_url(&self.path_label) else {
+            return plain_hyperlink_lines(lines);
+        };
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let mut linked = HyperlinkLine::new(line);
+                if index == 0 {
+                    linked.hyperlinks.push(
+                        crate::terminal_hyperlinks::TerminalHyperlink::trusted_local_file(
+                            2..15,
+                            destination.clone(),
+                        ),
+                    );
+                }
+                linked
+            })
+            .collect()
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![Line::from(format!("Viewed image {}", self.path_label))]
     }
+}
+
+fn image_file_url(path: &str) -> Option<Url> {
+    let path = LegacyAppPathString::from_string(path).to_inferred_abs_path()?;
+    path.as_path()
+        .is_file()
+        .then(|| Url::from_file_path(path.as_path()).ok())?
 }
 
 pub(crate) fn new_view_image_tool_call(path: LegacyAppPathString) -> ViewImageHistoryCell {
