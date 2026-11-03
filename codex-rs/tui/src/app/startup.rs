@@ -620,10 +620,11 @@ impl App {
                     &config,
                     &harness_overrides,
                 );
+                let progress_observer = startup_draft.resume_progress_observer();
                 let resumed = match startup_draft
                     .run_until(
                         tui,
-                        app_server.resume_thread_with_permission_overrides(
+                        app_server.resume_thread_with_permission_overrides_and_progress(
                             &local_settings,
                             config.clone(),
                             target_session.thread_id,
@@ -632,6 +633,7 @@ impl App {
                                 &config,
                                 &harness_overrides,
                             ),
+                            progress_observer,
                         ),
                     )
                     .await
@@ -688,14 +690,17 @@ impl App {
                         };
                         config.model_provider_id = provider_id;
                         config.model_provider = provider;
+                        let progress_observer = startup_draft.resume_progress_observer();
                         match startup_draft
                             .run_until(
                                 tui,
-                                app_server.resume_thread(
+                                app_server.resume_thread_with_permission_overrides_and_progress(
                                     &local_settings,
                                     config.clone(),
                                     target_session.thread_id,
                                     crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+                                    crate::resume_permissions::ResumePermissions::default(),
+                                    progress_observer,
                                 ),
                             )
                             .await

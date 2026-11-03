@@ -38,7 +38,7 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::resume_picker::SessionSelection;
 use crate::resume_progress::ResumeProgressEstimate;
-use crate::resume_progress::progress_percentage;
+use crate::resume_progress::ResumeProgressObserver;
 use crate::tui;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -134,9 +134,7 @@ impl StartupProgressDisplay {
         if self.complete {
             return 100;
         }
-        let time_estimate =
-            progress_percentage(self.started_at.elapsed(), self.estimate.expected_duration());
-        time_estimate.min(99)
+        self.estimate.progress_percentage(self.started_at.elapsed())
     }
 }
 
@@ -262,6 +260,12 @@ impl StartupDraftPump {
             estimate,
             complete: false,
         });
+    }
+
+    pub(crate) fn resume_progress_observer(&self) -> Option<ResumeProgressObserver> {
+        self.progress
+            .as_ref()
+            .map(|progress| progress.estimate.observer(progress.started_at))
     }
 
     pub(crate) fn take_draft(&mut self) -> ComposerDraftSnapshot {

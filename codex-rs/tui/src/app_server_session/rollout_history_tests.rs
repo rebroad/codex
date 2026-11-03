@@ -34,7 +34,7 @@ fn resume_progress_consumes_only_the_matching_request_event() {
 
     assert!(matches!(
         take_resume_progress(progress_event(request_id.clone(), 64), &request_id),
-        Ok(())
+        Ok(Some(64))
     ));
     assert!(matches!(
         take_resume_progress(progress_event(RequestId::Integer(8), 80), &request_id),
