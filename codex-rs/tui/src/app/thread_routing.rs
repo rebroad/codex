@@ -1051,6 +1051,16 @@ impl App {
             }
             AppCommand::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
+                if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                    self.chat_widget.add_error_message(format!(
+                        "App-server config reloaded, but the TUI could not refresh its config: {err}"
+                    ));
+                    return Ok(true);
+                }
+                self.chat_widget
+                    .apply_reloaded_feature_settings(&self.config);
+                self.chat_widget
+                    .add_info_message("Configuration reloaded.".to_string(), /*hint*/ None);
                 Ok(true)
             }
             AppCommand::OverrideTurnContext { .. } => {
