@@ -14,34 +14,14 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -L)"
 BUILD_TREE=""
 SCRIPT_REPO="$(cd -- "${SCRIPT_DIR}/.." && pwd -L)"
 BUILD_REPO_OVERRIDE="${CODEX_BUILD_REPO:-}"
-case "${SCRIPT_REPO##*/}" in
-  *.build|*.make)
-    BUILD_TREE="${SCRIPT_REPO}"
-    SOURCE_REPO=""
-    if git_common_dir="$(git -C "${SCRIPT_REPO}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
-      && [[ "$(basename "${git_common_dir}")" == .git ]] \
-      && [[ -d "${git_common_dir}" ]]; then
-      source_candidate="$(dirname "${git_common_dir}")"
-      if [[ -d "${source_candidate}/codex-rs" ]]; then
-        SOURCE_REPO="${source_candidate}"
-      fi
-    fi
-    if [[ -z "${SOURCE_REPO}" ]]; then
-      source_candidate="${SCRIPT_REPO%.*}"
-      if [[ -d "${source_candidate}/codex-rs" ]]; then
-        SOURCE_REPO="$(cd -- "${source_candidate}" && pwd -P)"
-      fi
-    fi
-    ;;
-  *)
-    SOURCE_REPO="${SCRIPT_REPO}"
-    if [[ -n "${BUILD_REPO_OVERRIDE}" ]]; then
-      BUILD_TREE="${BUILD_REPO_OVERRIDE}"
-    else
-      BUILD_TREE="${SOURCE_REPO}.build"
-    fi
-    ;;
-esac
+SOURCE_REPO="$(python3 "${SCRIPT_DIR}/resolve_source_repo.py" "${SCRIPT_REPO}")" \
+  || { echo "Source checkout could not be discovered for ${SCRIPT_REPO}" >&2; exit 1; }
+if [[ -n "${BUILD_REPO_OVERRIDE}" ]]; then
+  BUILD_TREE="${BUILD_REPO_OVERRIDE}"
+else
+  BUILD_TREE="$(python3 "${SCRIPT_DIR}/resolve_source_repo.py" --resolve-build-repo "${SCRIPT_REPO}")" \
+    || { echo "No build tree found for ${SCRIPT_REPO}" >&2; exit 1; }
+fi
 if [[ -z "${BUILD_TREE}" ]]; then
   echo "No build tree found. Set CODEX_BUILD_REPO to an external .build/.make path, or create ${SOURCE_REPO}.build" >&2
   exit 1
