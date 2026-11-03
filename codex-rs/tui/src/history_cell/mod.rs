@@ -96,6 +96,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use unicode_segmentation::UnicodeSegmentation;
+#[cfg(test)]
 use url::Url;
 
 const RAW_DIFF_SUMMARY_WIDTH: usize = 10_000;

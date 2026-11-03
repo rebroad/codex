@@ -77,6 +77,22 @@ fn viewed_image_narrow_summary() {
 }
 
 #[test]
+fn viewed_image_label_links_to_existing_local_image() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let image = directory.path().join("image.png");
+    std::fs::write(&image, b"image").expect("image file");
+    let cell = new_view_image_tool_call(LegacyAppPathString::from_path(&image));
+
+    let lines = cell.display_hyperlink_lines(/*width*/ 80);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0].hyperlinks[0].terminal_destination(),
+        Url::from_file_path(&image).ok().map(|url| url.to_string())
+    );
+    assert_eq!(lines[0].hyperlinks[0].columns, 2..15);
+}
+
+#[test]
 fn failed_patch_keeps_diagnostics_beyond_the_legacy_preview() {
     let diagnostics = (1..=12)
         .map(|line| format!("diagnostic line {line}"))
