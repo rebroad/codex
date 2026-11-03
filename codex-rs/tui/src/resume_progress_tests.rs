@@ -21,19 +21,21 @@ fn workload(size_bytes: u64) -> Workload {
 }
 
 #[test]
-fn progress_advances_linearly_by_elapsed_seconds_and_reserves_completion() {
+fn progress_slows_near_completion_when_resume_exceeds_estimate() {
     let expected = Duration::from_secs(30);
 
     assert_eq!(progress_percentage(Duration::ZERO, expected), 0);
-    assert_eq!(progress_percentage(Duration::from_millis(999), expected), 0);
+    assert_eq!(progress_percentage(Duration::from_millis(999), expected), 2);
     assert_eq!(progress_percentage(Duration::from_secs(1), expected), 3);
     assert_eq!(
         progress_percentage(Duration::from_millis(1_999), expected),
-        3
+        5
     );
-    assert_eq!(progress_percentage(Duration::from_secs(15), expected), 50);
-    assert_eq!(progress_percentage(expected, expected), 99);
+    assert_eq!(progress_percentage(Duration::from_secs(15), expected), 45);
+    assert_eq!(progress_percentage(expected, expected), 90);
     assert_eq!(progress_percentage(Duration::from_secs(60), expected), 99);
+    assert_eq!(progress_percentage(Duration::from_secs(120), expected), 99);
+    assert_eq!(progress_percentage(Duration::from_secs(300), expected), 99);
 }
 
 #[test]

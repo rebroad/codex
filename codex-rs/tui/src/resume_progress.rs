@@ -172,8 +172,16 @@ fn estimate_duration(workload: Workload, samples: &[Sample]) -> Duration {
 
 pub(crate) fn progress_percentage(elapsed: Duration, expected: Duration) -> u8 {
     let expected_millis = expected.as_millis().max(1);
-    let elapsed_millis = u128::from(elapsed.as_secs()).saturating_mul(1_000);
-    (elapsed_millis.saturating_mul(100) / expected_millis).min(99) as u8
+    let elapsed_millis = elapsed.as_millis();
+    let elapsed_ratio = elapsed_millis as f64 / expected_millis as f64;
+    // Keep progress linear through the estimate, then stretch the final 10%
+    // over overruns so 99% is not reached until twice the expected duration.
+    let percentage = if elapsed_ratio <= 1.0 {
+        90.0 * elapsed_ratio
+    } else {
+        90.0 + 10.0 * (1.0 - (-std::f64::consts::LN_10 * (elapsed_ratio - 1.0)).exp())
+    };
+    percentage.floor().clamp(0.0, 99.0) as u8
 }
 
 #[cfg(test)]
