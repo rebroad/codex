@@ -185,6 +185,7 @@ impl SlashCommand {
                 | SlashCommand::Mcp
                 | SlashCommand::Export
                 | SlashCommand::Raw
+                | SlashCommand::Config
                 | SlashCommand::Cd
                 | SlashCommand::Pwd
                 | SlashCommand::Usage

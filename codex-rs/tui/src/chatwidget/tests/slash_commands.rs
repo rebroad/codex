@@ -3504,6 +3504,36 @@ async fn slash_rollout_handles_missing_path() {
 }
 
 #[tokio::test]
+async fn reloaded_fast_mode_feature_refreshes_service_tier_command() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ false);
+    assert!(chat.current_model_service_tier_commands().is_empty());
+
+    let mut config = chat.config.clone();
+    config
+        .features
+        .enable(Feature::FastMode)
+        .expect("Fast mode is not constrained in the test config");
+    chat.apply_reloaded_feature_settings(&config);
+
+    assert_eq!(
+        chat.current_model_service_tier_commands(),
+        vec![fast_tier_command()]
+    );
+}
+
+#[tokio::test]
+async fn config_reload_slash_command_requests_runtime_reload() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(/*running*/ false);
+
+    chat.dispatch_command_with_args(SlashCommand::Config, "reload".to_string(), Vec::new());
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReloadUserConfig));
+}
+
+#[tokio::test]
 async fn fast_slash_command_updates_and_persists_local_service_tier() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);
