@@ -858,6 +858,12 @@ impl ChatWidget {
         } = prepared;
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Config if trimmed.eq_ignore_ascii_case("reload") => {
+                self.submit_op(AppCommand::reload_user_config());
+            }
+            SlashCommand::Config => {
+                self.add_error_message("Usage: /config [reload]".to_string());
+            }
             SlashCommand::Export if trimmed.is_empty() => self.show_transcript_export_popup(),
             SlashCommand::Export => {
                 self.set_queue_autosend_suppressed(/*suppressed*/ true);

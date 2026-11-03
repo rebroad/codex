@@ -4,12 +4,26 @@ use super::ChatWidget;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use crate::legacy_core::config::Config;
 use crate::service_tier_resolution;
 use codex_features::Feature;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::openai_models::SPEED_TIER_FAST;
 
 impl ChatWidget {
+    pub(crate) fn apply_reloaded_feature_settings(&mut self, config: &Config) {
+        self.config.features = config.features.clone();
+        self.set_daybreak_enabled(self.daybreak_enabled);
+        self.refresh_effective_service_tier();
+        self.sync_service_tier_commands();
+        self.sync_worktrees_enabled();
+        self.sync_plugins_command_enabled();
+        self.sync_goal_command_enabled();
+        self.sync_mentions_v2_enabled();
+        self.refresh_plugin_mentions();
+        self.refresh_status_surfaces();
+    }
+
     pub(crate) fn set_service_tier(&mut self, service_tier: Option<String>) {
         self.config.service_tier = service_tier;
         self.refresh_effective_service_tier();
