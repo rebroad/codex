@@ -30,7 +30,8 @@ mod tests;
 ///
 /// Paginated JSONL rollouts use a reverse scan. It stops at the newest `CompactedItem` with both
 /// replacement history and a window number, and returns that compaction plus its newer suffix. If
-/// the newest compaction lacks either field, the scan continues to the beginning of the rollout.
+/// newer compactions lack either field, they stay in the suffix; the scan continues to an older
+/// safe boundary and reaches the beginning only when no safe boundary exists.
 ///
 /// Compressed segments are decoded before applying their original JSONL offsets. Legacy rollouts
 /// keep the existing full-history path.
