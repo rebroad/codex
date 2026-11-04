@@ -299,17 +299,40 @@ impl ShutdownState {
                 false
             }
         };
-        turn_admission.begin_drain();
-        self.draining = true;
-        if graceful_restart {
+        if graceful_restart && (running_turn_count > 0 || active_admissions > 0) {
             info!(
-                "received graceful restart request; closed work admission and waiting for active work to stop (connections={}, runningAssistantTurns={}, admittedRequests={})",
+                "received graceful restart request; waiting for idle before draining (connections={}, runningAssistantTurns={}, admittedRequests={})",
                 connection_count, running_turn_count, active_admissions,
             );
         } else {
+            turn_admission.begin_drain();
+            self.draining = true;
             info!(
                 "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new work rejected)",
                 connection_count, running_turn_count,
+            );
+        }
+    }
+
+    fn begin_drain_if_idle(
+        &mut self,
+        running_turn_count: usize,
+        active_admissions: usize,
+        connection_count: usize,
+        turn_admission: &turn_admission::TurnAdmission,
+    ) {
+        if self.requested
+            && !self.draining
+            && !self.forced
+            && running_turn_count == 0
+            && active_admissions == 0
+        {
+            turn_admission.begin_drain();
+            self.draining = true;
+            self.last_logged_running_turn_count = None;
+            info!(
+                "graceful restart reached idle; entering drain (connections={}, new work rejected)",
+                connection_count,
             );
         }
     }
@@ -1258,6 +1281,12 @@ pub async fn run_main_with_transport_options(
                 // releasing its permit, and shutdown must observe that new turn.
                 let mut active_admissions = *active_admissions_rx.borrow_and_update();
                 let mut running_turn_count = *running_turn_count_rx.borrow_and_update();
+                shutdown_state.begin_drain_if_idle(
+                    running_turn_count,
+                    active_admissions,
+                    connections.len(),
+                    &processor.turn_admission,
+                );
                 // An admission can race with the zero-count observation above. The
                 // admission lock makes closing atomic; refresh counts after closing
                 // so shutdown still waits for work admitted just before the drain.
@@ -1888,7 +1917,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn graceful_restart_closes_admission_immediately_and_waits_for_active_work() {
+    fn graceful_restart_keeps_admission_open_until_managed_turns_are_idle() {
         let admission = TurnAdmission::default();
         let active = admission.subscribe_active();
         let in_flight = admission.admit().expect("initial request admitted");
@@ -1902,17 +1931,21 @@ mod tests {
             *active.borrow(),
             &admission,
         );
-        assert!(shutdown.draining());
-        assert!(admission.admit().is_err());
+        assert!(!shutdown.draining());
+        let newly_admitted = admission.admit().expect("new work remains accepted");
         assert!(matches!(
-            shutdown.update(1, *active.borrow(), connection_count, false, true),
+            shutdown.update(1, *active.borrow(), connection_count, true, true),
             ShutdownAction::Noop
         ));
+        drop(newly_admitted);
 
         drop(in_flight);
         assert_eq!(*active.borrow(), 0);
+        shutdown.begin_drain_if_idle(0, 0, connection_count, &admission);
+        assert!(shutdown.draining());
+        assert!(admission.admit().is_err());
         assert!(matches!(
-            shutdown.update(1, *active.borrow(), connection_count, true, true),
+            shutdown.update(0, *active.borrow(), connection_count, true, true),
             ShutdownAction::Finish
         ));
     }

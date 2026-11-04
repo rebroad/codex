@@ -222,6 +222,33 @@ async fn managed_force_shutdown_exits_with_active_work() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_restart_if_idle_keeps_admission_open_until_active_work_finishes() -> Result<()> {
+    let home = TempDir::new()?;
+    let (release_response, response_gate) = oneshot::channel();
+    let (mock, _completions) =
+        start_streaming_sse_server(vec![vec![stream_chunk(Some(response_gate), "Done")?]]).await;
+    create_config_toml(home.path(), mock.uri(), "never")?;
+    let socket_path = home.path().join("control/server.sock");
+    let mut server = spawn_server(home.path(), &socket_path)?;
+    let mut client = connect_default_daemon_client(&socket_path).await?;
+    let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
+    start_turn(&mut client, /*id*/ 3, &thread.thread.id).await?;
+    wait_for_requests(&mock, /*count*/ 1).await?;
+
+    request_restart_if_idle(&server).await?;
+    assert_still_running(&mut server, "restart-if-idle must wait for active work").await;
+    start_thread(&mut client, /*id*/ 4, json!({})).await?;
+
+    release_response
+        .send(())
+        .expect("active response should be released");
+    wait_success(&mut server).await?;
+    mock.shutdown().await;
+    Ok(())
+}
+
 enum SnapshotScenario {
     WriteFailure,
     Ephemeral,
@@ -1460,6 +1487,20 @@ async fn request_shutdown(server: &Child, _socket_path: &Path) -> Result<()> {
         .arg(pid.to_string())
         .status()?;
     anyhow::ensure!(status.success(), "failed to signal server {pid}: {status}");
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn request_restart_if_idle(server: &Child) -> Result<()> {
+    let pid = server.id().context("server pid")?;
+    let status = StdCommand::new("kill")
+        .arg("-HUP")
+        .arg(pid.to_string())
+        .status()?;
+    anyhow::ensure!(
+        status.success(),
+        "failed to request idle restart for server {pid}: {status}"
+    );
     Ok(())
 }
 
