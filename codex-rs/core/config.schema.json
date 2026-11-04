@@ -3735,6 +3735,11 @@
           },
           "type": "array"
         },
+        "model_context_window": {
+          "description": "Size of the model context window to use when this project is active.",
+          "format": "int64",
+          "type": "integer"
+        },
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
         }

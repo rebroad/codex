@@ -269,6 +269,35 @@ async fn load_config_applies_thread_title_model_override() -> std::io::Result<()
 }
 
 #[tokio::test]
+async fn load_config_uses_active_project_context_window_override() -> std::io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let cwd = temp_dir.path().join("project");
+    std::fs::create_dir_all(&cwd)?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            model_context_window: Some(200_000),
+            projects: Some(HashMap::from([(
+                cwd.to_string_lossy().into_owned(),
+                ProjectConfig {
+                    model_context_window: Some(408_000),
+                    ..Default::default()
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        temp_dir.path().abs(),
+    )
+    .await?;
+
+    assert_eq!(config.model_context_window, Some(408_000));
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_passes_model_replacements_to_model_resolution() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     let config_toml: ConfigToml = toml::from_str(
@@ -6381,6 +6410,7 @@ async fn project_additional_writable_roots_extend_workspace_writable_roots() -> 
                     additional_writable_roots: vec![AdditionalWritableRoot::Path(
                         additional_root.abs(),
                     )],
+                    ..Default::default()
                 },
             )])),
             ..Default::default()

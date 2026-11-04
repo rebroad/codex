@@ -4533,7 +4533,9 @@ impl Config {
             service_tier,
             review_model,
             thread_title_model,
-            model_context_window: cfg.model_context_window,
+            model_context_window: active_project
+                .model_context_window
+                .or(cfg.model_context_window),
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_auto_compact_token_limit_scope: cfg
                 .model_auto_compact_token_limit_scope
