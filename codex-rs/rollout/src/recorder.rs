@@ -1316,17 +1316,15 @@ fn load_indexed_rollout(
     let RolloutItem::SessionMeta(session_meta) = session_meta_line.item else {
         return Ok(None);
     };
-    let Some(checkpoint) = index.checkpoints.last() else {
+    let Some(checkpoint) = index.checkpoints.iter().rev().find(|checkpoint| {
+        checkpoint.replacement_history
+            && checkpoint.window_number
+            && (checkpoint.resume_metadata
+                || matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated))
+            && checkpoint.uncompressed_offset < index.uncompressed_size
+    }) else {
         return Ok(None);
     };
-    if !checkpoint.replacement_history
-        || !checkpoint.window_number
-        || (!checkpoint.resume_metadata
-            && !matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated))
-        || checkpoint.uncompressed_offset >= index.uncompressed_size
-    {
-        return Ok(None);
-    }
     let Some(frame) = index
         .frames
         .iter()
@@ -1377,7 +1375,7 @@ fn load_plain_indexed_rollout(
                     continue;
                 };
                 if !is_safe_compaction_checkpoint(&compacted, session_meta.meta.history_mode) {
-                    return Ok(None);
+                    continue;
                 }
                 let Some(offset) = scanner.last_record_start_offset() else {
                     return Ok(None);

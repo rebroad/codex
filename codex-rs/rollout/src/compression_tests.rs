@@ -175,6 +175,17 @@ async fn resume_skips_pre_compaction_history_for_plain_and_compressed_rollouts()
     assert!(!compressed_path.exists());
     assert!(!index_path.exists());
 
+    let (plain_fallback_items, _, _) = RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(plain_fallback_items.len(), 4);
+    assert!(matches!(
+        &plain_fallback_items[1],
+        RolloutItem::Compacted(compacted) if compacted.window_number == Some(1)
+    ));
+    assert!(matches!(
+        &plain_fallback_items[3],
+        RolloutItem::Compacted(compacted) if compacted.window_number == Some(2)
+    ));
+
     let mut output = File::create(&compressed_path)?;
     let mut index = super::worker::encode_zstd_to_writer(&path, &mut output)?;
     output.flush()?;
@@ -185,7 +196,19 @@ async fn resume_skips_pre_compaction_history_for_plain_and_compressed_rollouts()
         RolloutRecorder::load_rollout_items(&path).await?;
     assert_eq!(ineligible_thread_id, Some(thread_id));
     assert_eq!(ineligible_parse_errors, 0);
-    assert_eq!(ineligible_items.len(), 5);
+    assert_eq!(ineligible_items.len(), 4);
+    assert!(matches!(
+        &ineligible_items[1],
+        RolloutItem::Compacted(compacted) if compacted.window_number == Some(1)
+    ));
+    assert!(matches!(
+        &ineligible_items[2],
+        RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "after compaction"
+    ));
+    assert!(matches!(
+        &ineligible_items[3],
+        RolloutItem::Compacted(compacted) if compacted.window_number == Some(2)
+    ));
 
     append_rollout_item_to_path(&path, &suffix.item).await?;
     assert!(path.exists());
