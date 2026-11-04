@@ -45,6 +45,25 @@ const THREAD_LIST_MAX_EXCLUDED_IDS: usize = 100;
 const PAGINATED_FULL_HISTORY_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
 const PAGINATED_THREAD_READ_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.";
 
+pub(super) struct ThreadListStateWritePermit<'a> {
+    _guard: tokio::sync::RwLockWriteGuard<'a, ()>,
+    operation: &'static str,
+    acquired_at: std::time::Instant,
+}
+
+impl Drop for ThreadListStateWritePermit<'_> {
+    fn drop(&mut self) {
+        let held_ms = self.acquired_at.elapsed().as_millis();
+        if held_ms >= 100 {
+            tracing::info!(
+                operation = self.operation,
+                thread_list_write_permit_held_ms = held_ms,
+                "released long-held thread-list state permit"
+            );
+        }
+    }
+}
+
 async fn stage_pending_thread_metadata(
     thread_manager: &ThreadManager,
     thread_store: &dyn ThreadStore,
@@ -733,7 +752,9 @@ impl ThreadRequestProcessor {
             .transpose()?;
 
         {
-            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let _thread_list_state_permit = self
+                .acquire_thread_list_state_permit("thread/section/move")
+                .await?;
             self.thread_manager
                 .move_thread_to_section(thread_uuid, section_id.as_deref(), before_thread_uuid)
                 .await
@@ -993,8 +1014,23 @@ impl ThreadRequestProcessor {
 
     pub(super) async fn acquire_thread_list_state_permit(
         &self,
-    ) -> Result<RwLockWriteGuard<'_, ()>, JSONRPCErrorError> {
-        Ok(self.thread_list_state_permit.write().await)
+        operation: &'static str,
+    ) -> Result<ThreadListStateWritePermit<'_>, JSONRPCErrorError> {
+        let wait_started_at = std::time::Instant::now();
+        let guard = self.thread_list_state_permit.write().await;
+        let wait_ms = wait_started_at.elapsed().as_millis();
+        if wait_ms >= 100 {
+            tracing::info!(
+                operation,
+                thread_list_write_permit_wait_ms = wait_ms,
+                "waited for thread-list state permit"
+            );
+        }
+        Ok(ThreadListStateWritePermit {
+            _guard: guard,
+            operation,
+            acquired_at: std::time::Instant::now(),
+        })
     }
 
     async fn set_app_server_client_info(
@@ -1726,7 +1762,9 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadArchiveParams,
     ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/archive")
+            .await?;
         self.thread_archive_response(params).await
     }
 
@@ -1881,7 +1919,9 @@ impl ThreadRequestProcessor {
             return Err(invalid_request("thread name must not be empty"));
         };
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/name/set")
+            .await?;
         self.thread_manager
             .update_thread_metadata(
                 thread_id,
@@ -2030,7 +2070,9 @@ impl ThreadRequestProcessor {
             None
         };
         let updated_thread = {
-            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let _thread_list_state_permit = self
+                .acquire_thread_list_state_permit("thread/metadata/update")
+                .await?;
             let previous_project_id = if project_update.is_some() {
                 Some(
                     self.thread_store
@@ -2121,7 +2163,9 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadUnarchiveParams,
     ) -> Result<(ThreadUnarchiveResponse, ThreadUnarchivedNotification), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/unarchive")
+            .await?;
         let (response, thread_id) = self.thread_unarchive_response(params).await?;
         Ok((response, ThreadUnarchivedNotification { thread_id }))
     }
@@ -2164,7 +2208,9 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<(ThreadRevertResponse, String), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/revert")
+            .await?;
         let ThreadRevertParams {
             thread_id,
             before_turn_id,
@@ -3879,7 +3925,17 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
+        let thread_list_state_permit_started_at = std::time::Instant::now();
         let _thread_list_state_permit = self.thread_list_state_permit.read().await;
+        let thread_list_state_permit_wait_ms =
+            thread_list_state_permit_started_at.elapsed().as_millis();
+        if thread_list_state_permit_wait_ms >= 100 {
+            tracing::info!(
+                thread_id = %params.thread_id,
+                thread_list_read_permit_wait_ms = thread_list_state_permit_wait_ms,
+                "waited for thread-list state permit before resume"
+            );
+        }
         let stored_thread_from_running_probe = match target {
             ThreadResumeTarget::Client(request_id) => match self
                 .resume_running_thread(

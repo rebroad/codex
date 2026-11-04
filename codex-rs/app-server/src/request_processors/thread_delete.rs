@@ -11,7 +11,9 @@ impl ThreadRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let mut deleted_thread_ids = Vec::new();
         let result = {
-            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let _thread_list_state_permit = self
+                .acquire_thread_list_state_permit("thread/delete")
+                .await?;
             self.thread_delete_response(params, &mut deleted_thread_ids)
                 .await
         };
