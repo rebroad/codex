@@ -13,7 +13,6 @@ use codex_rollout::RolloutItem;
 use codex_rollout::ScanOutcome;
 
 use super::LocalThreadStore;
-use super::read_thread;
 use super::rollout_lineage::RolloutLineage;
 use super::thread_rollout_resolver;
 use crate::LoadThreadHistoryParams;
@@ -28,13 +27,13 @@ mod tests;
 
 /// Loads rollout items needed to reconstruct the latest model-visible context.
 ///
-/// Paginated JSONL rollouts use a reverse scan. It stops at the newest `CompactedItem` with both
-/// replacement history and a window number, and returns that compaction plus its newer suffix. If
-/// newer compactions lack either field, they stay in the suffix; the scan continues to an older
-/// safe boundary and reaches the beginning only when no safe boundary exists.
+/// Rollouts use a reverse scan. It stops at the newest `CompactedItem` with both replacement
+/// history and a window number, and returns that compaction plus its newer suffix. If newer
+/// compactions lack either field, they stay in the suffix; the scan continues to an older safe
+/// boundary and reaches the beginning only when no safe boundary exists.
 ///
 /// Compressed segments are decoded before applying their original JSONL offsets. Legacy rollouts
-/// keep the existing full-history path.
+/// use their compatibility parser while scanning.
 pub(super) async fn load_latest_model_context(
     store: &LocalThreadStore,
     params: LoadThreadHistoryParams,
@@ -99,7 +98,11 @@ pub(super) async fn load_from_rollout_path(
             .await?;
         scan_model_context_from_lineage(lineage, session_meta, progress.clone()).await?
     } else {
-        read_thread::load_history_items(path).await?
+        let mut items =
+            super::rollout_migration::load_legacy_model_context(path.to_path_buf(), progress)
+                .await?;
+        items.insert(0, RolloutItem::SessionMeta(session_meta));
+        items
     };
 
     let after = super::history_revision::read(path).await;
