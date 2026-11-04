@@ -4022,6 +4022,7 @@ impl ThreadRequestProcessor {
             self.load_resume_initial_history_from_stored_thread_with_progress(
                 *stored_thread,
                 progress_request,
+                path.clone(),
             )
             .await
             .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
@@ -4038,6 +4039,7 @@ impl ThreadRequestProcessor {
                     .load_resume_initial_history_from_stored_thread_with_progress(
                         stored_thread,
                         progress_request,
+                        path.clone(),
                     )
                     .await
                     .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread))),
@@ -5010,7 +5012,7 @@ impl ThreadRequestProcessor {
         &self,
         stored_thread: StoredThread,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
-        self.load_resume_initial_history_from_stored_thread_with_progress(stored_thread, None)
+        self.load_resume_initial_history_from_stored_thread_with_progress(stored_thread, None, None)
             .await
     }
 
@@ -5018,9 +5020,9 @@ impl ThreadRequestProcessor {
         &self,
         stored_thread: StoredThread,
         progress_request: Option<ConnectionRequestId>,
+        requested_rollout_path: Option<PathBuf>,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
         let thread_id = stored_thread.thread_id.to_string();
-        let rollout_path = stored_thread.rollout_path.clone();
         let (progress, progress_delivery) = progress_request
             .map(|request| {
                 let outgoing = Arc::clone(&self.outgoing);
@@ -5052,50 +5054,71 @@ impl ThreadRequestProcessor {
             .map_or((None, None), |(progress, delivery)| {
                 (Some(progress), Some(delivery))
             });
-        if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
-            let params = StoreLoadThreadHistoryParams {
-                thread_id: stored_thread.thread_id,
-                include_archived: true,
-            };
-            let model_context_result = if let Some(progress) = progress {
-                self.thread_store
-                    .load_latest_model_context_with_progress(params, progress)
-                    .await
-            } else {
-                self.thread_store.load_latest_model_context(params).await
-            };
+        if requested_rollout_path.is_some()
+            && matches!(stored_thread.history_mode, ThreadHistoryMode::Legacy)
+        {
+            let stored_thread_result = self
+                .read_stored_thread_for_resume_with_progress(
+                    &thread_id,
+                    requested_rollout_path.as_ref(),
+                    /*include_history*/ true,
+                    progress,
+                )
+                .await;
             if let Some(progress_delivery) = progress_delivery
                 && let Err(error) = progress_delivery.await
             {
                 warn!(%error, "failed to deliver thread resume progress notifications");
             }
-            let model_context = model_context_result.map_err(thread_store_resume_read_error)?;
-            let history = InitialHistory::Resumed(ResumedHistory {
-                history_revision: model_context.revision,
-                conversation_id: model_context.thread_id,
-                history: Arc::new(model_context.items),
-                rollout_path: stored_thread.rollout_path.clone(),
-            });
+            let mut stored_thread = stored_thread_result?;
+            let history = self
+                .stored_thread_to_initial_history(&mut stored_thread)
+                .await?;
             return Ok((history, stored_thread));
         }
-        let stored_thread_result = self
-            .read_stored_thread_for_resume_with_progress(
-                &thread_id,
-                rollout_path.as_ref(),
-                /*include_history*/ true,
-                progress,
-            )
-            .await;
+        let params = StoreLoadThreadHistoryParams {
+            thread_id: stored_thread.thread_id,
+            include_archived: true,
+        };
+        let model_context_result = if let Some(progress) = progress {
+            self.thread_store
+                .load_latest_model_context_with_progress(params, progress)
+                .await
+        } else {
+            self.thread_store.load_latest_model_context(params).await
+        };
         if let Some(progress_delivery) = progress_delivery
             && let Err(error) = progress_delivery.await
         {
             warn!(%error, "failed to deliver thread resume progress notifications");
         }
-        let mut stored_thread = stored_thread_result?;
-        let history = self
-            .stored_thread_to_initial_history(&mut stored_thread)
-            .await?;
+        let model_context = model_context_result.map_err(thread_store_resume_read_error)?;
+        let history = InitialHistory::Resumed(ResumedHistory {
+            history_revision: model_context.revision,
+            conversation_id: model_context.thread_id,
+            history: Arc::new(model_context.items),
+            rollout_path: stored_thread.rollout_path.clone(),
+        });
         Ok((history, stored_thread))
+    }
+
+    #[tracing::instrument(level = "trace", skip_all)]
+    async fn stored_thread_to_initial_history(
+        &self,
+        stored_thread: &mut StoredThread,
+    ) -> Result<InitialHistory, JSONRPCErrorError> {
+        let thread_id = stored_thread.thread_id;
+        let history = stored_thread.history.take().ok_or_else(|| {
+            internal_error(format!(
+                "thread {thread_id} did not include persisted history"
+            ))
+        })?;
+        Ok(InitialHistory::Resumed(ResumedHistory {
+            history_revision: history.revision,
+            conversation_id: thread_id,
+            history: Arc::new(history.items),
+            rollout_path: stored_thread.rollout_path.clone(),
+        }))
     }
 
     async fn read_stored_thread_for_resume(
@@ -5184,25 +5207,6 @@ impl ThreadRequestProcessor {
         }
 
         Ok(stored_thread)
-    }
-
-    #[tracing::instrument(level = "trace", skip_all)]
-    async fn stored_thread_to_initial_history(
-        &self,
-        stored_thread: &mut StoredThread,
-    ) -> Result<InitialHistory, JSONRPCErrorError> {
-        let thread_id = stored_thread.thread_id;
-        let history = stored_thread.history.take().ok_or_else(|| {
-            internal_error(format!(
-                "thread {thread_id} did not include persisted history"
-            ))
-        })?;
-        Ok(InitialHistory::Resumed(ResumedHistory {
-            history_revision: history.revision,
-            conversation_id: thread_id,
-            history: Arc::new(history.items),
-            rollout_path: stored_thread.rollout_path.clone(),
-        }))
     }
 
     fn stored_thread_to_api_thread(

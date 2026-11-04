@@ -44,6 +44,7 @@ use super::helpers::has_guardian_default_title;
 use super::thread_history;
 use super::thread_history::ProjectedRolloutLine;
 use super::thread_history::RolloutProjectionStep;
+use crate::ThreadReadProgressCallback;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
@@ -78,6 +79,13 @@ use telemetry::RolloutMigrationTrigger;
 
 const PROJECTION_BATCH_BYTES: u64 = 256 * 1024;
 const MAX_ROLLOUT_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+pub(super) async fn load_legacy_model_context(
+    rollout_path: PathBuf,
+    progress: Option<ThreadReadProgressCallback>,
+) -> ThreadStoreResult<Vec<RolloutItem>> {
+    subagent::load_model_context(rollout_path, progress).await
+}
 
 /// Shared with blocking workers so cancellation cannot release their file ownership early.
 struct MigrationLocks {

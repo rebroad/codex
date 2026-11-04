@@ -30,6 +30,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::ThreadStore;
+use crate::local::read_thread;
 use crate::local::test_support::test_config;
 use crate::local::test_support::write_session_file_with_history_mode;
 
@@ -75,6 +76,86 @@ async fn stops_at_newest_usable_compaction_and_keeps_companions() {
             turn_context,
         ])
         .expect("serialize expected context")
+    );
+}
+
+#[tokio::test]
+async fn legacy_model_context_stops_at_newest_usable_compaction() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(/*v*/ 1011);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let world_state = RolloutItem::WorldState(WorldStateItem::full(Default::default()));
+    let turn_context = turn_context(home.path(), "legacy-companion");
+    let path = write_session_file_with_history_mode(
+        home.path(),
+        "2025-01-03T13-00-09",
+        uuid,
+        ThreadHistoryMode::Legacy,
+    )
+    .expect("write legacy session file");
+    append_items(
+        path.as_path(),
+        [
+            user_message("superseded history"),
+            compacted("latest legacy compaction", Some(Vec::new())),
+            world_state.clone(),
+            turn_context.clone(),
+        ],
+    );
+    let session_meta = codex_rollout::read_session_meta_line(path.as_path())
+        .await
+        .expect("read session metadata");
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+
+    let context = store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load legacy model context");
+
+    assert_eq!(
+        serde_json::to_value(context.items).expect("serialize context"),
+        serde_json::to_value(vec![
+            RolloutItem::SessionMeta(session_meta),
+            compacted("latest legacy compaction", Some(Vec::new())),
+            world_state,
+            turn_context,
+        ])
+        .expect("serialize expected context")
+    );
+}
+
+#[tokio::test]
+async fn legacy_model_context_keeps_full_history_without_a_safe_compaction() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(/*v*/ 1012);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let path = write_session_file_with_history_mode(
+        home.path(),
+        "2025-01-03T13-00-10",
+        uuid,
+        ThreadHistoryMode::Legacy,
+    )
+    .expect("write legacy session file");
+    append_items(path.as_path(), [user_message("complete legacy history")]);
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+
+    let context = store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete legacy model context");
+    let full_history = read_thread::load_history_items(path.as_path())
+        .await
+        .expect("load complete legacy history");
+
+    assert_eq!(
+        serde_json::to_value(context.items).expect("serialize model context"),
+        serde_json::to_value(full_history).expect("serialize full history")
     );
 }
 
