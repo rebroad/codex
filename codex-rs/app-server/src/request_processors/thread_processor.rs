@@ -3905,16 +3905,27 @@ impl ThreadRequestProcessor {
         prepared_config: &mut Option<PreparedResumeConfig>,
     ) -> Result<ControlFlow<()>, JSONRPCErrorError> {
         let resume_started_at = std::time::Instant::now();
-        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
-            && self
+        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id) {
+            let pending_unloads_lock_started_at = std::time::Instant::now();
+            let is_pending_unload = self
                 .pending_thread_unloads
                 .lock()
                 .await
-                .contains_key(&thread_id)
-        {
-            return Err(invalid_request(format!(
-                "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-            )));
+                .contains_key(&thread_id);
+            let pending_unloads_lock_wait_ms =
+                pending_unloads_lock_started_at.elapsed().as_millis();
+            if pending_unloads_lock_wait_ms >= 100 {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    pending_unloads_lock_wait_ms,
+                    "waited for pending-unload state before resume"
+                );
+            }
+            if is_pending_unload {
+                return Err(invalid_request(format!(
+                    "thread {thread_id} is closing; retry thread/resume after the thread is closed"
+                )));
+            }
         }
 
         if params.sandbox.is_some() && params.permissions.is_some() {
@@ -3936,6 +3947,7 @@ impl ThreadRequestProcessor {
                 "waited for thread-list state permit before resume"
             );
         }
+        let running_thread_probe_started_at = std::time::Instant::now();
         let stored_thread_from_running_probe = match target {
             ThreadResumeTarget::Client(request_id) => match self
                 .resume_running_thread(
@@ -3965,6 +3977,14 @@ impl ThreadRequestProcessor {
                 None
             }
         };
+        let running_thread_probe_ms = running_thread_probe_started_at.elapsed().as_millis();
+        if running_thread_probe_ms >= 100 {
+            tracing::info!(
+                thread_id = %params.thread_id,
+                running_thread_probe_ms,
+                "slow running-thread probe before resume history load"
+            );
+        }
 
         let ThreadResumeParams {
             thread_id,
@@ -3988,6 +4008,7 @@ impl ThreadRequestProcessor {
         } = params.clone();
         let include_turns = !exclude_turns;
 
+        let stored_thread_metadata_started_at = std::time::Instant::now();
         let history_load_started_at = std::time::Instant::now();
         let progress_request = match target {
             ThreadResumeTarget::Client(request_id) => Some(request_id.clone()),
@@ -4023,6 +4044,22 @@ impl ThreadRequestProcessor {
                 Err(error) => Err(error),
             }
         };
+        let stored_thread_metadata_ms = stored_thread_metadata_started_at.elapsed().as_millis();
+        if stored_thread_metadata_ms >= 100 {
+            tracing::info!(
+                thread_id = %thread_id,
+                stored_thread_metadata_ms,
+                "slow stored-thread metadata read before resume progress"
+            );
+        }
+        let resume_pre_history_ms = resume_started_at.elapsed().as_millis();
+        if resume_pre_history_ms >= 100 {
+            tracing::info!(
+                thread_id = %thread_id,
+                resume_pre_history_ms,
+                "resume pre-history stage completed"
+            );
+        }
         let (thread_history, resume_source_thread) = resume_result?;
         // Path-based resume can use an empty request thread ID. Coordinate once its real
         // identity is known; unrelated loaded threads never wait for this cold startup.
