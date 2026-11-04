@@ -348,7 +348,7 @@ async fn fork_version_respects_inherited_segment_cutoffs() {
 }
 
 #[tokio::test]
-async fn returns_scanned_full_history_for_unsupported_compaction() {
+async fn uses_older_checkpoint_after_unsupported_compaction() {
     enum MissingField {
         ReplacementHistory,
         WindowNumber,
@@ -368,18 +368,41 @@ async fn returns_scanned_full_history_for_unsupported_compaction() {
             MissingField::ReplacementHistory => unsupported_compaction.replacement_history = None,
             MissingField::WindowNumber => unsupported_compaction.window_number = None,
         }
+        let older_checkpoint = compacted("older usable compaction", Some(Vec::new()));
+        let suffix = user_message("after unsupported compaction");
         let path = write_paginated_rollout(
             home.path(),
             "2025-01-03T13-00-01",
             uuid,
             [
                 user_message("older history"),
-                compacted("older usable compaction", Some(Vec::new())),
-                unsupported,
+                older_checkpoint.clone(),
+                unsupported.clone(),
+                suffix.clone(),
             ],
         );
+        let session_meta = codex_rollout::read_session_meta_line(&path)
+            .await
+            .expect("read session metadata");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let context = store
+            .load_latest_model_context(LoadThreadHistoryParams {
+                thread_id: session_meta.meta.id,
+                include_archived: false,
+            })
+            .await
+            .expect("load bounded model context");
 
-        assert_reverse_scan_matches_full_history(home.path(), path.as_path()).await;
+        assert_eq!(
+            serde_json::to_value(context.items).expect("serialize bounded context"),
+            serde_json::to_value(vec![
+                RolloutItem::SessionMeta(session_meta),
+                older_checkpoint,
+                unsupported,
+                suffix,
+            ])
+            .expect("serialize expected bounded context")
+        );
     }
 }
 
