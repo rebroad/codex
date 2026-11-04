@@ -651,6 +651,8 @@ pub enum CircuitBreakAction {
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    /// Size of the model context window to use when this project is active.
+    pub model_context_window: Option<i64>,
     /// Additional writable roots applied when this project is active. Absolute
     /// paths are ordinary roots; entries beginning with `s/` are substitutions.
     #[serde(default)]
