@@ -2166,7 +2166,13 @@ impl ThreadManagerState {
             ));
         }
         if let InitialHistory::Resumed(resumed) = &initial_history {
+            let thread_registry_lock_started_at = std::time::Instant::now();
             let mut threads = self.threads.write().await;
+            tracing::info!(
+                thread_id = %resumed.conversation_id,
+                thread_registry_lock_wait_ms = thread_registry_lock_started_at.elapsed().as_millis(),
+                "acquired thread registry lock for resume"
+            );
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
                 if thread.is_running() {
                     // The parent's pool still owns this runtime and its rollout writer.
@@ -2211,8 +2217,17 @@ impl ThreadManagerState {
                             .get_or_insert_with(|| local.runtime.generate_thread_id())
                     }
                 };
+                let factory_started_at = std::time::Instant::now();
+                let control = factory(thread_id).await?;
+                if is_resumed_thread {
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        agent_control_factory_ms = factory_started_at.elapsed().as_millis(),
+                        "created agent control before session spawn"
+                    );
+                }
                 AgentControlInit::Provided {
-                    control: factory(thread_id).await?,
+                    control,
                     runtime: local.runtime,
                 }
             }
@@ -2237,9 +2252,15 @@ impl ThreadManagerState {
             && !session_source.is_non_root_agent()
             && let AgentControlInit::Local(control) = &agent_control
         {
+            let metadata_restore_started_at = std::time::Instant::now();
             control
                 .restore_v2_agent_metadata(&config, resumed.conversation_id)
                 .await;
+            tracing::info!(
+                thread_id = %resumed.conversation_id,
+                metadata_restore_ms = metadata_restore_started_at.elapsed().as_millis(),
+                "restored V2 agent metadata before session spawn"
+            );
         }
         let (instructions, inherited_exec_policy, extensions, mcp_manager, multi_agent_version) =
             if isolation == codex_extension_api::SessionIsolation::Isolated {
@@ -2260,29 +2281,50 @@ impl ThreadManagerState {
                     Some(MultiAgentVersion::Disabled),
                 )
             } else {
-                (
-                    match inherited_instructions {
-                        Some(instructions) => instructions,
-                        None => {
-                            self.instructions_for_spawn(
+                let instructions = match inherited_instructions {
+                    Some(instructions) => instructions,
+                    None => {
+                        let instructions_started_at = std::time::Instant::now();
+                        let instructions = self
+                            .instructions_for_spawn(
                                 &session_source,
                                 parent_thread_id,
                                 forked_from_thread_id,
                                 thread_instructions_provider,
                             )
-                            .await
+                            .await;
+                        if is_resumed_thread {
+                            tracing::info!(
+                                instructions_load_ms =
+                                    instructions_started_at.elapsed().as_millis(),
+                                "loaded inherited instructions before session spawn"
+                            );
                         }
-                    },
-                    inherited_exec_policy,
-                    Arc::clone(&self.extensions),
-                    Arc::clone(&self.mcp_manager),
-                    self.initial_multi_agent_version_for_spawn(
+                        instructions
+                    }
+                };
+                let multi_agent_version_started_at = std::time::Instant::now();
+                let multi_agent_version = self
+                    .initial_multi_agent_version_for_spawn(
                         &initial_history,
                         Some(&session_source),
                         parent_thread_id,
                         forked_from_thread_id,
                     )
-                    .await,
+                    .await;
+                if is_resumed_thread {
+                    tracing::info!(
+                        multi_agent_version_load_ms =
+                            multi_agent_version_started_at.elapsed().as_millis(),
+                        "resolved multi-agent version before session spawn"
+                    );
+                }
+                (
+                    instructions,
+                    inherited_exec_policy,
+                    Arc::clone(&self.extensions),
+                    Arc::clone(&self.mcp_manager),
+                    multi_agent_version,
                 )
             };
         let mut instructions = instructions;
@@ -2291,10 +2333,19 @@ impl ThreadManagerState {
             instructions.user_provider = None;
             config.startup_warnings.extend(supplied.warnings);
         }
+        let parent_rollout_thread_trace_started_at = std::time::Instant::now();
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
+        if is_resumed_thread {
+            tracing::info!(
+                parent_rollout_thread_trace_ms =
+                    parent_rollout_thread_trace_started_at.elapsed().as_millis(),
+                "resolved parent rollout trace before session spawn"
+            );
+        }
         let tracked_session_source = session_source.clone();
+        let originator_started_at = std::time::Instant::now();
         let originator = self
             .effective_originator(
                 &initial_history,
@@ -2305,6 +2356,12 @@ impl ThreadManagerState {
                 parent_originator,
             )
             .await;
+        if is_resumed_thread {
+            tracing::info!(
+                originator_load_ms = originator_started_at.elapsed().as_millis(),
+                "resolved session originator before session spawn"
+            );
+        }
         let source_changed_during_startup = Arc::new(AtomicBool::new(false));
         {
             let mut starting = self
@@ -2324,6 +2381,11 @@ impl ThreadManagerState {
         };
         let attachment_source =
             forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
+        let resumed_thread_id = match &initial_history {
+            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+        };
+        let session_spawn_started_at = std::time::Instant::now();
         let spawn_result = Session::spawn(SessionSpawnArgs {
             startup,
             config,
@@ -2388,6 +2450,13 @@ impl ThreadManagerState {
             windows_sandbox_proxy_settings_mode,
         })
         .await;
+        if let Some(resumed_thread_id) = resumed_thread_id {
+            tracing::info!(
+                thread_id = %resumed_thread_id,
+                session_spawn_ms = session_spawn_started_at.elapsed().as_millis(),
+                "finished Session::spawn during thread resume"
+            );
+        }
         let (session, io) = match spawn_result {
             Ok(spawned) => spawned,
             Err(error) => {

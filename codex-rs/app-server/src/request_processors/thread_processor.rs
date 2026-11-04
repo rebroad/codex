@@ -45,6 +45,25 @@ const THREAD_LIST_MAX_EXCLUDED_IDS: usize = 100;
 const PAGINATED_FULL_HISTORY_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
 const PAGINATED_THREAD_READ_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.";
 
+pub(super) struct ThreadListStateWritePermit<'a> {
+    _guard: tokio::sync::RwLockWriteGuard<'a, ()>,
+    operation: &'static str,
+    acquired_at: std::time::Instant,
+}
+
+impl Drop for ThreadListStateWritePermit<'_> {
+    fn drop(&mut self) {
+        let held_ms = self.acquired_at.elapsed().as_millis();
+        if held_ms >= 100 {
+            tracing::info!(
+                operation = self.operation,
+                thread_list_write_permit_held_ms = held_ms,
+                "released long-held thread-list state permit"
+            );
+        }
+    }
+}
+
 async fn stage_pending_thread_metadata(
     thread_manager: &ThreadManager,
     thread_store: &dyn ThreadStore,
@@ -992,8 +1011,23 @@ impl ThreadRequestProcessor {
 
     pub(super) async fn acquire_thread_list_state_permit(
         &self,
-    ) -> Result<RwLockWriteGuard<'_, ()>, JSONRPCErrorError> {
-        Ok(self.thread_list_state_permit.write().await)
+        operation: &'static str,
+    ) -> Result<ThreadListStateWritePermit<'_>, JSONRPCErrorError> {
+        let wait_started_at = std::time::Instant::now();
+        let guard = self.thread_list_state_permit.write().await;
+        let wait_ms = wait_started_at.elapsed().as_millis();
+        if wait_ms >= 100 {
+            tracing::info!(
+                operation,
+                thread_list_write_permit_wait_ms = wait_ms,
+                "waited for thread-list state permit"
+            );
+        }
+        Ok(ThreadListStateWritePermit {
+            _guard: guard,
+            operation,
+            acquired_at: std::time::Instant::now(),
+        })
     }
 
     async fn set_app_server_client_info(
@@ -1725,7 +1759,9 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadArchiveParams,
     ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/archive")
+            .await?;
         self.thread_archive_response(params).await
     }
 
@@ -1880,7 +1916,9 @@ impl ThreadRequestProcessor {
             return Err(invalid_request("thread name must not be empty"));
         };
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/name/set")
+            .await?;
         self.thread_manager
             .update_thread_metadata(
                 thread_id,
@@ -2029,7 +2067,9 @@ impl ThreadRequestProcessor {
             None
         };
         let updated_thread = {
-            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let _thread_list_state_permit = self
+                .acquire_thread_list_state_permit("thread/metadata/update")
+                .await?;
             let previous_project_id = if project_update.is_some() {
                 Some(
                     self.thread_store
@@ -2120,7 +2160,9 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadUnarchiveParams,
     ) -> Result<(ThreadUnarchiveResponse, ThreadUnarchivedNotification), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/unarchive")
+            .await?;
         let (response, thread_id) = self.thread_unarchive_response(params).await?;
         Ok((response, ThreadUnarchivedNotification { thread_id }))
     }
@@ -2163,7 +2205,9 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<(ThreadRevertResponse, String), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _thread_list_state_permit = self
+            .acquire_thread_list_state_permit("thread/revert")
+            .await?;
         let ThreadRevertParams {
             thread_id,
             before_turn_id,
@@ -3858,16 +3902,27 @@ impl ThreadRequestProcessor {
         prepared_config: &mut Option<PreparedResumeConfig>,
     ) -> Result<ControlFlow<()>, JSONRPCErrorError> {
         let resume_started_at = std::time::Instant::now();
-        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
-            && self
+        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id) {
+            let pending_unloads_lock_started_at = std::time::Instant::now();
+            let is_pending_unload = self
                 .pending_thread_unloads
                 .lock()
                 .await
-                .contains_key(&thread_id)
-        {
-            return Err(invalid_request(format!(
-                "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-            )));
+                .contains_key(&thread_id);
+            let pending_unloads_lock_wait_ms =
+                pending_unloads_lock_started_at.elapsed().as_millis();
+            if pending_unloads_lock_wait_ms >= 100 {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    pending_unloads_lock_wait_ms,
+                    "waited for pending-unload state before resume"
+                );
+            }
+            if is_pending_unload {
+                return Err(invalid_request(format!(
+                    "thread {thread_id} is closing; retry thread/resume after the thread is closed"
+                )));
+            }
         }
 
         if params.sandbox.is_some() && params.permissions.is_some() {
@@ -3878,7 +3933,18 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
+        let thread_list_state_permit_started_at = std::time::Instant::now();
         let _thread_list_state_permit = self.thread_list_state_permit.read().await;
+        let thread_list_state_permit_wait_ms =
+            thread_list_state_permit_started_at.elapsed().as_millis();
+        if thread_list_state_permit_wait_ms >= 100 {
+            tracing::info!(
+                thread_id = %params.thread_id,
+                thread_list_read_permit_wait_ms = thread_list_state_permit_wait_ms,
+                "waited for thread-list state permit before resume"
+            );
+        }
+        let running_thread_probe_started_at = std::time::Instant::now();
         let stored_thread_from_running_probe = match target {
             ThreadResumeTarget::Client(request_id) => match self
                 .resume_running_thread(
@@ -3908,6 +3974,14 @@ impl ThreadRequestProcessor {
                 None
             }
         };
+        let running_thread_probe_ms = running_thread_probe_started_at.elapsed().as_millis();
+        if running_thread_probe_ms >= 100 {
+            tracing::info!(
+                thread_id = %params.thread_id,
+                running_thread_probe_ms,
+                "slow running-thread probe before resume history load"
+            );
+        }
 
         let ThreadResumeParams {
             thread_id,
@@ -3931,6 +4005,7 @@ impl ThreadRequestProcessor {
         } = params.clone();
         let include_turns = !exclude_turns;
 
+        let stored_thread_metadata_started_at = std::time::Instant::now();
         let history_load_started_at = std::time::Instant::now();
         let progress_request = match target {
             ThreadResumeTarget::Client(request_id) => Some(request_id.clone()),
@@ -3966,6 +4041,22 @@ impl ThreadRequestProcessor {
                 Err(error) => Err(error),
             }
         };
+        let stored_thread_metadata_ms = stored_thread_metadata_started_at.elapsed().as_millis();
+        if stored_thread_metadata_ms >= 100 {
+            tracing::info!(
+                thread_id = %thread_id,
+                stored_thread_metadata_ms,
+                "slow stored-thread metadata read before resume progress"
+            );
+        }
+        let resume_pre_history_ms = resume_started_at.elapsed().as_millis();
+        if resume_pre_history_ms >= 100 {
+            tracing::info!(
+                thread_id = %thread_id,
+                resume_pre_history_ms,
+                "resume pre-history stage completed"
+            );
+        }
         let (thread_history, resume_source_thread) = resume_result?;
         // Path-based resume can use an empty request thread ID. Coordinate once its real
         // identity is known; unrelated loaded threads never wait for this cold startup.
@@ -4288,17 +4379,23 @@ impl ThreadRequestProcessor {
 
         let response_history = thread_history.clone();
 
+        let request_trace_context_started_at = std::time::Instant::now();
+        let parent_trace = match &target {
+            ThreadResumeTarget::Client(request_id) => self.request_trace_context(request_id).await,
+            ThreadResumeTarget::DaemonRecovery => None,
+        };
+        tracing::info!(
+            thread_id = %thread_id,
+            request_trace_context_ms = request_trace_context_started_at.elapsed().as_millis(),
+            "resolved parent trace context for resume"
+        );
+
         let thread_create_started_at = std::time::Instant::now();
         match self
             .thread_manager
             .start_thread(StartThreadOptions {
                 initial_history: thread_history,
-                parent_trace: match target {
-                    ThreadResumeTarget::Client(request_id) => {
-                        self.request_trace_context(request_id).await
-                    }
-                    ThreadResumeTarget::DaemonRecovery => None,
-                },
+                parent_trace,
                 client_mcp_extensions,
                 ..StartThreadOptions::new(config)
             })
