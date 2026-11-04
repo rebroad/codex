@@ -4289,17 +4289,23 @@ impl ThreadRequestProcessor {
 
         let response_history = thread_history.clone();
 
+        let request_trace_context_started_at = std::time::Instant::now();
+        let parent_trace = match &target {
+            ThreadResumeTarget::Client(request_id) => self.request_trace_context(request_id).await,
+            ThreadResumeTarget::DaemonRecovery => None,
+        };
+        tracing::info!(
+            thread_id = %thread_id,
+            request_trace_context_ms = request_trace_context_started_at.elapsed().as_millis(),
+            "resolved parent trace context for resume"
+        );
+
         let thread_create_started_at = std::time::Instant::now();
         match self
             .thread_manager
             .start_thread(StartThreadOptions {
                 initial_history: thread_history,
-                parent_trace: match target {
-                    ThreadResumeTarget::Client(request_id) => {
-                        self.request_trace_context(request_id).await
-                    }
-                    ThreadResumeTarget::DaemonRecovery => None,
-                },
+                parent_trace,
                 client_mcp_extensions,
                 ..StartThreadOptions::new(config)
             })

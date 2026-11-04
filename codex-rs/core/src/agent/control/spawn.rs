@@ -194,6 +194,7 @@ impl LocalAgentControl {
         config: &Config,
         root_thread_id: ThreadId,
     ) {
+        let restore_started_at = Instant::now();
         let registry = &self.runtime.registry;
         registry.register_root_thread(root_thread_id);
 
@@ -203,6 +204,7 @@ impl LocalAgentControl {
         let Some(agent_graph_store) = state.agent_graph_store() else {
             return;
         };
+        let graph_read_started_at = Instant::now();
         let descendant_ids = match agent_graph_store
             .list_thread_spawn_descendants(
                 root_thread_id,
@@ -216,6 +218,12 @@ impl LocalAgentControl {
                 return;
             }
         };
+        tracing::info!(
+            thread_id = %root_thread_id,
+            descendant_count = descendant_ids.len(),
+            descendant_graph_read_ms = graph_read_started_at.elapsed().as_millis(),
+            "loaded V2 agent descendants for resume"
+        );
 
         // Overlap storage reads, but reserve paths and nicknames in graph order.
         let mut stored_threads = stream::iter(
@@ -225,6 +233,7 @@ impl LocalAgentControl {
                 .map(|thread_id| {
                     let state = &state;
                     async move {
+                        let stored_thread_read_started_at = Instant::now();
                         let stored_thread = state
                             .read_stored_thread(ReadThreadParams {
                                 thread_id,
@@ -232,6 +241,16 @@ impl LocalAgentControl {
                                 include_history: false,
                             })
                             .await;
+                        let stored_thread_read_ms =
+                            stored_thread_read_started_at.elapsed().as_millis();
+                        if stored_thread_read_ms >= 100 {
+                            tracing::info!(
+                                root_thread_id = %root_thread_id,
+                                thread_id = %thread_id,
+                                stored_thread_read_ms,
+                                "slow V2 agent metadata read during resume"
+                            );
+                        }
                         (thread_id, stored_thread)
                     }
                 }),
@@ -271,6 +290,11 @@ impl LocalAgentControl {
                 warn!("failed to restore V2 agent metadata for {thread_id}: {err}");
             }
         }
+        tracing::info!(
+            thread_id = %root_thread_id,
+            metadata_restore_ms = restore_started_at.elapsed().as_millis(),
+            "finished V2 agent metadata restore for resume"
+        );
     }
 
     /// Spawn a new agent thread and submit the initial prompt.
