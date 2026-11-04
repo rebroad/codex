@@ -1,19 +1,17 @@
-//! Progress timelines learned from prior rollout decoding markers.
+//! Resume startup progress estimated from prior elapsed durations.
 
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
-use tokio::time::Instant;
 
 const ESTIMATE_FILE_NAME: &str = "resume_progress_estimates.json";
 const MAX_SAMPLES: usize = 64;
 const MIN_ESTIMATE: Duration = Duration::from_secs(2);
 const MAX_ESTIMATE: Duration = Duration::from_secs(600);
+const DEFAULT_PRE_PROMPT_ESTIMATE: Duration = Duration::from_secs(2);
 const DEFAULT_BYTES_PER_SECOND: u64 = 8 * 1024 * 1024;
 const FIXED_OVERHEAD: Duration = Duration::from_millis(500);
 
@@ -68,13 +66,7 @@ struct Sample {
     workload: Workload,
     duration_ms: u64,
     #[serde(default)]
-    markers: Vec<ProgressMarker>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct ProgressMarker {
-    progress: u8,
-    elapsed_ms: u64,
+    pre_prompt_duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -83,43 +75,13 @@ struct EstimateHistory {
     samples: Vec<Sample>,
 }
 
-/// Stores only rollout size/format, decoded progress markers, and elapsed times.
-/// Rollout paths and contents are never stored.
+/// Stores only rollout size/format and elapsed times. Rollout paths and contents are never stored.
 #[derive(Clone)]
 pub(crate) struct ResumeProgressEstimate {
     codex_home: AbsolutePathBuf,
     workload: Workload,
     expected_duration: Duration,
-    history: Vec<Sample>,
-    current_markers: Arc<Mutex<Vec<ProgressMarker>>>,
-}
-
-#[derive(Clone)]
-pub(crate) struct ResumeProgressObserver {
-    started_at: Instant,
-    markers: Arc<Mutex<Vec<ProgressMarker>>>,
-}
-
-impl ResumeProgressObserver {
-    pub(crate) fn record(&self, progress: u8) {
-        let marker = ProgressMarker {
-            progress: progress.min(100),
-            elapsed_ms: self
-                .started_at
-                .elapsed()
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64,
-        };
-        let Ok(mut markers) = self.markers.lock() else {
-            return;
-        };
-        if markers
-            .last()
-            .is_none_or(|previous| marker.progress > previous.progress)
-        {
-            markers.push(marker);
-        }
-    }
+    pre_prompt_expected_duration: Duration,
 }
 
 impl ResumeProgressEstimate {
@@ -131,58 +93,38 @@ impl ResumeProgressEstimate {
         let workload = Workload::from_rollout(rollout_path, history_mode);
         let history = Self::read_history(&codex_home);
         let expected_duration = estimate_duration(workload, &history.samples);
+        let pre_prompt_expected_duration = estimate_pre_prompt_duration(workload, &history.samples);
         Self {
             codex_home,
             workload,
             expected_duration,
-            history: history.samples,
-            current_markers: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    pub(crate) fn observer(&self, started_at: Instant) -> ResumeProgressObserver {
-        ResumeProgressObserver {
-            started_at,
-            markers: Arc::clone(&self.current_markers),
+            pre_prompt_expected_duration,
         }
     }
 
     pub(crate) fn progress_percentage(&self, elapsed: Duration) -> u8 {
-        let sample = self.history.iter().rev().find(|sample| {
-            sample.workload.history == self.workload.history
-                && sample.workload.compression == self.workload.compression
-                && !sample.markers.is_empty()
-        });
-        let Ok(current_markers) = self.current_markers.lock() else {
-            return 0;
-        };
-        let Some(sample) = sample else {
-            return current_markers
-                .last()
-                .map_or(0, |marker| marker.progress.min(99));
-        };
-        progress_from_sample(
-            elapsed,
-            self.expected_duration,
-            sample,
-            current_markers.last().copied(),
-        )
+        progress_percentage(elapsed, self.expected_duration)
     }
 
-    pub(crate) fn record_completion(&self, duration: Duration) {
+    pub(crate) fn pre_prompt_progress_percentage(&self, elapsed: Duration) -> u8 {
+        progress_percentage(elapsed, self.pre_prompt_expected_duration)
+    }
+
+    pub(crate) fn record_completion(
+        &self,
+        pre_prompt_duration: Option<Duration>,
+        duration: Duration,
+    ) {
         if duration < Duration::from_millis(250) {
             return;
         }
         let mut history = Self::read_history(&self.codex_home);
-        history.version = 1;
+        history.version = 2;
         history.samples.push(Sample {
             workload: self.workload,
             duration_ms: duration.as_millis().min(u128::from(u64::MAX)) as u64,
-            markers: self
-                .current_markers
-                .lock()
-                .map(|markers| markers.clone())
-                .unwrap_or_default(),
+            pre_prompt_duration_ms: pre_prompt_duration
+                .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64),
         });
         let retained = history.samples.len().saturating_sub(MAX_SAMPLES);
         history.samples.drain(..retained);
@@ -202,9 +144,27 @@ impl ResumeProgressEstimate {
         std::fs::read(path.as_path())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .filter(|history: &EstimateHistory| history.version == 1)
+            .filter(|history: &EstimateHistory| history.version == 2)
             .unwrap_or_default()
     }
+}
+
+fn estimate_pre_prompt_duration(workload: Workload, samples: &[Sample]) -> Duration {
+    let mut durations = samples
+        .iter()
+        .filter(|sample| {
+            sample.workload.history == workload.history
+                && sample.workload.compression == workload.compression
+        })
+        .filter_map(|sample| sample.pre_prompt_duration_ms)
+        .filter(|duration| *duration > 0)
+        .map(Duration::from_millis)
+        .collect::<Vec<_>>();
+    if durations.is_empty() {
+        return DEFAULT_PRE_PROMPT_ESTIMATE;
+    }
+    durations.sort_unstable();
+    durations[durations.len() / 2].clamp(MIN_ESTIMATE, MAX_ESTIMATE)
 }
 
 fn estimate_duration(workload: Workload, samples: &[Sample]) -> Duration {
@@ -244,79 +204,10 @@ fn estimate_duration(workload: Workload, samples: &[Sample]) -> Duration {
     estimate.clamp(MIN_ESTIMATE, MAX_ESTIMATE)
 }
 
-fn progress_from_sample(
-    elapsed: Duration,
-    expected: Duration,
-    sample: &Sample,
-    current_marker: Option<ProgressMarker>,
-) -> u8 {
-    let sample_duration = sample.duration_ms.max(1) as f64;
-    let expected_ms = expected.as_millis() as f64;
-    let scale = expected_ms / sample_duration;
-    let mut points = vec![(0.0, 0.0)];
-    for marker in &sample.markers {
-        let progress = marker.progress.min(99) as f64;
-        let time_ms = marker.elapsed_ms as f64 * scale;
-        if progress > points.last().map_or(0.0, |point| point.1)
-            && time_ms > points.last().map_or(0.0, |point| point.0)
-        {
-            points.push((time_ms, progress));
-        }
-    }
-    if points.last().is_some_and(|point| point.1 < 100.0) {
-        points.push((expected_ms, 100.0));
-    }
-
-    let current_elapsed_ms = elapsed.as_millis() as f64;
-    if let Some(marker) = current_marker {
-        let current_progress = marker.progress.min(99) as f64;
-        if current_progress > 0.0 {
-            let predicted_ms = interpolate_time(&points, current_progress);
-            if predicted_ms > 0.0 {
-                let adjustment = current_elapsed_ms / predicted_ms;
-                for point in &mut points {
-                    point.0 *= adjustment;
-                }
-            }
-        }
-    }
-    interpolate_progress(&points, current_elapsed_ms)
-        .floor()
-        .clamp(0.0, 99.0) as u8
-}
-
-fn interpolate_time(points: &[(f64, f64)], progress: f64) -> f64 {
-    for pair in points.windows(2) {
-        let [(start_time, start_progress), (end_time, end_progress)] = pair else {
-            continue;
-        };
-        if progress <= *end_progress {
-            let progress_delta = end_progress - start_progress;
-            if progress_delta <= 0.0 {
-                return *end_time;
-            }
-            return start_time
-                + (end_time - start_time) * (progress - start_progress) / progress_delta;
-        }
-    }
-    points.last().map_or(0.0, |point| point.0)
-}
-
-fn interpolate_progress(points: &[(f64, f64)], elapsed_ms: f64) -> f64 {
-    for pair in points.windows(2) {
-        let [(start_time, start_progress), (end_time, end_progress)] = pair else {
-            continue;
-        };
-        if elapsed_ms <= *end_time {
-            let time_delta = end_time - start_time;
-            if time_delta <= 0.0 {
-                return *end_progress;
-            }
-            let fraction = (elapsed_ms - start_time) / time_delta;
-            return start_progress + (end_progress - start_progress) * fraction;
-        }
-    }
-    points.last().map_or(0.0, |point| point.1)
+fn progress_percentage(elapsed: Duration, expected: Duration) -> u8 {
+    let expected_millis = expected.as_millis().max(1);
+    let elapsed_millis = elapsed.as_millis();
+    (elapsed_millis.saturating_mul(100) / expected_millis).min(99) as u8
 }
 
 #[cfg(test)]

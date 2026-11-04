@@ -38,7 +38,6 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::resume_picker::SessionSelection;
 use crate::resume_progress::ResumeProgressEstimate;
-use crate::resume_progress::ResumeProgressObserver;
 use crate::tui;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -126,7 +125,16 @@ pub(crate) struct StartupDraftPump {
 struct StartupProgressDisplay {
     started_at: Instant,
     estimate: ResumeProgressEstimate,
+    phase: StartupResumeProgressPhase,
+    pre_prompt_duration: Option<Duration>,
     complete: bool,
+}
+
+#[derive(Clone, Copy)]
+enum StartupResumeProgressPhase {
+    BeforeCwdPrompt,
+    AfterCwdPrompt,
+    FullStartup,
 }
 
 impl StartupProgressDisplay {
@@ -134,7 +142,14 @@ impl StartupProgressDisplay {
         if self.complete {
             return 100;
         }
-        self.estimate.progress_percentage(self.started_at.elapsed())
+        let elapsed = self.started_at.elapsed();
+        match self.phase {
+            StartupResumeProgressPhase::BeforeCwdPrompt => {
+                self.estimate.pre_prompt_progress_percentage(elapsed)
+            }
+            StartupResumeProgressPhase::AfterCwdPrompt
+            | StartupResumeProgressPhase::FullStartup => self.estimate.progress_percentage(elapsed),
+        }
     }
 }
 
@@ -249,23 +264,54 @@ impl StartupDraftPump {
         }
     }
 
-    /// Start timing a selected resume before startup prefetch and thread hydration begin.
-    pub(crate) fn begin_resume_progress(
-        &mut self,
-        estimate: ResumeProgressEstimate,
-        started_at: Instant,
-    ) {
+    /// Start timing when the selected resume is about to be shown to the user.
+    pub(crate) fn begin_resume_progress(&mut self, estimate: ResumeProgressEstimate) {
         self.progress = Some(StartupProgressDisplay {
-            started_at,
+            started_at: Instant::now(),
             estimate,
+            phase: StartupResumeProgressPhase::BeforeCwdPrompt,
+            pre_prompt_duration: None,
             complete: false,
         });
     }
 
-    pub(crate) fn resume_progress_observer(&self) -> Option<ResumeProgressObserver> {
-        self.progress
-            .as_ref()
-            .map(|progress| progress.estimate.observer(progress.started_at))
+    pub(crate) fn complete_resume_progress_before_cwd_prompt(
+        &mut self,
+        tui: &mut Tui,
+    ) -> io::Result<()> {
+        let Some(progress) = self.progress.as_mut() else {
+            return Ok(());
+        };
+        progress.pre_prompt_duration = Some(progress.started_at.elapsed());
+        progress.complete = true;
+        let result = if self.initial_screen == StartupDraftInitialScreen::Composer {
+            self.draw(tui, tui.terminal.last_known_screen_size)
+        } else {
+            Ok(())
+        };
+        result
+    }
+
+    pub(crate) fn restart_resume_progress_after_cwd_prompt(
+        &mut self,
+        tui: &mut Tui,
+    ) -> io::Result<()> {
+        let Some(progress) = self.progress.as_mut() else {
+            return Ok(());
+        };
+        progress.started_at = Instant::now();
+        progress.phase = StartupResumeProgressPhase::AfterCwdPrompt;
+        progress.complete = false;
+        if self.initial_screen == StartupDraftInitialScreen::Composer {
+            self.draw(tui, tui.terminal.last_known_screen_size)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn continue_resume_progress_without_cwd_prompt(&mut self) {
+        if let Some(progress) = self.progress.as_mut() {
+            progress.phase = StartupResumeProgressPhase::FullStartup;
+        }
     }
 
     pub(crate) fn take_draft(&mut self) -> ComposerDraftSnapshot {
@@ -407,14 +453,14 @@ impl StartupDraftPump {
         }
     }
 
-    /// Record a successful resume when its first usable prompt has been prepared.
+    /// Record a successful resume when the session or goal choice is ready to display.
     pub(crate) fn complete_resume_progress(&mut self, tui: &mut Tui) -> io::Result<()> {
         let Some(mut progress) = self.progress.take() else {
             return Ok(());
         };
         progress
             .estimate
-            .record_completion(progress.started_at.elapsed());
+            .record_completion(progress.pre_prompt_duration, progress.started_at.elapsed());
         progress.complete = true;
         self.progress = Some(progress);
         let result = if self.initial_screen == StartupDraftInitialScreen::Composer {

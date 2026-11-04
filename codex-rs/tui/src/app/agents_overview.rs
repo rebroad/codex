@@ -903,8 +903,13 @@ impl App {
             }
         }
         if !read_only && !is_new_session && !self.chat_widget.fork_in_progress {
-            self.maybe_prompt_resume_paused_goal_after_resume(app_server, root_thread_id)
-                .await;
+            if let Some(objective) = self
+                .paused_goal_objective_after_resume(app_server, root_thread_id)
+                .await
+            {
+                self.chat_widget
+                    .show_resume_paused_goal_prompt(root_thread_id, objective);
+            }
         }
 
         Ok(AppRunControl::Continue)

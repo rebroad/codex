@@ -51,37 +51,38 @@ impl App {
         self.chat_widget.show_goal_summary(goal);
     }
 
-    pub(super) async fn maybe_prompt_resume_paused_goal_after_resume(
+    pub(super) async fn paused_goal_objective_after_resume(
         &mut self,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
-    ) {
+    ) -> Option<String> {
         if self.chat_widget.has_misalignment_policy_violation() {
-            return;
+            return None;
         }
 
         let result = app_server.thread_goal_get(thread_id).await;
         if self.current_displayed_thread_id() != Some(thread_id) {
-            return;
+            return None;
         }
 
         let response = match result {
             Ok(response) => response,
             Err(err) => {
                 tracing::warn!("failed to read thread goal after resume: {err}");
-                return;
+                return None;
             }
         };
 
         let Some(goal) = response.goal else {
-            return;
+            return None;
         };
         if matches!(
             goal.status,
             ThreadGoalStatus::Paused | ThreadGoalStatus::Blocked | ThreadGoalStatus::UsageLimited
         ) {
-            self.chat_widget
-                .show_resume_paused_goal_prompt(thread_id, goal.objective);
+            Some(goal.objective)
+        } else {
+            None
         }
     }
 

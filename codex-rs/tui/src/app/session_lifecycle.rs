@@ -1505,11 +1505,13 @@ impl App {
                         .await;
                 }
                 if !read_only {
-                    self.maybe_prompt_resume_paused_goal_after_resume(
-                        app_server,
-                        resumed_thread_id,
-                    )
-                    .await;
+                    if let Some(objective) = self
+                        .paused_goal_objective_after_resume(app_server, resumed_thread_id)
+                        .await
+                    {
+                        self.chat_widget
+                            .show_resume_paused_goal_prompt(resumed_thread_id, objective);
+                    }
                 }
                 tracing::info!(
                     thread_id = %resumed_thread_id,

@@ -73,6 +73,37 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     action: CwdPromptAction,
     cwd_context: ResumeCwdContext<'_>,
 ) -> color_eyre::Result<ResolveCwdOutcome> {
+    resolve_cwd_for_resume_or_fork_internal(tui, config, history_cwd, action, cwd_context, None)
+        .await
+}
+
+pub(crate) async fn resolve_cwd_for_resume_or_fork_with_before_prompt(
+    tui: &mut Tui,
+    config: &Config,
+    history_cwd: Option<PathBuf>,
+    action: CwdPromptAction,
+    cwd_context: ResumeCwdContext<'_>,
+    before_prompt: &mut dyn FnMut(&mut Tui) -> std::io::Result<()>,
+) -> color_eyre::Result<ResolveCwdOutcome> {
+    resolve_cwd_for_resume_or_fork_internal(
+        tui,
+        config,
+        history_cwd,
+        action,
+        cwd_context,
+        Some(before_prompt),
+    )
+    .await
+}
+
+async fn resolve_cwd_for_resume_or_fork_internal(
+    tui: &mut Tui,
+    config: &Config,
+    history_cwd: Option<PathBuf>,
+    action: CwdPromptAction,
+    cwd_context: ResumeCwdContext<'_>,
+    mut before_prompt: Option<&mut dyn FnMut(&mut Tui) -> std::io::Result<()>>,
+) -> color_eyre::Result<ResolveCwdOutcome> {
     if matches!(cwd_context.mode, Some(ResumeCwdMode::Current)) {
         return Ok(ResolveCwdOutcome::Continue(Some(
             cwd_context.remembered_current_cwd.to_path_buf(),
@@ -93,6 +124,9 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
         Some(ResumeCwdMode::Current) | None => {}
     }
     if cwds_differ(cwd_context.current_cwd, &history_cwd) {
+        if let Some(before_prompt) = before_prompt.as_mut() {
+            before_prompt(tui)?;
+        }
         let selection_outcome = cwd_prompt::run_cwd_selection_prompt(
             tui,
             config,

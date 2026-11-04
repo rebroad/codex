@@ -254,8 +254,13 @@ async fn misalignment_policy_blocks_queued_turns_and_goal_resumption() -> Result
         unreachable!("embedded app-server request IDs are integers");
     };
 
-    app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
-        .await;
+    if let Some(objective) = app
+        .paused_goal_objective_after_resume(&mut app_server, thread_id)
+        .await
+    {
+        app.chat_widget
+            .show_resume_paused_goal_prompt(thread_id, objective);
+    }
     for event in [
         AppEvent::CodexOp(queued_turn),
         AppEvent::CodexOp(crate::app_command::AppCommand::ExecApproval {

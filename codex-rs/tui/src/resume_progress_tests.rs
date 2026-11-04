@@ -1,11 +1,12 @@
 use super::CompressionKind;
 use super::EstimateHistory;
 use super::HistoryKind;
-use super::ProgressMarker;
 use super::ResumeProgressEstimate;
 use super::Sample;
 use super::Workload;
 use super::estimate_duration;
+use super::estimate_pre_prompt_duration;
+use super::progress_percentage;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -21,93 +22,24 @@ fn workload(size_bytes: u64) -> Workload {
 }
 
 #[test]
-fn progress_interpolates_between_measured_markers_and_completion() {
-    let sample = Sample {
-        workload: workload(1024),
-        duration_ms: 12_000,
-        markers: vec![
-            ProgressMarker {
-                progress: 20,
-                elapsed_ms: 2_000,
-            },
-            ProgressMarker {
-                progress: 50,
-                elapsed_ms: 6_000,
-            },
-            ProgressMarker {
-                progress: 90,
-                elapsed_ms: 9_000,
-            },
-            ProgressMarker {
-                progress: 100,
-                elapsed_ms: 10_000,
-            },
-        ],
-    };
+fn progress_advances_linearly_and_reserves_completion() {
+    let expected = Duration::from_secs(12);
 
-    assert_eq!(
-        super::progress_from_sample(
-            Duration::from_secs(4),
-            Duration::from_secs(12),
-            &sample,
-            None,
-        ),
-        35
-    );
-    assert_eq!(
-        super::progress_from_sample(
-            Duration::from_millis(9_600),
-            Duration::from_secs(12),
-            &sample,
-            None,
-        ),
-        95
-    );
-}
-
-#[test]
-fn current_markers_recalibrate_the_historical_timeline() {
-    let sample = Sample {
-        workload: workload(1024),
-        duration_ms: 12_000,
-        markers: vec![
-            ProgressMarker {
-                progress: 20,
-                elapsed_ms: 2_000,
-            },
-            ProgressMarker {
-                progress: 50,
-                elapsed_ms: 6_000,
-            },
-            ProgressMarker {
-                progress: 90,
-                elapsed_ms: 9_000,
-            },
-        ],
-    };
-
-    assert_eq!(
-        super::progress_from_sample(
-            Duration::from_secs(9),
-            Duration::from_secs(12),
-            &sample,
-            Some(ProgressMarker {
-                progress: 50,
-                elapsed_ms: 9_000,
-            }),
-        ),
-        50
-    );
+    assert_eq!(progress_percentage(Duration::ZERO, expected), 0);
+    assert_eq!(progress_percentage(Duration::from_secs(3), expected), 25);
+    assert_eq!(progress_percentage(Duration::from_secs(6), expected), 50);
+    assert_eq!(progress_percentage(expected, expected), 99);
+    assert_eq!(progress_percentage(Duration::from_secs(30), expected), 99);
 }
 
 #[test]
 fn learned_rollout_throughput_scales_estimate_to_file_size() {
     let history = EstimateHistory {
-        version: 1,
+        version: 2,
         samples: vec![Sample {
             workload: workload(10 * 1024 * 1024),
             duration_ms: 10_500,
-            markers: Vec::new(),
+            pre_prompt_duration_ms: None,
         }],
     };
 
@@ -120,7 +52,7 @@ fn learned_rollout_throughput_scales_estimate_to_file_size() {
 #[test]
 fn unrelated_rollout_formats_do_not_train_each_other() {
     let history = EstimateHistory {
-        version: 1,
+        version: 2,
         samples: vec![Sample {
             workload: Workload {
                 size_bytes: 10 * 1024 * 1024,
@@ -128,7 +60,7 @@ fn unrelated_rollout_formats_do_not_train_each_other() {
                 compression: CompressionKind::Compressed,
             },
             duration_ms: 60_500,
-            markers: Vec::new(),
+            pre_prompt_duration_ms: None,
         }],
     };
 
@@ -148,6 +80,37 @@ fn fallback_estimate_uses_size_and_is_bounded() {
 }
 
 #[test]
+fn pre_prompt_estimate_uses_only_matching_resume_samples() {
+    let history = EstimateHistory {
+        version: 2,
+        samples: vec![
+            Sample {
+                workload: workload(10 * 1024 * 1024),
+                duration_ms: 10_500,
+                pre_prompt_duration_ms: Some(4_500),
+            },
+            Sample {
+                workload: Workload {
+                    history: HistoryKind::Legacy,
+                    ..workload(10 * 1024 * 1024)
+                },
+                duration_ms: 20_000,
+                pre_prompt_duration_ms: Some(20_000),
+            },
+        ],
+    };
+
+    assert_eq!(
+        estimate_pre_prompt_duration(workload(1024), &history.samples),
+        Duration::from_millis(4_500)
+    );
+    assert_eq!(
+        estimate_pre_prompt_duration(workload(1024), &[]),
+        Duration::from_secs(2)
+    );
+}
+
+#[test]
 fn completed_resume_learns_numeric_metrics_without_storing_paths() {
     let home = TempDir::new().expect("create temporary Codex home");
     let rollout = home.path().join("private-session.jsonl");
@@ -160,28 +123,25 @@ fn completed_resume_learns_numeric_metrics_without_storing_paths() {
         Some(rollout.as_path()),
         Some(ThreadHistoryMode::Legacy),
     );
-    let observer = estimate.observer(tokio::time::Instant::now() - Duration::from_secs(2));
-    observer.record(42);
-    assert_eq!(estimate.progress_percentage(Duration::from_secs(2)), 42);
-    estimate.record_completion(Duration::from_secs(12));
+    estimate.record_completion(Some(Duration::from_secs(4)), Duration::from_secs(8));
 
     let saved = std::fs::read_to_string(codex_home.join("resume_progress_estimates.json"))
         .expect("read saved estimate");
     assert!(!saved.contains("private-session"));
     assert!(!saved.contains(home.path().to_str().expect("UTF-8 temp path")));
     let saved: EstimateHistory = serde_json::from_str(&saved).expect("parse saved estimate");
-    assert_eq!(saved.samples[0].markers[0].progress, 42);
-
+    assert_eq!(saved.samples[0].duration_ms, 8_000);
+    assert_eq!(saved.samples[0].pre_prompt_duration_ms, Some(4_000));
     let learned = ResumeProgressEstimate::load(
         codex_home,
         Some(rollout.as_path()),
         Some(ThreadHistoryMode::Legacy),
     );
-    assert!(learned.expected_duration >= Duration::from_millis(11_999));
-    assert!(learned.expected_duration <= Duration::from_millis(12_001));
-    let marker = saved.samples[0].markers[0];
+    assert!(learned.expected_duration >= Duration::from_millis(7_999));
+    assert!(learned.expected_duration <= Duration::from_millis(8_001));
+    assert_eq!(learned.progress_percentage(Duration::from_secs(4)), 50);
     assert_eq!(
-        learned.progress_percentage(Duration::from_millis(marker.elapsed_ms)),
-        42
+        learned.pre_prompt_progress_percentage(Duration::from_secs(2)),
+        50
     );
 }

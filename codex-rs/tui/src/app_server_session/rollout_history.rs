@@ -12,7 +12,6 @@ use super::started_thread_from_resume_response;
 use super::thread_resume_params_from_config;
 use super::thread_session_state_from_thread_response;
 use crate::legacy_core::config::Config;
-use crate::resume_progress::ResumeProgressObserver;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AskForApproval;
@@ -38,13 +37,13 @@ const READ_ONLY_HISTORY_TURN_LIMIT: u32 = 100;
 fn take_resume_progress(
     event: AppServerEvent,
     request_id: &RequestId,
-) -> Result<Option<u8>, AppServerEvent> {
+) -> Result<(), AppServerEvent> {
     match event {
         AppServerEvent::ServerNotification(notification) => {
             if let ServerNotification::ThreadResumeProgress(progress) = notification.as_ref()
                 && progress.request_id == *request_id
             {
-                return Ok(Some(progress.progress));
+                return Ok(());
             }
             Err(AppServerEvent::ServerNotification(notification))
         }
@@ -56,7 +55,6 @@ async fn request_thread_resume_with_progress(
     session: &mut AppServerSession,
     request_id: RequestId,
     params: ThreadResumeParams,
-    progress_observer: Option<ResumeProgressObserver>,
 ) -> Result<ThreadResumeResponse, TypedRequestError> {
     let request_id_for_progress = request_id.clone();
     let request_handle = session.client.request_handle();
@@ -65,17 +63,12 @@ async fn request_thread_resume_with_progress(
     let mut events_open = true;
     loop {
         tokio::select! {
-            // Drain this request's rollout progress before its response. Yield between
-            // notifications so the startup screen can update its duration estimate.
+            // Consume rollout progress before its response so it does not leak into the
+            // regular app event stream. Yield so the startup screen can refresh elapsed time.
             biased;
             event = session.client.next_event(), if events_open => match event {
                 Some(event) => match take_resume_progress(event, &request_id_for_progress) {
-                    Ok(progress) => {
-                        if let (Some(progress), Some(observer)) =
-                            (progress, progress_observer.as_ref())
-                        {
-                            observer.record(progress);
-                        }
+                    Ok(()) => {
                         // Let the startup event loop update its progress display during a scan.
                         tokio::task::yield_now().await;
                     }
@@ -235,26 +228,6 @@ impl AppServerSession {
         model_settings: ResumeModelSettings,
         permission_overrides: crate::resume_permissions::ResumePermissions,
     ) -> Result<AppServerStartedThread> {
-        self.resume_thread_with_permission_overrides_and_progress(
-            local_settings,
-            config,
-            thread_id,
-            model_settings,
-            permission_overrides,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn resume_thread_with_permission_overrides_and_progress(
-        &mut self,
-        local_settings: &crate::local_settings::LocalSettings,
-        config: Config,
-        thread_id: ThreadId,
-        model_settings: ResumeModelSettings,
-        permission_overrides: crate::resume_permissions::ResumePermissions,
-        progress_observer: Option<ResumeProgressObserver>,
-    ) -> Result<AppServerStartedThread> {
         self.thread_tool_transport().validate_config(&config)?;
         let session_config = if matches!(
             model_settings,
@@ -306,13 +279,8 @@ impl AppServerSession {
             rollout_maintenance_guard = None;
         }
         let request_id = self.next_request_id();
-        let resume_response = request_thread_resume_with_progress(
-            self,
-            request_id,
-            params.clone(),
-            progress_observer.clone(),
-        )
-        .await;
+        let resume_response =
+            request_thread_resume_with_progress(self, request_id, params.clone()).await;
         drop(rollout_maintenance_guard);
         let mut response: ThreadResumeResponse = match resume_response {
             Ok(response) => response,
@@ -322,16 +290,11 @@ impl AppServerSession {
                 self.history_support = ThreadHistorySupport::LegacyOnly;
                 params.exclude_turns = false;
                 let request_id = self.next_request_id();
-                request_thread_resume_with_progress(
-                    self,
-                    request_id,
-                    params,
-                    progress_observer.clone(),
-                )
-                .await
-                .map_err(|err| {
-                    bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-                })?
+                request_thread_resume_with_progress(self, request_id, params)
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
+                    })?
             }
             Err(TypedRequestError::Server { source, .. }) if is_active_writer_conflict(&source) => {
                 let mut attach_failure = None;
@@ -353,7 +316,6 @@ impl AppServerSession {
                                 self,
                                 request_id,
                                 params.clone(),
-                                progress_observer.clone(),
                             )
                             .await
                             {
@@ -396,16 +358,14 @@ impl AppServerSession {
                         ));
                     }
                     let request_id = self.next_request_id();
-                    request_thread_resume_with_progress(
-                        self,
-                        request_id,
-                        params,
-                        progress_observer.clone(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-                    })?
+                    request_thread_resume_with_progress(self, request_id, params)
+                        .await
+                        .map_err(|err| {
+                            bootstrap_request_error(
+                                "thread/resume failed during TUI bootstrap",
+                                err,
+                            )
+                        })?
                 }
             }
             Err(err) => {

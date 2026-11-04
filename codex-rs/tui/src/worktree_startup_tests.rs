@@ -29,7 +29,6 @@ async fn explicit_remote_worktree_rejection_is_snapshotted() -> anyhow::Result<(
         Arg0DispatchPaths::default(),
         LoaderOverrides::default(),
         Some(endpoint),
-        None,
     )
     .await
     .expect_err("managed worktrees require a local session");

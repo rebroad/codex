@@ -620,11 +620,10 @@ impl App {
                     &config,
                     &harness_overrides,
                 );
-                let progress_observer = startup_draft.resume_progress_observer();
                 let resumed = match startup_draft
                     .run_until(
                         tui,
-                        app_server.resume_thread_with_permission_overrides_and_progress(
+                        app_server.resume_thread_with_permission_overrides(
                             &local_settings,
                             config.clone(),
                             target_session.thread_id,
@@ -633,7 +632,6 @@ impl App {
                                 &config,
                                 &harness_overrides,
                             ),
-                            progress_observer,
                         ),
                     )
                     .await
@@ -690,17 +688,15 @@ impl App {
                         };
                         config.model_provider_id = provider_id;
                         config.model_provider = provider;
-                        let progress_observer = startup_draft.resume_progress_observer();
                         match startup_draft
                             .run_until(
                                 tui,
-                                app_server.resume_thread_with_permission_overrides_and_progress(
+                                app_server.resume_thread_with_permission_overrides(
                                     &local_settings,
                                     config.clone(),
                                     target_session.thread_id,
                                     crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
                                     crate::resume_permissions::ResumePermissions::default(),
-                                    progress_observer,
                                 ),
                             )
                             .await
@@ -1125,19 +1121,21 @@ See the Codex keymap documentation for supported actions and examples."
                         .add_info_message(notice.to_string(), /*hint*/ None);
                 }
             }
-            if !read_only_thread
-                && should_prompt_for_paused_goal_after_startup_resume
-                && let Err(err) = startup_draft
+            if !read_only_thread && should_prompt_for_paused_goal_after_startup_resume {
+                let paused_goal = match startup_draft
                     .run_until(
                         tui,
-                        app.maybe_prompt_resume_paused_goal_after_resume(
-                            &mut app_server,
-                            thread_id,
-                        ),
+                        app.paused_goal_objective_after_resume(&mut app_server, thread_id),
                     )
                     .await
-            {
-                return shutdown_on_startup_error(app_server, err).await;
+                {
+                    Ok(paused_goal) => paused_goal,
+                    Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                };
+                if let Some(objective) = paused_goal {
+                    app.chat_widget
+                        .show_resume_paused_goal_prompt(thread_id, objective);
+                }
             }
         }
         if !start_in_agents_overview
