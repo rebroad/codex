@@ -128,6 +128,9 @@ use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnSettingsUpdateParams;
+use codex_app_server_protocol::TurnSettingsUpdateResponse;
+use codex_app_server_protocol::TurnSettingsUpdateStatus;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
@@ -169,6 +172,7 @@ const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
 pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str = "A previous external agent import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
+const TURN_SETTINGS_UPDATE_METHOD: &str = "turn/settings/update";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ForkGoalContinuation {
@@ -304,6 +308,12 @@ fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
             && source.message.contains(THREAD_SETTINGS_UPDATE_METHOD))
 }
 
+fn is_turn_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
+    source.code == JSONRPC_METHOD_NOT_FOUND
+        || (source.code == JSONRPC_INVALID_REQUEST
+            && source.message.contains(TURN_SETTINGS_UPDATE_METHOD))
+}
+
 /// Data collected during the TUI bootstrap phase that the main event loop
 /// needs to configure the UI, telemetry, and initial rate-limit prefetch.
 ///
@@ -341,6 +351,7 @@ pub(crate) struct AppServerSession {
     pub(crate) model_provider_override: Option<String>,
     history_support: ThreadHistorySupport,
     thread_settings_update_supported: bool,
+    turn_settings_update_supported: bool,
     default_model: Option<String>,
     available_models: Vec<ModelPreset>,
     daybreak_api_key_compat: Arc<tokio::sync::Semaphore>,
@@ -452,6 +463,7 @@ impl AppServerSession {
             model_provider_override: None,
             history_support: ThreadHistorySupport::Paginated,
             thread_settings_update_supported: true,
+            turn_settings_update_supported: true,
             default_model: None,
             available_models: Vec::new(),
             daybreak_api_key_compat: Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
@@ -1435,6 +1447,33 @@ impl AppServerSession {
                 Ok(false)
             }
             Err(err) => Err(err).wrap_err("thread/settings/update failed in TUI"),
+        }
+    }
+
+    pub(crate) async fn turn_settings_update(
+        &mut self,
+        params: TurnSettingsUpdateParams,
+    ) -> Result<Option<TurnSettingsUpdateStatus>> {
+        if !self.turn_settings_update_supported {
+            return Ok(None);
+        }
+        let request_id = self.next_request_id();
+        match self
+            .client
+            .request_typed::<TurnSettingsUpdateResponse>(ClientRequest::TurnSettingsUpdate {
+                request_id,
+                params,
+            })
+            .await
+        {
+            Ok(response) => Ok(Some(response.status)),
+            Err(TypedRequestError::Server { source, .. })
+                if is_turn_settings_update_unsupported(&source) =>
+            {
+                self.turn_settings_update_supported = false;
+                Ok(None)
+            }
+            Err(err) => Err(err).wrap_err("turn/settings/update failed in TUI"),
         }
     }
 
@@ -2690,6 +2729,31 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    #[tokio::test]
+    async fn turn_settings_update_reports_when_turn_is_no_longer_active() -> Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let mut config = build_config(&codex_home).await;
+        config.features.enable(Feature::StepModelSwitching)?;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "[features]\nstep_model_switching = true\n",
+        )?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        let started = app_server.start_thread(&config).await?;
+
+        let status = app_server
+            .turn_settings_update(TurnSettingsUpdateParams {
+                thread_id: started.session.thread_id.to_string(),
+                turn_id: "no-longer-active".to_string(),
+                model: Some("gpt-5.4".to_string()),
+                ..TurnSettingsUpdateParams::default()
+            })
+            .await?;
+
+        assert_eq!(status, Some(TurnSettingsUpdateStatus::TargetUnavailable));
+        Ok(())
     }
 
     #[tokio::test]
