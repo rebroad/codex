@@ -591,10 +591,10 @@ async fn cold_thread_resume_rechecks_non_local_history_after_config_load() -> Re
     client.shutdown().await?;
 
     let client = start_in_process_client(config, loader_overrides).await?;
-    let reads_before_resume = thread_store.calls().await.read_thread_with_history;
+    let reads_before_resume = thread_store.calls().await.load_latest_model_context;
     // The in-memory store is pathless, so resume currently fails later while
-    // assembling the response. Reuse the probe within each attempt, but read it
-    // again after loading configuration without the metadata permit.
+    // assembling the response. Resume probes the latest model context twice:
+    // once before loading configuration and again after configuration is loaded.
     let _resume_result = client
         .request(ClientRequest::ThreadResume {
             request_id: RequestId::Integer(3),
@@ -605,7 +605,7 @@ async fn cold_thread_resume_rechecks_non_local_history_after_config_load() -> Re
         })
         .await?;
 
-    let reads_after_resume = thread_store.calls().await.read_thread_with_history;
+    let reads_after_resume = thread_store.calls().await.load_latest_model_context;
     client.shutdown().await?;
     assert_eq!(reads_after_resume, reads_before_resume + 2);
     Ok(())
