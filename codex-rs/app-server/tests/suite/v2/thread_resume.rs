@@ -167,7 +167,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_resume_paginated_model_context_preserves_original_metadata() -> Result<()> {
+async fn thread_resume_paginated_model_context_preserves_settings_and_updates_preview() -> Result<()>
+{
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let saved_cwd = normalized_existing_path(codex_home.path())?;
@@ -238,7 +239,7 @@ async fn thread_resume_paginated_model_context_preserves_original_metadata() -> 
     assert_eq!(cwd.as_path(), saved_cwd);
     assert_eq!(resumed.id, conversation_id);
     assert_eq!(resumed.history_mode, ThreadHistoryMode::Paginated);
-    assert_eq!(resumed.preview, "Saved user message");
+    assert!(resumed.preview.is_empty());
     assert!(resumed.turns.is_empty());
 
     timeout(
@@ -276,7 +277,7 @@ async fn thread_resume_paginated_model_context_preserves_original_metadata() -> 
     // The resume checkpoint keeps the effective cwd inside the bounded replay,
     // even after the original settings snapshot falls outside its window.
     assert_eq!(cwd.as_path(), saved_cwd);
-    assert_eq!(resumed.preview, "Saved user message");
+    assert_eq!(resumed.preview, "bounded suffix user message");
     assert!(resumed.turns.is_empty());
 
     timeout(
@@ -308,9 +309,9 @@ async fn thread_resume_paginated_model_context_preserves_original_metadata() -> 
             metadata.first_user_message.as_deref(),
         ),
         (
-            Some("Saved user message"),
-            "Saved user message",
-            Some("Saved user message"),
+            Some("bounded suffix user message"),
+            "bounded suffix user message",
+            Some("bounded suffix user message"),
         )
     );
     Ok(())
