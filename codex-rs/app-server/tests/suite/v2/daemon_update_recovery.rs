@@ -216,9 +216,12 @@ async fn managed_force_shutdown_exits_with_active_work() -> Result<()> {
     start_turn(&mut client, /*id*/ 3, &thread.thread.id).await?;
     wait_for_requests(&mock, /*count*/ 1).await?;
     request_shutdown(&server, &socket_path).await?;
-    assert_still_running(&mut server, "graceful shutdown must wait").await;
-    request_shutdown(&server, &socket_path).await?;
     wait_success(&mut server).await?;
+    assert_eq!(
+        daemon_recovery::read_candidates(&daemon_recovery_file_path(home.path()))?,
+        [thread.thread.id].into(),
+    );
+    mock.shutdown().await;
     Ok(())
 }
 
@@ -337,10 +340,13 @@ async fn managed_shutdown_skips_nonpersistent_threads_and_tolerates_save_failure
         .await?;
     }
     request_shutdown(&server, &socket_path).await?;
-    wait_success(&mut server).await?;
     if matches!(scenario, SnapshotScenario::WriteFailure) {
+        assert_still_running(&mut server, "failed handoff must keep the server alive").await;
         assert!(path.is_dir());
+        server.kill().await?;
+        server.wait().await?;
     } else {
+        wait_success(&mut server).await?;
         assert_eq!(daemon_recovery::read_candidates(&path)?, Default::default());
     }
     Ok(())
