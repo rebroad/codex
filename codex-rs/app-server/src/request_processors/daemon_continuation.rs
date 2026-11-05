@@ -22,6 +22,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_rollout::RolloutItem;
+use codex_thread_store::LoadThreadHistoryParams;
 
 impl ThreadRequestProcessor {
     pub(crate) async fn continue_daemon_turn(&self, thread_id: &str, saved: InterruptedTurn) {
@@ -40,13 +41,47 @@ impl ThreadRequestProcessor {
             tracing::debug!(%thread_id, "skipping interrupted turn recovery because the thread has no rollout");
             return;
         };
-        let history = match codex_rollout::RolloutRecorder::load_rollout_items(&path).await {
-            Ok((history, _, _)) => history,
+        let mut full_history_loaded = false;
+        let mut history = match self
+            .thread_store
+            .load_latest_model_context(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: true,
+            })
+            .await
+        {
+            Ok(context) => context.items,
             Err(err) => {
-                tracing::warn!(%thread_id, %err, "failed to read interrupted turn history");
-                return;
+                tracing::debug!(%thread_id, %err, "failed to load bounded interrupted turn context; falling back to full history");
+                full_history_loaded = true;
+                match codex_rollout::RolloutRecorder::load_rollout_items(&path).await {
+                    Ok((history, _, _)) => history,
+                    Err(err) => {
+                        tracing::warn!(%thread_id, %err, "failed to read interrupted turn history");
+                        return;
+                    }
+                }
             }
         };
+        let latest_started_turn = history.iter().rev().find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(&event.turn_id),
+            _ => None,
+        });
+        let bounded_context_is_ambiguous = latest_started_turn.is_none()
+            || (latest_started_turn == Some(&saved.turn_id)
+                && !history.iter().any(|item| {
+                    matches!(item, RolloutItem::TurnContext(context)
+                        if context.turn_id.as_ref() == Some(&saved.turn_id))
+                }));
+        if bounded_context_is_ambiguous && !full_history_loaded {
+            history = match codex_rollout::RolloutRecorder::load_rollout_items(&path).await {
+                Ok((history, _, _)) => history,
+                Err(err) => {
+                    tracing::warn!(%thread_id, %err, "failed to read interrupted turn history");
+                    return;
+                }
+            };
+        }
         // The snapshot has complete recorded input, but the old process may have
         // completed or replaced its turn during the shutdown grace period.
         let Some(start) = history
