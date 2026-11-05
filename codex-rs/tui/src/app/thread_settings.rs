@@ -11,12 +11,21 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::TurnSettingsUpdateParams;
+use codex_app_server_protocol::TurnSettingsUpdateStatus;
 use codex_config::types::ApprovalsReviewer;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
+
+fn turn_settings_update_error_message(error: &color_eyre::Report) -> String {
+    format!(
+        "The selected model will apply on the next turn; the active turn could not be updated: {error:#}"
+    )
+}
 
 impl App {
     pub(super) async fn sync_active_thread_model_setting(
@@ -29,6 +38,29 @@ impl App {
             return;
         };
         params.effort = effort;
+        if self.config.features.enabled(Feature::StepModelSwitching)
+            && let Some(thread_id) = self.active_thread_id
+            && let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await
+        {
+            match app_server
+                .turn_settings_update(TurnSettingsUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id,
+                    model: params.model.clone(),
+                    effort: params.effort.clone(),
+                    ..TurnSettingsUpdateParams::default()
+                })
+                .await
+            {
+                Ok(Some(
+                    TurnSettingsUpdateStatus::Applied | TurnSettingsUpdateStatus::TargetUnavailable,
+                ))
+                | Ok(None) => {}
+                Err(error) => self
+                    .chat_widget
+                    .add_error_message(turn_settings_update_error_message(&error)),
+            }
+        }
         let defaulted_to_auto_review = params.approvals_reviewer
             == Some(AppServerApprovalsReviewer::AutoReview)
             && (self.chat_widget.config_ref().approvals_reviewer != ApprovalsReviewer::AutoReview
@@ -248,6 +280,10 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "thread_settings_tests.rs"]
+mod tests;
 
 fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
     if settings.collaboration_mode.mode == ModeKind::Default {
