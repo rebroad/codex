@@ -2757,6 +2757,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turn_settings_update_error_chain_includes_server_rejection() -> Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let config = build_config(&codex_home).await;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        let started = app_server.start_thread(&config).await?;
+
+        let error = app_server
+            .turn_settings_update(TurnSettingsUpdateParams {
+                thread_id: started.session.thread_id.to_string(),
+                turn_id: "active-turn".to_string(),
+                model: Some("test-model".to_string()),
+                ..TurnSettingsUpdateParams::default()
+            })
+            .await
+            .expect_err("model updates should be rejected while the feature is disabled");
+
+        let display = format!("{error:#}");
+        assert!(display.contains("turn/settings/update failed in TUI"));
+        assert!(display.contains("turn/settings/update failed:"));
+        assert!(display.contains("turn settings updates require the step_model_switching feature"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn bootstrap_reuses_prefetched_account_without_another_account_read() -> Result<()> {
         let codex_home = tempfile::tempdir()?;
         let mut config = build_config(&codex_home).await;

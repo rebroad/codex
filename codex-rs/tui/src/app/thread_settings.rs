@@ -49,7 +49,7 @@ impl App {
                 Ok(Some(TurnSettingsUpdateStatus::Applied | TurnSettingsUpdateStatus::TargetUnavailable))
                 | Ok(None) => {}
                 Err(error) => self.chat_widget.add_error_message(format!(
-                    "The selected model will apply on the next turn; the active turn could not be updated: {error}"
+                    "The selected model will apply on the next turn; the active turn could not be updated: {error:#}"
                 )),
             }
         }
