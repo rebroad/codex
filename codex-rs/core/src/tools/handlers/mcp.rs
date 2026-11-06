@@ -325,7 +325,10 @@ impl CoreToolRuntime for McpHandler {
         let ToolCallSource::CodeMode { cell_id, .. } = &invocation.source else {
             return;
         };
-        let evidence_mode = node_repl_review_evidence_mode(&invocation.turn);
+        let evidence_mode = node_repl_review_evidence_mode(
+            &invocation.turn,
+            &invocation.step_context.settings.model_info,
+        );
         let image_capture_enabled = invocation
             .session
             .services
