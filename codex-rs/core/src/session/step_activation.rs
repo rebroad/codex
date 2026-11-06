@@ -108,15 +108,6 @@ fn check_legacy_model_safety(
     }) {
         return Err("the destination changes the admitted Guardian rejection policy".to_string());
     }
-    // TurnMetadataState pins both node REPL flags. Guardian prompt/evidence
-    // construction also reads node_repl_auto_review_required from the turn.
-    if retained_models.iter().any(|model| {
-        model.computer_use_review_required() != destination.computer_use_review_required()
-    }) {
-        return Err(
-            "the destination changes the admitted node REPL review requirement".to_string(),
-        );
-    }
     if retained_models
         .iter()
         .any(|model| model.guardian != destination.guardian)

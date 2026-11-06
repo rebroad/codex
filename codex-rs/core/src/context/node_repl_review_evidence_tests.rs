@@ -6,9 +6,22 @@ use pretty_assertions::assert_eq;
 use super::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS;
 use super::NodeReplReviewEvidence;
 use super::NodeReplReviewEvidenceMode;
+use super::node_repl_review_evidence_mode;
 use codex_context_fragments::ContextualUserFragment;
 // Assert the existing rendering contract independently of its implementation constant.
 const MAX_RENDERED_BYTES: usize = 32_000;
+
+#[tokio::test]
+async fn review_evidence_mode_uses_the_step_model_requirement() {
+    let (_session, turn) = crate::session::tests::make_session_and_context().await;
+    let mut model_info = turn.model_info().as_ref().clone();
+    model_info.node_repl_auto_review_required = true;
+
+    assert_eq!(
+        node_repl_review_evidence_mode(&turn, &model_info),
+        NodeReplReviewEvidenceMode::Multimodal
+    );
+}
 
 fn text_input(text: &str) -> UserInput {
     super::text_input(text.to_string())

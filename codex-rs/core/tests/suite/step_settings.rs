@@ -2970,6 +2970,77 @@ async fn captured_step_controls_mcp_output_limit(supports_images: bool) -> Resul
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_model_switch_updates_node_repl_review_metadata() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            paused_response("resp-1", "pause-before-model-switch"),
+            paused_response("resp-2", "pause-after-model-switch"),
+            sse_completed("resp-3"),
+        ],
+    )
+    .await;
+    let test = step_settings_test()
+        .with_config(|config| {
+            for model in &mut config.model_catalog.as_mut().expect("test models").models {
+                model.node_repl_auto_review_required = model.slug == MODEL_B;
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let first_pause = start_paused_turn(&test.codex).await?;
+
+    assert_eq!(
+        submit_turn_settings(
+            &test.codex,
+            &first_pause.turn_id,
+            TurnSettingsUpdate {
+                model: Some(MODEL_B.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?,
+        TurnSettingsUpdateOutcome::Applied
+    );
+    answer_paused_turn(&test.codex, &first_pause.turn_id).await?;
+    let second_pause = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    answer_paused_turn(&test.codex, &second_pause.turn_id).await?;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::Error(error) => panic!("model update failed: {}", error.message),
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["model"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(MODEL_A), json!(MODEL_B), json!(MODEL_B)]
+    );
+    assert_eq!(
+        request_turn_metadata(&requests[0])["node_repl_auto_review_required"],
+        false
+    );
+    for request in &requests[1..] {
+        assert_eq!(
+            request_turn_metadata(request)["node_repl_auto_review_required"],
+            true
+        );
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct SettingsEcho(Arc<Mutex<Option<ConversationHistory>>>);
 
