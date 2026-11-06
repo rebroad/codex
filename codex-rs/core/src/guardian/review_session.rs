@@ -887,8 +887,7 @@ async fn ensure_guardian_node_repl_policy(
 ) -> anyhow::Result<()> {
     if !params
         .parent_context
-        .turn()
-        .model_info()
+        .model_info
         .computer_use_review_required()
         || params.category != GuardianScope::ComputerUse
     {

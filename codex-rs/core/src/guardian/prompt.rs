@@ -105,7 +105,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         anyhow::bail!("approval environment id exceeds Guardian's 256-byte limit");
     }
     let evidence_mode = parent_context
-        .map(|context| node_repl_review_evidence_mode(context.turn()))
+        .map(|context| node_repl_review_evidence_mode(context.turn(), &context.model_info))
         .unwrap_or(NodeReplReviewEvidenceMode::Disabled);
     let node_repl_transcripts_enabled = evidence_mode != NodeReplReviewEvidenceMode::Disabled;
     let node_repl_result_token_limit = if node_repl_transcripts_enabled {
