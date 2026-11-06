@@ -21,6 +21,12 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 
+fn turn_settings_update_error_message(error: &color_eyre::Report) -> String {
+    format!(
+        "The selected model will apply on the next turn; the active turn could not be updated: {error:#}"
+    )
+}
+
 impl App {
     pub(super) async fn sync_active_thread_model_setting(
         &mut self,
@@ -46,11 +52,13 @@ impl App {
                 })
                 .await
             {
-                Ok(Some(TurnSettingsUpdateStatus::Applied | TurnSettingsUpdateStatus::TargetUnavailable))
+                Ok(Some(
+                    TurnSettingsUpdateStatus::Applied | TurnSettingsUpdateStatus::TargetUnavailable,
+                ))
                 | Ok(None) => {}
-                Err(error) => self.chat_widget.add_error_message(format!(
-                    "The selected model will apply on the next turn; the active turn could not be updated: {error:#}"
-                )),
+                Err(error) => self
+                    .chat_widget
+                    .add_error_message(turn_settings_update_error_message(&error)),
             }
         }
         let defaulted_to_auto_review = params.approvals_reviewer
@@ -272,6 +280,10 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "thread_settings_tests.rs"]
+mod tests;
 
 fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
     if settings.collaboration_mode.mode == ModeKind::Default {
