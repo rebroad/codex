@@ -74,6 +74,23 @@ fn agent_message_item(message: &str) -> RolloutItem {
     }))
 }
 
+fn safe_compacted_item() -> RolloutItem {
+    RolloutItem::Compacted(crate::CompactedItem {
+        message: "summary".to_string(),
+        replacement_history: Some(Vec::new()),
+        guardian_history: None,
+        retained_context: None,
+        mcp_resource_origins: None,
+        window_number: Some(1),
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+        compaction_response_id: None,
+        latest_token_usage_record: None,
+        resume_metadata: None,
+    })
+}
+
 fn write_paginated_rollout(
     path: &Path,
     thread_id: ThreadId,
@@ -713,6 +730,68 @@ async fn recorder_preserves_additional_tools_in_both_history_modes() -> std::io:
         );
         recorder.shutdown().await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_persists_and_validates_plain_rollout_compaction_checkpoint() -> std::io::Result<()>
+{
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
+            SessionSource::Exec,
+            /*thread_source*/ None,
+            "test_originator".to_string(),
+            BaseInstructions::default(),
+            Vec::new(),
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated),
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    recorder
+        .record_canonical_items(&[
+            agent_message_item("before compaction"),
+            safe_compacted_item(),
+            agent_message_item("after compaction"),
+        ])
+        .await?;
+    recorder.flush().await?;
+
+    let rollout = fs::read_to_string(&rollout_path)?;
+    let compacted_offset = rollout
+        .find("\"type\":\"compacted\"")
+        .expect("compaction record") as u64;
+    let checkpoint =
+        crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::read_for(&rollout_path)
+            .expect("writer persisted the checkpoint");
+    assert_eq!(checkpoint.offset, compacted_offset);
+
+    let event_offset = rollout
+        .find("after compaction")
+        .expect("post-compaction event") as u64;
+    crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::write_for(
+        &rollout_path,
+        event_offset,
+    )?;
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3, "resume starts from the compaction record");
+    assert!(matches!(items[1], RolloutItem::Compacted(_)));
+    let checkpoint =
+        crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::read_for(&rollout_path)
+            .expect("fallback scan refreshed the checkpoint");
+    assert_eq!(checkpoint.offset, compacted_offset);
+
+    recorder.shutdown().await?;
     Ok(())
 }
 

@@ -96,6 +96,7 @@ The table is a behavior index, not a list of every fork-only commit. Test isolat
 ## Resume-progress and startup-input review
 
 - Indexed compaction resume: preserve the reconstructed model history while avoiding parsing pre-checkpoint records. New compressed rollouts use concatenated independently decodable zstd frames and a versioned sidecar index; old or invalid indexes fall back to full replay. Keep index validity tied to the compressed file and invalidate it when materializing for append.
+- Plain JSONL compaction resume: atomically persist the byte offset of each successfully written safe compaction in a sidecar, validate the referenced line on resume, and retain reverse scanning as a fallback that seeds the sidecar for older rollouts.
 - When newer compaction records are incomplete, both indexed rollout loading and model-context reconstruction must continue back to an earlier safe checkpoint while retaining every newer record for replay. Falling back to the start of a multi-gigabyte rollout can stall session recovery and inflate app-server memory use.
 - Legacy cold resume must use the same bounded-context selection as paginated resume. Preserve tolerant full-history reconstruction when no safe compaction exists, and report reverse-scan byte progress through the existing resume notification.
 - `feat(app-server): stream resume progress` (`760ede5a9f`) adds `rollout_uncompressed_size`; it does not remove `read_rollout_lines`.

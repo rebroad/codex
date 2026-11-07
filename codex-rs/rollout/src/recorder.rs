@@ -1367,6 +1367,13 @@ fn load_plain_indexed_rollout(
         return Ok(None);
     };
 
+    if let Some(checkpoint) =
+        crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::read_for(path)
+        && load_plain_rollout_from_checkpoint(&mut file, checkpoint.offset, &session_meta)?
+    {
+        return load_rollout_suffix(std::io::BufReader::new(file), session_meta, None);
+    }
+
     let mut scanner = ReverseJsonlScanner::new(file)?;
     let checkpoint = loop {
         match scanner.scan_next_rollout_line()? {
@@ -1387,8 +1394,33 @@ fn load_plain_indexed_rollout(
         }
     };
     let mut file = scanner.into_inner();
+    if let Err(error) =
+        crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::write_for(path, checkpoint)
+    {
+        warn!(
+            "failed to persist rollout compaction checkpoint for {}: {error}",
+            path.display()
+        );
+    }
     file.seek(SeekFrom::Start(checkpoint))?;
     load_rollout_suffix(std::io::BufReader::new(file), session_meta, None)
+}
+
+fn load_plain_rollout_from_checkpoint(
+    file: &mut File,
+    offset: u64,
+    session_meta: &SessionMetaLine,
+) -> std::io::Result<bool> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut line = String::new();
+    std::io::BufReader::new(&mut *file).read_line(&mut line)?;
+    let valid = line.ends_with('\n')
+        && crate::parse_rollout_line(&line).is_ok_and(|line| {
+            matches!(line.item, RolloutItem::Compacted(compacted)
+                if is_safe_compaction_checkpoint(&compacted, session_meta.meta.history_mode))
+        });
+    file.seek(SeekFrom::Start(offset))?;
+    Ok(valid)
 }
 
 fn is_safe_compaction_checkpoint(
@@ -2184,13 +2216,32 @@ impl RolloutWriterState {
         let mut write_result = Ok(());
         for item in &self.pending_items {
             match self.ordinal_state.current() {
-                Ok(ordinal) => match writer.write_rollout_item(item, ordinal).await {
-                    Ok(()) => self.ordinal_state.advance(),
-                    Err(err) => {
-                        write_result = Err(err);
-                        break;
+                Ok(ordinal) => {
+                    match writer.write_rollout_item(item, ordinal).await {
+                        Ok(offset) => {
+                            let history_mode = match self.ordinal_state {
+                                RolloutOrdinalState::Legacy => ThreadHistoryMode::Legacy,
+                                RolloutOrdinalState::Paginated { .. } => {
+                                    ThreadHistoryMode::Paginated
+                                }
+                            };
+                            if let RolloutItem::Compacted(compacted) = item
+                            && is_safe_compaction_checkpoint(compacted, history_mode)
+                            && let Err(error) = crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::write_for(
+                                &self.rollout_path,
+                                offset,
+                            )
+                        {
+                            warn!("failed to persist rollout compaction checkpoint for {}: {error}", self.rollout_path.display());
+                        }
+                            self.ordinal_state.advance();
+                        }
+                        Err(err) => {
+                            write_result = Err(err);
+                            break;
+                        }
                     }
-                },
+                }
                 Err(err) => {
                     write_result = Err(err);
                     break;
@@ -2281,11 +2332,28 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
-    let (_rollout_path, file, ordinal_state) =
+    let (rollout_path, file, ordinal_state) =
         open_rollout_for_append(rollout_path, /*writer_lock*/ None).await?;
     let ordinal = ordinal_state.current()?;
     let mut writer = JsonlWriter { file };
-    writer.write_rollout_item(item, ordinal).await
+    let offset = writer.write_rollout_item(item, ordinal).await?;
+    let history_mode = match ordinal_state {
+        RolloutOrdinalState::Legacy => ThreadHistoryMode::Legacy,
+        RolloutOrdinalState::Paginated { .. } => ThreadHistoryMode::Paginated,
+    };
+    if let RolloutItem::Compacted(compacted) = item
+        && is_safe_compaction_checkpoint(compacted, history_mode)
+        && let Err(error) = crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::write_for(
+            &rollout_path,
+            offset,
+        )
+    {
+        warn!(
+            "failed to persist rollout compaction checkpoint for {}: {error}",
+            rollout_path.display()
+        );
+    }
+    Ok(())
 }
 
 async fn open_rollout_for_append(
@@ -2367,7 +2435,7 @@ impl JsonlWriter {
         &mut self,
         rollout_item: &RolloutItem,
         ordinal: Option<u64>,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<u64> {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
@@ -2380,7 +2448,9 @@ impl JsonlWriter {
             ordinal,
             item: rollout_item,
         };
-        self.write_line(&line).await
+        let offset = self.file.metadata().await?.len();
+        self.write_line(&line).await?;
+        Ok(offset)
     }
     async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
         let mut json = serde_json::to_string(item)?;

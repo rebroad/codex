@@ -16,6 +16,7 @@ pub(crate) mod metadata;
 mod model_context;
 mod ordinal;
 mod persistence_metrics;
+mod plain_rollout_checkpoint;
 pub(crate) mod policy;
 pub(crate) mod recorder;
 mod reverse_jsonl_scanner;
