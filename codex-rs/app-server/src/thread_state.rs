@@ -368,7 +368,7 @@ pub(crate) struct ThreadStateManager {
 }
 
 impl ThreadStateManager {
-    /// Coordinates goal edits with cold/path-based resume for just this thread.
+    /// Coordinates goal and metadata updates with cold/path-based resume for this thread.
     pub(crate) async fn lock_goal_resume(
         &self,
         thread_id: ThreadId,
