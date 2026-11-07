@@ -843,6 +843,7 @@ mod tests {
         ResponseStream {
             rx_event,
             interrupt: None,
+            _response_lease: None,
             consumer_dropped: CancellationToken::new(),
         }
     }

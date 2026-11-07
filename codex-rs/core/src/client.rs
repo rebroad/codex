@@ -2449,14 +2449,22 @@ impl ModelClientSession {
                         )
                         .await?
                     {
-                        WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
+                        WebsocketStreamOutcome::Stream(mut stream) => {
+                            stream._response_lease = Some(
+                                self.client
+                                    .http_client_factory
+                                    .network_policy()
+                                    .hold_response(),
+                            );
+                            return Ok(stream);
+                        }
                         WebsocketStreamOutcome::FallbackToHttp => {
                             self.try_switch_fallback_transport(session_telemetry, model_info);
                         }
                     }
                 }
 
-                ResponsesHttpExecutor::new(&self.client)
+                let mut stream = ResponsesHttpExecutor::new(&self.client)
                     .stream_responses_http(
                         &self.turn_state,
                         /*expected_auth_owner*/ None,
@@ -2470,7 +2478,14 @@ impl ModelClientSession {
                         responses_metadata,
                         inference_trace,
                     )
-                    .await
+                    .await?;
+                stream._response_lease = Some(
+                    self.client
+                        .http_client_factory
+                        .network_policy()
+                        .hold_response(),
+                );
+                Ok(stream)
             }
         }
     }
@@ -2723,6 +2738,7 @@ where
         ResponseStream {
             rx_event,
             interrupt: None,
+            _response_lease: None,
             consumer_dropped: consumer_dropped_for_stream,
         },
         rx_last_response,

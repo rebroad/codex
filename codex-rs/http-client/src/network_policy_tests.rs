@@ -58,6 +58,33 @@ async fn invalidation_revokes_existing_permits_and_rejects_stale_publication() {
     assert!(policy.acquire(&url).is_ok());
 }
 
+#[test]
+fn policy_updates_wait_for_active_responses() {
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    let url = Url::parse("https://example.com").unwrap();
+    controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+    let permit = policy.acquire(&url).unwrap();
+    let response = policy.hold_response();
+
+    assert!(controller.publish(
+        policy.revision(),
+        DestinationPolicy::Restricted {
+            allowed_hosts: BTreeSet::from(["other.example".to_string()]),
+        }
+    ));
+    assert!(permit.check().is_ok());
+    assert!(policy.acquire(&url).is_ok());
+
+    drop(response);
+
+    assert_eq!(permit.check(), Err(NetworkPolicyDenied::Revoked));
+    assert_eq!(
+        policy.acquire(&url).unwrap_err(),
+        NetworkPolicyDenied::Destination
+    );
+}
+
 #[tokio::test]
 async fn load_failure_recovers_current_account_but_cannot_revive_previous_account() {
     let controller = NetworkPolicyController::default();

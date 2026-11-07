@@ -94,6 +94,35 @@ async fn auth_owner_generation_preserves_logout_and_switches_when_coalesced() {
 }
 
 #[tokio::test]
+async fn auth_owner_change_waits_for_active_response_usage_checkpoint() {
+    let mut manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    Arc::get_mut(&mut manager).unwrap().auth_route_config =
+        AuthRouteConfig::from_http_client_factory(
+            manager
+                .http_client_factory()
+                .with_network_policy(policy.clone()),
+        );
+    let initial = chatgpt_auth("user-a", "workspace-a", "token-a");
+    let next = chatgpt_auth("user-b", "workspace-b", "token-b");
+    manager.set_cached_auth(Some(initial.clone()));
+    let response = manager
+        .http_client_factory()
+        .network_policy()
+        .hold_response();
+    let mut changes = manager.auth_change_state_receiver();
+
+    manager.set_cached_auth(Some(next.clone()));
+    assert_eq!(manager.auth_cached(), Some(initial));
+    assert_eq!(changes.borrow().owner_generation, 1);
+
+    drop(response);
+    assert_eq!(manager.auth().await, Some(next));
+    assert_eq!(changes.borrow().owner_generation, 2);
+}
+
+#[tokio::test]
 async fn captured_credentials_are_revoked_if_account_changes_before_client_construction() {
     let mut manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
     let controller = NetworkPolicyController::default();

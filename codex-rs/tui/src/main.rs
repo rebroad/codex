@@ -40,7 +40,9 @@ fn main() -> anyhow::Result<()> {
         .await?;
         let is_fatal = match &exit_info.exit_reason {
             ExitReason::Fatal(message) => {
-                eprintln!("ERROR: {message}");
+                let timestamp =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                eprintln!("ERROR: [{timestamp}] {message}");
                 true
             }
             ExitReason::UserRequested

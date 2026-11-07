@@ -2137,6 +2137,7 @@ pub struct AuthManager {
     codex_home: PathBuf,
     auth_file: Option<PathBuf>,
     auth_file_fingerprint: Mutex<Option<AuthFileFingerprint>>,
+    pending_auth: Mutex<Option<PendingAuth>>,
     inner: RwLock<CachedAuth>,
     auth_change_tx: watch::Sender<u64>,
     auth_change_state_tx: watch::Sender<AuthChangeState>,
@@ -2155,6 +2156,10 @@ pub struct AuthManager {
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     workload_identity_selected: bool,
     auth_route_config: AuthRouteConfig,
+}
+
+struct PendingAuth {
+    auth: Option<CodexAuth>,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -2297,6 +2302,7 @@ impl AuthManager {
             codex_home,
             auth_file,
             auth_file_fingerprint: Mutex::new(auth_file_fingerprint),
+            pending_auth: Mutex::new(None),
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 permanent_refresh_failure: None,
@@ -2338,6 +2344,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            pending_auth: Mutex::new(None),
             inner: RwLock::new(cached),
             auth_change_tx,
             auth_change_state_tx: watch::channel(AuthChangeState::default()).0,
@@ -2370,6 +2377,7 @@ impl AuthManager {
             codex_home,
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            pending_auth: Mutex::new(None),
             inner: RwLock::new(cached),
             auth_change_tx,
             auth_change_state_tx: watch::channel(AuthChangeState::default()).0,
@@ -2406,6 +2414,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            pending_auth: Mutex::new(None),
             inner: RwLock::new(cached),
             auth_change_tx,
             auth_change_state_tx: watch::channel(AuthChangeState::default()).0,
@@ -2437,6 +2446,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            pending_auth: Mutex::new(None),
             inner: RwLock::new(CachedAuth {
                 auth: None,
                 permanent_refresh_failure: None,
@@ -2504,6 +2514,7 @@ impl AuthManager {
         }
 
         self.reload_changed_file_auth().await;
+        self.apply_pending_auth_if_idle();
         let auth = self.auth_cached()?;
         if Self::should_refresh_proactively(&auth)
             && let Err(err) = self.refresh_token().await
@@ -2816,10 +2827,20 @@ impl AuthManager {
             };
             let auth_context_changed = auth_changed_for_refresh || account_context_changed;
             let owner_changed = auth_context_changed && !same_owner(previous, new_auth.as_ref());
+            if owner_changed && self.application_network_policy().has_active_responses() {
+                if let Ok(mut pending_auth) = self.pending_auth.lock() {
+                    *pending_auth = Some(PendingAuth { auth: new_auth });
+                }
+                tracing::info!("Deferring auth owner change until the active response completes");
+                return false;
+            }
             if owner_changed {
                 self.auth_route_config
                     .application_network_policy()
                     .invalidate();
+            }
+            if let Ok(mut pending_auth) = self.pending_auth.lock() {
+                *pending_auth = None;
             }
             if auth_changed_for_refresh {
                 guard.permanent_refresh_failure = None;
@@ -2842,6 +2863,20 @@ impl AuthManager {
             changed
         } else {
             false
+        }
+    }
+
+    fn apply_pending_auth_if_idle(&self) {
+        if self.application_network_policy().has_active_responses() {
+            return;
+        }
+        let pending_auth = self
+            .pending_auth
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take());
+        if let Some(pending_auth) = pending_auth {
+            self.set_cached_auth(pending_auth.auth);
         }
     }
 
