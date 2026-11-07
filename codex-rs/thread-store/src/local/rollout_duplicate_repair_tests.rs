@@ -50,4 +50,30 @@ async fn does_not_create_backup_for_unique_ordinals() {
             .expect("scan rollout")
             .is_none()
     );
+    assert_eq!(
+        fs::read_dir(temp_dir.path())
+            .expect("list directory")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn preserves_unparsed_records_and_unterminated_last_line() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let rollout_path = temp_dir.path().join("rollout.jsonl");
+    let original =
+        b"{\"ordinal\":3}\r\ninvalid json\n{\"ordinal\":3}\n{\"ordinal\":-1}\n{\"ordinal\":4}";
+    fs::write(&rollout_path, original).expect("write rollout");
+
+    let backup = repair_duplicate_ordinals(ThreadId::default(), &rollout_path)
+        .await
+        .expect("repair rollout")
+        .expect("backup path");
+
+    assert_eq!(
+        fs::read(&rollout_path).expect("read repaired rollout"),
+        b"{\"ordinal\":3}\r\ninvalid json\n{\"ordinal\":-1}\n{\"ordinal\":4}"
+    );
+    assert_eq!(fs::read(backup).expect("read backup"), original);
 }

@@ -22,9 +22,6 @@ pub(super) async fn repair_duplicate_ordinals(
     let mut reader = tokio::io::BufReader::new(file);
     let mut line = Vec::new();
     let mut ordinals = HashSet::new();
-    let mut kept_lines = Vec::new();
-    let mut removed_count = 0;
-
     loop {
         line.clear();
         let bytes_read = reader
@@ -32,22 +29,14 @@ pub(super) async fn repair_duplicate_ordinals(
             .await
             .map_err(io_error)?;
         if bytes_read == 0 {
+            return Ok(None);
+        }
+        if is_duplicate(&line, &mut ordinals) {
             break;
         }
-        let duplicate = serde_json::from_slice::<serde_json::Value>(&line)
-            .ok()
-            .and_then(|value| value.get("ordinal").and_then(serde_json::Value::as_u64))
-            .is_some_and(|ordinal| !ordinals.insert(ordinal));
-        if duplicate {
-            removed_count += 1;
-        } else {
-            kept_lines.push(line.clone());
-        }
     }
-
-    if removed_count == 0 {
-        return Ok(None);
-    }
+    drop(reader);
+    ordinals.clear();
 
     let backup_path = backup_path(thread_id, rollout_path)?;
     tokio::fs::copy(rollout_path, backup_path.as_path())
@@ -65,24 +54,41 @@ pub(super) async fn repair_duplicate_ordinals(
             .as_nanos()
     ));
     let result = async {
-        let mut temporary = tokio::fs::File::create(&temporary_path)
+        let file = tokio::fs::File::open(rollout_path)
             .await
             .map_err(io_error)?;
-        for kept_line in kept_lines {
-            temporary
-                .write_all(kept_line.as_slice())
+        let mut reader = tokio::io::BufReader::new(file);
+        let file = tokio::fs::File::create(&temporary_path)
+            .await
+            .map_err(io_error)?;
+        let mut temporary = tokio::io::BufWriter::new(file);
+        let mut removed_count = 0;
+        loop {
+            line.clear();
+            if reader
+                .read_until(b'\n', &mut line)
                 .await
-                .map_err(io_error)?;
+                .map_err(io_error)?
+                == 0
+            {
+                break;
+            }
+            if is_duplicate(&line, &mut ordinals) {
+                removed_count += 1;
+            } else {
+                temporary.write_all(&line).await.map_err(io_error)?;
+            }
         }
         temporary.flush().await.map_err(io_error)?;
         drop(temporary);
-        replace_rollout(&temporary_path, rollout_path).await
+        replace_rollout(&temporary_path, rollout_path).await?;
+        Ok::<_, ThreadStoreError>(removed_count)
     }
     .await;
     if result.is_err() {
         let _ = tokio::fs::remove_file(&temporary_path).await;
     }
-    result?;
+    let removed_count = result?;
 
     tracing::warn!(
         thread_id = %thread_id,
@@ -92,6 +98,13 @@ pub(super) async fn repair_duplicate_ordinals(
         "removed later duplicate rollout ordinals"
     );
     Ok(Some(backup_path))
+}
+
+fn is_duplicate(line: &[u8], ordinals: &mut HashSet<u64>) -> bool {
+    serde_json::from_slice::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| value.get("ordinal").and_then(serde_json::Value::as_u64))
+        .is_some_and(|ordinal| !ordinals.insert(ordinal))
 }
 
 fn backup_path(thread_id: ThreadId, rollout_path: &Path) -> ThreadStoreResult<PathBuf> {
