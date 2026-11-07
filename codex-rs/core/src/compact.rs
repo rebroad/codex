@@ -872,6 +872,8 @@ async fn drain_to_completed(
                     request_cache_diagnostics,
                 )
                 .await;
+                stream.release_response_lease();
+                sess.services.auth_manager.apply_pending_auth_if_idle();
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await?;
                 return Ok(CompactionResponse {

@@ -85,8 +85,15 @@ struct State {
     policy: Option<DestinationPolicy>,
     revision: u64,
     account: u64,
+    active_responses: usize,
+    pending_update: Option<PendingPolicyUpdate>,
     permits: Vec<Weak<Permit>>,
     changes: watch::Sender<()>,
+}
+
+enum PendingPolicyUpdate {
+    Unavailable,
+    Published(DestinationPolicy),
 }
 
 struct Permit {
@@ -118,6 +125,11 @@ pub struct NetworkPolicyController {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NetworkPolicyRevision(u64);
 
+/// Keeps account policy changes from interrupting a response already being received.
+pub struct NetworkResponseLease {
+    state: Option<Arc<Mutex<State>>>,
+}
+
 impl Default for NetworkPolicyController {
     fn default() -> Self {
         Self {
@@ -125,6 +137,8 @@ impl Default for NetworkPolicyController {
                 policy: None,
                 revision: 0,
                 account: 0,
+                active_responses: 0,
+                pending_update: None,
                 permits: Vec::new(),
                 changes: watch::channel(()).0,
             })),
@@ -153,16 +167,11 @@ impl NetworkPolicyController {
         if state.revision != revision.0 {
             return;
         }
-        if state.policy.take().is_some() {
-            state.changes.send_replace(());
+        if state.active_responses > 0 {
+            state.pending_update = Some(PendingPolicyUpdate::Unavailable);
+            return;
         }
-        for permit in state
-            .permits
-            .drain(..)
-            .filter_map(|permit| permit.upgrade())
-        {
-            permit.revoked.send_replace(/*value*/ true);
-        }
+        apply_unavailable(&mut state);
     }
 
     /// Publishes a successful load only if its account/configuration generation is still current.
@@ -171,20 +180,58 @@ impl NetworkPolicyController {
         if state.revision != revision.0 {
             return false;
         }
-        state.permits.retain(|permit| {
-            let Some(permit) = permit.upgrade() else {
-                return false;
-            };
-            if !permit.destination.allowed_by(&policy) {
-                permit.revoked.send_replace(/*value*/ true);
-            }
-            true
-        });
-        if state.policy.as_ref() != Some(&policy) {
-            state.policy = Some(policy);
-            state.changes.send_replace(());
+        if state.active_responses > 0 {
+            state.pending_update = Some(PendingPolicyUpdate::Published(policy));
+            return true;
+        }
+        apply_published(&mut state, policy);
+        true
+    }
+}
+
+fn apply_unavailable(state: &mut State) {
+    if state.policy.take().is_some() {
+        state.changes.send_replace(());
+    }
+    for permit in state
+        .permits
+        .drain(..)
+        .filter_map(|permit| permit.upgrade())
+    {
+        permit.revoked.send_replace(/*value*/ true);
+    }
+}
+
+fn apply_published(state: &mut State, policy: DestinationPolicy) {
+    state.permits.retain(|permit| {
+        let Some(permit) = permit.upgrade() else {
+            return false;
+        };
+        if !permit.destination.allowed_by(&policy) {
+            permit.revoked.send_replace(/*value*/ true);
         }
         true
+    });
+    if state.policy.as_ref() != Some(&policy) {
+        state.policy = Some(policy);
+        state.changes.send_replace(());
+    }
+}
+
+impl Drop for NetworkResponseLease {
+    fn drop(&mut self) {
+        let Some(state) = &self.state else {
+            return;
+        };
+        let mut state = lock_state(state);
+        state.active_responses = state.active_responses.saturating_sub(1);
+        if state.active_responses == 0 {
+            match state.pending_update.take() {
+                Some(PendingPolicyUpdate::Unavailable) => apply_unavailable(&mut state),
+                Some(PendingPolicyUpdate::Published(policy)) => apply_published(&mut state, policy),
+                None => {}
+            }
+        }
     }
 }
 
@@ -217,6 +264,23 @@ impl NetworkPolicy {
     /// Whether this transport participates in the application policy lifecycle.
     pub fn is_managed(&self) -> bool {
         self.state.is_some()
+    }
+
+    /// Marks a response whose body and usage record are still being consumed.
+    pub fn hold_response(&self) -> NetworkResponseLease {
+        if let Some(state) = &self.state {
+            lock_state(state).active_responses += 1;
+        }
+        NetworkResponseLease {
+            state: self.state.clone(),
+        }
+    }
+
+    /// Whether a response stream currently holds account-policy updates.
+    pub fn has_active_responses(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| lock_state(state).active_responses > 0)
     }
 
     /// Watches effective changes; unmanaged callers have no application policy owner.

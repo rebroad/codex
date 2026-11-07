@@ -42,6 +42,7 @@ pub use crate::network_policy::NetworkPolicy;
 pub use crate::network_policy::NetworkPolicyController;
 pub use crate::network_policy::NetworkPolicyDenied;
 pub use crate::network_policy::NetworkPolicyRevision;
+pub use crate::network_policy::NetworkResponseLease;
 pub use crate::outbound_proxy::BuildRouteAwareHttpClientError;
 pub use crate::outbound_proxy::ClientRouteClass;
 pub use crate::outbound_proxy::HttpClientFactory;

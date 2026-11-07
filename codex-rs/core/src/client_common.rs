@@ -168,6 +168,7 @@ fn normalize_image_detail(detail: &mut Option<ImageDetail>, model_info: &ModelIn
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
     pub(crate) interrupt: Option<oneshot::Sender<codex_api::ResponseInterrupt>>,
+    pub(crate) _response_lease: Option<codex_http_client::NetworkResponseLease>,
     /// Signals the mapper task that the consumer stopped polling before the
     /// provider stream reached its own terminal event.
     pub(crate) consumer_dropped: CancellationToken,
@@ -184,6 +185,12 @@ impl Stream for ResponseStream {
 impl Drop for ResponseStream {
     fn drop(&mut self) {
         self.consumer_dropped.cancel();
+    }
+}
+
+impl ResponseStream {
+    pub(crate) fn release_response_lease(&mut self) {
+        self._response_lease.take();
     }
 }
 

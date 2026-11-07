@@ -453,6 +453,8 @@ async fn collect_compaction_output(
                     request_cache_diagnostics,
                 )
                 .await;
+                stream.release_response_lease();
+                sess.services.auth_manager.apply_pending_auth_if_idle();
                 completed_response_id = Some(response_id);
                 completed_token_usage = token_usage;
                 break;
@@ -843,6 +845,7 @@ mod tests {
         ResponseStream {
             rx_event,
             interrupt: None,
+            _response_lease: None,
             consumer_dropped: CancellationToken::new(),
         }
     }
