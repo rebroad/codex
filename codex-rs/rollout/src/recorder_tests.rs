@@ -776,6 +776,13 @@ async fn recorder_persists_and_validates_plain_rollout_compaction_checkpoint() -
             .expect("writer persisted the checkpoint");
     assert_eq!(checkpoint.offset, compacted_offset);
 
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3, "resume uses the saved compaction offset");
+    assert!(matches!(items[1], RolloutItem::Compacted(_)));
+
     let event_offset = rollout
         .find("after compaction")
         .expect("post-compaction event") as u64;
