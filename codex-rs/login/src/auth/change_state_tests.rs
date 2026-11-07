@@ -111,7 +111,7 @@ async fn auth_owner_change_waits_for_active_response_usage_checkpoint() {
         .http_client_factory()
         .network_policy()
         .hold_response();
-    let mut changes = manager.auth_change_state_receiver();
+    let changes = manager.auth_change_state_receiver();
 
     manager.set_cached_auth(Some(next.clone()));
     assert_eq!(manager.auth_cached(), Some(initial));
