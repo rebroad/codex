@@ -2,4 +2,4 @@
 source: tui/src/app/tests.rs
 expression: rendered
 ---
-■ Failed to open editor: editor directory must not be writable
+■ [00:00:00] Failed to open editor: editor directory must not be writable
