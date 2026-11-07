@@ -2,9 +2,9 @@
 
 ## Local build and validation workflow
 
-- Use `CARGO_INCREMENTAL=0` and sccache by default for local Rust builds and
-  tests. `scripts/codex_cargo_env.sh` configures the repository sccache wrapper;
-  do not change the normal sccache installation or global `PATH` without a
+- Use sccache for local Rust builds and tests; `scripts/codex_cargo_env.sh`
+  configures the repository wrapper. Do not change the normal sccache
+  installation or global `PATH` without a
   specific request.
 - Edit source files only in the source checkout. Build in the `../codex.build`
   sibling by default; it may be a symlink to storage elsewhere. Synchronize
