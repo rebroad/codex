@@ -2908,10 +2908,10 @@ impl App {
                 }
             }
             AppEvent::RenameAgentsOverviewThread { thread_id, name } => {
+                self.cancel_thread_title_generation(thread_id);
                 match app_server.thread_set_name(thread_id, name.clone()).await {
                     Ok(()) => {
                         self.chat_widget.expect_manual_thread_name(thread_id, name);
-                        self.cancel_thread_title_generation(thread_id);
                     }
                     Err(error) => {
                         if let Ok(mut state) = self.agents_overview.view_state.lock() {
@@ -2974,27 +2974,18 @@ impl App {
                 if cancellation.is_cancelled() {
                     return Ok(AppRunControl::Continue);
                 }
-                self.finish_thread_title_generation(thread_id, destination);
                 match destination {
                     ThreadTitleDestination::Automatic => {
                         if let Ok(response) = result
                             && let Some(title) = super::thread_title::parse_thread_title(&response)
-                            && let Ok(thread) = app_server
-                                .thread_read(thread_id, /*include_turns*/ false)
-                                .await
-                            && thread.name.is_none()
                         {
-                            match app_server.thread_set_name(thread_id, title.clone()).await {
-                                Ok(()) => self
-                                    .chat_widget
-                                    .on_thread_name_updated(thread_id, Some(title)),
-                                Err(error) => {
-                                    tracing::debug!(%error, "failed to apply generated thread title");
-                                }
-                            }
+                            self.apply_automatic_thread_title(app_server, thread_id, title, cancellation);
+                        } else {
+                            self.finish_thread_title_generation(thread_id, destination);
                         }
                     }
                     ThreadTitleDestination::RenameSuggestion { request_id } => {
+                        self.finish_thread_title_generation(thread_id, destination);
                         let suggestion = result
                             .ok()
                             .and_then(|response| super::thread_title::parse_thread_title(&response));
@@ -3004,6 +2995,14 @@ impl App {
                             request_id,
                             suggestion.as_deref(),
                         );
+                    }
+                }
+            }
+            AppEvent::AutomaticThreadTitleApplied { cancellation, thread_id, title } => {
+                if !cancellation.is_cancelled() {
+                    self.finish_thread_title_generation(thread_id, ThreadTitleDestination::Automatic);
+                    if let Some(title) = title {
+                        self.chat_widget.on_thread_name_updated(thread_id, Some(title));
                     }
                 }
             }

@@ -104,6 +104,8 @@ async fn automatic_thread_title_respects_origin_metadata_after_switching() -> co
         (false, Some("Manual title")),
     ] {
         let mut app = make_test_app().await;
+        let (event_tx, mut event_rx) = unbounded_channel();
+        app.app_event_tx = AppEventSender::new(event_tx);
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
         let started = app_server.start_thread(&app.config).await?;
         let thread_id = started.session.thread_id;
@@ -151,6 +153,16 @@ async fn automatic_thread_title_respects_origin_metadata_after_switching() -> co
             },
         )
         .await?;
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), event_rx.recv())
+                .await?
+                .expect("title completion event");
+            let completed = matches!(event, AppEvent::AutomaticThreadTitleApplied { .. });
+            app.handle_event(&mut tui, &mut app_server, event).await?;
+            if completed {
+                break;
+            }
+        }
         let expected_name = Some(manual_name.unwrap_or("Generated title").to_string());
         assert_eq!(
             app_server
@@ -328,6 +340,7 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
 
     let mut renamed = false;
     let mut generated = false;
+    let mut automatic_applied = false;
     let mut interrupted = false;
     let mut temporary_thread_id = None;
     loop {
@@ -352,6 +365,8 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
                         Some(result.as_ref().expect("hidden title thread").clone());
                 }
                 generated |= matches!(event.as_ref(), AppEvent::GeneratedThreadTitle { .. });
+                automatic_applied |=
+                    matches!(event.as_ref(), AppEvent::AutomaticThreadTitleApplied { .. });
                 app.handle_event(&mut tui, &mut app_server, *event).await?;
             }
             TitleDriveEvent::Server(event) => {
@@ -397,7 +412,7 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
                 renamed = true;
             }
         }
-        if generated && (!cancel || interrupted) {
+        if generated && (!automatic || cancel || automatic_applied) && (!cancel || interrupted) {
             break;
         }
     }
@@ -850,5 +865,114 @@ async fn thread_title_progress_clears_failed_requests_and_follows_thread_switche
     assert!(app.pending_thread_titles.is_empty());
     assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 120).contains('⠋'));
     app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn automatic_title_rpc_does_not_block_other_ui_events() -> color_eyre::Result<()> {
+    use crate::app_server_session::AppServerSession;
+    use crate::app_server_session::ThreadParamsMode;
+    use futures::SinkExt;
+    use futures::StreamExt;
+    use serde_json::json;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let mut app = make_test_app().await;
+    let (event_tx, mut event_rx) = unbounded_channel();
+    app.app_event_tx = AppEventSender::new(event_tx);
+    let thread_id = codex_protocol::ThreadId::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let (blocked_tx, blocked_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let mut socket = tokio_tungstenite::accept_async(stream).await?;
+        let mut blocked_tx = Some(blocked_tx);
+        let mut release_rx = Some(release_rx);
+        while let Some(frame) = socket.next().await {
+            let Message::Text(text) = frame? else {
+                continue;
+            };
+            let request: serde_json::Value = serde_json::from_str(&text)?;
+            let Some(id) = request.get("id") else {
+                continue;
+            };
+            let result = match request["method"].as_str() {
+                Some("initialize") => json!({"userAgent": "title-test", "codexHome": "/var/tmp"}),
+                Some("thread/read") => json!({"thread": {
+                    "id": thread_id, "sessionId": thread_id, "preview": "", "ephemeral": false,
+                    "modelProvider": "test", "createdAt": 1, "updatedAt": 1,
+                    "status": {"type": "idle"}, "cwd": "/var/tmp", "cliVersion": "0.0.0",
+                    "source": "cli", "turns": []
+                }}),
+                Some("thread/name/set") => {
+                    let _ = blocked_tx.take().expect("one title request").send(());
+                    let _ = release_rx.take().expect("one title request").await;
+                    json!({})
+                }
+                method => panic!("unexpected request: {method:?}"),
+            };
+            socket
+                .send(Message::Text(
+                    json!({"jsonrpc": "2.0", "id": id, "result": result})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+        }
+        Ok::<(), color_eyre::Report>(())
+    });
+    let client = crate::connect_remote_app_server(crate::RemoteAppServerEndpoint::WebSocket {
+        websocket_url,
+        auth_token: None,
+    })
+    .await?;
+    let mut app_server = AppServerSession::new(client, ThreadParamsMode::Remote);
+    let cancellation = CancellationToken::new();
+    app.pending_thread_titles.insert(
+        (thread_id, ThreadTitleDestination::Automatic),
+        cancellation.clone(),
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::GeneratedThreadTitle {
+                cancellation,
+                thread_id,
+                temporary_thread_id: codex_protocol::ThreadId::new(),
+                destination: ThreadTitleDestination::Automatic,
+                result: Ok(r#"{"title":"Generated title"}"#.to_string()),
+            },
+        ),
+    )
+    .await??;
+    tokio::time::timeout(std::time::Duration::from_secs(5), blocked_rx).await??;
+    let other_thread = codex_protocol::ThreadId::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::HideAgentsOverviewThread {
+                thread_id: other_thread,
+            },
+        ),
+    )
+    .await??;
+    assert!(app.agents_overview.hidden_threads.contains(&other_thread));
+    release_tx.send(()).expect("title request is waiting");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv())
+        .await?
+        .expect("title completion event");
+    app.handle_event(&mut tui, &mut app_server, event).await?;
+    assert!(app.pending_thread_titles.is_empty());
+    drop(app_server);
+    server.await??;
     Ok(())
 }

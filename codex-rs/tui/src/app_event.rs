@@ -379,6 +379,12 @@ pub(crate) enum AppEvent {
         destination: ThreadTitleDestination,
         result: Result<String, String>,
     },
+    /// Apply a completed automatic title update to the active display.
+    AutomaticThreadTitleApplied {
+        cancellation: CancellationToken,
+        thread_id: ThreadId,
+        title: Option<String>,
+    },
     /// Interrupt a task directly from the shared dashboard.
     StopAgentsOverviewThread {
         thread_id: ThreadId,

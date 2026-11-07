@@ -13,8 +13,14 @@ use crate::temporary_structured_request::TemporaryStructuredThreadOptions;
 use crate::temporary_structured_request::run_temporary_structured_turn;
 use crate::temporary_structured_request::start_temporary_thread;
 use crate::temporary_structured_request::unsubscribe_temporary_thread;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
@@ -38,6 +44,59 @@ struct GeneratedThreadTitle {
 }
 
 impl App {
+    pub(super) fn apply_automatic_thread_title(
+        &self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        title: String,
+        cancellation: CancellationToken,
+    ) {
+        let handle = app_server.request_handle();
+        let sender = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let operation = async {
+                let response = handle
+                    .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+                        request_id: RequestId::String(format!(
+                            "thread-title-read-{}",
+                            uuid::Uuid::new_v4()
+                        )),
+                        params: ThreadReadParams {
+                            thread_id: thread_id.to_string(),
+                            include_turns: false,
+                        },
+                    })
+                    .await
+                    .ok()?;
+                if response.thread.name.is_some() || cancellation.is_cancelled() {
+                    return None;
+                }
+                handle
+                    .request_typed::<ThreadSetNameResponse>(ClientRequest::ThreadSetName {
+                        request_id: RequestId::String(format!(
+                            "thread-title-set-{}",
+                            uuid::Uuid::new_v4()
+                        )),
+                        params: ThreadSetNameParams {
+                            thread_id: thread_id.to_string(),
+                            name: title.clone(),
+                        },
+                    })
+                    .await
+                    .ok()?;
+                Some(title)
+            };
+            let title = tokio::select! {
+                _ = cancellation.cancelled() => None,
+                title = operation => title,
+            };
+            sender.send(AppEvent::AutomaticThreadTitleApplied {
+                cancellation,
+                thread_id,
+                title,
+            });
+        });
+    }
     pub(super) fn sync_thread_title_progress(&mut self) {
         let pending = self.chat_widget.thread_id().is_some_and(|thread_id| {
             self.pending_thread_titles
