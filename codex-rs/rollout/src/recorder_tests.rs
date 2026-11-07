@@ -765,9 +765,12 @@ async fn recorder_persists_and_validates_plain_rollout_compaction_checkpoint() -
     recorder.flush().await?;
 
     let rollout = fs::read_to_string(&rollout_path)?;
-    let compacted_offset = rollout
+    let compacted_position = rollout
         .find("\"type\":\"compacted\"")
-        .expect("compaction record") as u64;
+        .expect("compaction record");
+    let compacted_offset = rollout[..compacted_position]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1) as u64;
     let checkpoint =
         crate::plain_rollout_checkpoint::PlainRolloutCheckpoint::read_for(&rollout_path)
             .expect("writer persisted the checkpoint");
