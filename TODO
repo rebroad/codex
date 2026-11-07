@@ -1,3 +1,4 @@
+sometimes `/status` reports 100% left for the context window (after a resume) when it is NOT true. fix this!
 timestamp the warnings in the TUI
 `/status` should show the backend account in TUI...?
 `codex resume` issues reporting "Error: account/read failed during TUI bootstrap: account/read failed: workspace routing discovery timed out (code -32603)"
