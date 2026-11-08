@@ -83,21 +83,7 @@ pub(super) async fn reconnect_with_attempt_timeout(
         let attempt = async {
             tokio::time::sleep(Duration::from_secs(delay)).await;
             failure_stage = "connect";
-            let client = match crate::app_server_connection::connect(&target).await {
-                Ok(client) => client,
-                Err(_) if matches!(target, AppServerTarget::LocalDaemon { .. }) => {
-                    // A new CLI session runs daemon startup before attaching. Existing TUI
-                    // sessions need the same recovery path if a detached restart never
-                    // brought the daemon back.
-                    if let Err(error) =
-                        codex_app_server_daemon::start_with_features(&Default::default()).await
-                    {
-                        tracing::debug!(%error, "could not ensure local app-server daemon during reconnect");
-                    }
-                    crate::app_server_connection::connect(&target).await?
-                }
-                Err(error) => return Err(error),
-            };
+            let client = crate::app_server_connection::connect(&target).await?;
             let mut session = AppServerSession::new(client, mode)
                 .with_local_codex_home(&config.codex_home)
                 .with_remote_cwd_override(remote_cwd.clone())
