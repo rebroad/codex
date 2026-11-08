@@ -4,6 +4,7 @@ expression: terminal.backend()
 ---
 
 
-■ [2000-01-01T00:00:00.000Z] Goals need a saved session. This session is temporary.
+■ [2000-01-01T00:00:00.000Z] Goals need a saved session. This session is
+temporary.
 Run `codex` to start a saved session, or `codex resume` / `/resume` to
 reopen one.

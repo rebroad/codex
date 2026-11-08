@@ -51,6 +51,7 @@ enum HooksBrowserPage {
 
 pub(crate) struct HooksBrowserView {
     entry: HooksListEntry,
+    error_timestamps: Vec<String>,
     page: HooksBrowserPage,
     state: ScrollState,
     complete: bool,
@@ -84,8 +85,14 @@ impl HooksBrowserView {
         keymap: ListKeymap,
     ) -> Self {
         entry.hooks.sort_by_key(|hook| hook.display_order);
+        let error_timestamps = entry
+            .errors
+            .iter()
+            .map(|_| crate::history_cell::error_timestamp())
+            .collect();
         let mut view = Self {
             entry,
+            error_timestamps,
             page: HooksBrowserPage::Events,
             state: ScrollState::new(),
             complete: false,
@@ -407,11 +414,17 @@ impl HooksBrowserView {
                 .iter()
                 .map(|warning| format!("⚠ {warning}").into()),
         );
-        lines.extend(self.entry.errors.iter().map(|error| {
-            format!("■ {}: {}", error.path.display(), error.message)
+        lines.extend(self.entry.errors.iter().zip(&self.error_timestamps).map(
+            |(error, timestamp)| {
+                format!(
+                    "■ [{timestamp}] {}: {}",
+                    error.path.display(),
+                    error.message
+                )
                 .red()
                 .into()
-        }));
+            },
+        ));
         lines
     }
 
