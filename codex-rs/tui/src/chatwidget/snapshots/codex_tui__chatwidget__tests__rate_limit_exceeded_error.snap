@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/app_server.rs
 expression: lines_to_single_string(&lines)
 ---
-■ [2000-01-01T00:00:00.000Z] rate limit exceeded: Please try again in 10s.
+■ [00:00:00] rate limit exceeded: Please try again in 10s.

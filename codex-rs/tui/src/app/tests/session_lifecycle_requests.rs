@@ -3922,7 +3922,7 @@ model_reasoning_effort = "low"
     let (path, _) = with_path
         .split_once("; remove it with")
         .expect("cleanup marker");
-    insta::assert_snapshot!(error.replace(path, "<CHECKOUT>"), @"■ [2000-01-01T00:00:00.000Z] Cannot fork into this worktree because developer instructions differ. Start a new conversation instead. An unused checkout was created at <CHECKOUT>; remove it with `git worktree remove <checkout-path>` from the source repository.");
+    insta::assert_snapshot!(error.replace(path, "<CHECKOUT>"), @"■ [00:00:00] Cannot fork into this worktree because developer instructions differ. Start a new conversation instead. An unused checkout was created at <CHECKOUT>; remove it with `git worktree remove <checkout-path>` from the source repository.");
     let retained = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => {
@@ -4431,7 +4431,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         .await
         .is_err()
     );
-    assert_snapshot!(history().join(""), @"■ [2000-01-01T00:00:00.000Z] Unable to check folder trust: Folder trust changed. Reopen the destination with its restricted settings.");
+    assert_snapshot!(history().join(""), @"■ [00:00:00] Unable to check folder trust: Folder trust changed. Reopen the destination with its restricted settings.");
     app.app_server_target = crate::AppServerTarget::Embedded;
     for (path, kind, expected) in [
         ("missing", "local", "Cannot access directory"),
@@ -4533,9 +4533,9 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         assert_eq!(fs::read_to_string(&config_path).ok(), original_user_config);
         let output = history().join("");
         if kind == "mcp" {
-            assert_snapshot!(output, @"■ [2000-01-01T00:00:00.000Z] MCP inventory is still loading.");
+            assert_snapshot!(output, @"■ [00:00:00] MCP inventory is still loading.");
         } else if kind == "restored" {
-            assert_snapshot!(output, @"■ [2000-01-01T00:00:00.000Z] Permission profile cannot be preserved by /cd.");
+            assert_snapshot!(output, @"■ [00:00:00] Permission profile cannot be preserved by /cd.");
         }
         assert!(output.contains(expected), "{path}");
         app.clear_committed_mcp_inventory_loading();
@@ -4576,7 +4576,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         );
         let output = history().join("");
         insta::allow_duplicates! {
-            assert_snapshot!(output, @"■ [2000-01-01T00:00:00.000Z] Failed to change: thread/fork failed during TUI bootstrap: thread/fork failed: forced thread/name/set failure (code -32603)");
+            assert_snapshot!(output, @"■ [00:00:00] Failed to change: thread/fork failed during TUI bootstrap: thread/fork failed: forced thread/name/set failure (code -32603)");
         }
     }
     app.agent_navigation.upsert(
@@ -4912,7 +4912,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     .expect("fork naming error history cell");
                 insta::assert_snapshot!(
                     name_error,
-                    @"■ [2000-01-01T00:00:00.000Z] Failed to name the forked session: thread/name/set failed in TUI"
+                    @"■ [00:00:00] Failed to name the forked session: thread/name/set failed in TUI"
                 );
                 assert!(matches!(take_backfill_counts(&requests), (0, 0) | (0, 1)));
 

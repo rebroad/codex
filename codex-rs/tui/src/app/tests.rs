@@ -3352,7 +3352,7 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
         .await;
     insta::assert_snapshot!(
         next_history_message(&mut events),
-        @"■ [2000-01-01T00:00:00.000Z] Wait for the task to connect before selecting permissions."
+        @"■ [00:00:00] Wait for the task to connect before selecting permissions."
     );
     let started = server.start_thread(&app.config).await?;
     let thread_id = started.session.thread_id;
@@ -3417,7 +3417,7 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
         .await;
     insta::assert_snapshot!(
         next_history_message(&mut events),
-        @"■ [2000-01-01T00:00:00.000Z] Changing directories with a named profile is not supported."
+        @"■ [00:00:00] Changing directories with a named profile is not supported."
     );
     app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
         turn_completed_notification(thread_id, "first", TurnStatus::Interrupted),
@@ -3517,7 +3517,7 @@ async fn remote_resume_rejects_explicit_permission_override() -> Result<()> {
         .expect("permission override error");
     insta::assert_snapshot!(
         lines_to_single_string(&cell.display_lines(/*width*/ 80)),
-        @"■ [2000-01-01T00:00:00.000Z] Permission overrides are not supported when resuming a remote task."
+        @"■ [00:00:00] Permission overrides are not supported when resuming a remote task."
     );
     server.shutdown().await?;
     Ok(())
@@ -7573,7 +7573,7 @@ async fn feedback_submission_stages_logs_cleans_up_and_emits_error_history_cell(
     };
     assert_eq!(
         lines_to_single_string(&cell.display_lines(/*width*/ 120)),
-        "■ [2000-01-01T00:00:00.000Z] Failed to upload feedback: boom"
+        "■ [00:00:00] Failed to upload feedback: boom"
     );
     Ok(())
 }
@@ -8062,7 +8062,7 @@ async fn remote_exec_resume_current_cwd_is_rejected() -> Result<()> {
     let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
     assert_eq!(
         rendered,
-        "■ [2000-01-01T00:00:00.000Z] `tui.resume_cwd = \"current\"` requires `--cd` when using a remote workspace"
+        "■ [00:00:00] `tui.resume_cwd = \"current\"` requires `--cd` when using a remote workspace"
     );
     app_server.shutdown().await?;
     Ok(())

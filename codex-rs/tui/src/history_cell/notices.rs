@@ -338,12 +338,12 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
 
 #[cfg(not(test))]
 pub(crate) fn error_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    chrono::Utc::now().format("%H:%M:%S").to_string()
 }
 
 #[cfg(test)]
 pub(crate) fn error_timestamp() -> String {
-    "2000-01-01T00:00:00.000Z".to_string()
+    "00:00:00".to_string()
 }
 
 #[derive(Debug)]

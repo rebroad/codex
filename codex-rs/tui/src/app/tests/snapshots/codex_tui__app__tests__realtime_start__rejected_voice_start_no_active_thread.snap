@@ -3,4 +3,4 @@ source: tui/src/app/tests/realtime_start.rs
 assertion_line: 59
 expression: rendered
 ---
-■ [2000-01-01T00:00:00.000Z] No active thread is available.
+■ [00:00:00] No active thread is available.

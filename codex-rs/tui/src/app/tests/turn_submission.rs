@@ -36,7 +36,7 @@ async fn worktree_creation_event_requires_feature() -> Result<()> {
             _ => None,
         })
         .expect("disabled feature message");
-    insta::assert_snapshot!(message, @"■ [2000-01-01T00:00:00.000Z] Enable worktrees in your Codex configuration to create a worktree.");
+    insta::assert_snapshot!(message, @"■ [00:00:00] Enable worktrees in your Codex configuration to create a worktree.");
     assert!(!app.config.codex_home.join("worktrees").exists());
     app_server.shutdown().await?;
     Ok(())
@@ -84,7 +84,7 @@ async fn worktree_creation_rejects_untrusted_source_before_allocation() -> Resul
             })
             .expect("source trust error");
         insta::allow_duplicates! {
-            insta::assert_snapshot!(message, @"■ [2000-01-01T00:00:00.000Z] Cannot create a worktree from an explicitly untrusted source.");
+            insta::assert_snapshot!(message, @"■ [00:00:00] Cannot create a worktree from an explicitly untrusted source.");
         }
         assert!(!app.config.codex_home.join("worktrees").exists());
     }
@@ -133,7 +133,7 @@ async fn worktree_creation_rejects_running_agent_before_allocation() -> Result<(
             _ => None,
         })
         .expect("running agent message");
-    insta::assert_snapshot!(message, @"■ [2000-01-01T00:00:00.000Z] Cannot change: another agent is running.");
+    insta::assert_snapshot!(message, @"■ [00:00:00] Cannot change: another agent is running.");
     server.shutdown().await?;
     Ok(())
 }
@@ -182,7 +182,7 @@ async fn turn_start_failure_is_shown_without_exiting() -> Result<()> {
     insta::assert_snapshot!(transcript, @r"
     › hello
 
-    ■ [2000-01-01T00:00:00.000Z] Failed to start turn: turn/start failed in TUI: turn/start failed: thread not found: 123e4567-e89b-12d3-a456-426614174000 (code -32600)
+    ■ [00:00:00] Failed to start turn: turn/start failed in TUI: turn/start failed: thread not found: 123e4567-e89b-12d3-a456-426614174000 (code -32600)
     ");
 
     app_server.shutdown().await?;
@@ -471,7 +471,7 @@ async fn unsupported_legacy_permissions_are_shown_without_exiting() -> Result<()
         .expect("unsupported permissions should be added to history");
     insta::assert_snapshot!(
         lines_to_single_string(&error_cell.display_lines(/*width*/ 200)),
-        @"■ [2000-01-01T00:00:00.000Z] Failed to start turn: the selected permission profile cannot be safely represented by the legacy app-server sandbox policy; select a named or legacy-compatible permission profile"
+        @"■ [00:00:00] Failed to start turn: the selected permission profile cannot be safely represented by the legacy app-server sandbox policy; select a named or legacy-compatible permission profile"
     );
 
     app.handle_event(

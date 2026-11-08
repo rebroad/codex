@@ -154,7 +154,7 @@ async fn interrupted_answer_flushes_queued_subagent_activity() {
     let FinalizedEvent::History(interrupted) = &events[2] else {
         panic!("expected interruption notice after the answer and subagent activity");
     };
-    assert!(interrupted.starts_with("■ [2000-01-01T00:00:00.000Z] Conversation interrupted"));
+    assert!(interrupted.starts_with("■ [00:00:00] Conversation interrupted"));
     assert!(chat.interrupts.is_empty());
     assert!(chat.stream_controller.is_none());
 }
@@ -191,7 +191,7 @@ async fn terminal_turn_drains_subagents_without_opening_queued_questions() {
         ];
         let error = (status == AppServerTurnStatus::Failed).then(|| {
             expected.push(FinalizedEvent::History(
-                "■ [2000-01-01T00:00:00.000Z] stream disconnected\n".to_string(),
+                "■ [00:00:00] stream disconnected\n".to_string(),
             ));
             AppServerTurnError {
                 message: "stream disconnected".to_string(),

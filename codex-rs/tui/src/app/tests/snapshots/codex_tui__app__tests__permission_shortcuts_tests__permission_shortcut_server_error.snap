@@ -3,4 +3,4 @@ source: tui/src/app/tests/permission_shortcuts_tests.rs
 assertion_line: 65
 expression: "next_history_message(&mut\nevents).replace(&thread_id.to_string(), \"<THREAD_ID>\")"
 ---
-■ [2000-01-01T00:00:00.000Z] Failed to select permissions: thread/settings/update failed in TUI: thread/settings/update failed: thread not found: <THREAD_ID> (code -32600)
+■ [00:00:00] Failed to select permissions: thread/settings/update failed in TUI: thread/settings/update failed: thread not found: <THREAD_ID> (code -32600)

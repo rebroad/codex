@@ -2,4 +2,4 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-■ [2000-01-01T00:00:00.000Z] Message exceeds the maximum length of 1048576 characters (1048577 provided).
+■ [00:00:00] Message exceeds the maximum length of 1048576 characters (1048577 provided).

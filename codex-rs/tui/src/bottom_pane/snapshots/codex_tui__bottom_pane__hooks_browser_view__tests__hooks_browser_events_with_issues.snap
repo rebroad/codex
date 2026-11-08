@@ -8,7 +8,7 @@ expression: "render_lines(&view, 112)"
                                                                                                                 
   Issues                                                                                                        
   ⚠ skipped invalid matcher for PreToolUse                                                                      
-  ■ [2000-01-01T00:00:00.000Z] /tmp/hooks.json: failed to parse hooks config                                    
+  ■ [00:00:00] /tmp/hooks.json: failed to parse hooks config
                                                                                                                 
   Event                 Installed   Active      Description                                                     
                                                                                                                 

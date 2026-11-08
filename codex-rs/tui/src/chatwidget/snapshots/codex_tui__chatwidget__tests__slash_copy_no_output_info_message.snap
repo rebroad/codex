@@ -3,4 +3,4 @@ source: tui/src/chatwidget/tests/slash_commands.rs
 assertion_line: 145
 expression: rendered
 ---
-■ [2000-01-01T00:00:00.000Z] No agent response to copy
+■ [00:00:00] No agent response to copy

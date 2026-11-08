@@ -4,4 +4,4 @@ assertion_line: 1083
 expression: "rendered.join(\"\\n\").replace(&thread_id.to_string(), \"<thread-id>\")"
 ---
 • An answer to keep.
-■ [2000-01-01T00:00:00.000Z] Voice conversation failed: thread/realtime/appendSpeech failed in TUI: thread/realtime/appendSpeech failed: thread not found: <thread-id> (code -32600)
+■ [00:00:00] Voice conversation failed: thread/realtime/appendSpeech failed in TUI: thread/realtime/appendSpeech failed: thread not found: <thread-id> (code -32600)

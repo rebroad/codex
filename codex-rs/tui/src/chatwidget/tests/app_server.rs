@@ -1949,7 +1949,7 @@ async fn live_app_server_server_overloaded_error_renders_error() {
     assert_eq!(cells.len(), 1);
     assert_eq!(
         lines_to_single_string(&cells[0]),
-        "■ [2000-01-01T00:00:00.000Z] server overloaded\n"
+        "■ [00:00:00] server overloaded\n"
     );
     assert!(!chat.bottom_pane.is_task_running());
 }

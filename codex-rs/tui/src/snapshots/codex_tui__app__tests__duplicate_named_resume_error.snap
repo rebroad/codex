@@ -5,4 +5,4 @@ expression: rendered
 ---
 Existing conversation
 
-■ [2000-01-01T00:00:00.000Z] Multiple sessions match 'duplicate-label' (including <session UUID> and <session UUID>); use a session UUID to disambiguate.
+■ [00:00:00] Multiple sessions match 'duplicate-label' (including <session UUID> and <session UUID>); use a session UUID to disambiguate.

@@ -2,7 +2,7 @@
 source: tui/src/app/tests/misalignment_policy_tests.rs
 expression: "format!(\"{errors}\\n{}\", render_bottom_popup(&app.chat_widget, 80))"
 ---
-■ [2000-01-01T00:00:00.000Z] Couldn’t continue this chat. Review its latest status before trying again.
+■ [00:00:00] Couldn’t continue this chat. Review its latest status before trying again.
   Chat paused as a precaution
   We couldn’t confirm the agent was interpreting your instructions correctly.
   Review what we detected before deciding to continue.

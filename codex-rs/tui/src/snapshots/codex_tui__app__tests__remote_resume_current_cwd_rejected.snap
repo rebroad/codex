@@ -2,4 +2,4 @@
 source: tui/src/app/tests.rs
 expression: rendered
 ---
-■ [2000-01-01T00:00:00.000Z] `tui.resume_cwd = "current"` requires `--cd` when using a remote workspace
+■ [00:00:00] `tui.resume_cwd = "current"` requires `--cd` when using a remote workspace
