@@ -6,5 +6,5 @@ expression: "cells.iter().map(|cell|\nlines_to_single_string(cell).trim().to_str
 Worked for [duration] • [completion time]
 • Saved conversation to conversation.md
 • Copied conversation to clipboard
-■ Copy failed: clipboard unavailable
-■ Export failed: missing parent
+■ [2000-01-01T00:00:00.000Z] Copy failed: clipboard unavailable
+■ [2000-01-01T00:00:00.000Z] Export failed: missing parent

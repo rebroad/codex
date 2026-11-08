@@ -124,9 +124,9 @@ async fn uncertain_windows_sandbox_setup_keeps_intent_and_input_locked() {
         };
         let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 160));
         if transport_error {
-            insta::assert_snapshot!(rendered, @"■ Windows sandbox setup response was lost. Waiting for completion or reconnection.");
+            insta::assert_snapshot!(rendered, @"■ [2000-01-01T00:00:00.000Z] Windows sandbox setup response was lost. Waiting for completion or reconnection.");
         } else {
-            insta::assert_snapshot!(rendered, @"■ Windows sandbox setup request timed out. Waiting for completion; restart Codex if it does not finish.");
+            insta::assert_snapshot!(rendered, @"■ [2000-01-01T00:00:00.000Z] Windows sandbox setup request timed out. Waiting for completion; restart Codex if it does not finish.");
         }
     }
 }
@@ -1921,7 +1921,7 @@ async fn windows_sandbox_config_refresh_uses_connected_server() -> Result<()> {
         AppEvent::InsertHistoryCell(cell) => cell,
         other => panic!("expected configuration error message, got {other:?}"),
     };
-    insta::assert_snapshot!(lines_to_single_string(&cell.display_lines(/*width*/ 160)), @"■ Could not read Windows sandbox configuration and requirements from the app server.");
+    insta::assert_snapshot!(lines_to_single_string(&cell.display_lines(/*width*/ 160)), @"■ [2000-01-01T00:00:00.000Z] Could not read Windows sandbox configuration and requirements from the app server.");
     assert!(app.chat_widget.windows_sandbox_elevated_setup_complete);
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),

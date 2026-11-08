@@ -383,9 +383,9 @@ async fn replacement_failure_keeps_current_task_and_restores_input() -> Result<(
             .collect::<Vec<_>>()
             .join("\n");
         if fail_read {
-            insta::assert_snapshot!(errors, @"■ Failed to read new session defaults: config/read failed in TUI");
+            insta::assert_snapshot!(errors, @"■ [2000-01-01T00:00:00.000Z] Failed to read new session defaults: config/read failed in TUI");
         } else {
-            insta::assert_snapshot!(errors, @"■ Failed to start a fresh session through the app server: thread/start failed during TUI bootstrap: thread/start failed: replacement unavailable (code -32603)");
+            insta::assert_snapshot!(errors, @"■ [2000-01-01T00:00:00.000Z] Failed to start a fresh session through the app server: thread/start failed during TUI bootstrap: thread/start failed: replacement unavailable (code -32603)");
         }
         server.shutdown().await?;
         proxy.await??;

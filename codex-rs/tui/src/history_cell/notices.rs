@@ -331,9 +331,19 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let timestamp = error_timestamp();
     let lines: Vec<Line<'static>> = vec![vec![format!("■ [{timestamp}] {message}").red()].into()];
     PlainHistoryCell { lines }
+}
+
+#[cfg(not(test))]
+fn error_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+fn error_timestamp() -> String {
+    "2000-01-01T00:00:00.000Z".to_string()
 }
 
 #[derive(Debug)]

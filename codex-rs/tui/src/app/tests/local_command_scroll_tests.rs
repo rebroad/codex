@@ -204,7 +204,7 @@ async fn settings_picker_save_failures_reveal_their_errors() -> Result<()> {
             older 4
             older 5
 
-            ■ Failed to save theme: TOML parse error at line 1, column 8
+            ■ [2000-01-01T00:00:00.000Z] Failed to save theme: TOML parse error at line 1, column 8
               |
             1 | [broken
               |        ^
@@ -413,7 +413,7 @@ async fn local_command_and_inline_error_reveal_their_history_output() -> Result<
     insta::assert_snapshot!(visible, @"
     older 5
 
-    ■ Usage: /keymap [debug]
+    ■ [2000-01-01T00:00:00.000Z] Usage: /keymap [debug]
     ");
     tui.set_owned_screen(/*owned*/ false)?;
     server.shutdown().await?;
@@ -470,7 +470,7 @@ async fn copy_shortcut_reveals_its_feedback_without_changing_the_draft() -> Resu
     insta::assert_snapshot!(visible, @"
     older 5
 
-    ■ No agent response to copy
+    ■ [2000-01-01T00:00:00.000Z] No agent response to copy
     ");
     tui.set_owned_screen(/*owned*/ false)?;
     server.shutdown().await?;

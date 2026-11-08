@@ -188,6 +188,12 @@ impl Drop for ResponseStream {
     }
 }
 
+impl ResponseStream {
+    pub(crate) fn release_response_lease(&mut self) {
+        self._response_lease.take();
+    }
+}
+
 #[cfg(test)]
 #[path = "client_common_tests.rs"]
 mod tests;

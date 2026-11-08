@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/review_mode.rs
 expression: last
 ---
-■ Goal budget reached - the turn was stopped.
+■ [2000-01-01T00:00:00.000Z] Goal budget reached - the turn was stopped.

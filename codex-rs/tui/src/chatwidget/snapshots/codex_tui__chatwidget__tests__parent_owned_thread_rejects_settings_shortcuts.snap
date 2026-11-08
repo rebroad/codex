@@ -2,6 +2,6 @@
 source: tui/src/chatwidget/tests/composer_submission.rs
 expression: rendered
 ---
-■ This sub-agent is controlled by its parent. Direct input is disabled.
-■ This sub-agent is controlled by its parent. Direct input is disabled.
-■ This sub-agent is controlled by its parent. Direct input is disabled.
+■ [2000-01-01T00:00:00.000Z] This sub-agent is controlled by its parent. Direct input is disabled.
+■ [2000-01-01T00:00:00.000Z] This sub-agent is controlled by its parent. Direct input is disabled.
+■ [2000-01-01T00:00:00.000Z] This sub-agent is controlled by its parent. Direct input is disabled.

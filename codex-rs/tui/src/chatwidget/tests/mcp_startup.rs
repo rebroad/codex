@@ -312,7 +312,7 @@ async fn review_during_mcp_startup_preserves_draft_when_foreground_work_is_pendi
                 .collect::<Vec<_>>();
             assert_eq!(
                 errors,
-                vec!["■ '/review' is disabled while a task is in progress.\n".to_string()]
+                vec!["■ [2000-01-01T00:00:00.000Z] '/review' is disabled while a task is in progress.\n".to_string()]
             );
             assert!(
                 !std::iter::from_fn(|| op_rx.try_recv().ok())

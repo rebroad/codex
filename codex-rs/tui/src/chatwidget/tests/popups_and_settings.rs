@@ -128,7 +128,7 @@ async fn marketplace_upgrade_failure_includes_backend_messages_snapshot() {
         .join("\n");
     insta::assert_snapshot!(
         rendered.trim(),
-        @"■ Failed to upgrade 2 marketplaces: debug: git ls-remote marketplace source failed with status 128: authentication failed; tools: failed to validate upgraded marketplace root: marketplace root does not contain a supported manifest"
+        @"■ [2000-01-01T00:00:00.000Z] Failed to upgrade 2 marketplaces: debug: git ls-remote marketplace source failed with status 128: authentication failed; tools: failed to validate upgraded marketplace root: marketplace root does not contain a supported manifest"
     );
 }
 

@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: "lines_to_single_string(&cells[0])"
 ---
-■ Daybreak availability could not be determined from the connected host's model catalog.
+■ [2000-01-01T00:00:00.000Z] Daybreak availability could not be determined from the connected host's model catalog.

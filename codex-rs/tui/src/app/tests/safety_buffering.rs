@@ -822,7 +822,7 @@ goals = true
             .expect("unsupported Daybreak model should be added to history");
         insta::assert_snapshot!(
             lines_to_single_string(&error_cell.display_lines(/*width*/ 200)),
-            @"■ Daybreak support for model gpt-5.6-luna could not be confirmed by the connected server. Use /daybreak to turn it off, or choose a compatible model and server."
+            @"■ [2000-01-01T00:00:00.000Z] Daybreak support for model gpt-5.6-luna could not be confirmed by the connected server. Use /daybreak to turn it off, or choose a compatible model and server."
         );
         app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
 
@@ -921,7 +921,7 @@ goals = true
             .expect("unsupported permissions should be added to history");
         insta::assert_snapshot!(
             lines_to_single_string(&error_cell.display_lines(/*width*/ 200)),
-            @"■ Failed to retry with a faster model: the selected permission profile cannot be safely represented by the legacy app-server sandbox policy; select a named or legacy-compatible permission profile"
+            @"■ [2000-01-01T00:00:00.000Z] Failed to retry with a faster model: the selected permission profile cannot be safely represented by the legacy app-server sandbox policy; select a named or legacy-compatible permission profile"
         );
         if let Some(release_active_response) = release_active_response.take() {
             let _ = release_active_response.send(());

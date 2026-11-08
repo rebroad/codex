@@ -3377,7 +3377,7 @@ async fn slash_pwd_and_cwd_alias_display_current_working_directory_from_composer
     insta::assert_snapshot!(output.join(""), @r"
 • Current working directory: /tmp/project
 • Current working directory: /tmp/project
-■ Usage: /pwd
+■ [2000-01-01T00:00:00.000Z] Usage: /pwd
 ");
 }
 
@@ -3462,8 +3462,8 @@ async fn slash_cd_rejects_pending_input_and_unsupported_session_ownership() {
         assert!(rx.try_recv().is_err(), "{state}");
     }
     insta::assert_snapshot!(format!("{}{}", errors[0], errors[3]), @r"
-■ The session must start before you can change its working directory.
-■ Changing directories requires an idle primary session without queued input.
+■ [2000-01-01T00:00:00.000Z] The session must start before you can change its working directory.
+■ [2000-01-01T00:00:00.000Z] Changing directories requires an idle primary session without queued input.
 ");
 }
 

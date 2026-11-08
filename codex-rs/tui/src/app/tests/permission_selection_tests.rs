@@ -280,7 +280,7 @@ async fn custom_permission_selection_uses_server_definition_and_preserves_state_
     app.change_working_directory(&mut tui, &mut server, client_home.path().abs())
         .await;
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
-    insta::assert_snapshot!(next_history_message(&mut events), @"■ Changing directories with an unconfirmed named profile is not supported.");
+    insta::assert_snapshot!(next_history_message(&mut events), @"■ [2000-01-01T00:00:00.000Z] Changing directories with an unconfirmed named profile is not supported.");
     let side = server
         .fork_side_thread(
             &app.local_settings,

@@ -3,4 +3,4 @@ source: tui/src/app/tests/realtime_requests.rs
 assertion_line: 1679
 expression: message
 ---
-■ Voice preference was saved but not applied: Overridden by session flags
+■ [2000-01-01T00:00:00.000Z] Voice preference was saved but not applied: Overridden by session flags

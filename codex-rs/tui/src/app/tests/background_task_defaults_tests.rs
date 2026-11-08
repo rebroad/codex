@@ -611,7 +611,7 @@ async fn command_center_new_read_failure_keeps_overview_and_does_not_start() -> 
             })
             .expect("visible read error");
         if capability == HistoryCapabilities::ConfigReadFails {
-            insta::assert_snapshot!(error, @"■ Unable to check folder trust: config/read failed while checking remote project trust");
+            insta::assert_snapshot!(error, @"■ [2000-01-01T00:00:00.000Z] Unable to check folder trust: config/read failed while checking remote project trust");
         } else if matches!(
             capability,
             HistoryCapabilities::ThreadStartWhileShuttingDown

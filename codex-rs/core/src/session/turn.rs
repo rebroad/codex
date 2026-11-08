@@ -3128,6 +3128,8 @@ async fn try_run_sampling_request(
                     request_cache_diagnostics,
                 )
                 .await;
+                stream.release_response_lease();
+                sess.services.auth_manager.apply_pending_auth_if_idle();
                 let budget_result = sess
                     .record_token_usage_info(
                         &turn_context,

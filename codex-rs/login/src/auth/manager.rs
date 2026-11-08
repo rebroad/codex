@@ -2866,7 +2866,8 @@ impl AuthManager {
         }
     }
 
-    fn apply_pending_auth_if_idle(&self) {
+    /// Applies an auth-owner update staged while a Responses stream was active.
+    pub fn apply_pending_auth_if_idle(&self) {
         if self.application_network_policy().has_active_responses() {
             return;
         }

@@ -2,4 +2,4 @@
 source: tui/src/app/tests/mcp_login_tests.rs
 expression: next_history_message(&mut events)
 ---
-■ Enterprise sign-in failed.
+■ [2000-01-01T00:00:00.000Z] Enterprise sign-in failed.

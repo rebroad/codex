@@ -3,4 +3,4 @@ source: tui/src/app/tests/mcp_login_tests.rs
 expression: "messages.join(\"\\n\")"
 ---
 • Signed in to enterprise.
-■ Unknown MCP server typo
+■ [2000-01-01T00:00:00.000Z] Unknown MCP server typo

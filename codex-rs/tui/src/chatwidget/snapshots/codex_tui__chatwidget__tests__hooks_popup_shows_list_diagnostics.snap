@@ -7,7 +7,7 @@ expression: popup
 
   Issues
   ⚠ skipped invalid matcher for PreToolUse
-  ■ /tmp/hooks.json: failed to parse hooks config
+  ■ [2000-01-01T00:00:00.000Z] /tmp/hooks.json: failed to parse hooks config
 
   Event                 Installed   Active      Description
 

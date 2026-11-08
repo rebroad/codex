@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: rendered
 ---
-■ Usage: /usage [daily|weekly|cumulative]
+■ [2000-01-01T00:00:00.000Z] Usage: /usage [daily|weekly|cumulative]
