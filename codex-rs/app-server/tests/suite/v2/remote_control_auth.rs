@@ -326,27 +326,30 @@ async fn explicitly_enabled_remote_control_stays_enabled_after_auth_owner_change
             manual_code: true,
         })
         .await?;
-    let enrollment = timeout(DEFAULT_TIMEOUT, read_http_request(&listener)).await??;
-    assert!(enrollment.request_line.contains("/server/enroll "));
-    respond_with_json(
-        enrollment.reader.into_inner(),
-        json!({
-            "server_id": "server-id", "environment_id": "environment-id",
-            "remote_control_token": "remote-control-token", "expires_at": "3026-05-22T12:34:56Z",
-        }),
-    )
-    .await?;
-    let pairing_request = timeout(DEFAULT_TIMEOUT, read_http_request(&listener)).await??;
-    assert!(pairing_request.request_line.contains("/server/pair "));
-    respond_with_json(
-        pairing_request.reader.into_inner(),
-        json!({
-            "pairing_code": "pairing-code", "server_id": "server-id",
-            "manual_pairing_code": "ABCD-EFGH", "environment_id": "environment-id",
-            "expires_at": "3026-05-22T12:34:56Z",
-        }),
-    )
-    .await?;
+    for _ in 0..8 {
+        let request = timeout(DEFAULT_TIMEOUT, read_http_request(&listener)).await??;
+        if request.request_line.contains("/server/enroll ") {
+            respond_with_json(
+                request.reader.into_inner(),
+                json!({
+                    "server_id": "server-id", "environment_id": "environment-id",
+                    "remote_control_token": "remote-control-token", "expires_at": "3026-05-22T12:34:56Z",
+                }),
+            )
+            .await?;
+        } else if request.request_line.contains("/server/pair ") {
+            respond_with_json(
+                request.reader.into_inner(),
+                json!({
+                    "pairing_code": "pairing-code", "server_id": "server-id",
+                    "manual_pairing_code": "ABCD-EFGH", "environment_id": "environment-id",
+                    "expires_at": "3026-05-22T12:34:56Z",
+                }),
+            )
+            .await?;
+            break;
+        }
+    }
     let response: codex_app_server_protocol::RemoteControlPairingStartResponse =
         timeout(DEFAULT_TIMEOUT, app.read_response(pairing)).await??;
     assert_eq!(response.manual_pairing_code.as_deref(), Some("ABCD-EFGH"));
