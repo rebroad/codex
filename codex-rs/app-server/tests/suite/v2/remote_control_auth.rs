@@ -308,6 +308,52 @@ async fn owner_change_discards_pending_and_queued_pairing() -> Result<()> {
 }
 
 #[tokio::test]
+async fn explicitly_enabled_remote_control_stays_enabled_after_auth_owner_change() -> Result<()> {
+    let home = TempDir::new()?;
+    let listener = configured_remote_control_listener(home.path()).await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .with_args(&["--remote-control"])
+        .build_initialized()
+        .await?;
+    login(&mut app, "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-a", "account-a", "initial").await?;
+    login_remote_control(&mut app, home.path(), "user-b", "account-b", "replacement").await?;
+
+    let pairing = app
+        .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
+            manual_code: true,
+        })
+        .await?;
+    let enrollment = timeout(DEFAULT_TIMEOUT, read_http_request(&listener)).await??;
+    assert!(enrollment.request_line.contains("/server/enroll "));
+    respond_with_json(
+        enrollment.reader.into_inner(),
+        json!({
+            "server_id": "server-id", "environment_id": "environment-id",
+            "remote_control_token": "remote-control-token", "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await?;
+    let pairing_request = timeout(DEFAULT_TIMEOUT, read_http_request(&listener)).await??;
+    assert!(pairing_request.request_line.contains("/server/pair "));
+    respond_with_json(
+        pairing_request.reader.into_inner(),
+        json!({
+            "pairing_code": "pairing-code", "server_id": "server-id",
+            "manual_pairing_code": "ABCD-EFGH", "environment_id": "environment-id",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await?;
+    let response: codex_app_server_protocol::RemoteControlPairingStartResponse =
+        timeout(DEFAULT_TIMEOUT, app.read_response(pairing)).await??;
+    assert_eq!(response.manual_pairing_code.as_deref(), Some("ABCD-EFGH"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn client_revoke_retry_stays_with_original_owner() -> Result<()> {
     for refreshed_user in ["user-a", "user-b"] {
         let home = TempDir::new()?;
