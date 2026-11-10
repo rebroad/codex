@@ -3117,12 +3117,19 @@ impl AuthManager {
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
+        let auth_before_reload = self.auth_cached();
+        if self.has_external_auth()
+            || auth_before_reload
+                .as_ref()
+                .is_some_and(|auth| auth.is_api_key_auth() || auth.is_personal_access_token_auth())
+        {
+            return self.refresh_token_from_authority_impl().await;
+        }
         let default_auth_path = self.codex_home.join("auth.json");
         let auth_path = self.auth_file.as_deref().unwrap_or(&default_auth_path);
         let _cross_process_guard = super::refresh_lock::acquire(auth_path)
             .await
             .map_err(RefreshTokenError::Transient)?;
-        let auth_before_reload = self.auth_cached();
         let expected_account_id = auth_before_reload
             .as_ref()
             .and_then(CodexAuth::get_account_id);

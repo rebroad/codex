@@ -1,3 +1,4 @@
+use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
@@ -17,6 +18,9 @@ pub(super) async fn acquire(auth_file: &Path) -> io::Result<File> {
             .and_then(|name| name.to_str())
             .unwrap_or("auth.json")
     ));
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let file = OpenOptions::new()
         .create(true)
         .read(true)
