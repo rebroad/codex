@@ -13,6 +13,7 @@ mod workload_identity;
 
 mod external_bearer;
 mod manager;
+mod refresh_lock;
 mod revoke;
 
 pub use auth_headers::AuthHeaders;

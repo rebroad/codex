@@ -3073,6 +3073,11 @@ impl AuthManager {
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
+        let default_auth_path = self.codex_home.join("auth.json");
+        let auth_path = self.auth_file.as_deref().unwrap_or(&default_auth_path);
+        let _cross_process_guard = super::refresh_lock::acquire(auth_path)
+            .await
+            .map_err(RefreshTokenError::Transient)?;
         let auth_before_reload = self.auth_cached();
         if auth_before_reload
             .as_ref()
@@ -3112,7 +3117,28 @@ impl AuthManager {
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
-        self.refresh_token_from_authority_impl().await
+        let default_auth_path = self.codex_home.join("auth.json");
+        let auth_path = self.auth_file.as_deref().unwrap_or(&default_auth_path);
+        let _cross_process_guard = super::refresh_lock::acquire(auth_path)
+            .await
+            .map_err(RefreshTokenError::Transient)?;
+        let auth_before_reload = self.auth_cached();
+        let expected_account_id = auth_before_reload
+            .as_ref()
+            .and_then(CodexAuth::get_account_id);
+        match self
+            .reload_if_account_id_matches(expected_account_id.as_deref())
+            .await
+        {
+            ReloadOutcome::ReloadedChanged => Ok(()),
+            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_impl().await,
+            ReloadOutcome::Skipped => {
+                Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                    RefreshTokenFailedReason::Other,
+                    REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
+                )))
+            }
+        }
     }
 
     async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {
