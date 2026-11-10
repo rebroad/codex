@@ -51,7 +51,11 @@ impl RemoteControl {
             Some(previous) => {
                 previous.session.shutdown_token.cancel();
                 if previous.authenticated {
-                    RemoteControlDesiredState::Disabled
+                    if self.startup.is_enabled() {
+                        self.startup
+                    } else {
+                        RemoteControlDesiredState::Disabled
+                    }
                 } else {
                     // Startup or an explicit enable while signed out may wait for first login.
                     *previous.session.desired_state_tx.borrow()
