@@ -40,6 +40,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::error::CodexErr;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
@@ -867,6 +868,64 @@ async fn turn_error_blocks_goal() -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
     assert_eq!(codex_state::ThreadGoalStatus::Blocked, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn bad_request_keeps_goal_active_and_defers_automatic_retry() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    tool_by_name(&tools, "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship goal extension backend" }),
+        ))
+        .await?;
+
+    let error_details = CodexErr::Fatal("test error details".to_string());
+    harness
+        .notify_turn_error_with_info(
+            "turn-1",
+            CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: Some(400),
+            },
+            error_details.details(),
+        )
+        .await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert!(
+        runtime
+            .thread_goals()
+            .has_thread_goal_continuation_deferral(thread_id)
+            .await?
+    );
+
+    harness.start_turn("turn-2", &TokenUsage::default()).await;
+
+    assert!(
+        !runtime
+            .thread_goals()
+            .has_thread_goal_continuation_deferral(thread_id)
+            .await?
+    );
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
     Ok(())
 }
 
@@ -1925,13 +1984,24 @@ impl GoalExtensionHarness {
     }
 
     async fn notify_turn_error(&self, turn_id: &str, error: CodexErr) {
+        let error_info = error.to_codex_protocol_error();
+        self.notify_turn_error_with_info(turn_id, error_info, error.details())
+            .await;
+    }
+
+    async fn notify_turn_error_with_info(
+        &self,
+        turn_id: &str,
+        error: CodexErrorInfo,
+        error_details: &codex_protocol::error::CodexErrorDetails,
+    ) {
         let turn_store = ExtensionData::new(turn_id);
         for contributor in self.registry.turn_lifecycle_contributors() {
             contributor
                 .on_turn_error(TurnErrorInput {
                     turn_id,
-                    error: error.to_codex_protocol_error(),
-                    error_details: error.details(),
+                    error: error.clone(),
+                    error_details,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                     turn_store: &turn_store,

@@ -426,22 +426,45 @@ where
                 return;
             };
 
-            let reason = match input.error {
-                CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
+            match input.error {
+                CodexErrorInfo::UsageLimitExceeded => {
+                    if let Err(err) = runtime
+                        .stop_active_goal_for_turn(input.turn_id, ActiveGoalStopReason::UsageLimit)
+                        .await
+                    {
+                        tracing::warn!(error = ?input.error, "failed to stop active goal after turn error: {err}");
+                    }
+                }
+                CodexErrorInfo::BadRequest
+                | CodexErrorInfo::InvalidPrompt
+                | CodexErrorInfo::HttpConnectionFailed {
+                    http_status_code: Some(400),
+                } => {
+                    if let Err(err) = runtime
+                        .defer_active_goal_after_bad_request(input.turn_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = ?input.error,
+                            "failed to defer active goal after bad request: {err}"
+                        );
+                    }
+                }
                 // The turn has ended because the error was non-retryable or its
                 // retries were exhausted. Block the goal to prevent automatic
                 // continuation from looping and consuming tokens, as can happen
                 // with compaction errors.
-                _ => ActiveGoalStopReason::TurnError,
-            };
-            if let Err(err) = runtime
-                .stop_active_goal_for_turn(input.turn_id, reason)
-                .await
-            {
-                tracing::warn!(
-                    error = ?input.error,
-                    "failed to stop active goal after turn error: {err}"
-                );
+                _ => {
+                    if let Err(err) = runtime
+                        .stop_active_goal_for_turn(input.turn_id, ActiveGoalStopReason::TurnError)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = ?input.error,
+                            "failed to stop active goal after turn error: {err}"
+                        );
+                    }
+                }
             }
         })
     }

@@ -273,6 +273,53 @@ impl GoalRuntimeHandle {
             .await
     }
 
+    pub(crate) async fn defer_active_goal_after_bad_request(
+        &self,
+        turn_id: &str,
+    ) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let _goal_state_permit = self.goal_state_permit().await?;
+        let accounting = &self.inner.accounting_state;
+        let Some(goal_id) = accounting.current_active_goal_id_for_turn(turn_id) else {
+            return Ok(());
+        };
+        self.account_active_goal_progress(
+            turn_id,
+            &format!("{turn_id}:bad-request-progress"),
+            codex_state::GoalAccountingMode::ActiveOnly,
+            BudgetLimitedGoalDisposition::KeepActive,
+        )
+        .await?;
+
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            accounting.clear_active_goal();
+            return Ok(());
+        };
+        if goal.goal_id != goal_id || goal.status != codex_state::ThreadGoalStatus::Active {
+            accounting.clear_active_goal();
+            return Ok(());
+        }
+
+        self.inner
+            .state_dbs
+            .thread_goals()
+            .defer_thread_goal_continuation(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?;
+        accounting.clear_active_goal();
+        Ok(())
+    }
+
     /// Accounts the ending turn and stops its active goal after an error or repeated empty output.
     pub(crate) async fn stop_active_goal_for_turn(
         &self,
