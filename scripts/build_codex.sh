@@ -1428,8 +1428,10 @@ install_remote_binary() {
     rm -f "${staging}"
     return 75
   fi
-  if ! ssh "${SSH_OPTS[@]}" "${target}" bash -s -- \
-    "${install_dir}" "${name}" "${remote_tmp}" "${RESTART_APP_SERVER}" <<'REMOTE_INSTALL'
+  local remote_command
+  printf -v remote_command '%q ' bash -s -- \
+    "${install_dir}" "${name}" "${remote_tmp}" "${RESTART_APP_SERVER}"
+  if ! ssh "${SSH_OPTS[@]}" "${target}" "${remote_command% }" <<'REMOTE_INSTALL'
 set -euo pipefail
 install_dir="$1"
 name="$2"
@@ -1719,7 +1721,13 @@ build_android() {
   export PATH="${llvm}/bin:${PATH}"
   export ANDROID_NDK_HOME="${ndk}" LIBLZMA_NO_PKG_CONFIG=1 BZIP2_NO_PKG_CONFIG=1 BZIP2_STATIC=1
   export PKG_CONFIG_ALLOW_CROSS=1 CODEX_SKIP_VENDORED_BWRAP=1
-  export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-} -Clink-arg=${builtins}"
+  local builtins_link_arg="-Clink-arg=${builtins}"
+  case " ${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-} " in
+    *" ${builtins_link_arg} "*) ;;
+    *)
+      export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-} ${builtins_link_arg}"
+      ;;
+  esac
   export CC_aarch64_linux_android="${llvm}/bin/aarch64-linux-android29-clang"
   export CXX_aarch64_linux_android="${llvm}/bin/aarch64-linux-android29-clang++"
   export AR_aarch64_linux_android="${llvm}/bin/llvm-ar"
