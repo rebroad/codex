@@ -58,6 +58,8 @@ ANDROID_PSI_NOTICE_DIR=""
 ANDROID_BALLAST_PID=""
 ANDROID_BALLAST_DIR=""
 ANDROID_RUST_TIMING_DIR=""
+SSH_CONTROL_DIR=""
+SSH_MUX_TARGETS=()
 TIMESTAMP="$(date -u +%Y%m%d%H%M)"
 COMMIT_SHORT=""
 SOURCE_START_COMMIT=""
@@ -307,6 +309,27 @@ start_android_ballast() {
   fi
   return 0
 }
+enable_ssh_multiplexing() {
+  local target="${1}" temp_root existing
+  if [[ -z "${SSH_CONTROL_DIR}" ]]; then
+    if [[ "${PREFIX:-}" == /data/data/* && -d "${PREFIX}/tmp" ]]; then
+      temp_root="${PREFIX}/tmp"
+    else
+      temp_root=/var/tmp
+    fi
+    SSH_CONTROL_DIR="$(mktemp -d "${temp_root%/}/cXXXXXX")" \
+      || die "unable to create a private SSH control-socket directory under ${temp_root}"
+    SSH_OPTS+=(
+      -o ControlMaster=auto
+      -o ControlPersist=10m
+      -o "ControlPath=${SSH_CONTROL_DIR}/%C"
+    )
+  fi
+  for existing in "${SSH_MUX_TARGETS[@]}"; do
+    [[ "${existing}" == "${target}" ]] && return 0
+  done
+  SSH_MUX_TARGETS+=("${target}")
+}
 cleanup_build_process() {
   stop_android_ballast
   if [[ -n "${ANDROID_RUST_TIMING_DIR}" ]]; then
@@ -315,6 +338,14 @@ cleanup_build_process() {
   fi
   release_cargo_target_lock
   codex_sccache_server_stop
+  if [[ -n "${SSH_CONTROL_DIR}" ]]; then
+    local target
+    for target in "${SSH_MUX_TARGETS[@]}"; do
+      ssh "${SSH_OPTS[@]}" -O exit "${target}" >/dev/null 2>&1 || true
+    done
+    rm -rf -- "${SSH_CONTROL_DIR}"
+    SSH_CONTROL_DIR=""
+  fi
   if [[ -n "${ANDROID_PSI_NOTICE_DIR}" ]]; then
     rm -rf "${ANDROID_PSI_NOTICE_DIR}"
   fi
@@ -1625,6 +1656,7 @@ install_target() {
     install_test_stdio_server "$(dirname "${binary}")/test_stdio_server" || return $?
     return 0
   fi
+  enable_ssh_multiplexing "${target}"
   if ! architecture="$(remote_target_architecture "${target}")"; then
     return 75
   fi
