@@ -102,6 +102,28 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
             } => {
                 let body_text = body.unwrap_or_default();
 
+                if status == http::StatusCode::BAD_REQUEST {
+                    let content_type = headers
+                        .as_ref()
+                        .and_then(|headers| headers.get(http::header::CONTENT_TYPE))
+                        .and_then(|value| value.to_str().ok());
+                    tracing::warn!(
+                        target: "codex_api::http_error",
+                        status = status.as_u16(),
+                        url = url.as_deref().map(log_safe_url),
+                        request_id = extract_request_id(headers.as_ref()),
+                        cf_ray = extract_header(headers.as_ref(), CF_RAY_HEADER),
+                        auth_error = extract_header(
+                            headers.as_ref(),
+                            X_OPENAI_AUTHORIZATION_ERROR_HEADER
+                        ),
+                        auth_error_code = extract_x_error_json_code(headers.as_ref()),
+                        content_type,
+                        response_body = %truncate_diagnostic_body(&body_text),
+                        "HTTP 400 response received"
+                    );
+                }
+
                 if status == http::StatusCode::SERVICE_UNAVAILABLE
                     && let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
                     && let Some(error) = value.get("error")
@@ -178,7 +200,19 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                     {
                         CodexErr::InvalidImageRequest()
                     } else {
-                        CodexErr::InvalidRequest(body_text)
+                        CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                            status,
+                            body: body_text,
+                            user_message: None,
+                            url,
+                            cf_ray: extract_header(headers.as_ref(), CF_RAY_HEADER),
+                            request_id: extract_request_id(headers.as_ref()),
+                            identity_authorization_error: extract_header(
+                                headers.as_ref(),
+                                X_OPENAI_AUTHORIZATION_ERROR_HEADER,
+                            ),
+                            identity_error_code: extract_x_error_json_code(headers.as_ref()),
+                        })
                     }
                 } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
@@ -273,6 +307,32 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
             }
         },
         ApiError::RateLimit(msg) => CodexErr::Stream(msg),
+    }
+}
+
+const DIAGNOSTIC_BODY_MAX_BYTES: usize = 2048;
+
+fn truncate_diagnostic_body(body: &str) -> String {
+    if body.len() <= DIAGNOSTIC_BODY_MAX_BYTES {
+        return body.to_string();
+    }
+
+    let mut end = DIAGNOSTIC_BODY_MAX_BYTES;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &body[..end])
+}
+
+fn log_safe_url(url: &str) -> String {
+    if let Ok(mut parsed) = url::Url::parse(url) {
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        let _ = parsed.set_username("");
+        let _ = parsed.set_password(None);
+        parsed.to_string()
+    } else {
+        url.split(['?', '#']).next().unwrap_or(url).to_string()
     }
 }
 

@@ -29,6 +29,7 @@ use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SessionSource;
@@ -250,6 +251,7 @@ where
             };
 
             let accounting = runtime.accounting_state();
+            accounting.clear_bad_request_recovery();
             let Ok(_turn_start_permit) = accounting.turn_start_permit().await else {
                 return;
             };
@@ -426,22 +428,58 @@ where
                 return;
             };
 
-            let reason = match input.error {
-                CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
+            match input.error {
+                CodexErrorInfo::UsageLimitExceeded => {
+                    if let Err(err) = runtime
+                        .stop_active_goal_for_turn(input.turn_id, ActiveGoalStopReason::UsageLimit)
+                        .await
+                    {
+                        tracing::warn!(error = ?input.error, "failed to stop active goal after turn error: {err}");
+                    }
+                }
+                // Some upstream 400 responses have nonstandard bodies and surface as `Other`.
+                // Recover upstream 400s in a fresh goal turn instead of blocking the active goal.
+                _ if matches!(
+                    input.error_details,
+                    CodexErrorDetails::UnexpectedStatus(error) if error.status.as_u16() == 400
+                ) || matches!(
+                    input.error_details,
+                    CodexErrorDetails::ConnectionFailed(error)
+                        if error.source.status().is_some_and(|status| status.as_u16() == 400)
+                ) || matches!(
+                    input.error,
+                    CodexErrorInfo::BadRequest
+                        | CodexErrorInfo::InvalidPrompt
+                        | CodexErrorInfo::HttpConnectionFailed {
+                            http_status_code: Some(400)
+                        }
+                ) =>
+                {
+                    if let Err(err) = runtime
+                        .recover_active_goal_after_bad_request(input.turn_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = ?input.error,
+                            "failed to resume active goal after bad request: {err}"
+                        );
+                    }
+                }
                 // The turn has ended because the error was non-retryable or its
                 // retries were exhausted. Block the goal to prevent automatic
                 // continuation from looping and consuming tokens, as can happen
                 // with compaction errors.
-                _ => ActiveGoalStopReason::TurnError,
-            };
-            if let Err(err) = runtime
-                .stop_active_goal_for_turn(input.turn_id, reason)
-                .await
-            {
-                tracing::warn!(
-                    error = ?input.error,
-                    "failed to stop active goal after turn error: {err}"
-                );
+                _ => {
+                    if let Err(err) = runtime
+                        .stop_active_goal_for_turn(input.turn_id, ActiveGoalStopReason::TurnError)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = ?input.error,
+                            "failed to stop active goal after turn error: {err}"
+                        );
+                    }
+                }
             }
         })
     }

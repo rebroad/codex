@@ -53,8 +53,15 @@ pub(crate) fn objective_updated_steering_item(goal: &ThreadGoal) -> ResponseItem
 pub(crate) fn continuation_steering_item(
     goal: &ThreadGoal,
     update_plan_enabled: bool,
+    recovering_from_bad_request: bool,
 ) -> ResponseItem {
-    goal_context_input_item(continuation_prompt(goal, update_plan_enabled))
+    let mut prompt = continuation_prompt(goal, update_plan_enabled);
+    if recovering_from_bad_request {
+        prompt.push_str(
+            "\n\nThe previous goal turn ended with an HTTP 400 Bad Request. Continue the goal in this new turn. Do not repeat the same request unchanged; inspect the failed operation and correct its inputs or use another route. If the error did not identify the cause, gather concrete evidence before trying again.",
+        );
+    }
+    goal_context_input_item(prompt)
 }
 
 fn goal_context_input_item(prompt: String) -> ResponseItem {

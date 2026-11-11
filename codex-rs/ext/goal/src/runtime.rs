@@ -273,6 +273,48 @@ impl GoalRuntimeHandle {
             .await
     }
 
+    pub(crate) async fn recover_active_goal_after_bad_request(
+        &self,
+        turn_id: &str,
+    ) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let _goal_state_permit = self.goal_state_permit().await?;
+        let accounting = &self.inner.accounting_state;
+        let Some(goal_id) = accounting.current_active_goal_id_for_turn(turn_id) else {
+            return Ok(());
+        };
+        self.account_active_goal_progress(
+            turn_id,
+            &format!("{turn_id}:bad-request-progress"),
+            codex_state::GoalAccountingMode::ActiveOnly,
+            BudgetLimitedGoalDisposition::KeepActive,
+        )
+        .await?;
+
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            accounting.clear_active_goal();
+            return Ok(());
+        };
+        if goal.goal_id != goal_id || goal.status != codex_state::ThreadGoalStatus::Active {
+            accounting.clear_active_goal();
+            return Ok(());
+        }
+
+        accounting.mark_recoverable_api_error(turn_id);
+        accounting.mark_idle_goal_active(goal.goal_id);
+        Ok(())
+    }
+
     /// Accounts the ending turn and stops its active goal after an error or repeated empty output.
     pub(crate) async fn stop_active_goal_for_turn(
         &self,
@@ -442,16 +484,12 @@ impl GoalRuntimeHandle {
         // change the goal after we read it but before the continuation launches.
         let _goal_state_permit = self.goal_state_permit().await?;
 
-        if self
-            .inner
+        self.inner
             .state_dbs
             .thread_goals()
-            .has_thread_goal_continuation_deferral(self.thread_id())
+            .clear_thread_goal_continuation_deferral(self.thread_id())
             .await
-            .map_err(|err| err.to_string())?
-        {
-            return Ok(());
-        }
+            .map_err(|err| err.to_string())?;
 
         let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
             tracing::debug!("skipping goal continuation because thread manager is unavailable");
@@ -482,9 +520,11 @@ impl GoalRuntimeHandle {
             .get::<TurnStartOptions>()
             .map(|options| options.as_ref().clone())
             .unwrap_or_default();
+        let recovering_from_bad_request = self.inner.accounting_state.take_bad_request_recovery();
         let item = continuation_steering_item(
             &protocol_goal_from_state(goal),
             thread.config().await.update_plan_enabled,
+            recovering_from_bad_request,
         );
 
         match thread
