@@ -141,6 +141,22 @@ SELECT EXISTS(
         .map_err(Into::into)
     }
 
+    /// Defers automatic continuation until the next user turn for an existing goal.
+    pub async fn defer_thread_goal_continuation(&self, thread_id: ThreadId) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO thread_goal_continuation_deferrals (thread_id)
+SELECT thread_id FROM thread_goals WHERE thread_id = ?
+ON CONFLICT(thread_id) DO NOTHING
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn clear_thread_goal_continuation_deferral(
         &self,
         thread_id: ThreadId,

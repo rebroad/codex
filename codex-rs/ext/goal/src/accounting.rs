@@ -37,6 +37,7 @@ struct GoalAccountingInner {
     consecutive_execution_failure_turns: u8,
     automatic_goal_turn_id: Option<String>,
     consecutive_empty_turns: u8,
+    bad_request_recovery_pending: bool,
     last_accounted_descendant_token_usage: i64,
 }
 
@@ -50,6 +51,7 @@ struct GoalTurnAccounting {
     successful_tool: bool,
     empty_final: bool,
     has_activity: bool,
+    recoverable_api_error: bool,
 }
 
 #[derive(Debug)]
@@ -223,6 +225,23 @@ impl GoalAccountingState {
         let mut inner = self.inner();
         inner.automatic_goal_turn_id = None;
         inner.consecutive_empty_turns = 0;
+        inner.bad_request_recovery_pending = false;
+    }
+
+    pub(crate) fn mark_recoverable_api_error(&self, turn_id: &str) {
+        let mut inner = self.inner();
+        if let Some(turn) = inner.turns.get_mut(turn_id) {
+            turn.recoverable_api_error = true;
+            inner.bad_request_recovery_pending = true;
+        }
+    }
+
+    pub(crate) fn take_bad_request_recovery(&self) -> bool {
+        std::mem::take(&mut self.inner().bad_request_recovery_pending)
+    }
+
+    pub(crate) fn clear_bad_request_recovery(&self) {
+        self.inner().bad_request_recovery_pending = false;
     }
 
     /// Evaluated under the goal-state permit after automatic admission records its turn ID.
@@ -235,7 +254,9 @@ impl GoalAccountingState {
         let automatic = inner.automatic_goal_turn_id.as_deref() == Some(turn_id);
         let turn = inner.turns.get_mut(turn_id)?;
         let goal_id = turn.active_goal_id.clone()?;
-        let empty = automatic && !turn.has_activity && (turn.empty_final || interrupted);
+        let empty = automatic
+            && !turn.has_activity
+            && (turn.empty_final || interrupted || turn.recoverable_api_error);
         turn.empty_final = false;
         if !empty {
             inner.consecutive_empty_turns = 0;
@@ -586,6 +607,7 @@ impl Default for GoalAccountingInner {
             consecutive_execution_failure_turns: 0,
             automatic_goal_turn_id: None,
             consecutive_empty_turns: 0,
+            bad_request_recovery_pending: false,
             last_accounted_descendant_token_usage: 0,
         }
     }
@@ -613,6 +635,7 @@ impl GoalTurnAccounting {
             successful_tool: false,
             empty_final: false,
             has_activity: false,
+            recoverable_api_error: false,
         }
     }
 
