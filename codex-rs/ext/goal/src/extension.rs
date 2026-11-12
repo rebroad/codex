@@ -29,6 +29,7 @@ use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SessionSource;
@@ -435,11 +436,28 @@ where
                         tracing::warn!(error = ?input.error, "failed to stop active goal after turn error: {err}");
                     }
                 }
-                CodexErrorInfo::BadRequest
-                | CodexErrorInfo::InvalidPrompt
-                | CodexErrorInfo::HttpConnectionFailed {
-                    http_status_code: Some(400),
-                } => {
+                // Some upstream 400 responses have nonstandard bodies and surface as `Other`.
+                // Defer opaque nonfatal errors until fresh user input instead of blocking the goal.
+                _ if (matches!(input.error, CodexErrorInfo::Other)
+                    && !matches!(input.error_details, CodexErrorDetails::Fatal(_)))
+                    || matches!(
+                        input.error_details,
+                        CodexErrorDetails::UnexpectedStatus(error) if error.status.as_u16() == 400
+                    )
+                    || matches!(
+                        input.error_details,
+                        CodexErrorDetails::ConnectionFailed(error)
+                            if error.source.status().is_some_and(|status| status.as_u16() == 400)
+                    )
+                    || matches!(
+                        input.error,
+                        CodexErrorInfo::BadRequest
+                            | CodexErrorInfo::InvalidPrompt
+                            | CodexErrorInfo::HttpConnectionFailed {
+                                http_status_code: Some(400)
+                            }
+                    ) =>
+                {
                     if let Err(err) = runtime
                         .defer_active_goal_after_bad_request(input.turn_id)
                         .await

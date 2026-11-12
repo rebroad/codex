@@ -56,9 +56,7 @@ async fn bad_request_keeps_goal_active_without_replaying_request() -> Result<()>
     let completed: TurnCompletedNotification = server.read_notification("turn/completed").await?;
     assert_eq!(TurnStatus::Failed, completed.turn.status);
     assert_eq!(
-        Some(CodexErrorInfo::HttpConnectionFailed {
-            http_status_code: Some(400),
-        }),
+        Some(CodexErrorInfo::Other),
         completed
             .turn
             .error
