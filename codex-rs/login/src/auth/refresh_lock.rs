@@ -1,8 +1,11 @@
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
 
@@ -11,16 +14,17 @@ pub(super) async fn acquire(auth_file: &Path) -> io::Result<File> {
     let canonical = auth_file
         .canonicalize()
         .unwrap_or_else(|_| auth_file.to_path_buf());
-    let lock_path = canonical.with_file_name(format!(
-        "{}.refresh.lock",
-        canonical
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("auth.json")
-    ));
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    #[cfg(unix)]
+    let user = unsafe { libc::getuid() }.to_string();
+    #[cfg(not(unix))]
+    let user = std::env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string());
+    let temp_dir = std::env::var_os("TMPDIR").unwrap_or_else(|| "/var/tmp".into());
+    let lock_dir = Path::new(&temp_dir).join(format!("codex-auth-locks-{user}"));
+    fs::create_dir_all(&lock_dir)?;
+    #[cfg(unix)]
+    fs::set_permissions(&lock_dir, fs::Permissions::from_mode(0o700))?;
+    let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
+    let lock_path = lock_dir.join(format!("{digest:x}.refresh.lock"));
     let file = OpenOptions::new()
         .create(true)
         .read(true)
