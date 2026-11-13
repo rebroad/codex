@@ -370,7 +370,9 @@ async fn disabled_turn_settings_update_reports_rejection_without_changing_future
     )
     .await;
     let codex_home = TempDir::new()?;
-    mock_config(codex_home.path(), &server.uri())?.write(codex_home.path())?;
+    mock_config(codex_home.path(), &server.uri())?
+        .disable_feature(Feature::StepModelSwitching)
+        .write(codex_home.path())?;
     let mut app = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)

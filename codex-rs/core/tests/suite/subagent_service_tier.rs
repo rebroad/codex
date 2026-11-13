@@ -163,6 +163,10 @@ async fn root_service_tier_change_updates_existing_subagent(
         .with_model("gpt-5.6-sol")
         .with_config(move |config| {
             config.service_tier = initial_service_tier_owned;
+            config
+                .features
+                .disable(Feature::StepModelSwitching)
+                .expect("test config should allow feature update");
             configure_priority_role(config);
         });
     let test = builder.build_with_auto_env(&server).await?;

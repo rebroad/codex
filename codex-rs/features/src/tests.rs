@@ -876,6 +876,7 @@ fn unstable_warning_event_ignores_enabled_structured_stable_feature() {
     let configured_features: Table = toml::from_str(
         r#"
 multi_agent_v2 = { enabled = true, tool_namespace = "agents" }
+step_model_switching = true
 code_mode = true
 "#,
     )
@@ -883,6 +884,7 @@ code_mode = true
 
     let mut features = Features::with_defaults();
     features.enable(Feature::MultiAgentV2);
+    features.enable(Feature::StepModelSwitching);
     features.enable(Feature::CodeMode);
 
     let warning = unstable_features_warning_event(
