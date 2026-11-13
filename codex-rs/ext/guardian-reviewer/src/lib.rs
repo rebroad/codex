@@ -38,9 +38,7 @@ pub use retry::GuardianReviewSessionLimits;
 pub use retry::run_with_retry;
 
 pub const MAX_REVIEW_ATTEMPTS: i64 = 3;
-// Leave a minute for a provider request using Codex's default five-minute
-// stream budget to return its terminal event before Guardian's outer deadline.
-pub const REVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(360);
+pub const REVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 pub use deadline::run_before_review_deadline;
 pub use pool::ReviewSessionResult;
