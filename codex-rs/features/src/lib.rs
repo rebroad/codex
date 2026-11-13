@@ -1993,7 +1993,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::StepModelSwitching,
         key: "step_model_switching",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {
