@@ -6,6 +6,19 @@ use codex_protocol::protocol::RateLimitReachedType;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn bad_request_diagnostics_bound_body_and_strip_url_query() {
+    let long_body = "é".repeat(DIAGNOSTIC_BODY_MAX_BYTES);
+    let diagnostic_body = truncate_diagnostic_body(&long_body);
+
+    assert!(diagnostic_body.len() <= DIAGNOSTIC_BODY_MAX_BYTES + "…".len());
+    assert!(diagnostic_body.ends_with('…'));
+    assert_eq!(
+        log_safe_url("https://user:secret@api.example.test/v1/responses?key=secret"),
+        "https://api.example.test/v1/responses"
+    );
+}
+
+#[test]
 fn map_api_error_maps_server_overloaded() {
     let err = map_api_error(ApiError::ServerOverloaded { retry_after: None });
     assert!(matches!(err.details(), CodexErrorDetails::ServerOverloaded));
@@ -475,7 +488,7 @@ fn map_api_error_preserves_misalignment_details_from_wrapped_websocket_error() {
 }
 
 #[test]
-fn map_api_error_keeps_other_400_errors_generic() {
+fn map_api_error_preserves_status_and_body_for_unrecognized_400_errors() {
     for code in ["invalid_request", "some_other_policy"] {
         let body = serde_json::json!({
             "error": {
@@ -492,10 +505,17 @@ fn map_api_error_keeps_other_400_errors_generic() {
             body: Some(body.clone()),
         }));
 
-        let CodexErrorDetails::InvalidRequest(message) = err.details() else {
-            panic!("expected CodexErrorDetails::InvalidRequest, got {err:?}");
+        let CodexErrorDetails::UnexpectedStatus(response) = err.details() else {
+            panic!("expected CodexErrorDetails::UnexpectedStatus, got {err:?}");
         };
-        assert_eq!(message, &body);
+        assert_eq!(response.status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(response.body, body);
+        assert_eq!(
+            err.to_codex_protocol_error(),
+            CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: Some(400)
+            }
+        );
     }
 }
 

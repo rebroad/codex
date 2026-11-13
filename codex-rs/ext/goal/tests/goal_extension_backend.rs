@@ -872,7 +872,7 @@ async fn turn_error_blocks_goal() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn bad_request_keeps_goal_active_and_defers_automatic_retry() -> anyhow::Result<()> {
+async fn bad_request_keeps_goal_active_for_automatic_recovery() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -906,7 +906,7 @@ async fn bad_request_keeps_goal_active_and_defers_automatic_retry() -> anyhow::R
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
     assert!(
-        runtime
+        !runtime
             .thread_goals()
             .has_thread_goal_continuation_deferral(thread_id)
             .await?

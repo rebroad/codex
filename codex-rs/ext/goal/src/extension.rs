@@ -251,6 +251,7 @@ where
             };
 
             let accounting = runtime.accounting_state();
+            accounting.clear_bad_request_recovery();
             let Ok(_turn_start_permit) = accounting.turn_start_permit().await else {
                 return;
             };
@@ -437,34 +438,30 @@ where
                     }
                 }
                 // Some upstream 400 responses have nonstandard bodies and surface as `Other`.
-                // Defer opaque nonfatal errors until fresh user input instead of blocking the goal.
-                _ if (matches!(input.error, CodexErrorInfo::Other)
-                    && !matches!(input.error_details, CodexErrorDetails::Fatal(_)))
-                    || matches!(
-                        input.error_details,
-                        CodexErrorDetails::UnexpectedStatus(error) if error.status.as_u16() == 400
-                    )
-                    || matches!(
-                        input.error_details,
-                        CodexErrorDetails::ConnectionFailed(error)
-                            if error.source.status().is_some_and(|status| status.as_u16() == 400)
-                    )
-                    || matches!(
-                        input.error,
-                        CodexErrorInfo::BadRequest
-                            | CodexErrorInfo::InvalidPrompt
-                            | CodexErrorInfo::HttpConnectionFailed {
-                                http_status_code: Some(400)
-                            }
-                    ) =>
+                // Recover upstream 400s in a fresh goal turn instead of blocking the active goal.
+                _ if matches!(
+                    input.error_details,
+                    CodexErrorDetails::UnexpectedStatus(error) if error.status.as_u16() == 400
+                ) || matches!(
+                    input.error_details,
+                    CodexErrorDetails::ConnectionFailed(error)
+                        if error.source.status().is_some_and(|status| status.as_u16() == 400)
+                ) || matches!(
+                    input.error,
+                    CodexErrorInfo::BadRequest
+                        | CodexErrorInfo::InvalidPrompt
+                        | CodexErrorInfo::HttpConnectionFailed {
+                            http_status_code: Some(400)
+                        }
+                ) =>
                 {
                     if let Err(err) = runtime
-                        .defer_active_goal_after_bad_request(input.turn_id)
+                        .recover_active_goal_after_bad_request(input.turn_id)
                         .await
                     {
                         tracing::warn!(
                             error = ?input.error,
-                            "failed to defer active goal after bad request: {err}"
+                            "failed to resume active goal after bad request: {err}"
                         );
                     }
                 }

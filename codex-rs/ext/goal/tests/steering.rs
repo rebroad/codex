@@ -32,7 +32,9 @@ fn enabled_checklist_preserves_the_original_continuation_prompt() {
         original,
     ));
     assert_eq!(
-        steering::continuation_steering_item(&goal, /*update_plan_enabled*/ true),
+        steering::continuation_steering_item(
+            &goal, /*update_plan_enabled*/ true, /*recovering_from_bad_request*/ false,
+        ),
         expected,
     );
 }
@@ -43,6 +45,7 @@ fn disabled_checklist_preserves_goal_text_that_mentions_the_tool() {
     let item = steering::continuation_steering_item(
         &test_goal(objective),
         /*update_plan_enabled*/ false,
+        /*recovering_from_bad_request*/ false,
     );
     let ResponseItem::Message { content, .. } = item else {
         panic!("expected goal continuation message");
@@ -53,6 +56,23 @@ fn disabled_checklist_preserves_goal_text_that_mentions_the_tool() {
     assert!(text.contains(objective));
     assert!(!text.contains("If update_plan is available"));
     assert!(text.contains("Completion audit:"));
+}
+
+#[test]
+fn bad_request_recovery_steering_avoids_repeating_the_failed_request() {
+    let item = steering::continuation_steering_item(
+        &test_goal("Finish the work"),
+        /*update_plan_enabled*/ true,
+        /*recovering_from_bad_request*/ true,
+    );
+    let ResponseItem::Message { content, .. } = item else {
+        panic!("expected goal continuation message");
+    };
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected goal continuation text");
+    };
+    assert!(text.contains("previous goal turn ended with an HTTP 400 Bad Request"));
+    assert!(text.contains("Do not repeat the same request unchanged"));
 }
 
 fn test_goal(objective: &str) -> ThreadGoal {
