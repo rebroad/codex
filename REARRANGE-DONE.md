@@ -36,5 +36,5 @@
 ## Handoff/build ownership continuation (in progress, 2026-11-17)
 
 - Reopened the rearrangement after review found source/build resolver, sync, and source-tree-build changes folded into `feat(app-server): support active turn handoff` (`c1bf1ec357`, formerly `5094608491`). The three resolver/sync files were absent from the former commit; the rewritten handoff commit has additional build-script changes as well.
-- The locked merge-base remains `rust-v0.163.0-alpha.11` at `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. Before rewriting, create a new checkpoint at the post-record-update tip and record its exact commit and tree here.
+- The locked merge-base remains `rust-v0.163.0-alpha.11` at `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. Fresh checkpoint: `alpha.before-rearrange-20261117-handoff-build-split` at `1d5f8b7b5ae975ceaae502593e68f2ead28803ef`, tree `3304df451060f58c3d2a264687471c34462dba7e`.
 - Ownership hypothesis to verify before rewriting: source/build resolver and sync-marker behavior belongs with `build: resolve source and external build trees`; source-tree build/symlink support belongs with `build: allow intentional source-tree build symlink`; deleted-worktree exec-server lock cleanup remains with the handoff behavior. No tests or builds will be run.
