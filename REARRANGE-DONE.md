@@ -32,3 +32,9 @@
 - Fetched `origin/alpha` at `f56162dda39d4bf2f156d542b78dea31785ef282`, then published the full-range rewrite using `--force-with-lease` against that exact tip.
 - A fresh fetch confirmed `origin/alpha` at `2784f61f6f461115c6f37c19a48a8a1889a11810` with tree `3f5fbc2d0450548bebcb05f949d1d379e6bac516`, matching local `alpha` at that point.
 - At publication, the locked merge-base remained unchanged; the range contained 396 commits, no merges, and no unsquashed fixup/squash/amend subjects. The source tree still matched the recorded checkpoint outside the two audit records. No tests or builds were run.
+
+## Handoff/build ownership continuation (in progress, 2026-11-17)
+
+- Reopened the rearrangement after review found source/build resolver, sync, and source-tree-build changes folded into `feat(app-server): support active turn handoff` (`c1bf1ec357`, formerly `5094608491`). The three resolver/sync files were absent from the former commit; the rewritten handoff commit has additional build-script changes as well.
+- The locked merge-base remains `rust-v0.163.0-alpha.11` at `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`. Before rewriting, create a new checkpoint at the post-record-update tip and record its exact commit and tree here.
+- Ownership hypothesis to verify before rewriting: source/build resolver and sync-marker behavior belongs with `build: resolve source and external build trees`; source-tree build/symlink support belongs with `build: allow intentional source-tree build symlink`; deleted-worktree exec-server lock cleanup remains with the handoff behavior. No tests or builds will be run.
