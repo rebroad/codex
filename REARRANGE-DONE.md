@@ -26,3 +26,9 @@
 - Reviewed the post-consolidation highest-touch paths: `scripts/build_codex.sh` (34 commits), `scripts/codex_rustc_oom_wrapper.sh` (27), `scripts/codex_rustc_timing.sh` (18), `scripts/README_android_ballast.md` (15), `scripts/tests/test_codex_rustc_timing.sh` (14), `scripts/codex_cargo_env.sh` (14), `scripts/tests/test_codex_rust_guard_output.py` (12), and `codex-rs/core/config.schema.json` (12). Their touches correspond to distinct orchestration, guard/timing, integration, tests, documentation, or config changes; shared-file location alone did not justify merging those purposes. Markdown progress churn remains consolidated.
 - Local verification: merge-base is still `5425d3e625daa58eea3ad1de27c087eb3b2ffbd3`; the source tree equals the checkpoint except the two audit records; `alpha` has 394 commits in the range, zero merges, and zero `fixup!`/`squash!`/`amend!` subjects. `git range-diff` against the checkpoint reports 372 unchanged, 20 changed, 6 owner-correction commits absorbed, and no new commits outside the audit records. The worktree was clean before this entry.
 - No tests or builds were run. Remote publication and its post-fetch verification remain the final gate.
+
+## Publication (2026-11-17)
+
+- Fetched `origin/alpha` at `f56162dda39d4bf2f156d542b78dea31785ef282`, then published the full-range rewrite using `--force-with-lease` against that exact tip.
+- A fresh fetch confirmed `origin/alpha` at `2784f61f6f461115c6f37c19a48a8a1889a11810` with tree `3f5fbc2d0450548bebcb05f949d1d379e6bac516`, matching local `alpha` at that point.
+- At publication, the locked merge-base remained unchanged; the range contained 396 commits, no merges, and no unsquashed fixup/squash/amend subjects. The source tree still matched the recorded checkpoint outside the two audit records. No tests or builds were run.
