@@ -757,7 +757,7 @@ async fn reconnect_allows_slow_hydration() -> Result<()> {
 }
 
 #[tokio::test]
-async fn reconnect_retries_after_a_connection_attempt_times_out() -> Result<()> {
+async fn reconnect_waits_for_a_slow_thread_resume_without_restarting_it() -> Result<()> {
     let (app, _, _) = make_test_app_with_channels().await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = crate::RemoteAppServerEndpoint::WebSocket {
@@ -765,30 +765,23 @@ async fn reconnect_retries_after_a_connection_attempt_times_out() -> Result<()> 
         auth_token: None,
     };
     let id = ThreadId::new();
-    let server =
-        tokio::spawn(async move {
-            let (stream, _) = listener.accept().await?;
-            let _ = serve_reconnect_requests(
-                tokio_tungstenite::accept_async(stream).await?,
-                |request| async move {
-                    if request.method == "thread/resume" {
-                        tokio::time::sleep(Duration::from_secs(/*secs*/ 12)).await;
-                        Some(json!({"error": {"code": -32603, "message": "delayed response"}}))
-                    } else {
-                        None
-                    }
-                },
-            )
-            .await;
-            let (stream, _) = listener.accept().await?;
-            serve_reconnect_requests(tokio_tungstenite::accept_async(stream).await?, |request| {
-                std::future::ready((request.method == "thread/resume").then(
-                    || json!({"error": {"code": -32600, "message": "thread no longer exists"}}),
-                ))
-            })
-            .await
-        });
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        serve_reconnect_requests(
+            tokio_tungstenite::accept_async(stream).await?,
+            |request| async move {
+                if request.method == "thread/resume" {
+                    tokio::time::sleep(Duration::from_secs(/*secs*/ 12)).await;
+                    Some(json!({"error": {"code": -32600, "message": "thread no longer exists"}}))
+                } else {
+                    None
+                }
+            },
+        )
+        .await;
+    });
 
+    let started_at = std::time::Instant::now();
     let connected = reconnect_with_attempt_timeout(
         AppServerTarget::Remote { endpoint },
         app.config.clone(),
@@ -801,8 +794,15 @@ async fn reconnect_retries_after_a_connection_attempt_times_out() -> Result<()> 
     )
     .await;
     assert!(connected.is_ok());
-    server.abort();
-    let _ = server.await;
+    assert!(started_at.elapsed() >= Duration::from_secs(/*secs*/ 12));
+    let methods = server.await??;
+    assert_eq!(
+        methods
+            .iter()
+            .filter(|method| *method == "thread/resume")
+            .count(),
+        1
+    );
     Ok(())
 }
 

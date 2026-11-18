@@ -27,6 +27,43 @@ pub(super) struct Reconnected {
     thread: Option<AppServerStartedThread>,
 }
 
+fn log_reconnect_attempt_failure(
+    attempt_number: usize,
+    failure_stage: &str,
+    error: &color_eyre::Report,
+) {
+    match error.downcast_ref::<TypedRequestError>() {
+        Some(TypedRequestError::Transport { method, .. }) => tracing::debug!(
+            attempt_number,
+            failure_stage,
+            request_method = method,
+            error_class = "transport",
+            "app-server reconnect attempt failed"
+        ),
+        Some(TypedRequestError::Server { method, source }) => tracing::debug!(
+            attempt_number,
+            failure_stage,
+            request_method = method,
+            error_class = "server",
+            server_error_code = source.code,
+            "app-server reconnect attempt failed"
+        ),
+        Some(TypedRequestError::Deserialize { method, .. }) => tracing::debug!(
+            attempt_number,
+            failure_stage,
+            request_method = method,
+            error_class = "deserialize",
+            "app-server reconnect attempt failed"
+        ),
+        None => tracing::debug!(
+            attempt_number,
+            failure_stage,
+            error_class = "other",
+            "app-server reconnect attempt failed"
+        ),
+    }
+}
+
 pub(super) async fn reconnect(
     target: AppServerTarget,
     config: Config,
@@ -71,8 +108,9 @@ pub(super) async fn reconnect_with_attempt_timeout(
             "The initial thread may have been created, but its ID was not received. Nothing was retried. Your prompt is editable; inspect your tasks before relaunching."
         );
     }
-    // Give each connection and hydration attempt enough time to finish, while allowing the TUI
-    // to outlast a long graceful daemon shutdown and keep retrying until its replacement is ready.
+    // Bound connection and bootstrap setup, but do not cancel a thread resume after the server
+    // has accepted it. Cold session startup can take longer than the setup deadline; canceling
+    // it only makes the server repeat expensive resume work on every retry.
     for (attempt_number, delay) in [0, 1, 2, 4]
         .into_iter()
         .chain(std::iter::repeat(/*elt*/ 8))
@@ -80,7 +118,7 @@ pub(super) async fn reconnect_with_attempt_timeout(
     {
         let attempt_number = attempt_number + 1;
         let mut failure_stage = "retry_delay";
-        let attempt = async {
+        let setup = async {
             tokio::time::sleep(Duration::from_secs(delay)).await;
             failure_stage = "connect";
             let client = crate::app_server_connection::connect(&target).await?;
@@ -90,99 +128,79 @@ pub(super) async fn reconnect_with_attempt_timeout(
                 .with_thread_tool_transport(task_tools.clone());
             failure_stage = "bootstrap";
             let bootstrap = session.bootstrap(&config).await?;
-            let thread = if let Some(thread_id) = thread_id {
-                failure_stage = "thread_resume";
-                match session
-                    .resume_thread(
-                        &local_settings,
-                        config.clone(),
-                        thread_id,
-                        ResumeModelSettings::PreserveExistingThread,
-                    )
-                    .await
-                {
-                    Ok(thread) => Some(thread),
-                    Err(error)
-                        if matches!(
-                            error.downcast_ref::<TypedRequestError>(),
-                            Some(TypedRequestError::Transport { .. })
-                        ) =>
-                    {
-                        return Err(error);
-                    }
-                    // Unloading threads use the same code as unavailable conversations, but
-                    // ordinary resume can reattach once the unload finishes.
-                    Err(error)
-                        if matches!(
-                            error.downcast_ref::<TypedRequestError>(),
-                            Some(TypedRequestError::Server { method, source })
-                                if method == "thread/resume" && source.code == -32600
-                                    && source.message.starts_with(&format!("thread {thread_id} is closing;"))
-                        ) =>
-                    {
-                        return Err(error);
-                    }
-                    Err(error)
-                        if matches!(
-                            error.downcast_ref::<TypedRequestError>(),
-                            Some(TypedRequestError::Server { source, .. }) if source.code == -32600
-                        ) || presentation == ReconnectPresentation::Overview =>
-                    {
-                        None
-                    }
-                    Err(error) => return Err(error),
-                }
-            } else {
-                None
-            };
-            Ok::<_, color_eyre::Report>(Reconnected {
-                session,
-                bootstrap,
-                thread,
-            })
+            Ok::<_, color_eyre::Report>((session, bootstrap))
         };
-        let result = tokio::time::timeout(attempt_timeout, attempt).await;
-        match result {
-            Ok(Ok(connected)) => return Ok(connected),
-            Ok(Err(error)) => match error.downcast_ref::<TypedRequestError>() {
-                Some(TypedRequestError::Transport { method, .. }) => tracing::debug!(
-                    attempt_number,
-                    failure_stage,
-                    request_method = method,
-                    error_class = "transport",
-                    "app-server reconnect attempt failed"
-                ),
-                Some(TypedRequestError::Server { method, source }) => tracing::debug!(
-                    attempt_number,
-                    failure_stage,
-                    request_method = method,
-                    error_class = "server",
-                    server_error_code = source.code,
-                    "app-server reconnect attempt failed"
-                ),
-                Some(TypedRequestError::Deserialize { method, .. }) => tracing::debug!(
-                    attempt_number,
-                    failure_stage,
-                    request_method = method,
-                    error_class = "deserialize",
-                    "app-server reconnect attempt failed"
-                ),
-                None => tracing::debug!(
-                    attempt_number,
-                    failure_stage,
-                    error_class = "other",
-                    "app-server reconnect attempt failed"
-                ),
-            },
+        let setup_result = tokio::time::timeout(attempt_timeout, setup).await;
+        let (mut session, bootstrap) = match setup_result {
+            Ok(Ok(connected)) => connected,
+            Ok(Err(error)) => {
+                log_reconnect_attempt_failure(attempt_number, failure_stage, &error);
+                continue;
+            }
             Err(_) => {
                 tracing::debug!(
                     attempt_number,
                     failure_stage,
                     "app-server reconnect attempt timed out"
                 );
+                continue;
             }
-        }
-        // Transport errors can contain endpoint credentials. Do not render or log them.
+        };
+        let thread = if let Some(thread_id) = thread_id {
+            failure_stage = "thread_resume";
+            match session
+                .resume_thread(
+                    &local_settings,
+                    config.clone(),
+                    thread_id,
+                    ResumeModelSettings::PreserveExistingThread,
+                )
+                .await
+            {
+                Ok(thread) => Some(thread),
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<TypedRequestError>(),
+                        Some(TypedRequestError::Transport { .. })
+                    ) =>
+                {
+                    log_reconnect_attempt_failure(attempt_number, failure_stage, &error);
+                    continue;
+                }
+                // Unloading threads use the same code as unavailable conversations, but
+                // ordinary resume can reattach once the unload finishes.
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<TypedRequestError>(),
+                        Some(TypedRequestError::Server { method, source })
+                            if method == "thread/resume" && source.code == -32600
+                                && source.message.starts_with(&format!("thread {thread_id} is closing;"))
+                    ) =>
+                {
+                    log_reconnect_attempt_failure(attempt_number, failure_stage, &error);
+                    continue;
+                }
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<TypedRequestError>(),
+                        Some(TypedRequestError::Server { source, .. }) if source.code == -32600
+                    ) || presentation == ReconnectPresentation::Overview =>
+                {
+                    None
+                }
+                Err(error) => {
+                    log_reconnect_attempt_failure(attempt_number, failure_stage, &error);
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        return Ok(Reconnected {
+            session,
+            bootstrap,
+            thread,
+        });
     }
     color_eyre::eyre::bail!("Server connection could not be restored");
 }

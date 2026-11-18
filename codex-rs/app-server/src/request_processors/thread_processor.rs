@@ -751,15 +751,12 @@ impl ThreadRequestProcessor {
             })
             .transpose()?;
 
-        {
-            let _thread_list_state_permit = self
-                .acquire_thread_list_state_permit("thread/section/move")
-                .await?;
-            self.thread_manager
-                .move_thread_to_section(thread_uuid, section_id.as_deref(), before_thread_uuid)
-                .await
-                .map_err(|err| core_thread_write_error("move thread in section", err))?;
-        }
+        // Section placement is independent of cold thread startup. Do not make pin/unpin wait
+        // behind a resume that is still restoring its session runtime.
+        self.thread_manager
+            .move_thread_to_section(thread_uuid, section_id.as_deref(), before_thread_uuid)
+            .await
+            .map_err(|err| core_thread_write_error("move thread in section", err))?;
 
         Ok(Some(ClientResponsePayload::ThreadSectionMove(
             ThreadSectionMoveResponse {},
