@@ -1525,6 +1525,10 @@ impl Session {
                 ShellSnapshot::disabled()
             };
             let inherited_environments = inherited_environments.unwrap_or_default();
+            // Reopening a saved thread must not keep the client waiting for an executor
+            // reconnect. Resolution continues in the background and execution can wait for it.
+            let non_blocking_snapshots = config.features.enabled(Feature::DeferredExecutor)
+                || matches!(&initial_history, InitialHistory::Resumed(_));
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
                 default_shell.clone(),
@@ -1534,7 +1538,7 @@ impl Session {
                 ),
                 shell_snapshot,
                 inherited_environments.clone(),
-                config.features.enabled(Feature::DeferredExecutor),
+                non_blocking_snapshots,
             ));
             turn_environments.update_selections(environment_selections);
             session_configuration.environments = turn_environments.selections();
