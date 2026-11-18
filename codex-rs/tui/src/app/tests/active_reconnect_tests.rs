@@ -778,7 +778,7 @@ async fn reconnect_waits_for_a_slow_thread_resume_without_restarting_it() -> Res
                 }
             },
         )
-        .await;
+        .await
     });
 
     let started_at = std::time::Instant::now();
