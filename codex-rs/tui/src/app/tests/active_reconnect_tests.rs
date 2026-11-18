@@ -795,6 +795,7 @@ async fn reconnect_waits_for_a_slow_thread_resume_without_restarting_it() -> Res
     .await;
     assert!(connected.is_ok());
     assert!(started_at.elapsed() >= Duration::from_secs(/*secs*/ 12));
+    drop(connected);
     let methods = server.await??;
     assert_eq!(
         methods
