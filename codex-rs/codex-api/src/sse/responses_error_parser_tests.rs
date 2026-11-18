@@ -11,6 +11,7 @@ fn test_try_parse_retry_delay() {
         code: Some("rate_limit_exceeded".to_string()),
         plan_type: None,
         resets_at: None,
+        limit_window_minutes: None,
         misalignment: None,
     };
 
@@ -26,6 +27,7 @@ fn test_try_parse_retry_delay_no_delay() {
         code: Some("rate_limit_exceeded".to_string()),
         plan_type: None,
         resets_at: None,
+        limit_window_minutes: None,
         misalignment: None,
     };
     let delay = try_parse_retry_delay(&err);
@@ -40,8 +42,44 @@ fn test_try_parse_retry_delay_azure() {
         code: Some("rate_limit_exceeded".to_string()),
         plan_type: None,
         resets_at: None,
+        limit_window_minutes: None,
         misalignment: None,
     };
     let delay = try_parse_retry_delay(&err);
     assert_eq!(delay, Some(Duration::from_secs(35)));
+}
+
+#[test]
+fn usage_limit_reached_is_classified_from_failed_response() {
+    for error in [
+        serde_json::json!({
+            "type": "usage_limit_reached",
+            "message": "You've hit your usage limit",
+            "plan_type": "free",
+            "resets_at": 1_795_803_019_i64,
+            "limit_window_minutes": 43_200,
+        }),
+        serde_json::json!({
+            "code": "usage_limit_reached",
+            "message": "You've hit your usage limit",
+        }),
+    ] {
+        let error = parse_failed_response(Some(serde_json::json!({
+            "error": error,
+        })));
+        let ApiError::UsageLimitReached(error) = error else {
+            panic!("expected usage-limit error, got {error:?}");
+        };
+        if error.plan_type.is_some() {
+            assert_eq!(
+                error.plan_type,
+                Some(codex_protocol::auth::PlanType::from_raw_value("free"))
+            );
+            assert_eq!(error.limit_window_minutes, Some(43_200));
+            assert_eq!(
+                error.resets_at.map(|timestamp| timestamp.timestamp()),
+                Some(1_795_803_019)
+            );
+        }
+    }
 }

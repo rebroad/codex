@@ -58,6 +58,27 @@ async fn invalidation_revokes_existing_permits_and_rejects_stale_publication() {
     assert!(policy.acquire(&url).is_ok());
 }
 
+#[tokio::test]
+async fn wait_until_available_resumes_after_policy_publication() {
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+    policy.invalidate();
+
+    let waiting_policy = policy.clone();
+    let waiter = tokio::spawn(async move { waiting_policy.wait_until_available().await });
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished());
+
+    controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+    waiter.await.unwrap();
+    assert!(
+        policy
+            .acquire(&Url::parse("https://example.com").unwrap())
+            .is_ok()
+    );
+}
+
 #[test]
 fn policy_updates_wait_for_active_responses() {
     let controller = NetworkPolicyController::default();

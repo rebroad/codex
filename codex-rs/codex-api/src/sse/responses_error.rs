@@ -4,7 +4,11 @@
 use crate::error::ApiError;
 use crate::error::parse_flex_unavailable;
 use crate::responses_headers::json_headers_to_http_headers;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_http_client::RetryAfter;
+use codex_protocol::auth::PlanType;
+use codex_protocol::error::UsageLimitReachedError;
 use codex_protocol::protocol::MisalignmentErrorDetails;
 use serde::Deserialize;
 use serde_json::Value;
@@ -19,6 +23,7 @@ struct Error {
     message: Option<String>,
     plan_type: Option<String>,
     resets_at: Option<i64>,
+    limit_window_minutes: Option<u16>,
     #[serde(default)]
     misalignment: Option<Value>,
 }
@@ -43,6 +48,21 @@ pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
             None => ApiError::Stream(message),
         };
     };
+
+    if error.r#type.as_deref() == Some("usage_limit_reached")
+        || error.code.as_deref() == Some("usage_limit_reached")
+    {
+        return ApiError::UsageLimitReached(UsageLimitReachedError {
+            plan_type: error.plan_type.as_deref().map(PlanType::from_raw_value),
+            resets_at: error
+                .resets_at
+                .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0)),
+            limit_window_minutes: error.limit_window_minutes,
+            rate_limits: None,
+            promo_message: None,
+            rate_limit_reached_type: None,
+        });
+    }
 
     match error.code.as_deref() {
         Some("context_length_exceeded") => ApiError::ContextWindowExceeded,

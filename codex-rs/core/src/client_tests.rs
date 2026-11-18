@@ -1732,6 +1732,7 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
         &mut provider_auth_recovery_attempted,
         &test_session_telemetry(),
         &provider,
+        /*auth_manager*/ None,
         /*event_sender*/ None,
         /*turn_id*/ None,
     )
@@ -1829,6 +1830,7 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
             &mut provider_auth_recovery_attempted,
             &telemetry,
             &provider,
+            /*auth_manager*/ None,
             Some(&event_sender),
             Some("turn-1"),
         )
@@ -1848,6 +1850,7 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
                 &mut provider_auth_recovery_attempted,
                 &telemetry,
                 &provider,
+                /*auth_manager*/ None,
                 Some(&event_sender),
                 Some("turn-1"),
             )

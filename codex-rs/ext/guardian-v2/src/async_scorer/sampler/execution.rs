@@ -29,6 +29,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::sync::oneshot;
 
@@ -129,8 +130,28 @@ impl SamplingExecution {
         &self,
         error: &LunaSamplerError,
         auth_recovery: &mut Option<UnauthorizedRecovery>,
+        fallback_retry_attempted: &mut bool,
+        expected_owner_generation: &AtomicU64,
         retries: &mut usize,
     ) -> bool {
+        if matches!(error, LunaSamplerError::Api(ApiError::UsageLimitReached(_)))
+            && !*fallback_retry_attempted
+            && let Some(auth_manager) = self.config.provider.auth_manager()
+            && (auth_manager.fallback_auth_is_active()
+                || auth_manager.switch_to_fallback_auth().await)
+        {
+            *fallback_retry_attempted = true;
+            expected_owner_generation.store(
+                auth_manager
+                    .auth_change_state_receiver()
+                    .borrow()
+                    .owner_generation,
+                Ordering::Release,
+            );
+            self.connections.clear();
+            return true;
+        }
+
         let retryable = match error {
             LunaSamplerError::ConnectionTimeout
             | LunaSamplerError::Api(
@@ -179,6 +200,7 @@ impl SamplingExecution {
                 | ApiError::ResponseIncomplete(_)
                 | ApiError::QuotaExceeded
                 | ApiError::UsageNotIncluded
+                | ApiError::UsageLimitReached(_)
                 | ApiError::RateLimit(_)
                 | ApiError::InvalidRequest { .. }
                 | ApiError::InvalidPrompt { .. }
@@ -198,41 +220,48 @@ impl SamplingExecution {
         &mut self,
         mut mode: SamplingMode<'_>,
     ) -> Result<String, LunaSamplerError> {
-        let auth_changes = self
-            .config
-            .provider
-            .auth_manager()
+        let auth_manager = self.config.provider.auth_manager();
+        let auth_changes = auth_manager
+            .as_ref()
             .filter(|_| self.config.provider.info().auth.is_none())
             .map(|manager| manager.auth_change_state_receiver());
-        let owner_generation = self.auth_owner_generation;
+        let expected_owner_generation = Arc::new(AtomicU64::new(
+            self.auth_owner_generation.unwrap_or_default(),
+        ));
         let account_changed_error = || {
             LunaSamplerError::Provider(
                 std::io::Error::other("account changed during Luna classification").into(),
             )
         };
         let ensure_account_owner = || {
-            if auth_changes
-                .as_ref()
-                .map(|changes| changes.borrow().owner_generation)
-                != owner_generation
-            {
+            if auth_changes.as_ref().is_some_and(|changes| {
+                changes.borrow().owner_generation
+                    != expected_owner_generation.load(Ordering::Acquire)
+            }) {
                 return Err(account_changed_error());
             }
             Ok(())
         };
         let mut owner_changes = auth_changes.clone();
+        let expected_owner_generation_for_watch = Arc::clone(&expected_owner_generation);
         let owner_changed = async move {
             let Some(changes) = owner_changes.as_mut() else {
                 return std::future::pending::<()>().await;
             };
-            while Some(changes.borrow_and_update().owner_generation) == owner_generation {
-                if changes.changed().await.is_err() {
+            loop {
+                if changes.borrow_and_update().owner_generation
+                    != expected_owner_generation_for_watch.load(Ordering::Acquire)
+                {
                     break;
+                }
+                if changes.changed().await.is_err() {
+                    return std::future::pending::<()>().await;
                 }
             }
         };
         tokio::pin!(owner_changed);
         let mut retries = 0;
+        let mut fallback_retry_attempted = false;
         let mut auth_recovery = self
             .config
             .provider
@@ -257,7 +286,13 @@ impl SamplingExecution {
                 Ok(lease) => lease,
                 Err(error) => {
                     if self
-                        .retry_after_failure(&error, &mut auth_recovery, &mut retries)
+                        .retry_after_failure(
+                            &error,
+                            &mut auth_recovery,
+                            &mut fallback_retry_attempted,
+                            &expected_owner_generation,
+                            &mut retries,
+                        )
                         .await
                     {
                         continue;
@@ -330,7 +365,13 @@ impl SamplingExecution {
                 Err(error) => {
                     let error = LunaSamplerError::Api(error);
                     if self
-                        .retry_after_failure(&error, &mut auth_recovery, &mut retries)
+                        .retry_after_failure(
+                            &error,
+                            &mut auth_recovery,
+                            &mut fallback_retry_attempted,
+                            &expected_owner_generation,
+                            &mut retries,
+                        )
                         .await
                     {
                         continue;
@@ -363,7 +404,13 @@ impl SamplingExecution {
                             return Err(error);
                         }
                         if self
-                            .retry_after_failure(&error, &mut auth_recovery, &mut retries)
+                            .retry_after_failure(
+                                &error,
+                                &mut auth_recovery,
+                                &mut fallback_retry_attempted,
+                                &expected_owner_generation,
+                                &mut retries,
+                            )
                             .await
                         {
                             continue 'retry;

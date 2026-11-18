@@ -77,6 +77,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
@@ -91,6 +92,7 @@ use serde_json::json;
 use std::io::Write;
 use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::Mock;
@@ -3670,6 +3672,449 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         error_event.message
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn usage_limit_retries_with_auth2_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let auth_json = |access_token: &str| {
+        json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "e30.e30.signature",
+                "access_token": access_token,
+                "refresh_token": format!("{access_token}-refresh"),
+                "account_id": "workspace-one"
+            },
+            "last_refresh": chrono::Utc::now()
+        })
+    };
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&auth_json("primary-token"))?,
+    )?;
+    std::fs::write(
+        home.path().join("auth2.json"),
+        serde_json::to_vec(&auth_json("fallback-token"))?,
+    )?;
+    let auth = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer primary-token"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": { "type": "usage_limit_reached", "message": "limit reached" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer fallback-token"),
+        sse(vec![
+            ev_response_created("fallback-response"),
+            ev_completed("fallback-response"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_home(home).with_auth_manager(auth.clone());
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue after switching auth".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        auth.auth_cached().unwrap().get_token_data()?.access_token,
+        "fallback-token"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streamed_usage_limit_retries_with_auth2_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let auth_json = |access_token: &str| {
+        json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "e30.e30.signature",
+                "access_token": access_token,
+                "refresh_token": format!("{access_token}-refresh"),
+                "account_id": "workspace-one"
+            },
+            "last_refresh": chrono::Utc::now()
+        })
+    };
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&auth_json("primary-token"))?,
+    )?;
+    std::fs::write(
+        home.path().join("auth2.json"),
+        serde_json::to_vec(&auth_json("fallback-token"))?,
+    )?;
+    let auth = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+
+    mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer primary-token"),
+        sse_failed(
+            "primary-response",
+            "usage_limit_reached",
+            "You've hit your usage limit",
+        ),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer fallback-token"),
+        sse(vec![
+            ev_response_created("fallback-response"),
+            ev_completed("fallback-response"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_home(home).with_auth_manager(auth.clone());
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue after a streamed usage limit".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        auth.auth_cached().unwrap().get_token_data()?.access_token,
+        "fallback-token"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_usage_limit_retries_with_auth2_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_websocket_server(vec![
+        vec![
+            vec![
+                ev_response_created("primary-prewarm"),
+                ev_completed("primary-prewarm"),
+            ],
+            vec![json!({
+                "type": "error",
+                "status": 429,
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "You've hit your usage limit"
+                }
+            })],
+        ],
+        vec![vec![
+            ev_response_created("fallback-response"),
+            ev_completed("fallback-response"),
+        ]],
+    ])
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let auth_json = |access_token: &str| {
+        json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "e30.e30.signature",
+                "access_token": access_token,
+                "refresh_token": format!("{access_token}-refresh"),
+                "account_id": "workspace-one"
+            },
+            "last_refresh": chrono::Utc::now()
+        })
+    };
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&auth_json("primary-token"))?,
+    )?;
+    std::fs::write(
+        home.path().join("auth2.json"),
+        serde_json::to_vec(&auth_json("fallback-token"))?,
+    )?;
+    let auth = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+    let mut builder = test_codex().with_home(home).with_auth_manager(auth.clone());
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue after a websocket usage limit".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let terminal_event = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_) | EventMsg::Error(_))
+    })
+    .await;
+    assert!(
+        matches!(terminal_event, EventMsg::TurnComplete(_)),
+        "turn did not complete after websocket usage limit: {terminal_event:?}"
+    );
+    assert!(
+        server.wait_for_handshakes(2, Duration::from_secs(10)).await,
+        "fallback auth did not establish a second websocket connection"
+    );
+    let auth_headers = server
+        .handshakes()
+        .into_iter()
+        .map(|handshake| handshake.header("authorization"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        auth_headers,
+        vec![
+            Some("Bearer primary-token".to_string()),
+            Some("Bearer fallback-token".to_string())
+        ]
+    );
+    assert_eq!(
+        auth.auth_cached().unwrap().get_token_data()?.access_token,
+        "fallback-token"
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_usage_limit_retries_with_auth2_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let auth_json = |access_token: &str| {
+        json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "e30.e30.signature",
+                "access_token": access_token,
+                "refresh_token": format!("{access_token}-refresh"),
+                "account_id": "workspace-one"
+            },
+            "last_refresh": chrono::Utc::now()
+        })
+    };
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&auth_json("primary-token"))?,
+    )?;
+    std::fs::write(
+        home.path().join("auth2.json"),
+        serde_json::to_vec(&auth_json("fallback-token"))?,
+    )?;
+    let auth = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer primary-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(
+                    sse_failed(
+                        "primary-response",
+                        "usage_limit_reached",
+                        "You've hit your usage limit",
+                    ),
+                    "text/event-stream",
+                )
+                .set_delay(Duration::from_millis(/*millis*/ 200)),
+        )
+        .up_to_n_times(/*n*/ 2)
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer fallback-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            sse(vec![
+                ev_response_created("fallback-response"),
+                ev_completed("fallback-response"),
+            ]),
+            "text/event-stream",
+        ))
+        .up_to_n_times(/*n*/ 2)
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+
+    let first = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth_manager(auth.clone())
+        .build_with_auto_env(&server)
+        .await?;
+    let second = test_codex()
+        .with_home(home)
+        .with_auth_manager(auth.clone())
+        .build_with_auto_env(&server)
+        .await?;
+    let input = || {
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue after a shared usage limit".into(),
+            text_elements: Vec::new(),
+        }])
+    };
+    let (first_start, second_start) = tokio::join!(
+        first.codex.start_or_steer_turn(input()),
+        second.codex.start_or_steer_turn(input()),
+    );
+    first_start?;
+    second_start?;
+    let (first_final, second_final) = tokio::join!(
+        wait_for_event(&first.codex, |event| matches!(
+            event,
+            EventMsg::TurnComplete(_) | EventMsg::Error(_)
+        )),
+        wait_for_event(&second.codex, |event| matches!(
+            event,
+            EventMsg::TurnComplete(_) | EventMsg::Error(_)
+        )),
+    );
+    assert!(
+        matches!(first_final, EventMsg::TurnComplete(_)),
+        "first turn ended with {first_final:?}"
+    );
+    assert!(
+        matches!(second_final, EventMsg::TurnComplete(_)),
+        "second turn ended with {second_final:?}"
+    );
+    assert_eq!(
+        auth.auth_cached().unwrap().get_token_data()?.access_token,
+        "fallback-token"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_access_token_retries_with_auth2_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let auth_json = |access_token: &str| {
+        json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "e30.e30.signature",
+                "access_token": access_token,
+                "refresh_token": format!("{access_token}-refresh"),
+                "account_id": "workspace-one"
+            },
+            "last_refresh": chrono::Utc::now()
+        })
+    };
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&auth_json("primary-token"))?,
+    )?;
+    std::fs::write(
+        home.path().join("auth2.json"),
+        serde_json::to_vec(&auth_json("fallback-token"))?,
+    )?;
+    let auth = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer primary-token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "code": "access_token_revoked",
+                "message": "The access token has been revoked"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer fallback-token"),
+        sse(vec![
+            ev_response_created("fallback-response"),
+            ev_completed("fallback-response"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_home(home).with_auth_manager(auth.clone());
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue after revoked token".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        auth.auth_cached().unwrap().get_token_data()?.access_token,
+        "fallback-token"
+    );
+    server.verify().await;
     Ok(())
 }
 

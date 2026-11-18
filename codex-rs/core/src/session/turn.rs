@@ -1745,6 +1745,7 @@ async fn run_sampling_request(
     let mut retry_state = ResponsesStreamRetryState::default();
     let mut initial_input = Some(input);
     let mut original_input = None;
+    let mut fallback_retry_attempted = false;
     let mut executed_tool_calls_by_output = HashMap::new();
     loop {
         // Running code-mode cells can request review while this response is in flight.
@@ -1804,6 +1805,17 @@ async fn run_sampling_request(
                     let rate_limits = e.rate_limits.clone();
                     if let Some(rate_limits) = rate_limits {
                         sess.update_rate_limits(&turn_context, *rate_limits).await;
+                    }
+                    if !fallback_retry_attempted
+                        && (sess.services.auth_manager.fallback_auth_is_active()
+                            || sess.services.auth_manager.switch_to_fallback_auth().await)
+                    {
+                        fallback_retry_attempted = true;
+                        let input = prompt.input.clone();
+                        original_input.get_or_insert(input.clone());
+                        initial_input = Some(input);
+                        turn_context.turn_timing_state.record_sampling_retry();
+                        continue;
                     }
                     return Err(err);
                 }

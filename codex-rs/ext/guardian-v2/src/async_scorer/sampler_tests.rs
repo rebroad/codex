@@ -52,6 +52,8 @@ use super::LunaSamplerError;
 use super::LunaSamplingRequest;
 use super::MAX_CONCURRENT_REQUESTS;
 
+#[path = "sampler_fallback_tests.rs"]
+mod fallback;
 #[path = "request_tests.rs"]
 mod request;
 #[path = "retained_sampling_tests.rs"]

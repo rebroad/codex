@@ -897,6 +897,33 @@ pub async fn run_main_with_transport_options(
     let transport_shutdown_token = CancellationToken::new();
     // Remote enrollment must cancel before RPC drain without shutting down telemetry.
     let remote_control_shutdown_token = transport_shutdown_token.child_token();
+    // Auth fallback can change the account from inside an active model request.
+    // Republish the shared policy before that request retries with the new owner.
+    let mut auth_changes = auth_manager.auth_change_state_receiver();
+    let mut auth_owner_generation = auth_changes.borrow_and_update().owner_generation;
+    let auth_config_manager = config_manager.clone();
+    let auth_shutdown_token = transport_shutdown_token.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = auth_shutdown_token.cancelled() => break,
+                changed = auth_changes.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let state = *auth_changes.borrow_and_update();
+                    if state.owner_generation == auth_owner_generation {
+                        continue;
+                    }
+                    auth_owner_generation = state.owner_generation;
+                    info!(auth_owner_generation, "auth owner changed; refreshing application network policy");
+                    if let Err(err) = auth_config_manager.refresh_application_network_policy().await {
+                        warn!(error = %err, "failed to refresh application network policy after auth owner change");
+                    }
+                }
+            }
+        }
+    });
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
     let mut owner_endpoint_available = false;
     let mut app_server_owner_profile = app_server_profile.clone();

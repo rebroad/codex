@@ -290,6 +290,22 @@ impl NetworkPolicy {
             .map(|state| lock_state(state).changes.subscribe())
     }
 
+    /// Waits until the policy owner publishes an available policy after invalidation.
+    pub async fn wait_until_available(&self) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let mut changes = lock_state(state).changes.subscribe();
+        loop {
+            if lock_state(state).policy.is_some() {
+                return;
+            }
+            if changes.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
     pub fn revision(&self) -> NetworkPolicyRevision {
         NetworkPolicyRevision(
             self.state

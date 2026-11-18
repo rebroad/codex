@@ -204,6 +204,7 @@ use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::extract_response_debug_context_from_api_error;
@@ -1627,6 +1628,7 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        let mut fallback_retry_attempted = false;
         loop {
             let client_setup = self
                 .client
@@ -1681,13 +1683,26 @@ impl ModelClientSession {
                             &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &provider,
+                            auth_manager.as_deref(),
                             self.client.event_sender.as_ref(),
                             responses_metadata.turn_id.as_deref(),
                         )
                         .await?,
                     );
                 }
-                Err(err) => return Err(provider.map_api_error(err)),
+                Err(err) => {
+                    let err = provider.map_api_error(err);
+                    if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
+                        && let Some(auth_manager) = auth_manager.as_ref()
+                        && !fallback_retry_attempted
+                        && (auth_manager.fallback_auth_is_active()
+                            || auth_manager.switch_to_fallback_auth().await)
+                    {
+                        fallback_retry_attempted = true;
+                        continue;
+                    }
+                    return Err(err);
+                }
             }
         }
     }
@@ -1809,7 +1824,7 @@ impl ResponsesHttpExecutor<'_> {
     pub(crate) async fn stream_responses_http(
         &self,
         turn_state: &Arc<OnceLock<String>>,
-        expected_auth_owner: Option<u64>,
+        mut expected_auth_owner: Option<u64>,
         event_sender: Option<&Sender<ProtocolEvent>>,
         prompt: &Prompt,
         model_info: &ModelInfo,
@@ -1826,6 +1841,7 @@ impl ResponsesHttpExecutor<'_> {
             .map(AuthManager::unauthorized_recovery);
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        let mut fallback_retry_attempted = false;
         loop {
             let client_setup = self
                 .client
@@ -1972,6 +1988,7 @@ impl ResponsesHttpExecutor<'_> {
                             &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &self.client.state.provider,
+                            auth_manager.as_deref(),
                             event_sender,
                             responses_metadata.turn_id.as_deref(),
                         )
@@ -1988,6 +2005,17 @@ impl ResponsesHttpExecutor<'_> {
                         response_debug_context.request_id.as_deref(),
                         /*output_items*/ &[],
                     );
+                    if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
+                        && let Some(auth_manager) = auth_manager.as_ref()
+                        && !fallback_retry_attempted
+                        && (auth_manager.fallback_auth_is_active()
+                            || auth_manager.switch_to_fallback_auth().await)
+                    {
+                        fallback_retry_attempted = true;
+                        let _ = auth_manager.auth().await;
+                        expected_auth_owner = self.client.auth_owner_generation();
+                        continue;
+                    }
                     return Err(err);
                 }
             }
@@ -2033,6 +2061,7 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        let mut fallback_retry_attempted = false;
         loop {
             let client_setup = self
                 .client
@@ -2113,6 +2142,7 @@ impl ModelClientSession {
                             &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &provider,
+                            auth_manager.as_deref(),
                             self.client.event_sender.as_ref(),
                             responses_metadata.turn_id.as_deref(),
                         )
@@ -2120,7 +2150,19 @@ impl ModelClientSession {
                     );
                     continue;
                 }
-                Err(err) => return Err(provider.map_api_error(err)),
+                Err(err) => {
+                    let err = provider.map_api_error(err);
+                    if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
+                        && let Some(auth_manager) = auth_manager.as_ref()
+                        && !fallback_retry_attempted
+                        && (auth_manager.fallback_auth_is_active()
+                            || auth_manager.switch_to_fallback_auth().await)
+                    {
+                        fallback_retry_attempted = true;
+                        continue;
+                    }
+                    return Err(err);
+                }
             }
 
             // Measure the complete logical request, not only the websocket delta.
@@ -2852,10 +2894,25 @@ async fn handle_unauthorized(
     provider_auth_recovery_attempted: &mut bool,
     session_telemetry: &SessionTelemetry,
     provider: &SharedModelProvider,
+    auth_manager: Option<&AuthManager>,
     event_sender: Option<&Sender<ProtocolEvent>>,
     turn_id: Option<&str>,
 ) -> Result<UnauthorizedRecoveryExecution> {
     let debug = extract_response_debug_context(&transport);
+    if debug
+        .auth_error_code
+        .as_deref()
+        .into_iter()
+        .chain(debug.auth_error.as_deref())
+        .any(|error| error.to_ascii_lowercase().contains("revok"))
+        && let Some(auth_manager) = auth_manager
+        && auth_manager.switch_to_fallback_auth().await
+    {
+        return Ok(UnauthorizedRecoveryExecution {
+            mode: "auth2_fallback",
+            phase: "revoked_access_token",
+        });
+    }
     if !*provider_auth_recovery_attempted {
         *provider_auth_recovery_attempted = true;
         let messages = provider.auth_recovery_messages();
@@ -2932,6 +2989,15 @@ async fn handle_unauthorized(
             }
             Err(RefreshTokenError::Policy(error)) => Err(CodexErr::Fatal(error.to_string())),
             Err(RefreshTokenError::Permanent(failed)) => {
+                if failed.reason == codex_protocol::auth::RefreshTokenFailedReason::Revoked
+                    && let Some(auth_manager) = auth_manager
+                    && auth_manager.switch_to_fallback_auth().await
+                {
+                    return Ok(UnauthorizedRecoveryExecution {
+                        mode: "auth2_fallback",
+                        phase: "revoked_token",
+                    });
+                }
                 session_telemetry.record_auth_recovery(
                     mode,
                     phase,

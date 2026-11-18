@@ -2442,6 +2442,7 @@ fn websocket_error_detail(err: &ApiError) -> String {
         | ApiError::ContextWindowExceeded
         | ApiError::QuotaExceeded
         | ApiError::UsageNotIncluded
+        | ApiError::UsageLimitReached(_)
         | ApiError::Retryable { .. }
         | ApiError::RateLimitExceeded { .. }
         | ApiError::RateLimit(_)
