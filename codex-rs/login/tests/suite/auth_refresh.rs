@@ -1460,6 +1460,87 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
 
 #[serial_test::serial(auth_env)]
 #[tokio::test]
+async fn usage_limit_switches_to_auth2_until_auth_json_changes() -> Result<()> {
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let primary = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(build_tokens("primary-access", "primary-refresh")),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    ctx.write_auth(&primary).await?;
+    ctx.auth_manager
+        .auth()
+        .await
+        .context("primary auth should load")?;
+
+    let fallback = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(build_tokens("fallback-access", "fallback-refresh")),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    std::fs::write(
+        ctx.codex_home.path().join("auth2.json"),
+        serde_json::to_vec(&fallback)?,
+    )?;
+
+    assert!(
+        ctx.auth_manager
+            .switch_to_fallback_auth_on_usage_limit()
+            .await
+    );
+    assert_eq!(
+        ctx.auth_manager
+            .auth_cached()
+            .unwrap()
+            .get_token_data()?
+            .access_token,
+        "fallback-access"
+    );
+    assert_eq!(
+        ctx.auth_manager
+            .auth()
+            .await
+            .unwrap()
+            .get_token_data()?
+            .access_token,
+        "fallback-access"
+    );
+    assert!(
+        !ctx.auth_manager
+            .switch_to_fallback_auth_on_usage_limit()
+            .await
+    );
+
+    let updated_primary = AuthDotJson {
+        tokens: Some(build_tokens("updated-primary", "updated-refresh")),
+        ..primary
+    };
+    ctx.write_auth(&updated_primary).await?;
+    assert_eq!(
+        ctx.auth_manager
+            .auth()
+            .await
+            .unwrap()
+            .get_token_data()?
+            .access_token,
+        "updated-primary"
+    );
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
 async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

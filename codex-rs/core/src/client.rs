@@ -204,6 +204,7 @@ use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::extract_response_debug_context_from_api_error;
@@ -1687,7 +1688,16 @@ impl ModelClientSession {
                         .await?,
                     );
                 }
-                Err(err) => return Err(provider.map_api_error(err)),
+                Err(err) => {
+                    let err = provider.map_api_error(err);
+                    if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
+                        && let Some(auth_manager) = auth_manager.as_ref()
+                        && auth_manager.switch_to_fallback_auth_on_usage_limit().await
+                    {
+                        continue;
+                    }
+                    return Err(err);
+                }
             }
         }
     }
@@ -1809,7 +1819,7 @@ impl ResponsesHttpExecutor<'_> {
     pub(crate) async fn stream_responses_http(
         &self,
         turn_state: &Arc<OnceLock<String>>,
-        expected_auth_owner: Option<u64>,
+        mut expected_auth_owner: Option<u64>,
         event_sender: Option<&Sender<ProtocolEvent>>,
         prompt: &Prompt,
         model_info: &ModelInfo,
@@ -1988,6 +1998,14 @@ impl ResponsesHttpExecutor<'_> {
                         response_debug_context.request_id.as_deref(),
                         /*output_items*/ &[],
                     );
+                    if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
+                        && let Some(auth_manager) = auth_manager.as_ref()
+                        && auth_manager.switch_to_fallback_auth_on_usage_limit().await
+                    {
+                        let _ = auth_manager.auth().await;
+                        expected_auth_owner = self.client.auth_owner_generation();
+                        continue;
+                    }
                     return Err(err);
                 }
             }
@@ -2120,7 +2138,16 @@ impl ModelClientSession {
                     );
                     continue;
                 }
-                Err(err) => return Err(provider.map_api_error(err)),
+                Err(err) => {
+                    let err = provider.map_api_error(err);
+                    if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
+                        && let Some(auth_manager) = auth_manager.as_ref()
+                        && auth_manager.switch_to_fallback_auth_on_usage_limit().await
+                    {
+                        continue;
+                    }
+                    return Err(err);
+                }
             }
 
             // Measure the complete logical request, not only the websocket delta.

@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::Weak;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -2137,6 +2138,7 @@ pub struct AuthManager {
     codex_home: PathBuf,
     auth_file: Option<PathBuf>,
     auth_file_fingerprint: Mutex<Option<AuthFileFingerprint>>,
+    fallback_auth_active: AtomicBool,
     pending_auth: Mutex<Option<PendingAuth>>,
     inner: RwLock<CachedAuth>,
     auth_change_tx: watch::Sender<u64>,
@@ -2302,6 +2304,7 @@ impl AuthManager {
             codex_home,
             auth_file,
             auth_file_fingerprint: Mutex::new(auth_file_fingerprint),
+            fallback_auth_active: AtomicBool::new(false),
             pending_auth: Mutex::new(None),
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
@@ -2344,6 +2347,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            fallback_auth_active: AtomicBool::new(false),
             pending_auth: Mutex::new(None),
             inner: RwLock::new(cached),
             auth_change_tx,
@@ -2377,6 +2381,7 @@ impl AuthManager {
             codex_home,
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            fallback_auth_active: AtomicBool::new(false),
             pending_auth: Mutex::new(None),
             inner: RwLock::new(cached),
             auth_change_tx,
@@ -2414,6 +2419,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            fallback_auth_active: AtomicBool::new(false),
             pending_auth: Mutex::new(None),
             inner: RwLock::new(cached),
             auth_change_tx,
@@ -2446,6 +2452,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             auth_file: None,
             auth_file_fingerprint: Mutex::new(None),
+            fallback_auth_active: AtomicBool::new(false),
             pending_auth: Mutex::new(None),
             inner: RwLock::new(CachedAuth {
                 auth: None,
@@ -2608,6 +2615,53 @@ impl AuthManager {
             return;
         }
 
+        if self.fallback_auth_active.load(Ordering::Acquire) {
+            let Some(primary_fingerprint) =
+                Self::read_auth_file_fingerprint(self.auth_file.as_deref(), &self.codex_home)
+            else {
+                return;
+            };
+            let changed = self
+                .auth_file_fingerprint
+                .lock()
+                .ok()
+                .is_some_and(|previous| previous.as_ref() != Some(&primary_fingerprint));
+            if !changed {
+                return;
+            }
+            let Ok(_refresh_guard) = self.refresh_lock.acquire().await else {
+                return;
+            };
+            let Some(current) =
+                Self::read_auth_file_fingerprint(self.auth_file.as_deref(), &self.codex_home)
+            else {
+                return;
+            };
+            let still_changed = self
+                .auth_file_fingerprint
+                .lock()
+                .ok()
+                .is_some_and(|previous| previous.as_ref() != Some(&current));
+            if !still_changed {
+                return;
+            }
+            match self.load_file_auth_from(self.auth_file.as_deref()).await {
+                Ok(Some(auth)) => {
+                    self.set_cached_auth(Some(auth));
+                    self.fallback_auth_active.store(false, Ordering::Release);
+                    if let Ok(mut stored) = self.auth_file_fingerprint.lock() {
+                        *stored = Some(current);
+                    }
+                    tracing::info!("Restored primary auth after auth.json changed");
+                }
+                Ok(None) => tracing::warn!("primary auth file changed but contains no credentials"),
+                Err(error) => {
+                    tracing::warn!(error = %error, "deferring primary auth reload until auth file is valid")
+                }
+            }
+            return;
+        }
+
         let Some(fingerprint) =
             Self::read_auth_file_fingerprint(self.auth_file.as_deref(), &self.codex_home)
         else {
@@ -2648,6 +2702,44 @@ impl AuthManager {
             }
             Err(error) => {
                 tracing::warn!(error = %error, "deferring auth reload until auth file is valid");
+            }
+        }
+    }
+
+    /// Switches to `auth2.json` after the backend reports an exhausted usage window.
+    /// The fallback is only available for the default file-backed auth source.
+    pub async fn switch_to_fallback_auth_on_usage_limit(&self) -> bool {
+        if self.auth_file.is_some()
+            || self.auth_credentials_store_mode != AuthCredentialsStoreMode::File
+            || self.has_external_auth()
+            || self.fallback_auth_active.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let fallback_path = self.codex_home.join("auth2.json");
+        if !fallback_path.is_file() {
+            return false;
+        }
+        let Ok(_refresh_guard) = self.refresh_lock.acquire().await else {
+            return false;
+        };
+        if self.fallback_auth_active.load(Ordering::Acquire) {
+            return false;
+        }
+        match self.load_file_auth_from(Some(&fallback_path)).await {
+            Ok(Some(auth)) => {
+                self.set_cached_auth(Some(auth));
+                self.fallback_auth_active.store(true, Ordering::Release);
+                tracing::info!("Backend usage limit reached; switched auth to auth2.json");
+                true
+            }
+            Ok(None) => {
+                tracing::warn!("auth2.json exists but contains no usable credentials");
+                false
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to load fallback auth from auth2.json");
+                false
             }
         }
     }
@@ -2784,11 +2876,22 @@ impl AuthManager {
     }
 
     async fn load_file_auth(&self) -> std::io::Result<Option<CodexAuth>> {
+        if self.fallback_auth_active.load(Ordering::Acquire) {
+            let fallback_path = self.codex_home.join("auth2.json");
+            return self.load_file_auth_from(Some(&fallback_path)).await;
+        }
+        self.load_file_auth_from(self.auth_file.as_deref()).await
+    }
+
+    async fn load_file_auth_from(
+        &self,
+        auth_file: Option<&Path>,
+    ) -> std::io::Result<Option<CodexAuth>> {
         let allowed_login_methods = self.allowed_login_methods();
         let effective_chatgpt_workspaces = self.effective_chatgpt_workspaces();
         load_auth_with_file(
             &self.codex_home,
-            self.auth_file.as_deref(),
+            auth_file,
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
             Some(&allowed_login_methods),
@@ -3073,7 +3176,13 @@ impl AuthManager {
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
-        let default_auth_path = self.codex_home.join("auth.json");
+        let default_auth_path =
+            self.codex_home
+                .join(if self.fallback_auth_active.load(Ordering::Acquire) {
+                    "auth2.json"
+                } else {
+                    "auth.json"
+                });
         let auth_path = self.auth_file.as_deref().unwrap_or(&default_auth_path);
         let _cross_process_guard = super::refresh_lock::acquire(auth_path)
             .await
@@ -3125,7 +3234,13 @@ impl AuthManager {
         {
             return self.refresh_token_from_authority_impl().await;
         }
-        let default_auth_path = self.codex_home.join("auth.json");
+        let default_auth_path =
+            self.codex_home
+                .join(if self.fallback_auth_active.load(Ordering::Acquire) {
+                    "auth2.json"
+                } else {
+                    "auth.json"
+                });
         let auth_path = self.auth_file.as_deref().unwrap_or(&default_auth_path);
         let _cross_process_guard = super::refresh_lock::acquire(auth_path)
             .await

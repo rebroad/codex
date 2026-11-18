@@ -3674,6 +3674,81 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn usage_limit_retries_with_auth2_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let auth_json = |access_token: &str| {
+        json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "e30.e30.signature",
+                "access_token": access_token,
+                "refresh_token": format!("{access_token}-refresh"),
+                "account_id": "workspace-one"
+            },
+            "last_refresh": chrono::Utc::now()
+        })
+    };
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&auth_json("primary-token"))?,
+    )?;
+    std::fs::write(
+        home.path().join("auth2.json"),
+        serde_json::to_vec(&auth_json("fallback-token"))?,
+    )?;
+    let auth = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer primary-token"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": { "type": "usage_limit_reached", "message": "limit reached" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer fallback-token"),
+        sse(vec![
+            ev_response_created("fallback-response"),
+            ev_completed("fallback-response"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_home(home).with_auth_manager(auth.clone());
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue after switching auth".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        auth.auth_cached().unwrap().get_token_data()?.access_token,
+        "fallback-token"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
