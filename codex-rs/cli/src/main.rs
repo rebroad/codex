@@ -133,6 +133,10 @@ use codex_terminal_detection::TerminalName;
     override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
+    /// Path to the auth.json file to use for this invocation.
+    #[arg(long = "auth-file", value_name = "FILE", global = true)]
+    auth_file: Option<PathBuf>,
+
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
 
@@ -1096,12 +1100,19 @@ async fn cli_main(
     remote_control_disabled: bool,
 ) -> anyhow::Result<()> {
     let MultitoolCli {
+        auth_file,
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+    if let Some(auth_file) = auth_file {
+        codex_login::set_auth_file_override(auth_file);
+        // An existing managed daemon has its own environment and auth manager.
+        // Keep this invocation's selected auth file local to its app server.
+        interactive.no_daemon = true;
+    }
     // Retain the launch target through TUI exit, even if a launcher changes selection.
     let daemon_cli_executable = arg0_paths
         .codex_self_exe
