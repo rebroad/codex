@@ -3179,6 +3179,30 @@ mod tests {
     }
 
     #[test]
+    fn auth_file_parses_for_interactive_exec_and_login() {
+        let auth_file = "/tmp/custom/auth.json";
+        for args in [
+            vec!["codex", "--auth-file", auth_file, "say hello"],
+            vec![
+                "codex",
+                "exec",
+                "--bare-prompt",
+                "--ephemeral",
+                "--auth-file",
+                auth_file,
+                "say hello",
+            ],
+            vec!["codex", "login", "--auth-file", auth_file],
+        ] {
+            let cli = MultitoolCli::try_parse_from(args).expect("auth file should parse");
+            assert_eq!(
+                cli.auth_file.as_deref(),
+                Some(std::path::Path::new(auth_file))
+            );
+        }
+    }
+
+    #[test]
     fn login_start_and_complete_parse_as_subcommands() {
         let cli = MultitoolCli::try_parse_from(["codex", "login", "start", "--json"])
             .expect("login start should parse");
