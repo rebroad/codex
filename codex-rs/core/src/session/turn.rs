@@ -1805,6 +1805,13 @@ async fn run_sampling_request(
                     if let Some(rate_limits) = rate_limits {
                         sess.update_rate_limits(&turn_context, *rate_limits).await;
                     }
+                    if sess.services.auth_manager.switch_to_fallback_auth().await {
+                        let input = prompt.input.clone();
+                        original_input.get_or_insert(input.clone());
+                        initial_input = Some(input);
+                        turn_context.turn_timing_state.record_sampling_retry();
+                        continue;
+                    }
                     return Err(err);
                 }
                 _ => err,
