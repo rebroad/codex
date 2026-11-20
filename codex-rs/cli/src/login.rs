@@ -712,7 +712,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("ChatGPT credentials found (token validity not checked)");
+                match auth.get_account_email() {
+                    Some(email) => eprintln!("Logged in using ChatGPT as {email}"),
+                    None => eprintln!("Logged in using ChatGPT (email unavailable)"),
+                }
                 std::process::exit(0);
             }
             AuthMode::Headers => {
