@@ -1682,6 +1682,7 @@ impl ModelClientSession {
                             &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &provider,
+                            auth_manager.as_deref(),
                             self.client.event_sender.as_ref(),
                             responses_metadata.turn_id.as_deref(),
                         )
@@ -1692,7 +1693,7 @@ impl ModelClientSession {
                     let err = provider.map_api_error(err);
                     if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
                         && let Some(auth_manager) = auth_manager.as_ref()
-                        && auth_manager.switch_to_fallback_auth_on_usage_limit().await
+                        && auth_manager.switch_to_fallback_auth().await
                     {
                         continue;
                     }
@@ -1982,6 +1983,7 @@ impl ResponsesHttpExecutor<'_> {
                             &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &self.client.state.provider,
+                            auth_manager.as_deref(),
                             event_sender,
                             responses_metadata.turn_id.as_deref(),
                         )
@@ -2000,7 +2002,7 @@ impl ResponsesHttpExecutor<'_> {
                     );
                     if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
                         && let Some(auth_manager) = auth_manager.as_ref()
-                        && auth_manager.switch_to_fallback_auth_on_usage_limit().await
+                        && auth_manager.switch_to_fallback_auth().await
                     {
                         let _ = auth_manager.auth().await;
                         expected_auth_owner = self.client.auth_owner_generation();
@@ -2131,6 +2133,7 @@ impl ModelClientSession {
                             &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &provider,
+                            auth_manager.as_deref(),
                             self.client.event_sender.as_ref(),
                             responses_metadata.turn_id.as_deref(),
                         )
@@ -2142,7 +2145,7 @@ impl ModelClientSession {
                     let err = provider.map_api_error(err);
                     if matches!(err.details(), CodexErrorDetails::UsageLimitReached(_))
                         && let Some(auth_manager) = auth_manager.as_ref()
-                        && auth_manager.switch_to_fallback_auth_on_usage_limit().await
+                        && auth_manager.switch_to_fallback_auth().await
                     {
                         continue;
                     }
@@ -2879,10 +2882,25 @@ async fn handle_unauthorized(
     provider_auth_recovery_attempted: &mut bool,
     session_telemetry: &SessionTelemetry,
     provider: &SharedModelProvider,
+    auth_manager: Option<&AuthManager>,
     event_sender: Option<&Sender<ProtocolEvent>>,
     turn_id: Option<&str>,
 ) -> Result<UnauthorizedRecoveryExecution> {
     let debug = extract_response_debug_context(&transport);
+    if debug
+        .auth_error_code
+        .as_deref()
+        .into_iter()
+        .chain(debug.auth_error.as_deref())
+        .any(|error| error.to_ascii_lowercase().contains("revok"))
+        && let Some(auth_manager) = auth_manager
+        && auth_manager.switch_to_fallback_auth().await
+    {
+        return Ok(UnauthorizedRecoveryExecution {
+            mode: "auth2_fallback",
+            phase: "revoked_access_token",
+        });
+    }
     if !*provider_auth_recovery_attempted {
         *provider_auth_recovery_attempted = true;
         let messages = provider.auth_recovery_messages();
@@ -2959,6 +2977,15 @@ async fn handle_unauthorized(
             }
             Err(RefreshTokenError::Policy(error)) => Err(CodexErr::Fatal(error.to_string())),
             Err(RefreshTokenError::Permanent(failed)) => {
+                if failed.reason == codex_protocol::auth::RefreshTokenFailedReason::Revoked
+                    && let Some(auth_manager) = auth_manager
+                    && auth_manager.switch_to_fallback_auth().await
+                {
+                    return Ok(UnauthorizedRecoveryExecution {
+                        mode: "auth2_fallback",
+                        phase: "revoked_token",
+                    });
+                }
                 session_telemetry.record_auth_recovery(
                     mode,
                     phase,

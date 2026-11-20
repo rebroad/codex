@@ -1494,11 +1494,7 @@ async fn usage_limit_switches_to_auth2_until_auth_json_changes() -> Result<()> {
         serde_json::to_vec(&fallback)?,
     )?;
 
-    assert!(
-        ctx.auth_manager
-            .switch_to_fallback_auth_on_usage_limit()
-            .await
-    );
+    assert!(ctx.auth_manager.switch_to_fallback_auth().await);
     assert_eq!(
         ctx.auth_manager
             .auth_cached()
@@ -1516,11 +1512,7 @@ async fn usage_limit_switches_to_auth2_until_auth_json_changes() -> Result<()> {
             .access_token,
         "fallback-access"
     );
-    assert!(
-        !ctx.auth_manager
-            .switch_to_fallback_auth_on_usage_limit()
-            .await
-    );
+    assert!(!ctx.auth_manager.switch_to_fallback_auth().await);
 
     let updated_primary = AuthDotJson {
         tokens: Some(build_tokens("updated-primary", "updated-refresh")),

@@ -2706,9 +2706,9 @@ impl AuthManager {
         }
     }
 
-    /// Switches to `auth2.json` after the backend reports an exhausted usage window.
+    /// Switches to `auth2.json` after the primary credentials can no longer be used.
     /// The fallback is only available for the default file-backed auth source.
-    pub async fn switch_to_fallback_auth_on_usage_limit(&self) -> bool {
+    pub async fn switch_to_fallback_auth(&self) -> bool {
         if self.auth_file.is_some()
             || self.auth_credentials_store_mode != AuthCredentialsStoreMode::File
             || self.has_external_auth()
@@ -2730,7 +2730,7 @@ impl AuthManager {
             Ok(Some(auth)) => {
                 self.set_cached_auth(Some(auth));
                 self.fallback_auth_active.store(true, Ordering::Release);
-                tracing::info!("Backend usage limit reached; switched auth to auth2.json");
+                tracing::info!("Primary auth is unusable; switched auth to auth2.json");
                 true
             }
             Ok(None) => {
