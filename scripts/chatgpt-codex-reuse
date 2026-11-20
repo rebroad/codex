@@ -1,11 +1,16 @@
 #!/bin/sh
 
 REAL_CODEX=/home/rebroad/.cargo/bin/codex
+CHATGPT_CODEX=/usr/lib/chatgpt/resources/codex.chatgpt
+print_startup_config=0
 run_app_server=0
 found_app_server=0
 expect_command=0
 
 for arg do
+    if [ "$arg" = --print-startup-config ]; then
+        print_startup_config=1
+    fi
     if [ "$expect_command" -eq 1 ]; then
         case "$arg" in
             -*) run_app_server=1 ;;
@@ -18,6 +23,15 @@ for arg do
         expect_command=1
     fi
 done
+
+if [ "$found_app_server" -eq 1 ] && [ "$print_startup_config" -eq 1 ]; then
+    if ! "$REAL_CODEX" app-server --help 2>&1 | grep -q -- '--print-startup-config'; then
+        if [ -x "$CHATGPT_CODEX" ]; then
+            exec "$CHATGPT_CODEX" "$@"
+        fi
+    fi
+    exec "$REAL_CODEX" "$@"
+fi
 
 if [ "$found_app_server" -eq 1 ] && { [ "$run_app_server" -eq 1 ] || [ "$expect_command" -eq 1 ]; }; then
     daemon_info=$("$REAL_CODEX" app-server daemon version 2>/dev/null) || daemon_info=
