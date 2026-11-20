@@ -27,7 +27,19 @@ done
 if [ "$found_app_server" -eq 1 ] && [ "$print_startup_config" -eq 1 ]; then
     if ! "$REAL_CODEX" app-server --help 2>&1 | grep -q -- '--print-startup-config'; then
         if [ -x "$CHATGPT_CODEX" ]; then
-            exec "$CHATGPT_CODEX" "$@"
+            startup_output=$(mktemp /var/tmp/chatgpt-codex-startup.XXXXXX) || exec "$CHATGPT_CODEX" "$@"
+            startup_rewritten=${startup_output}.json
+            trap 'rm -f "$startup_output" "$startup_rewritten"' 0
+            "$CHATGPT_CODEX" "$@" >"$startup_output"
+            startup_status=$?
+            daemon_info=$("$REAL_CODEX" app-server daemon version 2>/dev/null) || daemon_info=
+            daemon_version=$(printf '%s' "$daemon_info" | jq -er 'select(.status == "running" and .cliVersion == .appServerVersion) | .appServerVersion' 2>/dev/null) || daemon_version=
+            if [ "$startup_status" -eq 0 ] && [ -n "$daemon_version" ] && [ "$daemon_version" != null ] && jq --arg version "$daemon_version" '.appServerVersion = $version' "$startup_output" >"$startup_rewritten" 2>/dev/null; then
+                cat "$startup_rewritten"
+            else
+                cat "$startup_output"
+            fi
+            exit "$startup_status"
         fi
     fi
     exec "$REAL_CODEX" "$@"
