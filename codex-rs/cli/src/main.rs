@@ -2985,6 +2985,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
         interactive
             .shared
@@ -3022,6 +3023,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
         interactive
             .shared
@@ -3075,6 +3077,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
 
         let Subcommand::Archive(SessionArchiveCommand {
