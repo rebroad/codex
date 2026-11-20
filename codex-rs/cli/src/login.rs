@@ -16,6 +16,7 @@ use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions;
+use codex_login::auth_file_override;
 use codex_login::build_authorize_url;
 use codex_login::complete_oauth_login_with_callback_url;
 use codex_login::generate_oauth_state;
@@ -52,7 +53,7 @@ const ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE: &str =
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
 const DEFAULT_LOGIN_LOG_FILTER: &str =
     "codex_cli=info,codex_core=info,codex_login=info,codex_otel::auth_storage=warn";
-const PENDING_LOGIN_FILENAME: &str = "login-pending.json";
+const PENDING_LOGIN_FILENAME: &str = "logins-pending.json";
 const PENDING_LOGIN_MAX_AGE_SECONDS: u64 = 15 * 60;
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
@@ -151,7 +152,46 @@ fn pending_login_path(config: &Config) -> PathBuf {
     config.codex_home.join(PENDING_LOGIN_FILENAME).to_path_buf()
 }
 
+fn pending_login_auth_file(value: &serde_json::Value) -> Option<PathBuf> {
+    value
+        .get("auth_file")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+}
+
+fn resolve_auth_file_path(auth_file: PathBuf) -> PathBuf {
+    if auth_file.is_absolute() {
+        auth_file
+    } else {
+        std::env::current_dir()
+            .map(|current_dir| current_dir.join(&auth_file))
+            .unwrap_or(auth_file)
+    }
+}
+
+fn auth_file_for_pending_login() -> Option<PathBuf> {
+    auth_file_override().map(resolve_auth_file_path)
+}
+
 fn write_pending_login(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let mut pending_logins = match std::fs::File::open(path) {
+        Ok(file) => {
+            let current: serde_json::Value = serde_json::from_reader(file)?;
+            current
+                .get("pending_logins")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(err),
+    };
+    let auth_file = pending_login_auth_file(value);
+    pending_logins.retain(|pending| {
+        pending_login_auth_file(pending) != auth_file && !pending_login_is_expired(pending)
+    });
+    pending_logins.push(value.clone());
+
     let mut options = OpenOptions::new();
     options.create(true).truncate(true).write(true);
     #[cfg(unix)]
@@ -160,12 +200,76 @@ fn write_pending_login(path: &Path, value: &serde_json::Value) -> std::io::Resul
         options.mode(0o600);
     }
     let file = options.open(path)?;
-    serde_json::to_writer_pretty(file, value).map_err(std::io::Error::other)
+    serde_json::to_writer_pretty(
+        file,
+        &serde_json::json!({ "pending_logins": pending_logins }),
+    )
+    .map_err(std::io::Error::other)
 }
 
-fn read_pending_login(path: &Path) -> std::io::Result<serde_json::Value> {
+fn read_pending_login(
+    path: &Path,
+    callback_url: &str,
+    auth_file_override: Option<&Path>,
+) -> std::io::Result<serde_json::Value> {
+    let callback_state = url::Url::parse(callback_url).ok().and_then(|url| {
+        url.query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned())
+    });
     let file = std::fs::File::open(path)?;
-    serde_json::from_reader(file).map_err(std::io::Error::other)
+    let pending_logins: serde_json::Value = serde_json::from_reader(file)?;
+    let pending_logins = pending_logins
+        .get("pending_logins")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| std::io::Error::other("pending login store is malformed"))?;
+    let pending = pending_logins
+        .iter()
+        .find(|pending| {
+            pending.get("state").and_then(serde_json::Value::as_str) == callback_state.as_deref()
+        })
+        .cloned()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no matching pending login")
+        })?;
+    if let Some(auth_file_override) = auth_file_override {
+        let requested_auth_file = resolve_auth_file_path(auth_file_override.to_path_buf());
+        if pending_login_auth_file(&pending).as_deref() != Some(requested_auth_file.as_path()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no pending login matches the callback and auth-file override",
+            ));
+        }
+    }
+    Ok(pending)
+}
+
+fn remove_pending_login(path: &Path, state: &str) -> std::io::Result<()> {
+    let file = std::fs::File::open(path)?;
+    let mut pending_logins: serde_json::Value = serde_json::from_reader(file)?;
+    let pending_logins = pending_logins
+        .get_mut("pending_logins")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| std::io::Error::other("pending login store is malformed"))?;
+    pending_logins
+        .retain(|pending| pending.get("state").and_then(serde_json::Value::as_str) != Some(state));
+    write_pending_logins(path, pending_logins)
+}
+
+fn write_pending_logins(path: &Path, pending_logins: &[serde_json::Value]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    serde_json::to_writer_pretty(
+        file,
+        &serde_json::json!({ "pending_logins": pending_logins }),
+    )
+    .map_err(std::io::Error::other)
 }
 
 fn pending_login_is_expired(value: &serde_json::Value) -> bool {
@@ -237,6 +341,7 @@ pub async fn run_login_start(cli_config_overrides: CliConfigOverrides, json: boo
         "state": state,
         "code_verifier": pkce.code_verifier,
         "code_challenge": pkce.code_challenge,
+        "auth_file": auth_file_for_pending_login(),
     });
     if let Err(err) = write_pending_login(&pending_login_path(&config), &pending) {
         eprintln!("Error saving pending login: {err}");
@@ -264,7 +369,7 @@ pub async fn run_login_complete(
     let config = load_config_or_exit(cli_config_overrides).await;
     let _login_log_guard = init_login_file_logging(&config);
     let path = pending_login_path(&config);
-    let pending = match read_pending_login(&path) {
+    let pending = match read_pending_login(&path, &callback_url, auth_file_override().as_deref()) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("No pending login was found: {err}");
@@ -272,7 +377,9 @@ pub async fn run_login_complete(
         }
     };
     if pending_login_is_expired(&pending) {
-        let _ = std::fs::remove_file(&path);
+        if let Some(state) = pending.get("state").and_then(serde_json::Value::as_str) {
+            let _ = remove_pending_login(&path, state);
+        }
         eprintln!("The pending login has expired. Run `codex login start` again.");
         std::process::exit(1);
     }
@@ -296,6 +403,7 @@ pub async fn run_login_complete(
         config.auth_keyring_backend_kind(),
         config.auth_route_config(),
     );
+    opts.auth_file = pending_login_auth_file(&pending);
     opts.issuer = required("issuer");
     let pkce = codex_login::PkceCodes {
         code_verifier: required("code_verifier"),
@@ -311,7 +419,7 @@ pub async fn run_login_complete(
     .await;
     match result {
         Ok(()) => {
-            let _ = std::fs::remove_file(path);
+            let _ = remove_pending_login(&path, &required("state"));
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
@@ -870,7 +978,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::clear_existing_auth_before_login;
+    use super::pending_login_auth_file;
+    use super::read_pending_login;
     use super::safe_format_key;
+    use super::write_pending_login;
 
     #[tokio::test]
     async fn clears_existing_auth_before_login() {
@@ -904,6 +1015,83 @@ mod tests {
     fn formats_long_key() {
         let key = "sk-proj-1234567890ABCDE";
         assert_eq!(safe_format_key(key), "sk-proj-***ABCDE");
+    }
+
+    #[test]
+    fn pending_login_retains_auth_file_override() {
+        let codex_home = tempdir().expect("temporary Codex home");
+        let auth_file = codex_home.path().join("custom-auth.json");
+        let pending = serde_json::json!({ "auth_file": auth_file });
+        assert_eq!(pending_login_auth_file(&pending), Some(auth_file));
+    }
+
+    #[test]
+    fn pending_logins_replace_only_the_same_auth_file() {
+        let codex_home = tempdir().expect("temporary Codex home");
+        let path = codex_home.path().join("logins-pending.json");
+        let default_login = serde_json::json!({ "created_at": u64::MAX, "state": "default" });
+        let custom_login = serde_json::json!({
+            "created_at": u64::MAX,
+            "state": "custom-old",
+            "auth_file": codex_home.path().join("custom-auth.json"),
+        });
+        let replacement_login = serde_json::json!({
+            "created_at": u64::MAX,
+            "state": "custom-new",
+            "auth_file": codex_home.path().join("custom-auth.json"),
+        });
+
+        write_pending_login(&path, &default_login).expect("save default login");
+        write_pending_login(&path, &custom_login).expect("save custom login");
+        write_pending_login(&path, &replacement_login).expect("replace custom login");
+
+        let store: serde_json::Value =
+            serde_json::from_reader(std::fs::File::open(path).expect("open pending store"))
+                .expect("read pending store");
+        assert_eq!(
+            store["pending_logins"],
+            serde_json::json!([default_login, replacement_login])
+        );
+    }
+
+    #[test]
+    fn callback_state_selects_the_matching_pending_login() {
+        let codex_home = tempdir().expect("temporary Codex home");
+        let path = codex_home.path().join("logins-pending.json");
+        let first = serde_json::json!({ "created_at": u64::MAX, "state": "first" });
+        let second = serde_json::json!({
+            "created_at": u64::MAX,
+            "state": "second",
+            "auth_file": codex_home.path().join("custom-auth.json"),
+        });
+        write_pending_login(&path, &first).expect("save first login");
+        write_pending_login(&path, &second).expect("save second login");
+
+        assert_eq!(
+            read_pending_login(
+                &path,
+                "http://localhost/auth/callback?state=second&code=x",
+                None,
+            )
+            .expect("select matching login"),
+            second
+        );
+        assert!(
+            read_pending_login(
+                &path,
+                "http://localhost/auth/callback?state=second&code=x",
+                Some(codex_home.path().join("custom-auth.json").as_path()),
+            )
+            .is_ok()
+        );
+        assert!(
+            read_pending_login(
+                &path,
+                "http://localhost/auth/callback?state=second&code=x",
+                Some(codex_home.path().join("other-auth.json").as_path()),
+            )
+            .is_err()
+        );
     }
 
     #[test]

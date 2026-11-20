@@ -133,6 +133,10 @@ use codex_terminal_detection::TerminalName;
     override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
+    /// Path to the auth.json file to use for this invocation.
+    #[arg(long = "auth-file", value_name = "FILE", global = true)]
+    auth_file: Option<PathBuf>,
+
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
 
@@ -1096,12 +1100,19 @@ async fn cli_main(
     remote_control_disabled: bool,
 ) -> anyhow::Result<()> {
     let MultitoolCli {
+        auth_file,
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+    if let Some(auth_file) = auth_file {
+        codex_login::set_auth_file_override(auth_file);
+        // An existing managed daemon has its own environment and auth manager.
+        // Keep this invocation's selected auth file local to its app server.
+        interactive.no_daemon = true;
+    }
     // Retain the launch target through TUI exit, even if a launcher changes selection.
     let daemon_cli_executable = arg0_paths
         .codex_self_exe
@@ -2974,6 +2985,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
         interactive
             .shared
@@ -3011,6 +3023,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
         interactive
             .shared
@@ -3064,6 +3077,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
 
         let Subcommand::Archive(SessionArchiveCommand {
@@ -3162,6 +3176,30 @@ mod tests {
 
         assert!(cli.subcommand.is_none());
         assert_eq!(cli.interactive.prompt.as_deref(), Some("import"));
+    }
+
+    #[test]
+    fn auth_file_parses_for_interactive_exec_and_login() {
+        let auth_file = "/tmp/custom/auth.json";
+        for args in [
+            vec!["codex", "--auth-file", auth_file, "say hello"],
+            vec![
+                "codex",
+                "exec",
+                "--bare-prompt",
+                "--ephemeral",
+                "--auth-file",
+                auth_file,
+                "say hello",
+            ],
+            vec!["codex", "login", "--auth-file", auth_file],
+        ] {
+            let cli = MultitoolCli::try_parse_from(args).expect("auth file should parse");
+            assert_eq!(
+                cli.auth_file.as_deref(),
+                Some(std::path::Path::new(auth_file))
+            );
+        }
     }
 
     #[test]

@@ -16,6 +16,19 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+static AUTH_FILE_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Selects the auth file used by file-backed credential storage in this process.
+pub fn set_auth_file_override(auth_file: PathBuf) {
+    let _ = AUTH_FILE_OVERRIDE.set(auth_file);
+}
+
+/// Returns the auth file selected for this process, if any.
+pub fn auth_file_override() -> Option<PathBuf> {
+    AUTH_FILE_OVERRIDE.get().cloned()
+}
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
@@ -160,7 +173,7 @@ impl From<AgentIdentityJwtClaims> for AgentIdentityAuthRecord {
 }
 
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
-    codex_home.join("auth.json")
+    auth_file_override().unwrap_or_else(|| codex_home.join("auth.json"))
 }
 
 pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
