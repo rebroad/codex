@@ -820,7 +820,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT");
+                eprintln!("ChatGPT credentials found (token validity not checked)");
                 std::process::exit(0);
             }
             AuthMode::Headers => {
