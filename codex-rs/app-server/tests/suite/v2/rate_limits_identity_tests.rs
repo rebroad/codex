@@ -12,11 +12,12 @@ use axum::http::HeaderMap;
 use axum::routing::get;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::LoginAccountResponse;
-use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -59,19 +60,44 @@ async fn identity_is_rechecked_after_backend_response(
         format!("chatgpt_base_url = \"http://{}\"\n", listener.local_addr()?),
     )?;
     let expected_authorization = format!("Bearer {old_token}");
+    let new_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .chatgpt_account_id(account)
+            .chatgpt_user_id(user)
+            .plan_type("team"),
+    )?;
+    let new_authorization = format!("Bearer {new_token}");
+    let response_account = account.to_owned();
+    let response_user = user.to_owned();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_route = Arc::clone(&calls);
     let router = Router::new().route(
         "/api/codex/usage",
         get(move |headers: HeaderMap| {
             let expected_authorization = expected_authorization.clone();
+            let new_authorization = new_authorization.clone();
             let entered = Arc::clone(&request_entered);
             let release = Arc::clone(&response_release);
+            let calls = Arc::clone(&calls_for_route);
+            let response_account = response_account.clone();
+            let response_user = response_user.clone();
             async move {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                let (expected_authorization, response_account, response_user) = if call == 0 {
+                    entered.notify_one();
+                    release.notified().await;
+                    (expected_authorization, "workspace-a", "user-a")
+                } else {
+                    (
+                        new_authorization,
+                        response_account.as_str(),
+                        response_user.as_str(),
+                    )
+                };
                 assert_eq!(headers["authorization"], expected_authorization);
-                assert_eq!(headers["chatgpt-account-id"], "workspace-a");
-                entered.notify_one();
-                release.notified().await;
+                assert_eq!(headers["chatgpt-account-id"], response_account);
                 Json(json!({
-                    "account_id": "workspace-a", "user_id": "user-a", "plan_type": "team",
+                    "account_id": response_account, "user_id": response_user, "plan_type": "team",
                     "rate_limit": {"allowed": true, "limit_reached": false,
                         "primary_window": {"used_percent": 42, "limit_window_seconds": 3600,
                             "reset_after_seconds": 120, "reset_at": 2000000000}}
@@ -100,41 +126,28 @@ async fn identity_is_rechecked_after_backend_response(
         )
         .await?;
     timeout(READ_TIMEOUT, entered.notified()).await?;
-    let token = encode_id_token(
-        &ChatGptIdTokenClaims::new()
-            .chatgpt_account_id(account)
-            .chatgpt_user_id(user)
-            .plan_type("team"),
-    )?;
     let login = app
-        .send_chatgpt_auth_tokens_login_request(token, account.into(), Some("team".into()))
+        .send_chatgpt_auth_tokens_login_request(new_token, account.into(), Some("team".into()))
         .await?;
     let response: LoginAccountResponse = timeout(READ_TIMEOUT, app.read_response(login)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     release.notify_one();
-    if !verified {
-        let error = timeout(
-            READ_TIMEOUT,
-            app.read_stream_until_error_message(RequestId::Integer(request)),
-        )
-        .await??;
-        server.abort();
-        assert_eq!(
-            error.error.message,
-            "failed to fetch codex rate limits: application network permission was revoked"
-        );
-        return Ok(());
-    }
     let response: GetAccountRateLimitsResponse =
         timeout(READ_TIMEOUT, app.read_response(request)).await??;
     server.abort();
+    let call_count = calls.load(Ordering::SeqCst);
+    if verified {
+        assert_eq!(call_count, 1);
+    } else {
+        assert!((2..=3).contains(&call_count));
+    }
     let snapshot = json!({
         "limitId": "codex", "planType": "team",
         "primary": {"usedPercent": 42, "windowDurationMins": 60, "resetsAt": 2000000000}
     });
     let expected: GetAccountRateLimitsResponse = serde_json::from_value(json!({
-        "ordinaryUsageAllowed": if verified { Some(true) } else { None },
-        "accountId": "workspace-a",
+        "ordinaryUsageAllowed": Some(true),
+        "accountId": account,
         "rateLimits": snapshot, "rateLimitsByLimitId": {"codex": snapshot}
     }))?;
     assert_eq!(response, expected);

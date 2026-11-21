@@ -9,6 +9,8 @@ use crate::outgoing_message::AccountNotification;
 use chrono::DateTime;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountRateLimitsParams;
+use codex_backend_client::RequestError;
+use codex_http_client::NetworkPolicyDenied;
 use codex_login::LoginOnboardingEntrypoint;
 use codex_login::login_with_bedrock_access_keys;
 use codex_mcp::ema_auth_scope;
@@ -1219,43 +1221,74 @@ impl AccountRequestProcessor {
         &self,
         params: GetAccountRateLimitsParams,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        let Some((auth, http_client_factory)) = self.backend_auth().await? else {
-            return Err(invalid_request(
-                "codex account authentication required to read rate limits",
-            ));
-        };
+        let auth_changes = self.auth_manager.auth_change_state_receiver();
+        let mut retry_count = 0;
+        let (response, detailed_rate_limit_reset_credits) = loop {
+            let owner_generation = auth_changes.borrow().owner_generation;
+            let Some((auth, http_client_factory)) = self.backend_auth().await? else {
+                return Err(invalid_request(
+                    "codex account authentication required to read rate limits",
+                ));
+            };
 
-        if !auth.uses_codex_backend() {
-            return Err(invalid_request(
-                "chatgpt authentication required to read rate limits",
-            ));
-        }
-
-        let client = BackendClient::from_auth(
-            self.config.chatgpt_base_url.clone(),
-            &auth,
-            http_client_factory,
-        );
-
-        let usage_request = async {
-            if params.supports_luna_reserve
-                && auth.auth_mode() == codex_protocol::auth::AuthMode::Chatgpt
-                && !auth.is_fedramp_account()
-            {
-                client.get_rate_limits_with_luna_reserve().await
-            } else {
-                client.get_rate_limits_with_reset_credits().await
+            if !auth.uses_codex_backend() {
+                return Err(invalid_request(
+                    "chatgpt authentication required to read rate limits",
+                ));
             }
-        };
-        let (response, detailed_rate_limit_reset_credits) = tokio::join!(usage_request, async {
-            if params.exclude_reset_credit_details {
-                None
-            } else {
-                Self::detailed_rate_limit_reset_credits(&client).await
+
+            let client = BackendClient::from_auth(
+                self.config.chatgpt_base_url.clone(),
+                &auth,
+                http_client_factory,
+            );
+
+            let usage_request = async {
+                if params.supports_luna_reserve
+                    && auth.auth_mode() == codex_protocol::auth::AuthMode::Chatgpt
+                    && !auth.is_fedramp_account()
+                {
+                    client.get_rate_limits_with_luna_reserve().await
+                } else {
+                    client.get_rate_limits_with_reset_credits().await
+                }
+            };
+            let (response, detailed_rate_limit_reset_credits) =
+                tokio::join!(usage_request, async {
+                    if params.exclude_reset_credit_details {
+                        None
+                    } else {
+                        Self::detailed_rate_limit_reset_credits(&client).await
+                    }
+                },);
+            let owner_changed = auth_changes.borrow().owner_generation != owner_generation;
+            let revoked = response.as_ref().is_err_and(|error| {
+                error.to_string() == NetworkPolicyDenied::Revoked.to_string()
+                    || error.chain().any(|cause| {
+                        cause.downcast_ref::<NetworkPolicyDenied>()
+                            == Some(&NetworkPolicyDenied::Revoked)
+                            || cause.downcast_ref::<RequestError>().is_some_and(|error| {
+                                matches!(error, RequestError::Policy(NetworkPolicyDenied::Revoked))
+                            })
+                    })
+            });
+            if retry_count < 2 && (owner_changed || revoked) {
+                // Auth or policy changes revoke in-flight requests. Rebuild auth and
+                // policy a bounded number of times so the caller can continue against
+                // the current state when multiple changes overlap.
+                retry_count += 1;
+                continue;
             }
-        },);
-        let response = response
-            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
+            let response = response.map_err(|err| {
+                internal_error(format!("failed to fetch codex rate limits: {err}"))
+            })?;
+            if owner_changed {
+                return Err(internal_error(
+                    "account changed while fetching codex rate limits",
+                ));
+            }
+            break (response, detailed_rate_limit_reset_credits);
+        };
         if response.rate_limits.is_empty() {
             return Err(internal_error(
                 "failed to fetch codex rate limits: no snapshots returned",
