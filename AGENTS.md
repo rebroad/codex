@@ -37,6 +37,9 @@
   limitation until retried outside that sandbox.
 - Prefer `scripts/build_codex.sh` from the designated external build tree for
   end-to-end build/install validation.
+- When restarting the app-server from within an ongoing goal, use
+  `codex app-server daemon restart`; do not use `restart-if-idle`, which can
+  wait indefinitely for the active turn to finish.
 - Keep downstream changes aligned with upstream where possible. When a change
   repairs a bug or corrects behavior introduced by an existing downstream
   commit, first use `git blame` on the affected lines and inspect the relevant
