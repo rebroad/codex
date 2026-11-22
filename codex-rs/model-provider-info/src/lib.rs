@@ -226,6 +226,8 @@ pub struct ModelProviderInfoOverrides {
     /// Secondary OAuth credentials required by the provider's gateway.
     pub gateway_oauth: Option<GatewayOAuthConfig>,
     pub aws: Option<ModelProviderAwsAuthInfo>,
+    /// Optional capability overrides for this provider.
+    pub capabilities: Option<ModelProviderCapabilities>,
     pub wire_api: Option<WireApi>,
     pub query_params: Option<HashMap<String, String>>,
     pub http_headers: Option<HashMap<String, String>>,
@@ -269,6 +271,18 @@ impl ModelProviderInfoOverrides {
         if let Some(value) = &self.aws {
             provider.aws = Some(value.clone());
             provider.auth = None;
+        }
+        if let Some(value) = &self.capabilities {
+            let capabilities = provider.capabilities.get_or_insert_default();
+            if value.codex_managed_compaction.is_some() {
+                capabilities.codex_managed_compaction = value.codex_managed_compaction;
+            }
+            if value.external_web_access.is_some() {
+                capabilities.external_web_access = value.external_web_access;
+            }
+            if value.remote_compaction.is_some() {
+                capabilities.remote_compaction = value.remote_compaction;
+            }
         }
         if let Some(value) = self.wire_api {
             provider.wire_api = value;
@@ -338,6 +352,7 @@ impl From<ModelProviderInfo> for ModelProviderInfoOverrides {
             auth: provider.auth,
             gateway_oauth: provider.gateway_oauth,
             aws: provider.aws,
+            capabilities: provider.capabilities,
             wire_api: Some(provider.wire_api),
             query_params: provider.query_params.map(|params| {
                 params

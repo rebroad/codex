@@ -7,6 +7,13 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tracing_subscriber::prelude::*;
 
+#[test]
+fn automatic_compaction_follows_provider_ownership() {
+    assert!(auto_compaction_is_enabled(false, true));
+    assert!(!auto_compaction_is_enabled(false, false));
+    assert!(!auto_compaction_is_enabled(true, true));
+}
+
 struct RewriteAgentMessageContributor;
 
 impl TurnItemContributor for RewriteAgentMessageContributor {

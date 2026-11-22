@@ -279,6 +279,11 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
+            codex_managed_compaction: self
+                .info
+                .capabilities
+                .and_then(|capabilities| capabilities.codex_managed_compaction)
+                .unwrap_or(true),
             image_generation: false,
             web_search: self.endpoint == BedrockEndpoint::Mantle,
             external_web_access: false,
@@ -694,6 +699,7 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
+                codex_managed_compaction: true,
                 image_generation: false,
                 web_search: true,
                 external_web_access: false,
@@ -712,6 +718,7 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
+                codex_managed_compaction: true,
                 image_generation: false,
                 web_search: false,
                 external_web_access: false,

@@ -10,6 +10,7 @@ use codex_model_provider_info::RemoteCompactionSupport;
 /// can further restrict the functionality exposed to the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
+    pub codex_managed_compaction: bool,
     pub image_generation: bool,
     pub web_search: bool,
     pub external_web_access: bool,
@@ -19,6 +20,7 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
+            codex_managed_compaction: true,
             image_generation: true,
             web_search: true,
             external_web_access: true,
@@ -41,6 +43,9 @@ impl ProviderCapabilities {
         };
         let overrides = info.capabilities.unwrap_or_default();
         Self {
+            codex_managed_compaction: overrides
+                .codex_managed_compaction
+                .unwrap_or(defaults.codex_managed_compaction),
             external_web_access: overrides
                 .external_web_access
                 .unwrap_or(defaults.external_web_access),

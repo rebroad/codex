@@ -33,3 +33,18 @@ fn capability_overrides_preserve_unspecified_provider_defaults() {
         );
     }
 }
+
+#[test]
+fn provider_can_delegate_context_compaction() {
+    let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    provider_info.capabilities = Some(ModelProviderCapabilities {
+        codex_managed_compaction: Some(false),
+        ..Default::default()
+    });
+
+    assert!(
+        !create_model_provider(provider_info, /*auth_manager*/ None)
+            .capabilities()
+            .codex_managed_compaction
+    );
+}

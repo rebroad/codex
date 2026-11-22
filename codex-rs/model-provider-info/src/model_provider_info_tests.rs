@@ -559,6 +559,35 @@ fn test_merge_configured_model_provider_overrides_inherits_openai_defaults() {
 }
 
 #[test]
+fn model_provider_capability_override_preserves_unspecified_values() {
+    let mut provider = ModelProviderInfo {
+        capabilities: Some(ModelProviderCapabilities {
+            codex_managed_compaction: Some(true),
+            external_web_access: Some(true),
+            remote_compaction: Some(RemoteCompactionSupport::V2),
+        }),
+        ..ModelProviderInfo::default()
+    };
+    ModelProviderInfoOverrides {
+        capabilities: Some(ModelProviderCapabilities {
+            codex_managed_compaction: Some(false),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+    .apply_to(&mut provider);
+
+    assert_eq!(
+        provider.capabilities,
+        Some(ModelProviderCapabilities {
+            codex_managed_compaction: Some(false),
+            external_web_access: Some(true),
+            remote_compaction: Some(RemoteCompactionSupport::V2),
+        })
+    );
+}
+
+#[test]
 fn test_merge_configured_model_providers_applies_amazon_bedrock_aws_override() {
     let credential_export = AwsCredentialExportConfig {
         command: "aws-vault".to_string(),

@@ -172,11 +172,18 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
-    let auto_compaction_enabled = sess
+    let auto_compaction_disabled = sess
         .services
         .thread_extension_data
         .get::<AutoCompactionDisabled>()
-        .is_none();
+        .is_some();
+    let auto_compaction_enabled = auto_compaction_is_enabled(
+        auto_compaction_disabled,
+        turn_context
+            .provider
+            .capabilities()
+            .codex_managed_compaction,
+    );
     let auto_summarization_enabled =
         auto_compaction_enabled && !turn_context.config.features.enabled(Feature::TokenBudget);
     if crate::guardian::is_basic_session_source(&turn_context.session_source) {
@@ -1408,6 +1415,10 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
     previous
         .zip(current)
         .is_some_and(|(previous, current)| previous != current)
+}
+
+fn auto_compaction_is_enabled(explicitly_disabled: bool, codex_managed_compaction: bool) -> bool {
+    !explicitly_disabled && codex_managed_compaction
 }
 
 /// Runs pre-sampling compaction against the previous model when its compaction compatibility

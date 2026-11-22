@@ -42,6 +42,11 @@ impl ToolExecutor<ToolInvocation> for NewContextWindowHandler {
                 .thread_extension_data
                 .get::<AutoCompactionDisabled>()
                 .is_some()
+                || !invocation
+                    .turn
+                    .provider
+                    .capabilities()
+                    .codex_managed_compaction
             {
                 return Err(FunctionCallError::RespondToModel(
                     "Context resets are disabled for this thread.".to_string(),

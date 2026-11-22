@@ -39,9 +39,13 @@ pub(crate) struct AsyncCompactionState {
 
 pub(super) fn enabled(turn_context: &TurnContext) -> bool {
     turn_context
-        .config
-        .features
-        .enabled(Feature::AsyncCompaction)
+        .provider
+        .capabilities()
+        .codex_managed_compaction
+        && turn_context
+            .config
+            .features
+            .enabled(Feature::AsyncCompaction)
         && !turn_context.config.features.enabled(Feature::TokenBudget)
         && matches!(
             turn_context.provider.capabilities().remote_compaction,

@@ -11,6 +11,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderCapabilities {
+    /// Whether Codex should compact conversation history for this provider.
+    /// Defaults to true for compatibility with existing providers.
+    pub codex_managed_compaction: Option<bool>,
     /// Whether hosted web search may access the live web.
     pub external_web_access: Option<bool>,
     /// Remote context-compaction protocol; omission preserves provider defaults.

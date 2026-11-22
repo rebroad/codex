@@ -1397,6 +1397,34 @@ websocket_connect_timeout_ms = 10_000
     assert_eq!(config.model_provider, expected_provider);
 }
 
+#[tokio::test]
+async fn load_config_allows_provider_to_manage_context_compaction() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "openai"
+
+[model_providers.openai.capabilities]
+codex_managed_compaction = false
+"#,
+    )
+    .expect("provider compaction ownership should deserialize");
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("config should load");
+
+    assert_eq!(
+        config
+            .model_provider
+            .capabilities
+            .and_then(|capabilities| capabilities.codex_managed_compaction),
+        Some(false)
+    );
+}
+
 #[test]
 fn config_toml_deserializes_model_availability_nux() {
     let toml = r#"

@@ -2788,6 +2788,29 @@
       },
       "type": "object"
     },
+    "ModelProviderCapabilities": {
+      "additionalProperties": false,
+      "description": "Overrides for the optional API features supported by a custom provider.",
+      "properties": {
+        "codex_managed_compaction": {
+          "description": "Whether Codex should compact conversation history for this provider. Defaults to true for compatibility with existing providers.",
+          "type": "boolean"
+        },
+        "external_web_access": {
+          "description": "Whether hosted web search may access the live web.",
+          "type": "boolean"
+        },
+        "remote_compaction": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RemoteCompactionSupport"
+            }
+          ],
+          "description": "Remote context-compaction protocol; omission preserves provider defaults."
+        }
+      },
+      "type": "object"
+    },
     "ModelProviderInfoOverrides": {
       "additionalProperties": false,
       "description": "Fields supplied for a provider in `config.toml`.\n\nThis intentionally keeps scalar fields optional so an entry for a built-in provider can inherit every setting that it does not explicitly override.",
@@ -2800,6 +2823,14 @@
         },
         "base_url": {
           "type": "string"
+        },
+        "capabilities": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelProviderCapabilities"
+            }
+          ],
+          "description": "Optional capability overrides for this provider."
         },
         "env_http_headers": {
           "additionalProperties": {
@@ -4043,6 +4074,25 @@
           "description": "Option to disable reasoning summaries.",
           "enum": [
             "none"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "RemoteCompactionSupport": {
+      "description": "Remote context-compaction protocols supported by a model provider.",
+      "oneOf": [
+        {
+          "description": "Use local compaction instead of a provider compaction protocol.",
+          "enum": [
+            "unsupported"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Send `compaction_trigger` items over the Responses endpoint.",
+          "enum": [
+            "v2"
           ],
           "type": "string"
         }
