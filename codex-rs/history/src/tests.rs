@@ -7,6 +7,43 @@ use serde_json::json;
 
 use super::*;
 
+#[test]
+fn previous_turn_settings_accept_missing_provider_metadata() -> Result<()> {
+    let previous: PreviousTurnSettings = serde_json::from_value(json!({
+        "model": "legacy-model",
+        "comp_hash": null,
+        "realtime_active": null
+    }))?;
+    assert_eq!(
+        previous,
+        PreviousTurnSettings {
+            model: "legacy-model".to_string(),
+            model_provider_id: None,
+            cyber_access_program: None,
+            comp_hash: None,
+            realtime_active: None,
+        }
+    );
+
+    let current: PreviousTurnSettings = serde_json::from_value(json!({
+        "model": "current-model",
+        "model_provider_id": "provider-a",
+        "comp_hash": null,
+        "realtime_active": null
+    }))?;
+    assert_eq!(
+        current,
+        PreviousTurnSettings {
+            model: "current-model".to_string(),
+            model_provider_id: Some("provider-a".to_string()),
+            cyber_access_program: None,
+            comp_hash: None,
+            realtime_active: None,
+        }
+    );
+    Ok(())
+}
+
 fn thread_settings_snapshot(disabled_plugin_ids: Vec<String>) -> Result<ThreadSettingsSnapshot> {
     Ok(serde_json::from_value(json!({
         "model": "gpt-5",
@@ -62,6 +99,34 @@ fn latest_disabled_plugin_ids_preserves_owned_updates_and_clears() -> Result<()>
     assert_eq!(
         latest_disabled_plugin_ids(&history, thread_id),
         Some(cleared.disabled_plugin_ids.as_slice())
+    );
+    Ok(())
+}
+
+#[test]
+fn latest_model_provider_id_uses_only_thread_owned_settings() -> Result<()> {
+    let thread_id = ThreadId::new();
+    let ancestor_id = ThreadId::new();
+    let mut selected = thread_settings_snapshot(Vec::new())?;
+    selected.model_provider_id = "provider-a".to_string();
+    let mut inherited = selected.clone();
+    inherited.model_provider_id = "ancestor-provider".to_string();
+    let item = |thread_id, thread_settings| {
+        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
+            codex_protocol::protocol::ThreadSettingsAppliedEvent {
+                thread_id,
+                thread_settings,
+            },
+        ))
+    };
+    let history = vec![
+        item(Some(thread_id), selected),
+        item(Some(ancestor_id), inherited.clone()),
+        item(/*thread_id*/ None, inherited),
+    ];
+    assert_eq!(
+        latest_model_provider_id(&history, thread_id),
+        Some("provider-a")
     );
     Ok(())
 }

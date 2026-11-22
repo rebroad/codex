@@ -2663,6 +2663,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
             root_turn_id: Some("root-turn".to_string()),
         }),
         previous_turn_settings: Some(codex_history::PreviousTurnSettings {
+            model_provider_id: None,
             model: "parent-model".into(),
             comp_hash: None,
             cyber_access_program: None,
@@ -3838,6 +3839,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
                     last_started_turn_id: None,
                     turn_attribution: None,
                     previous_turn_settings: Some(codex_history::PreviousTurnSettings {
+                        model_provider_id: None,
                         model: "parent-model".into(),
                         comp_hash: None,
                         cyber_access_program: None,

@@ -1835,7 +1835,7 @@ impl Session {
             retained_context,
             guardian_history,
             last_started_turn_id,
-            previous_turn_settings,
+            mut previous_turn_settings,
             reference_context_item,
             turn_attribution,
             world_state_baseline,
@@ -1846,6 +1846,21 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        if let Some(settings) = previous_turn_settings.as_mut()
+            && settings.model_provider_id.is_none()
+        {
+            settings.model_provider_id =
+                codex_history::latest_model_provider_id(rollout_items, self.thread_id())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        rollout_items.iter().find_map(|item| match item {
+                            RolloutItem::SessionMeta(meta) if meta.meta.id == self.thread_id() => {
+                                meta.meta.model_provider.clone()
+                            }
+                            _ => None,
+                        })
+                    });
+        }
         let recovered_outputs = crate::context_manager::ensure_call_outputs_present(&mut history);
         let orphaned_outputs = crate::context_manager::remove_orphan_outputs(&mut history);
         if !recovered_outputs.is_empty() || orphaned_outputs > 0 {

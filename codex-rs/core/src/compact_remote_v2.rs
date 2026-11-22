@@ -93,12 +93,20 @@ const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
 #[derive(Clone, Copy)]
 enum CompactionRequestKind<'a> {
     Foreground,
+    ProviderManagedContext,
     Background(&'a CancellationToken),
 }
 
 enum CompactionRequestTransport<'a> {
     Foreground(&'a mut ModelClientSession),
+    ProviderManagedContext(&'a mut ModelClientSession),
     Background(Option<String>, Option<u64>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteCompactionInput {
+    History,
+    ProviderManagedContext,
 }
 
 /// The caller decides whether a declined prepared result needs a foreground request.
@@ -135,6 +143,34 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
         compaction_metadata,
         candidate,
         fallback,
+        RemoteCompactionInput::History,
+    )
+    .await
+}
+
+pub(crate) async fn run_provider_managed_context_compaction(
+    sess: Arc<Session>,
+    step_context: Arc<StepContext>,
+    replacement_step_context: Arc<StepContext>,
+    client_session: &mut ModelClientSession,
+    world_state: Arc<WorldState>,
+) -> CodexResult<bool> {
+    let compaction_metadata = CompactionTurnMetadata::new(
+        CompactionTrigger::Auto,
+        CompactionReason::ProviderTransition,
+        CompactionImplementation::ResponsesCompactionV2,
+        CompactionPhase::PreTurn,
+    );
+    run_remote_compact_task_inner(
+        &sess,
+        &step_context,
+        &replacement_step_context,
+        Some(client_session),
+        world_state,
+        compaction_metadata,
+        /*candidate*/ None,
+        CompactionFallback::Foreground,
+        RemoteCompactionInput::ProviderManagedContext,
     )
     .await
 }
@@ -159,6 +195,7 @@ pub(crate) async fn run_remote_compact_task(
         compaction_metadata,
         /*candidate*/ None,
         CompactionFallback::Foreground,
+        RemoteCompactionInput::History,
     )
     .await
     .map(|_| ())
@@ -174,6 +211,7 @@ async fn run_remote_compact_task_inner(
     compaction_metadata: CompactionTurnMetadata,
     candidate: Option<Box<BackgroundCompactionCandidate>>,
     fallback: CompactionFallback,
+    input_kind: RemoteCompactionInput,
 ) -> CodexResult<bool> {
     let turn_context = &step_context.turn;
     let trigger = compaction_metadata.trigger();
@@ -233,6 +271,7 @@ async fn run_remote_compact_task_inner(
         started_item.as_ref(),
         candidate.map(|candidate| *candidate),
         fallback,
+        input_kind,
     ))
     .await;
     if matches!(result, Ok(false)) {
@@ -291,7 +330,7 @@ async fn run_remote_compaction_request_v2(
     transport: CompactionRequestTransport<'_>,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let turn_context = &step_context.turn;
-    let client_session = match transport {
+    let (client_session, request_kind) = match transport {
         CompactionRequestTransport::Background(turn_state, auth_owner_generation) => {
             let settings = &step_context.settings;
             let cancellation = crate::session::async_compaction::shutdown_cancellation(sess).await;
@@ -319,7 +358,13 @@ async fn run_remote_compaction_request_v2(
             )
             .await;
         }
-        CompactionRequestTransport::Foreground(client_session) => client_session,
+        CompactionRequestTransport::Foreground(client_session) => {
+            (client_session, CompactionRequestKind::Foreground)
+        }
+        CompactionRequestTransport::ProviderManagedContext(client_session) => (
+            client_session,
+            CompactionRequestKind::ProviderManagedContext,
+        ),
     };
     let settings = &turn_context.initial_settings;
     let max_retries = turn_context
@@ -343,15 +388,7 @@ async fn run_remote_compaction_request_v2(
             )
             .await
         {
-            Ok(stream) => {
-                collect_compaction_output(
-                    sess,
-                    turn_context,
-                    stream,
-                    CompactionRequestKind::Foreground,
-                )
-                .await
-            }
+            Ok(stream) => collect_compaction_output(sess, turn_context, stream, request_kind).await,
             Err(err) => Err(err),
         };
         match result {
@@ -386,7 +423,9 @@ async fn collect_compaction_output(
     let mut completed_token_usage = None;
     loop {
         let event = match request_kind {
-            CompactionRequestKind::Foreground => stream.next().await,
+            CompactionRequestKind::Foreground | CompactionRequestKind::ProviderManagedContext => {
+                stream.next().await
+            }
             CompactionRequestKind::Background(cancellation) => tokio::select! {
                 biased;
                 // Charge completed usage even when cancellation arrives at the same time.
@@ -405,7 +444,8 @@ async fn collect_compaction_output(
                         let _ = sess.record_rollout_budget_usage(usage).await;
                     }
                 }
-                CompactionRequestKind::Foreground => {
+                CompactionRequestKind::Foreground
+                | CompactionRequestKind::ProviderManagedContext => {
                     sess.record_incomplete_response_usage(
                         turn_context,
                         &turn_context.initial_settings,
@@ -423,7 +463,13 @@ async fn collect_compaction_output(
             }
             ResponseEvent::OutputItemDone(item) => {
                 output_item_count += 1;
-                if let ResponseItem::Compaction { .. } = item {
+                if matches!(request_kind, CompactionRequestKind::ProviderManagedContext)
+                    && matches!(&item, ResponseItem::Message { role, .. } if role == "assistant")
+                {
+                    if compaction_output.is_none() {
+                        compaction_output = Some(item);
+                    }
+                } else if let ResponseItem::Compaction { .. } = item {
                     compaction_count += 1;
                     if compaction_output.is_none() {
                         compaction_output = Some(item);
@@ -469,7 +515,19 @@ async fn collect_compaction_output(
         ));
     };
 
-    if compaction_count != 1 {
+    if matches!(request_kind, CompactionRequestKind::ProviderManagedContext) {
+        let valid_summary = matches!(
+            compaction_output.as_ref(),
+            Some(ResponseItem::Message { role, content, .. })
+                if role == "assistant"
+                    && content.iter().any(|part| matches!(part, codex_protocol::models::ContentItem::OutputText { text, .. } if !text.trim().is_empty()))
+        );
+        if output_item_count != 1 || compaction_count != 0 || !valid_summary {
+            return Err(CodexErr::Stream(format!(
+                "provider-managed compaction expected one non-empty assistant summary, got {output_item_count} output items"
+            )));
+        }
+    } else if compaction_count != 1 {
         return Err(CodexErr::Fatal(format!(
             "remote compaction v2 expected exactly one compaction output item, got {compaction_count} from {output_item_count} output items"
         )));

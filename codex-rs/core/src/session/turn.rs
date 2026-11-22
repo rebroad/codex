@@ -10,6 +10,7 @@ use crate::compact::AutoCompactionDisabled;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact_remote_v2::BackgroundCompactionCandidate;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
+use crate::compact_remote_v2::run_provider_managed_context_compaction;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
@@ -408,6 +409,7 @@ pub(crate) async fn run_turn(
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+        model_provider_id: Some(turn_context.config.model_provider_id.clone()),
         model: turn_context.model_info().slug.clone(),
         cyber_access_program: turn_context.cyber_access_program,
         comp_hash: turn_context.model_info().comp_hash.clone(),
@@ -1425,7 +1427,7 @@ fn auto_compaction_is_enabled(explicitly_disabled: bool, codex_managed_compactio
 /// hash changed or when switching to a smaller context-window model.
 ///
 /// Returns `Err(_)` only when compaction was attempted and failed.
-async fn maybe_run_previous_model_inline_compact(
+pub(super) async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
@@ -1434,6 +1436,102 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
+    let provider_transition = previous_turn_settings
+        .model_provider_id
+        .as_deref()
+        .filter(|provider_id| *provider_id != turn_context.config.model_provider_id.as_str())
+        .and_then(|provider_id| {
+            turn_context
+                .config
+                .model_providers
+                .get(provider_id)
+                .cloned()
+                .map(|provider_info| (provider_id.to_string(), provider_info))
+        })
+        .filter(|(_, provider_info)| {
+            !codex_model_provider::create_model_provider(
+                provider_info.clone(),
+                sess.services.model_client.auth_manager(),
+            )
+            .capabilities()
+            .codex_managed_compaction
+                && turn_context
+                    .provider
+                    .capabilities()
+                    .codex_managed_compaction
+        });
+    if let Some((provider_id, provider_info)) = provider_transition {
+        let previous_provider = codex_model_provider::create_model_provider(
+            provider_info.clone(),
+            sess.services.model_client.auth_manager(),
+        );
+        if previous_provider.capabilities().remote_compaction != RemoteCompactionSupport::V2 {
+            return Err(CodexErr::Fatal(format!(
+                "provider `{provider_id}` manages its own context but does not support remote compaction required to switch providers"
+            )));
+        }
+
+        let mut previous_model_turn_context = turn_context
+            .with_model(
+                previous_turn_settings.model.clone(),
+                &sess.services.models_manager,
+            )
+            .await;
+        let mut previous_config = (*previous_model_turn_context.config).clone();
+        previous_config.model_provider_id = provider_id;
+        previous_config.model_provider = provider_info.clone();
+        previous_model_turn_context.config = Arc::new(previous_config);
+        previous_model_turn_context.provider = previous_provider;
+        previous_model_turn_context.cyber_access_program = cyber_access_program::for_provider(
+            &previous_model_turn_context.config.model_provider_id,
+            previous_turn_settings.cyber_access_program,
+        );
+        let previous_step_context = sess
+            .capture_step_context(Arc::new(previous_model_turn_context), cancellation_token)
+            .await?;
+        let replacement_step_context = sess
+            .capture_step_context(Arc::clone(turn_context), cancellation_token)
+            .await?;
+        let world_state = Arc::new(
+            sess.build_world_state_for_step(&replacement_step_context, /*new_window*/ true)
+                .await?,
+        );
+        let previous_settings = previous_turn_settings.clone();
+        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model_provider_id: Some(turn_context.config.model_provider_id.clone()),
+            model: turn_context.model_info().slug.clone(),
+            cyber_access_program: turn_context.cyber_access_program,
+            comp_hash: turn_context.model_info().comp_hash.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
+        let previous_client = sess.services.model_client.with_provider_info(provider_info);
+        let mut previous_client_session = previous_client.new_session();
+        let result = run_provider_managed_context_compaction(
+            Arc::clone(sess),
+            previous_step_context,
+            replacement_step_context,
+            &mut previous_client_session,
+            world_state,
+        )
+        .await;
+        match result {
+            Ok(true) => {}
+            Ok(false) => {
+                sess.set_previous_turn_settings(Some(previous_settings))
+                    .await;
+                return Err(CodexErr::Fatal(
+                    "provider-managed context compaction was not installed".to_string(),
+                ));
+            }
+            Err(error) => {
+                sess.set_previous_turn_settings(Some(previous_settings))
+                    .await;
+                return Err(error);
+            }
+        }
+        return Ok(());
+    }
     let should_compact_for_comp_hash_change = comp_hash_changed(
         previous_turn_settings.comp_hash.as_deref(),
         turn_context.model_info().comp_hash.as_deref(),

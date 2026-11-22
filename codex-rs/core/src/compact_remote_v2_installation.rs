@@ -4,6 +4,8 @@
 
 use super::*;
 use crate::compact::build_compaction_replacement_history;
+use crate::context::CompactionSummary;
+use crate::context::ContextualUserFragment;
 use crate::context::world_state::split_prefix_updates;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::CompactedHistoryInstallation;
@@ -25,6 +27,7 @@ pub(super) async fn run_compaction(
     mut started_item: Option<&TurnItem>,
     candidate: Option<BackgroundCompactionCandidate>,
     fallback: CompactionFallback,
+    input_kind: RemoteCompactionInput,
 ) -> CodexResult<bool> {
     if let Some(candidate) = candidate {
         let installed = build_and_install_compaction(
@@ -37,6 +40,7 @@ pub(super) async fn run_compaction(
             analytics_details,
             started_item,
             Some(candidate),
+            input_kind,
         )
         .await?;
         if installed {
@@ -65,6 +69,7 @@ pub(super) async fn run_compaction(
         analytics_details,
         started_item,
         /*candidate*/ None,
+        input_kind,
     )
     .await
 }
@@ -80,6 +85,7 @@ async fn build_and_install_compaction(
     analytics_details: &mut CompactionAnalyticsDetails,
     started_item: Option<&TurnItem>,
     candidate: Option<BackgroundCompactionCandidate>,
+    input_kind: RemoteCompactionInput,
 ) -> CodexResult<bool> {
     let turn_context = &step_context.turn;
     if let Some(candidate) = &candidate
@@ -129,12 +135,26 @@ async fn build_and_install_compaction(
             &compaction_trace,
             compaction_metadata,
             analytics_details,
-            RemoteCompactV2AttemptInput::Foreground(client_session.as_deref_mut()),
+            match input_kind {
+                RemoteCompactionInput::History => {
+                    RemoteCompactV2AttemptInput::Foreground(client_session.as_deref_mut())
+                }
+                RemoteCompactionInput::ProviderManagedContext => {
+                    RemoteCompactV2AttemptInput::ProviderManagedContext(
+                        client_session.as_deref_mut().expect(
+                            "provider-managed compaction requires its prior provider client",
+                        ),
+                    )
+                }
+            },
         )
         .await;
         let (attempt, compaction_turn_context) = match attempt {
             Ok(attempt) => (attempt, turn_context),
             Err(error) => {
+                if input_kind == RemoteCompactionInput::ProviderManagedContext {
+                    return Err(error);
+                }
                 let fallback_turn_context = &replacement_step_context.turn;
                 if !should_retry_with_current_model(&error, turn_context, fallback_turn_context) {
                     return Err(error);
@@ -189,6 +209,33 @@ async fn build_and_install_compaction(
         sess.record_rollout_budget_usage(token_usage).await?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
     }
+    let (compaction_output, checkpoint_message) = match input_kind {
+        RemoteCompactionInput::History => (compaction_output, String::new()),
+        RemoteCompactionInput::ProviderManagedContext => {
+            let ResponseItem::Message { content, .. } = compaction_output else {
+                return Err(CodexErr::Stream(
+                    "provider-managed compaction returned a non-message summary".to_string(),
+                ));
+            };
+            let summary = content
+                .iter()
+                .filter_map(|part| match part {
+                    codex_protocol::models::ContentItem::OutputText { text, .. } => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<String>();
+            let summary = codex_utils_output_truncation::truncate_text(
+                &summary,
+                codex_utils_output_truncation::TruncationPolicy::Tokens(8_000),
+            );
+            let checkpoint_message = format!("{}\n{summary}", crate::compact::SUMMARY_PREFIX);
+            let summary_item =
+                ContextualUserFragment::into(CompactionSummary::new(checkpoint_message.clone()));
+            (summary_item, checkpoint_message)
+        }
+    };
     let (compacted_history, retained_images) = build_v2_compacted_history(
         prompt_input,
         prompt_input_metadata,
@@ -237,7 +284,7 @@ async fn build_and_install_compaction(
         let (window_number, window_ids) = sess.advance_auto_compact_window().await;
         let installation = CompactedHistoryMetadata {
             input_goal_ids,
-            message: String::new(),
+            message: checkpoint_message,
             window_number,
             window_ids,
             compaction_response_id: Some(compaction_response_id),

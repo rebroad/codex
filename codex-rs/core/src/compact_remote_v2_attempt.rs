@@ -45,6 +45,7 @@ pub(super) struct RemoteCompactV2Attempt {
 
 pub(super) enum RemoteCompactV2AttemptInput<'a> {
     Foreground(Option<&'a mut ModelClientSession>),
+    ProviderManagedContext(&'a mut ModelClientSession),
     Background(BackgroundCompactionInput),
 }
 
@@ -150,6 +151,16 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 None,
             )
         }
+        RemoteCompactV2AttemptInput::ProviderManagedContext(client_session) => (
+            turn_context.model_info(),
+            HashSet::new(),
+            None,
+            sess.get_prompt_base_instructions().await,
+            Vec::new(),
+            Vec::new(),
+            CompactionRequestTransport::ProviderManagedContext(client_session),
+            None,
+        ),
         RemoteCompactV2AttemptInput::Background(input) => (
             &step_context.settings.model_info,
             UserGoalUpdate::message_ids(input.input.iter()),

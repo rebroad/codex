@@ -62,6 +62,7 @@ use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ModelProviderCapabilities;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::model_info;
@@ -4458,6 +4459,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
+            model_provider_id: None,
             model: previous_model.to_string(),
             comp_hash: None,
             cyber_access_program: None,
@@ -6230,6 +6232,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     let turn_context_baseline = turn_context.to_turn_context_item();
     let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
     let previous_turn_settings = PreviousTurnSettings {
+        model_provider_id: None,
         model: "previous-model".to_string(),
         comp_hash: Some("comp-hash".to_string()),
         cyber_access_program: None,
@@ -11070,6 +11073,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.realtime_active = true;
     let previous_turn_settings = PreviousTurnSettings {
+        model_provider_id: None,
         model: turn_context.model_info().slug.clone(),
         comp_hash: None,
         cyber_access_program: None,
@@ -11439,6 +11443,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
     });
     session
         .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model_provider_id: None,
             model: "base-model".to_string(),
             comp_hash: None,
             cyber_access_program: None,
@@ -11543,6 +11548,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
 async fn build_initial_context_prepends_model_switch_message() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_turn_settings = PreviousTurnSettings {
+        model_provider_id: None,
         model: "previous-regular-model".to_string(),
         comp_hash: None,
         cyber_access_program: None,
@@ -11598,6 +11604,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
 
     session
         .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model_provider_id: None,
             model: previous_context.model_info().slug.clone(),
             comp_hash: None,
             cyber_access_program: None,
@@ -12152,6 +12159,116 @@ async fn remote_compaction_v2_retains_only_the_selected_step(first_attempt: Firs
 }
 
 #[tokio::test]
+async fn provider_transition_compacts_cached_context_without_replaying_history() {
+    let server = responses::start_mock_server().await;
+    let (session, mut turn, events) = make_remote_compaction_session(&server.uri()).await;
+    let mut previous_provider =
+        built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    previous_provider.base_url = Some(format!("{}/v1", server.uri()));
+    previous_provider.supports_websockets = false;
+    previous_provider.capabilities = Some(ModelProviderCapabilities {
+        codex_managed_compaction: Some(false),
+        remote_compaction: Some(codex_model_provider::RemoteCompactionSupport::V2),
+        ..Default::default()
+    });
+    let mut config = (*turn.config).clone();
+    config
+        .model_providers
+        .insert("provider-managed".to_string(), previous_provider);
+    Arc::get_mut(&mut turn)
+        .expect("turn context is unshared")
+        .config = Arc::new(config);
+    session
+        .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model_provider_id: Some("provider-managed".to_string()),
+            model: turn.model_info().slug.clone(),
+            comp_hash: turn.model_info().comp_hash.clone(),
+            cyber_access_program: None,
+            realtime_active: Some(turn.realtime_active),
+        }))
+        .await;
+    session
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[user_message("cached provider conversation")],
+        )
+        .await;
+    session
+        .spawn_task(
+            Arc::clone(&turn),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+    let success = ResponseTemplate::new(/*status*/ 200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string(responses::sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": "provider summary" }],
+                },
+            }),
+            responses::ev_completed("provider-transition-compaction"),
+        ]));
+    let requests = responses::mount_response_sequence(&server, vec![success]).await;
+    let mut client_session = session.services.model_client.new_session();
+
+    super::turn::maybe_run_previous_model_inline_compact(
+        &session,
+        &turn,
+        &mut client_session,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider transition compaction");
+
+    let request = requests.single_request();
+    assert_eq!(request.inputs_of_type("compaction_trigger").len(), 1);
+    assert!(
+        !request
+            .body_json()
+            .to_string()
+            .contains("cached provider conversation")
+    );
+    assert!(
+        !session
+            .clone_history()
+            .await
+            .raw_items()
+            .any(|item| serde_json::to_string(item)
+                .expect("serialize compacted history item")
+                .contains("cached provider conversation")),
+        "provider-managed conversation text should not remain in Codex history"
+    );
+    assert!(
+        session
+            .clone_history()
+            .await
+            .raw_items()
+            .any(|item| matches!(item, ResponseItem::Message { role, content, .. }
+                if role == "user" && content.iter().any(|part| matches!(part, codex_protocol::models::ContentItem::InputText { text } if text.contains("provider summary"))))),
+        "provider summary should be installed as hidden compacted context"
+    );
+    assert_eq!(
+        session
+            .previous_turn_settings()
+            .await
+            .and_then(|settings| settings.model_provider_id),
+        Some(turn.config.model_provider_id.clone()),
+    );
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    recv_terminal_event(&events, TerminalEventKind::TurnAborted).await;
+}
+
+#[tokio::test]
 async fn interrupting_compaction_fallback_retains_last_known_step_context() {
     let (release_primary, primary_gate) = tokio::sync::oneshot::channel();
     let (release_fallback, fallback_gate) = tokio::sync::oneshot::channel();
@@ -12179,6 +12296,7 @@ async fn interrupting_compaction_fallback_retains_last_known_step_context() {
     );
     session
         .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model_provider_id: None,
             model: "gpt-5.4".to_string(),
             comp_hash: Some("old".to_string()),
             cyber_access_program: None,

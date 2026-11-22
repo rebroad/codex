@@ -570,6 +570,19 @@ pub fn latest_disabled_plugin_ids(items: &[RolloutItem], thread_id: ThreadId) ->
         .and_then(|context| context.disabled_plugin_ids.as_deref())
 }
 
+/// Returns the latest provider selected by a thread-owned settings snapshot.
+pub fn latest_model_provider_id(items: &[RolloutItem], thread_id: ThreadId) -> Option<&str> {
+    items.iter().rev().find_map(|item| {
+        if let RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) = item
+            && event.thread_id == Some(thread_id)
+        {
+            Some(event.thread_settings.model_provider_id.as_str())
+        } else {
+            None
+        }
+    })
+}
+
 fn multi_agent_version_from_items(
     items: &[RolloutItem],
     thread_id: Option<ThreadId>,
