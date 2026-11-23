@@ -1,4 +1,5 @@
 use crate::agent::child_config::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
+use crate::agent::child_config::is_gpt_6_or_newer;
 use crate::agent::child_config::model_supports_multi_agent_backend;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -14,13 +15,11 @@ use std::collections::BTreeMap;
 pub const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
-const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
-const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE_V2: &str = "Spawned agents inherit your current model by default. Do not set the `model` field unless the user explicitly asks for a different model.";
-const SPAWN_AGENT_MODEL_CATALOG_GUIDANCE: &str =
-    "Pick model overrides from the latest <model_catalog> listing.";
+const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Choose a more capable available model when the task is unusually difficult or an agent is stuck; otherwise omit `model` to inherit.";
+const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE_V2: &str = "Spawned agents inherit your current model by default. Choose a more capable available model when the task is unusually difficult or an agent is stuck; otherwise omit `model` to inherit.";
+const SPAWN_AGENT_MODEL_CATALOG_GUIDANCE: &str = "Choose model overrides from the latest <model_catalog> listing, using a more capable model when extra reasoning is likely to help.";
 const SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1: &str = "Agent type override for the new agent. Omit to inherit the parent agent type with a full-history fork; otherwise, `default` is used.";
-const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
-    "Model override for the new agent. Omit unless an explicit override is needed.";
+const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str = "Model override for the new agent. Choose a more capable available model when extra reasoning is likely to help; omit to inherit the parent model.";
 const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
 #[derive(Debug, Clone)]
@@ -826,6 +825,7 @@ fn spawn_agent_models_description(
     let visible_models: Vec<&ModelPreset> = models
         .iter()
         .filter(|model| model.show_in_picker)
+        .filter(|model| is_gpt_6_or_newer(&model.model))
         .filter(|model| model_supports_multi_agent_backend(model, multi_agent_version))
         .take(MAX_SPAWN_AGENT_MODEL_OVERRIDES)
         .collect();

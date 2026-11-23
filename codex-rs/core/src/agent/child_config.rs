@@ -17,6 +17,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::MultiAgentVersion;
+use std::future::Future;
 
 pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
 
@@ -26,6 +27,14 @@ pub(crate) fn model_supports_multi_agent_backend(
 ) -> bool {
     multi_agent_version != MultiAgentVersion::V2
         || model.multi_agent_version != Some(MultiAgentVersion::Disabled)
+}
+
+pub(crate) fn is_gpt_6_or_newer(model_slug: &str) -> bool {
+    model_slug
+        .strip_prefix("gpt-")
+        .and_then(|version| version.split(['.', '-']).next())
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 6)
 }
 
 /// Selects the existing spawn tool's role-inheritance rules.
@@ -217,16 +226,22 @@ async fn apply_requested_spawn_agent_model_overrides(
     }
 
     if let Some(requested_model) = requested_model {
-        let available_models = session
-            .services
-            .models_manager
-            .list_models(RefreshStrategy::Offline, config.http_client_factory())
+        let models_manager = &session.services.models_manager;
+        let http_client_factory = config.http_client_factory();
+        let available_models = models_manager
+            .list_models(RefreshStrategy::Offline, http_client_factory.clone())
             .await;
-        let selected_model_name = find_spawn_agent_model_name(
+        let selected_model_name = find_spawn_agent_model_name_with_refresh(
             &available_models,
             requested_model,
             turn.multi_agent_version,
-        )?;
+            async {
+                models_manager
+                    .list_models(RefreshStrategy::Online, http_client_factory)
+                    .await
+            },
+        )
+        .await?;
         let selected_model_info = session
             .services
             .models_manager
@@ -323,6 +338,24 @@ async fn apply_spawn_agent_role(
     )
 }
 
+async fn find_spawn_agent_model_name_with_refresh<F>(
+    available_models: &[ModelPreset],
+    requested_model: &str,
+    multi_agent_version: MultiAgentVersion,
+    refresh_available_models: F,
+) -> Result<String, String>
+where
+    F: Future<Output = Vec<ModelPreset>>,
+{
+    match find_spawn_agent_model_name(available_models, requested_model, multi_agent_version) {
+        Ok(model) => Ok(model),
+        Err(_) => {
+            let refreshed_models = refresh_available_models.await;
+            find_spawn_agent_model_name(&refreshed_models, requested_model, multi_agent_version)
+        }
+    }
+}
+
 fn find_spawn_agent_model_name(
     available_models: &[ModelPreset],
     requested_model: &str,
@@ -339,6 +372,7 @@ fn find_spawn_agent_model_name(
             let available = available_models
                 .iter()
                 .filter(|model| model.show_in_picker)
+                .filter(|model| is_gpt_6_or_newer(&model.model))
                 .filter(|model| model_supports_multi_agent_backend(model, multi_agent_version))
                 .take(MAX_SPAWN_AGENT_MODEL_OVERRIDES)
                 .map(|model| model.model.as_str())
@@ -370,4 +404,59 @@ fn validate_spawn_agent_reasoning_effort(
     Err(format!(
         "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
     ))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn model_preset(model: &str) -> ModelPreset {
+        serde_json::from_value(json!({
+            "id": model,
+            "model": model,
+            "display_name": model,
+            "description": "test model",
+            "default_reasoning_effort": "medium",
+            "supported_reasoning_efforts": [],
+            "is_default": false,
+            "upgrade": null,
+            "show_in_picker": true,
+            "availability_nux": null,
+            "supported_in_api": true
+        }))
+        .expect("valid model preset")
+    }
+
+    #[tokio::test]
+    async fn requested_model_is_retried_after_catalog_refresh_on_cache_miss() {
+        let cached_models = [model_preset("gpt-6-luna")];
+        let refreshed_models = vec![model_preset("gpt-6-luna"), model_preset("gpt-6.1-terra")];
+
+        let selected = find_spawn_agent_model_name_with_refresh(
+            &cached_models,
+            "gpt-6.1-terra",
+            MultiAgentVersion::V2,
+            async { refreshed_models },
+        )
+        .await
+        .expect("model should be selected from refreshed catalog");
+
+        assert_eq!(selected, "gpt-6.1-terra");
+    }
+
+    #[tokio::test]
+    async fn cached_model_selection_does_not_refresh_catalog() {
+        let cached_models = [model_preset("gpt-6-luna")];
+
+        let selected = find_spawn_agent_model_name_with_refresh(
+            &cached_models,
+            "gpt-6-luna",
+            MultiAgentVersion::V2,
+            async { panic!("cached selection must not refresh") },
+        )
+        .await
+        .expect("cached model should be selected");
+
+        assert_eq!(selected, "gpt-6-luna");
+    }
 }

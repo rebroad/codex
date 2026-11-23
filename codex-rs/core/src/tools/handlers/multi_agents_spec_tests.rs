@@ -415,3 +415,32 @@ fn list_agents_tool_status_schema_includes_interrupted() {
         ])
     );
 }
+
+#[test]
+fn spawn_agent_model_catalog_only_lists_gpt_6_and_newer() {
+    let models = ["gpt-5.6-terra", "gpt-6-luna", "gpt-6.1-terra"]
+        .into_iter()
+        .map(|slug| {
+            serde_json::from_value(json!({
+                "id": slug,
+                "model": slug,
+                "display_name": slug,
+                "description": "test model",
+                "default_reasoning_effort": "medium",
+                "supported_reasoning_efforts": [],
+                "is_default": false,
+                "upgrade": null,
+                "show_in_picker": true,
+                "availability_nux": null,
+                "supported_in_api": true
+            }))
+            .expect("valid model preset")
+        })
+        .collect::<Vec<ModelPreset>>();
+
+    let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
+
+    assert!(description.contains("`gpt-6-luna`"));
+    assert!(description.contains("`gpt-6.1-terra`"));
+    assert!(!description.contains("gpt-5.6-terra"));
+}
