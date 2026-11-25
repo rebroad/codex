@@ -99,6 +99,9 @@ pub(super) fn config_exclusion(
     if !cli_kv_overrides
         .iter()
         .all(|(key, value)| match key.as_str() {
+            // These values are carried in each thread/start or thread/resume request, so
+            // a TUI can select a provider/model while reusing the shared app-server.
+            "model" | "model_provider" => value.is_str(),
             "suppress_unstable_features_warning" | "tui.fullscreen_transcript" => value.is_bool(),
             "tui" => value.as_table().is_some_and(|tui| {
                 tui.len() == 1

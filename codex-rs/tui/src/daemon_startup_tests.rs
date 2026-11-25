@@ -34,7 +34,10 @@ fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
         ("tui={fullscreen_transcript='true'}", false),
         ("tui={fullscreen_transcript=true,animations=false}", false),
         ("features={}", false),
-        ("model='test'", false),
+        ("model='test'", true),
+        ("model_provider='test-provider'", true),
+        ("model_provider=true", false),
+        ("model_provider={name='Example Provider'}", false),
     ] {
         let overrides = codex_utils_cli::CliConfigOverrides {
             raw_overrides: vec![raw.to_string()],
